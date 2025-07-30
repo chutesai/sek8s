@@ -1,0 +1,30 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: restricted-user-permissions
+rules:
+# Only basic read permissions
+- apiGroups: [""]
+  resources: ["pods", "services", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+# NO permissions for admission webhooks, API services, CRDs
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: restrict-regular-users
+subjects:
+- kind: Group
+  name: "developers"  # Your developer group
+  apiGroup: rbac.authorization.k8s.io
+- kind: User
+  name: "developer@company.com"
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: restricted-user-permissions
+  apiGroup: rbac.authorization.k8s.io

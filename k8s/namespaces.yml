@@ -1,0 +1,30 @@
+---
+# System namespaces might need privileged access
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# System namespaces might need privileged access
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chutes
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# System namespaces might need privileged access
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: karmada-cluster
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline  
+    pod-security.kubernetes.io/warn: restricted

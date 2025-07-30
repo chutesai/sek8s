@@ -1,0 +1,24 @@
+[Unit]
+Description=TEE k3s Admission Controller
+After=network.target
+Before=k3s.service
+
+[Service]
+Type=simple
+User=admission-controller
+Group=admission-controller
+WorkingDirectory=/app
+# TODO: What args need to pass in?
+ExecStart=/app/.venv/bin/admission-controller
+Restart=always
+RestartSec=5
+
+# Security hardening
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/admission-controller
+
+[Install]
+WantedBy=multi-user.target

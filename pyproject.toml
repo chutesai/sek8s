@@ -2,12 +2,15 @@
 name = "sek8s"
 version = "0.1.0"
 description = ""
-authors = ["Kyle Widmann <Kyle.Widmann@gmail.com>"]
+authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
 autoflake = "^2.3.1"
+flask = "^3.1.1"
+cryptography = "^45.0.4"
+psutil = "^7.0.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -22,6 +25,9 @@ mypy = "^1.9.0"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+admission-controller = 'sek8s.main:run'
 
 [tool.isort]
 profile = "black"

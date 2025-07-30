@@ -1,0 +1,20 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: k3s-cluster
+nodes:
+- role: control-plane
+  image: k3s-kind:latest
+  extraPortMappings:
+  - containerPort: 6443
+    hostPort: 6443
+    protocol: TCP
+  extraMounts:
+  - hostPath: /var/lib/k3s
+    containerPath: /var/lib/rancher/k3s
+  - hostPath: /sys/fs/cgroup
+    containerPath: /sys/fs/cgroup
+    readOnly: true
+networking:
+  disableDefaultCNI: false
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"

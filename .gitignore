@@ -6,3 +6,4 @@
 **/image/*
 **/*.log
 .idea
+bin/

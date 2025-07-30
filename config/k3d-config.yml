@@ -1,0 +1,43 @@
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: chutes
+image: sek8s_development:local-0
+servers: 1
+agents: 0
+kubeAPI:
+  host: "0.0.0.0"
+  hostIP: "127.0.0.1"
+  hostPort: "6443"
+ports:
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer
+  - port: 8443:443
+    nodeFilters:
+      - loadbalancer
+volumes:
+  - volume: /tmp/k3d-data:/var/lib/rancher/k3s/storage
+    nodeFilters:
+      - all
+  # - volume: /home/kyle/Code/Chutes/sek8s/k8s/admission-configuration.yml:/etc/k3s/admission-config.yaml
+  # - volume: rego:/etc/rego
+env:
+  - envVar: ENVIRONMENT=development
+    nodeFilters:
+      - all
+options:
+  k3d:
+    wait: true
+    timeout: "300s"
+  k3s:
+    extraArgs:
+      - arg: --write-kubeconfig-mode=644
+        nodeFilters:
+          - server:*
+      # - arg: --kube-apiserver-arg=admission-control-config-file=/etc/k3s/admission-config.yaml
+      #   nodeFilters:
+      #     - server:*
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    switchCurrentContext: true

@@ -1,3 +1,10 @@
+.PHONY: install
+install: ##@development Instal development dependencies
+install: venv
+	mkdir bin
+	curl -L -o bin/opa https://openpolicyagent.org/downloads/v1.3.0/opa_linux_amd64_static
+	chmod 755 ./bin/opa
+
 .PHONY: venv
 venv: ##@development Set up virtual environment
 venv:
@@ -15,12 +22,16 @@ build:
 .PHONY: infrastructure
 infrastructure: ##@development Set up infrastructure for tests
 infrastructure:
-	echo "Skipping..."
+	k3d cluster create dev --config config/k3d-config.yml
 
-.PHONY: client
+.PHONY: clean
 clean: ##@development Clean up any dependencies
 clean:
-	echo "Skipping..."
+	k3d cluster delete dev
+
+.PHONY: redeploy
+redeploy: ##@development Redeploy infrastructure
+redeploy: clean infrastructure
 
 .PHONY: config
 ci: ##@development Run CI pipeline

@@ -1,0 +1,43 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionWebhook
+metadata:
+  name: admission-controller
+webhooks:
+- name: universal-validator
+  rules:
+  # Cover ALL operations
+  - operations: ["CREATE", "UPDATE", "DELETE", "CONNECT"]
+    apiGroups: ["*"]
+    apiVersions: ["*"] 
+    resources: ["*"]
+  - operations: ["CREATE", "UPDATE", "DELETE"]
+    apiGroups: [""]
+    apiVersions: ["*"]
+    resources: ["*"]
+  
+  # Critical: No selectors = applies to everything
+  # namespaceSelector: {}  # All namespaces
+  # objectSelector: {}     # All objects
+  
+  clientConfig:
+    url: "https://localhost:8443/validate"
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail        # CRITICAL: Fail secure
+  timeoutSeconds: 10         # Reasonable timeout
+  
+# Separate webhook for bypass prevention
+- name: bypass-prevention
+  rules:
+  - operations: ["CREATE", "UPDATE", "DELETE"]
+    apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingadmissionwebhooks", "mutatingadmissionwebhooks"]
+  - operations: ["CREATE", "UPDATE", "DELETE"] 
+    apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+  - operations: ["CREATE", "UPDATE", "DELETE"]
+    apiGroups: ["apiextensions.k8s.io"] 
+    resources: ["customresourcedefinitions"]
+  clientConfig:
+    url: "https://localhost:8443/validate-bypass"
+  failurePolicy: Fail
