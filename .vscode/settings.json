@@ -1,0 +1,13 @@
+{
+    "python.defaultInterpreterPath": ".venv/bin/python",
+    "python.testing.unittestArgs": [
+        "-v",
+        "tests/**/test_*.py"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.exclude": [
+        "**/.venv/*"
+    ]
+}
