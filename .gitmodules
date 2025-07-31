@@ -1,0 +1,4 @@
+[submodule "tdx"]
+	path = tdx
+	url = https://github.com/canonical/tdx.git
+	branch = main
