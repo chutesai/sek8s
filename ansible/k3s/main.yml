@@ -1,0 +1,41 @@
+- name: Test VM connectivity and basic functionality
+  block:
+    - name: Ping the VM to test connectivity
+      ping:
+      
+    - name: Gather system facts
+      setup:
+      
+    - name: Check disk space
+      shell: df -h /
+      register: disk_space
+      
+    - name: Display disk space
+      debug:
+        msg: "Root filesystem usage: {{ disk_space.stdout_lines[1] }}"
+        
+    - name: Test file creation
+      file:
+        path: /tmp/ansible_test_file
+        state: touch
+        mode: '0644'
+        
+    - name: Verify file was created
+      stat:
+        path: /tmp/ansible_test_file
+      register: test_file
+      
+    - name: Confirm test file exists
+      debug:
+        msg: "Test file created successfully"
+      when: test_file.stat.exists
+      
+    - name: Clean up test file
+      file:
+        path: /tmp/ansible_test_file
+        state: absent
+        
+  rescue:
+    - name: Handle test failures
+      debug:
+        msg: "VM build test failed - investigate further"

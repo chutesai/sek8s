@@ -1,3 +1,5 @@
 .coverage
 .venv
 **/__pycache__/*
+
+**/*.log
