@@ -3,14 +3,14 @@ set -e
 
 # Resolve the absolute path of the script's directory
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
 TDX_REPO="$REPO_ROOT/tdx"
 UBUNTU_VERSION="25.04"
 APP_SCRIPT="${APP_SCRIPT:-$REPO_ROOT/scripts/setup-app.sh}"
-ANSIBLE_DIR="${ANSIBLE_DIR:-$REPO_ROOT/ansible/k3s}"
-FIRST_BOOT_SCRIPT="${FIRST_BOOT_SCRIPT:-$REPO_ROOT/scripts/first-boot.sh}"
+ANSIBLE_DIR="${ANSIBLE_DIR:-$REPO_ROOT/ansible}"
+BOOT_SCRIPTS_DIR="${BOOT_SCRIPTS_DIR:-$REPO_ROOT/scripts/boot}"
 LOGFILE="$REPO_ROOT/tdx-image-build.log"
 CREATE_TD_SCRIPT="$TDX_REPO/guest-tools/image/create-td-image.sh"
 GUEST_IMG_PATH="$TDX_REPO/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2"
@@ -33,13 +33,12 @@ if [ ! -d "$TDX_REPO" ]; then
     echo "Initializing canonical/tdx submodule..." | tee -a "$LOGFILE"
     git -C "$REPO_ROOT" submodule update --init --recursive >> "$LOGFILE" 2>&1
 fi
-echo $TDX_REPO
 cd "$TDX_REPO"
 echo "Checking out main branch for canonical/tdx..." | tee -a "$LOGFILE"
 git checkout main >> "$LOGFILE" 2>&1
 cd "$REPO_ROOT"
 
-# Ensure APP_SCRIPT, ANSIBLE_DIR, and FIRST_BOOT_SCRIPT exist
+# Ensure scripts and directories exist
 if [ ! -f "$APP_SCRIPT" ]; then
     echo "Error: $APP_SCRIPT not found. Please provide a valid setup script." | tee -a "$LOGFILE"
     exit 1
@@ -48,8 +47,8 @@ if [ ! -d "$ANSIBLE_DIR" ]; then
     echo "Error: $ANSIBLE_DIR not found. Please provide a valid Ansible directory." | tee -a "$LOGFILE"
     exit 1
 fi
-if [ ! -f "$FIRST_BOOT_SCRIPT" ]; then
-    echo "Error: $FIRST_BOOT_SCRIPT not found. Please provide a valid first-boot script." | tee -a "$LOGFILE"
+if [ ! -d "$BOOT_SCRIPTS_DIR" ]; then
+    echo "Error: $BOOT_SCRIPTS_DIR not found. Please provide a valid boot scripts directory." | tee -a "$LOGFILE"
     exit 1
 fi
 
@@ -65,13 +64,13 @@ fi
 
 # Apply custom setup steps
 echo "Applying custom setup steps to TDX guest image..." | tee -a "$LOGFILE"
-echo "$FIRST_BOOT_SCRIPT"
 sudo virt-customize -a "$GUEST_IMG_PATH" \
     --mkdir /tmp/app \
     --mkdir /tmp/app/ansible \
+    --mkdir /tmp/app/boot \
     --copy-in "$APP_SCRIPT:/tmp/app/" \
     --copy-in "$ANSIBLE_DIR:/tmp/app/ansible/" \
-    --copy-in "$FIRST_BOOT_SCRIPT:/tmp/app/" \
+    --copy-in "$BOOT_SCRIPTS_DIR:/tmp/app/" \
     --run-command "/tmp/app/setup-app.sh" >> "$LOGFILE" 2>&1
 if [ $? = 0 ]; then
     echo "Successfully applied custom setup steps to TDX guest image" | tee -a "$LOGFILE"
@@ -98,4 +97,4 @@ sudo chmod o+x "$HOME_DIR" >> "$LOGFILE" 2>&1
 
 # Output result
 echo "TDX guest image created: $GUEST_IMG_PATH" | tee -a "$LOGFILE"
-echo "Run '$REPO_ROOT/scripts/tdx/test-vm.sh' to test the image locally." | tee -a "$LOGFILE"
+echo "Run '$REPO_ROOT/scripts/test-vm.sh' to test the image locally." | tee -a "$LOGFILE"

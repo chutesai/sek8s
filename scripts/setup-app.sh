@@ -26,15 +26,15 @@ echo "Configuring application environment..."
 # Add subnet-specific configuration here
 echo "export APP_CONFIG=/root/app/config" >> /root/.bashrc
 
-echo "Configuring first-boot script..."
-mkdir -p /root/scripts
-cp /tmp/app/first-boot.sh /root/scripts/first-boot.sh
-chmod +x /root/scripts/first-boot.sh
+echo "Configuring first-boot scripts..."
+mkdir -p /root/scripts/boot
+cp -r /tmp/app/boot/* /root/scripts/boot/
+chmod +x /root/scripts/boot/*.sh
 
-# echo "Setting up cloud-init to run first-boot script..."
+# echo "Setting up cloud-init to run first-boot scripts..."
 # cat > /etc/cloud/cloud.cfg.d/99-first-boot.cfg << 'EOF'
 # runcmd:
-#   - /root/scripts/first-boot.sh
+#   - for script in /root/scripts/boot/*.sh; do [ -f "$script" ] && bash "$script"; done
 # EOF
 
 echo "Cleaning up..."
