@@ -1,6 +1,6 @@
 ---
 - name: Common Setup
-  hosts: all
+  hosts: server
   become: true
   tags:
     - common
@@ -13,7 +13,7 @@
         name: common
 
 - name: Setup K3S clusters
-  hosts: all
+  hosts: server
   become: true
   tags:
     - k3s
@@ -26,7 +26,7 @@
         name: k3s
 
 - name: GPU Setup
-  hosts: workers
+  hosts: server
   become: true
   tags:
     - gpu
@@ -39,7 +39,7 @@
         name: gpu
 
 - name: Setup Chutes GPU Clusters
-  hosts: all
+  hosts: server
   become: true
   tags:
     - chutes-gpu

@@ -76,19 +76,7 @@ For example:
 ```yaml
 
 all:
-  vars:
-    ansible_user: ubuntu
-    ansible_ssh_private_key_file: ~/.ssh/key.pem
-    ssh_keys:
-      - "ssh-rsa AAAAB... user@domain.com"
-    # The username you want to use to login to those machines (and your public key will be added to).
-    user: billybob
-
-    # Local kubectl setup
-    setup_local_kubeconfig: false # Set to true to setup kubeconfig on the ansible controller
-    controller_kubeconfig: ~/.kube/chutes.config # Path to the ansible controller kubeconfig file you want to use
-    controller_kubectl_staging_dir: "{{ '~/.kube' | expanduser }}/chutes-staging" # noqa var-naming[no-role-prefix]
-
+  vars: {}
   hosts:
     # This would be the main node, which runs postgres, redis, gepetto, etc.
     control:
