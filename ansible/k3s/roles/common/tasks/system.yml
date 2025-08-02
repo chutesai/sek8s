@@ -55,6 +55,11 @@
 
 - name: Setup system packages
   block:
+    - name: Clean apt cache
+      ansible.builtin.apt:
+        autoclean: true
+        autoremove: true
+
     - name: Update apt cache
       ansible.builtin.apt:
         update_cache: true
@@ -101,7 +106,7 @@
           - build-essential
           - nginx
           - redis
-          - net-tools
+          - iproute2
           - ffmpeg
           - rsyslog
           - libpq-dev
