@@ -23,8 +23,8 @@ cp -r /tmp/app/ansible/* /root/ansible/
 cwd=$(pwd)
 cd /root/ansible/k3s
 echo "Running Ansible playbook..."
-# ansible-playbook playbooks/site.yml
-cd $cwd
+ansible-playbook playbooks/site.yml
+cd "$cwd"
 
 echo "Configuring application environment..."
 # Add subnet-specific configuration here

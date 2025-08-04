@@ -1,0 +1,3 @@
+#cloud-config
+hostname: chutes-miner-gpu-0
+timezone: UTC

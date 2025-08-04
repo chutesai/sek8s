@@ -7,6 +7,7 @@ IMAGE_PATH="tdx/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2
 VM_NAME="tdx-test-vm"
 LOGFILE="tdx-test-vm.log"
 VNC_PORT="5900"
+USER_DATA_FILE="${USER_DATA_FILE:-local/user-data.yaml}"
 
 # Log function
 log() {
@@ -61,6 +62,12 @@ if [ ! -f "$IMAGE_PATH" ]; then
     exit 1
 fi
 
+# Check for user-data file
+if [ -n "$USER_DATA_FILE" ] && [ ! -f "$USER_DATA_FILE" ]; then
+    log "Error: User-data file $USER_DATA_FILE not found."
+    exit 1
+fi
+
 # Fix permissions for libvirt-qemu
 log "Fixing permissions for $IMAGE_PATH..."
 sudo chown root:libvirt-qemu "$IMAGE_PATH" >> $LOGFILE 2>&1
@@ -96,6 +103,13 @@ if virsh list --all | grep -q "$VM_NAME"; then
     virsh undefine $VM_NAME >> $LOGFILE 2>&1 || true
 fi
 
+# Prepare cloud-init user-data
+CLOUD_INIT_OPT=""
+if [ -f "$USER_DATA_FILE" ]; then
+    log "Using user-data file: $USER_DATA_FILE"
+    CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
+fi
+
 # Start the VM
 log "Starting VM $VM_NAME..."
 virt-install \
@@ -108,6 +122,7 @@ virt-install \
     --network network=default \
     --graphics vnc,listen=0.0.0.0,port=$VNC_PORT \
     --import \
+    $CLOUD_INIT_OPT \
     --noautoconsole >> $LOGFILE 2>&1
 if [ $? -eq 0 ]; then
     log "VM $VM_NAME started successfully."
@@ -132,6 +147,10 @@ log "2. Verify Ansible playbooks: 'ls /root/ansible/'"
 log "3. Check k3s (if installed): 'sudo systemctl status k3s' and 'kubectl get nodes'"
 log "4. Check environment variables: 'cat /root/.bashrc | grep APP_CONFIG'"
 log "5. Check Bittensor (if installed): 'which btcli' or 'sudo systemctl status bittensor'"
+if [ -f "$USER_DATA_FILE" ]; then
+    log "6. Check user-data: 'cat /var/lib/cloud/instance/user-data.txt'"
+    log "7. Check hostname: 'hostname' and 'cat /etc/hostname'"
+fi
 
 # Instructions for cleanup
 log "To stop and remove the VM after testing:"
