@@ -16,6 +16,8 @@ log() {
     echo "$1" | tee -a $LOGFILE
 }
 
+echo "" > $LOGFILE
+
 # Check prerequisites
 log "Checking prerequisites..."
 if ! command -v qemu-kvm >/dev/null 2>&1; then
@@ -139,7 +141,7 @@ log "2. Console: Run 'virsh console $VM_NAME' to access the text console (exit w
 log "Default credentials (if not customized):"
 log "  Username: tdx"
 log "  Password: 123456"
-log "To customize credentials, edit cloud-init in setup-app.sh or check tdx/guest-tools/image/cloud-init/."
+log "To customize credentials, edit cloud-init in setup-server.sh or check tdx/guest-tools/image/cloud-init/."
 
 # Validate custom setup
 if [ -f "$USER_DATA_FILE" ]; then

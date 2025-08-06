@@ -6,3 +6,7 @@
 - name: Setup monitoring
   ansible.builtin.include_tasks: setup_monitoring.yml
   tags: monitoring
+
+- name: Setup chutes
+  ansible.builtin.include_tasks: setup_chutes.yml
+  tags: chutes

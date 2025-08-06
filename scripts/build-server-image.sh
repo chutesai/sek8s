@@ -10,6 +10,7 @@ TDX_REPO="$REPO_ROOT/tdx"
 UBUNTU_VERSION="25.04"
 BOOT_SCRIPT="${BOOT_SCRIPT:-$REPO_ROOT/scripts/setup-server.sh}"
 ANSIBLE_DIR="${ANSIBLE_DIR:-$REPO_ROOT/ansible}"
+CHARTS_DIR="${CHARTS_DIR:-$REPO_ROOT/charts}"
 BOOT_SCRIPTS_DIR="${BOOT_SCRIPTS_DIR:-$REPO_ROOT/scripts/boot}"
 LOGFILE="$REPO_ROOT/tdx-image-build.log"
 GUEST_IMG_PATH="$TDX_REPO/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2"
@@ -82,7 +83,7 @@ cat > "$USER_DATA_FILE" << 'EOF'
 hostname: build-node
 timezone: UTC
 runcmd:
-  - /root/setup-app.sh > /var/log/setup-app.log 2>&1 && echo "SUCCESS" > /root/setup-app-done || echo "ERROR \$?" > /root/setup-app-done
+  - /root/setup-server.sh > /var/log/setup-server.log 2>&1 && echo "SUCCESS" > /root/setup-server-done || echo "ERROR \$?" > /root/setup-server-done
 EOF
 
 # Apply custom setup steps
@@ -95,8 +96,9 @@ sudo virt-customize -a "$SEK8S_IMG_PATH" \
     --mkdir /root/scripts/boot \
     --copy-in "$BOOT_SCRIPT:/root/" \
     --copy-in "$ANSIBLE_DIR:/root/" \
+    --copy-in "$CHARTS_DIR:/root/" \
     --copy-in "$BOOT_SCRIPTS_DIR:/root/scripts" \
-    --chmod 755:/root/setup-app.sh \
+    --chmod 755:/root/setup-server.sh \
     --run-command 'find /root/scripts/boot -type f -name "*.sh" -exec chmod 755 {} \;'
 if [ $? -eq 0 ]; then
     log "Successfully applied custom setup steps to TDX guest image"
@@ -162,17 +164,17 @@ if ! virsh list --state-running | grep -q "$VM_NAME"; then
     exit 1
 fi
 
-# Check setup-app.sh completion
-log "Checking setup-app.sh completion..."
+# Check setup-server.sh completion
+log "Checking setup-server.sh completion..."
 for i in {1..120}; do
-    if sudo virt-cat -a "$SEK8S_IMG_PATH" /root/setup-app-done > /tmp/setup-app-status 2>/dev/null; then
-        if grep -q "SUCCESS" /tmp/setup-app-status; then
+    if sudo virt-cat -a "$SEK8S_IMG_PATH" /root/setup-server-done > /tmp/setup-server-status 2>/dev/null; then
+        if grep -q "SUCCESS" /tmp/setup-server-status; then
             log "Ansible playbook completed successfully"
-            sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-app.log >> "$LOGFILE" 2>&1
+            sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-server.log >> "$LOGFILE" 2>&1
             break
-        elif grep -q "ERROR" /tmp/setup-app-status; then
-            log "Error: setup-app.sh failed"
-            sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-app.log >> "$LOGFILE" 2>&1
+        elif grep -q "ERROR" /tmp/setup-server-status; then
+            log "Error: setup-server.sh failed"
+            sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-server.log >> "$LOGFILE" 2>&1
             if [ "$DEBUG" = "true" ]; then
                 # Pause for debugging
                 log "Paused for debugging before removing build VM. Press Enter to continue and shutdown the VM..."
@@ -183,17 +185,17 @@ for i in {1..120}; do
             exit 1
         fi
     fi
-    log "Waiting for setup-app.sh ($i/120)..."
+    log "Waiting for setup-server.sh ($i/120)..."
     sleep 30
 done
-if ! sudo virt-cat -a "$SEK8S_IMG_PATH" /root/setup-app-done > /tmp/setup-app-status 2>/dev/null || ! grep -q "SUCCESS" /tmp/setup-app-status; then
-    log "Error: setup-app.sh not run or not completed"
-    sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-app.log >> "$LOGFILE" 2>&1 || true
+if ! sudo virt-cat -a "$SEK8S_IMG_PATH" /root/setup-server-done > /tmp/setup-server-status 2>/dev/null || ! grep -q "SUCCESS" /tmp/setup-server-status; then
+    log "Error: setup-server.sh not run or not completed"
+    sudo virt-cat -a "$SEK8S_IMG_PATH" /var/log/setup-server.log >> "$LOGFILE" 2>&1 || true
     virsh destroy "$VM_NAME" >/dev/null 2>&1 || true
     virsh undefine "$VM_NAME" >/dev/null 2>&1 || true
     exit 1
 fi
-rm -f /tmp/setup-app-status
+rm -f /tmp/setup-server-status
 
 log "Press Enter to continue and shut down the VM..."
 read -r

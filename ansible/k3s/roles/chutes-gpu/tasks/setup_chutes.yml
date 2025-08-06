@@ -1,0 +1,9 @@
+---
+- name: Install Chutes Miner charts
+  ansible.builtin.command: >
+    helm install chutes ~/charts/chutes-miner-gpu
+    --namespace chutes
+    --create-namespace
+    --kubeconfig=/etc/rancher/k3s/k3s.yaml
+  register: helm_result
+  changed_when: helm_result.rc == 0
