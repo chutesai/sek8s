@@ -9,7 +9,7 @@ IMAGE_PATH="$REPO_ROOT/image/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
 VM_NAME="tdx-test-vm"
 LOGFILE="tdx-test-vm.log"
 VNC_PORT="5900"
-USER_DATA_FILE="${USER_DATA_FILE:-local/user-data.yaml}"
+USER_DATA_FILE="${USER_DATA_FILE:-local/user-data.tmpl.yaml}"
 
 # Log function
 log() {
@@ -110,8 +110,14 @@ fi
 # Prepare cloud-init user-data
 CLOUD_INIT_OPT=""
 if [ -f "$USER_DATA_FILE" ]; then
+
+    # Example substitution before using the user-data
+    sed -e "s/MINER_SS58_PLACEHOLDER/$MINER_SS58/" \
+        -e "s/MINER_SEED_PLACEHOLDER/$MINER_SEED/" \
+        $USER_DATA_FILE > local/user-data.yaml
+
     log "Using user-data file: $USER_DATA_FILE"
-    CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
+    CLOUD_INIT_OPT="--cloud-init user-data=local/user-data.yaml"
 fi
 
 # Start the VM

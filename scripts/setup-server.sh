@@ -18,6 +18,7 @@ chmod +x /root/scripts/boot/*.sh
 
 echo "Setting up cloud-init to run first-boot scripts..."
 cat > /etc/cloud/cloud.cfg.d/99-first-boot.cfg << 'EOF'
+#cloud-config
 runcmd:
   - for script in /root/scripts/boot/*.sh; do [ -f "$script" ] && bash "$script"; done
 EOF
@@ -27,6 +28,32 @@ cwd=$(pwd)
 cd /root/ansible/k3s
 ansible-playbook playbooks/site.yml
 cd "$cwd"
+
+# Make getty wait for cloud-final
+sudo mkdir -p /etc/systemd/system/getty@.service.d/
+sudo tee /etc/systemd/system/getty@.service.d/wait-for-cloud-init.conf > /dev/null << 'EOF'
+[Unit]
+After=cloud-final.service
+Wants=cloud-final.service
+EOF
+
+# Make SSH wait for cloud-final
+sudo mkdir -p /etc/systemd/system/ssh.service.d/
+sudo tee /etc/systemd/system/ssh.service.d/wait-for-cloud-init.conf > /dev/null << 'EOF'
+[Unit]
+After=cloud-final.service
+Wants=cloud-final.service
+EOF
+
+# Make user sessions wait for cloud-final
+sudo mkdir -p /etc/systemd/system/systemd-user-sessions.service.d/
+sudo tee /etc/systemd/system/systemd-user-sessions.service.d/wait-for-cloud-init.conf > /dev/null << 'EOF'
+[Unit]
+After=cloud-final.service
+Wants=cloud-final.service
+EOF
+
+sudo systemctl daemon-reload
 
 echo "Cleaning up..."
 apt-get clean
