@@ -1,0 +1,171 @@
+---
+# This should SUCCEED - mounting from /cache
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-valid-cache-mount
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: success
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "echo 'Cache mount successful' > /data/test.txt && sleep 3600"]
+    volumeMounts:
+    - name: cache-vol
+      mountPath: /data
+  volumes:
+  - name: cache-vol
+    hostPath:
+      path: /cache/test-valid
+      type: DirectoryOrCreate
+---
+# This should FAIL - mounting from /etc
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-invalid-etc-mount
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: failure
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "ls /host-etc && sleep 3600"]
+    volumeMounts:
+    - name: etc-vol
+      mountPath: /host-etc
+  volumes:
+  - name: etc-vol
+    hostPath:
+      path: /etc
+      type: Directory
+---
+# This should FAIL - mounting from /var
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-invalid-var-mount
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: failure
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "ls /host-var && sleep 3600"]
+    volumeMounts:
+    - name: var-vol
+      mountPath: /host-var
+  volumes:
+  - name: var-vol
+    hostPath:
+      path: /var/log
+      type: Directory
+---
+# This should SUCCEED - emptyDir volume
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-valid-emptydir
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: success
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "echo 'EmptyDir mount successful' > /data/test.txt && sleep 3600"]
+    volumeMounts:
+    - name: empty-vol
+      mountPath: /data
+  volumes:
+  - name: empty-vol
+    emptyDir: {}
+---
+# This should SUCCEED - configMap volume
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+  namespace: default
+data:
+  test.conf: |
+    test=value
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-valid-configmap
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: success
+spec:
+  containers:
+  - name: test
+    image: busybox
+    command: ["sh", "-c", "cat /config/test.conf && sleep 3600"]
+    volumeMounts:
+    - name: config-vol
+      mountPath: /config
+  volumes:
+  - name: config-vol
+    configMap:
+      name: test-config
+---
+# This should SUCCEED - Job with emptyDir for /tmp
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-job-emptydir-tmp
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: success
+spec:
+  template:
+    spec:
+      containers:
+      - name: test
+        image: busybox
+        command: ["sh", "-c", "echo 'Job temp data' > /tmp/jobdata.txt && cat /tmp/jobdata.txt"]
+        volumeMounts:
+        - name: tmp-vol
+          mountPath: /tmp
+      volumes:
+      - name: tmp-vol
+        emptyDir: {}
+      restartPolicy: Never
+---
+# This should SUCCEED - Job with /cache mount
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: test-job-cache-mount
+  namespace: default
+  labels:
+    test: mount-restriction
+    expected: success
+spec:
+  template:
+    spec:
+      containers:
+      - name: test
+        image: busybox
+        command: ["sh", "-c", "echo 'Cache data' > /data/cache.txt && cat /data/cache.txt"]
+        volumeMounts:
+        - name: cache-vol
+          mountPath: /data
+      volumes:
+      - name: cache-vol
+        hostPath:
+          path: /cache/jobs
+          type: DirectoryOrCreate
+      restartPolicy: Never
