@@ -33,7 +33,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "========================================="
-echo "Phase 1: Mount Restrictions Test Suite"
+echo "Mount Restrictions Test Suite"
 echo "========================================="
 
 # Test 1: Verify /cache directory exists and has correct permissions

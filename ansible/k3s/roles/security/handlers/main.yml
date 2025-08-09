@@ -8,4 +8,8 @@
     name: k3s
     state: restarted
   when: ansible_facts.services['k3s.service'] is defined
-  
+
+- name: reload apparmor
+  systemd:
+    name: apparmor
+    state: reloaded

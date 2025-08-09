@@ -1,0 +1,53 @@
+#include <tunables/global>
+
+/usr/local/bin/k3s flags=(attach_disconnected) {
+  #include <abstractions/base>
+  
+  # Allow k3s to load modules (exception to general denial)
+  capability sys_module,
+  
+  # Module operations
+  /sbin/modprobe ix,
+  /sbin/insmod ix,
+  /sbin/rmmod ix,
+  /lib/modules/** r,
+  
+  # Read module state
+  /proc/modules r,
+  /sys/module/** r,
+  
+  # Standard k3s operations
+  /usr/local/bin/k3s mr,
+  /var/lib/rancher/k3s/** rw,
+  /etc/rancher/k3s/** r,
+  /run/k3s/** rw,
+  /var/log/k3s/** w,
+  
+  # Container operations
+  /sys/fs/cgroup/** rw,
+  /proc/sys/** rw,
+  
+  # Network
+  network inet stream,
+  network inet dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  
+  # GPU support
+  /dev/nvidia* rw,
+  /dev/nvidiactl rw,
+  
+  # Allow all capabilities except those explicitly denied elsewhere
+  capability,
+  
+  # Containerd socket
+  /run/k3s/containerd/containerd.sock rw,
+  
+  # Overlayfs
+  mount -> /var/lib/rancher/k3s/agent/containerd/**,
+  umount /var/lib/rancher/k3s/agent/containerd/**,
+  
+  # Temporary directories
+  /tmp/** rw,
+  /var/tmp/** rw,
+}

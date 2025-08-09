@@ -1,0 +1,40 @@
+---
+- name: Ensure AppArmor is installed and enabled
+  package:
+    name: apparmor
+    state: present
+
+- name: Create AppArmor abstractions directory
+  file:
+    path: /etc/apparmor.d/abstractions
+    state: directory
+    mode: '0755'
+
+- name: Deploy module loading abstraction
+  copy:
+    src: apparmor/abstractions/module-loading
+    dest: /etc/apparmor.d/abstractions/module-loading
+    mode: '0644'
+  notify: reload apparmor
+
+- name: Deploy k3s AppArmor profile with module restrictions
+  copy:
+    src: apparmor/usr.local.bin.k3s
+    dest: /etc/apparmor.d/usr.local.bin.k3s
+    mode: '0644'
+  notify: reload apparmor
+
+- name: Load k3s AppArmor profile
+  command: apparmor_parser -r /etc/apparmor.d/usr.local.bin.k3s
+  changed_when: true
+
+- name: Verify AppArmor profile is loaded
+  command: aa-status --json
+  register: aa_status
+  changed_when: false
+
+- name: Ensure k3s profile is enforced
+  assert:
+    that:
+      - "'usr.local.bin.k3s' in aa_status.stdout"
+    fail_msg: "K3s AppArmor profile not loaded"

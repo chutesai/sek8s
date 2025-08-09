@@ -13,7 +13,7 @@
 
     - name: Create OPA volume policy
       ansible.builtin.copy:
-        src: files/opa-volume-policy.rego
+        src: files/opa/opa-volume-policy.rego
         dest: /etc/opa/policies/volume-restrictions.rego
         owner: root
         group: root
