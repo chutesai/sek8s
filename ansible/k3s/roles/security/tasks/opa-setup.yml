@@ -1,0 +1,21 @@
+- name: OPA Policy setup
+  block:
+    - name: Create OPA directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/opa
+        - /etc/opa/policies
+        - /var/log/opa
+      tags: opa-setup
+
+    - name: Create OPA volume policy
+      ansible.builtin.copy:
+        src: files/opa-volume-policy.rego
+        dest: /etc/opa/policies/volume-restrictions.rego
+        owner: root
+        group: root
+        mode: "0644"
+      tags: opa-policy

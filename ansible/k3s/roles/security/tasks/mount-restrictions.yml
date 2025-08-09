@@ -1,0 +1,43 @@
+---
+- name: Mount restrictions setup
+  block:
+    - name: Ensure /cache directory exists
+      ansible.builtin.file:
+        path: /cache
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create systemd drop-in directory for k3s
+      ansible.builtin.file:
+        path: /etc/systemd/system/k3s.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Copy k3s mount restrictions drop-in
+      ansible.builtin.copy:
+        src: files/k3s-mount-restrictions.conf
+        dest: /etc/systemd/system/k3s.service.d/mount-restrictions.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart k3s
+
+    - name: Set sysctl parameters for mount security
+      when: false
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-mount-security.conf
+        reload: true
+      loop:
+        - { name: "fs.protected_regular", value: "2" }
+        - { name: "fs.protected_fifos", value: "2" }
+        - { name: "fs.protected_symlinks", value: "1" }
+        - { name: "fs.protected_hardlinks", value: "1" }

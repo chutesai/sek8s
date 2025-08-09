@@ -3,13 +3,14 @@ set -e
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 UBUNTU_VERSION="25.04"
-IMAGE_PATH="$REPO_ROOT/image/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
+IMAGE_PATH="$REPO_ROOT/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
 VM_NAME="tdx-test-vm"
 LOGFILE="tdx-test-vm.log"
 VNC_PORT="5900"
-USER_DATA_FILE="${USER_DATA_FILE:-local/user-data.tmpl.yaml}"
+USER_DATA_TMPL="${USER_DATA_TMPL:-$REPO_ROOT/local/user-data.tmpl.yaml}"
+USER_DATA_FILE="${USER_DATA_FILE:-$REPO_ROOT/local/user-data.yaml}"
 
 # Log function
 log() {
@@ -67,8 +68,8 @@ if [ ! -f "$IMAGE_PATH" ]; then
 fi
 
 # Check for user-data file
-if [ -n "$USER_DATA_FILE" ] && [ ! -f "$USER_DATA_FILE" ]; then
-    log "Error: User-data file $USER_DATA_FILE not found."
+if [ -n "$USER_DATA_TMPL" ] && [ ! -f "$USER_DATA_TMPL" ]; then
+    log "Error: User-data file $USER_DATA_TMPL not found."
     exit 1
 fi
 
@@ -109,15 +110,15 @@ fi
 
 # Prepare cloud-init user-data
 CLOUD_INIT_OPT=""
-if [ -f "$USER_DATA_FILE" ]; then
+if [ -f "$USER_DATA_TMPL" ]; then
 
     # Example substitution before using the user-data
     sed -e "s/MINER_SS58_PLACEHOLDER/$MINER_SS58/" \
         -e "s/MINER_SEED_PLACEHOLDER/$MINER_SEED/" \
-        $USER_DATA_FILE > local/user-data.yaml
+        $USER_DATA_TMPL > $USER_DATA_FILE
 
-    log "Using user-data file: $USER_DATA_FILE"
-    CLOUD_INIT_OPT="--cloud-init user-data=local/user-data.yaml"
+    log "Using user-data file: $USER_DATA_TMPL"
+    CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
 fi
 
 # Start the VM
@@ -150,7 +151,7 @@ log "  Password: 123456"
 log "To customize credentials, edit cloud-init in setup-server.sh or check tdx/guest-tools/image/cloud-init/."
 
 # Validate custom setup
-if [ -f "$USER_DATA_FILE" ]; then
+if [ -f "$USER_DATA_TMPL" ]; then
     log "Validating custom setup (connect to VM to run these checks):"
     log "1. Check user-data: 'cat /var/lib/cloud/instance/user-data.txt'"
     log "2. Check hostname: 'hostname' and 'cat /etc/hostname'"

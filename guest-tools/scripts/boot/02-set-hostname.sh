@@ -9,8 +9,6 @@ log() {
 
 # Configuration
 USER_DATA_FILE="/var/lib/cloud/instance/user-data.txt"
-METADATA_URL="http://169.254.169.254/latest/meta-data/hostname"
-FALLBACK_PREFIX="k3s"
 
 # Get node IP for fallback hostname
 log "Determining node IP..."
@@ -28,28 +26,13 @@ if [ -f "$USER_DATA_FILE" ]; then
     NEW_HOSTNAME=$(grep '^hostname:' "$USER_DATA_FILE" | sed 's/hostname: *//' | tr -d '\n' | tr -d '[:space:]')
     if [ -n "$NEW_HOSTNAME" ]; then
         log "Using hostname from cloud-init user-data: $NEW_HOSTNAME"
-    fi
-fi
-# Fallback to cloud provider metadata (e.g., AWS EC2)
-if [ -z "$NEW_HOSTNAME" ]; then
-    if command -v curl >/dev/null 2>&1; then
-        NEW_HOSTNAME=$(curl -s --max-time 5 "$METADATA_URL" 2>/dev/null)
-        if [ -n "$NEW_HOSTNAME" ]; then
-            log "Using hostname from metadata service: $NEW_HOSTNAME"
-        fi
     else
-        log "curl not available, skipping metadata service"
+        log "'hostname' not set in $USER_DATA_FILE, can not set hostname..."
+        exit 1
     fi
-fi
-# Fallback to environment variable
-if [ -z "$NEW_HOSTNAME" ] && [ -n "$NODE_HOSTNAME" ]; then
-    NEW_HOSTNAME="$NODE_HOSTNAME"
-    log "Using hostname from NODE_HOSTNAME: $NEW_HOSTNAME"
-fi
-# Final fallback to generated hostname
-if [ -z "$NEW_HOSTNAME" ]; then
-    NEW_HOSTNAME="$FALLBACK_PREFIX-$(echo "$NODE_IP" | tr '.' '-')"
-    log "Using fallback hostname: $NEW_HOSTNAME"
+else
+    log "$USER_DATA_FILE does not exist, can not set hostname..."
+    exit 1
 fi
 
 # Validate hostname (alphanumeric, hyphens, 1-63 characters)

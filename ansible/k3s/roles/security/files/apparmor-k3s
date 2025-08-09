@@ -1,0 +1,110 @@
+#include <tunables/global>
+
+profile k3s-restrictions flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+  #include <abstractions/openssl>
+  
+  # Allow all capabilities for now
+  capability,
+  
+  # Network access
+  network inet stream,
+  network inet dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+  
+  # Core k3s binaries and libraries
+  /usr/local/bin/k3s ix,
+  /usr/local/bin/k3s-* ix,
+  /usr/bin/** ix,
+  /usr/sbin/** ix,
+  /bin/** ix,
+  /sbin/** ix,
+  /lib/** mr,
+  /lib64/** mr,
+  /usr/lib/** mr,
+  /usr/lib64/** mr,
+  
+  # k3s data directories
+  /var/lib/rancher/k3s/** rwk,
+  /var/lib/kubelet/** rwk,
+  /var/lib/cni/** rwk,
+  /run/k3s/** rwk,
+  /run/containerd/** rwk,
+  /run/flannel/** rwk,
+  
+  # Config directories
+  /etc/rancher/** r,
+  /etc/cni/** r,
+  /etc/containerd/** r,
+  
+  # System directories
+  /proc/** r,
+  /sys/** r,
+  /dev/** rw,
+  
+  # Temporary directories
+  /tmp/** rwk,
+  /var/tmp/** rwk,
+  
+  # Cache directory - ONLY persistent mount allowed
+  /cache/ r,
+  /cache/** rwk,
+  
+  # Mount operations - restricted to specific types
+  mount fstype=overlay -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/,
+  mount fstype=overlay -> /var/lib/rancher/k3s/agent/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/,
+  mount fstype=tmpfs -> /run/**,
+  mount fstype=tmpfs -> /var/lib/kubelet/pods/*/volumes/kubernetes.io~empty-dir/**,
+  mount fstype=proc -> /proc/,
+  mount fstype=sysfs -> /sys/,
+  mount fstype=devtmpfs -> /dev/,
+  mount fstype=cgroup -> /sys/fs/cgroup/,
+  mount fstype=cgroup2 -> /sys/fs/cgroup/unified/,
+  
+  # Only allow bind mounts from /cache to specific container-related paths
+  mount options=(rw,bind) /cache/ -> /var/lib/kubelet/pods/*/volumes/**,
+  mount options=(rw,bind) /cache/** -> /var/lib/kubelet/pods/*/volumes/**,
+  mount options=(ro,bind) /cache/ -> /var/lib/kubelet/pods/*/volumes/**,
+  mount options=(ro,bind) /cache/** -> /var/lib/kubelet/pods/*/volumes/**,
+  
+  mount options=(rw,bind) /cache/ -> /var/lib/rancher/k3s/storage/**,
+  mount options=(rw,bind) /cache/** -> /var/lib/rancher/k3s/storage/**,
+  mount options=(ro,bind) /cache/ -> /var/lib/rancher/k3s/storage/**,
+  mount options=(ro,bind) /cache/** -> /var/lib/rancher/k3s/storage/**,
+  
+  mount options=(rw,bind) /cache/ -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/**,
+  mount options=(rw,bind) /cache/** -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/**,
+  mount options=(ro,bind) /cache/ -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/**,
+  mount options=(ro,bind) /cache/** -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/**,
+  
+  # Allow bind mounts to /tmp for k8s jobs (container /tmp, not host /tmp)
+  mount options=(rw,bind) /** -> /var/lib/kubelet/pods/*/volumes/**,
+  mount options=(rw,bind) /** -> /var/lib/rancher/k3s/storage/**,
+  mount options=(rw,bind) /** -> /run/containerd/io.containerd.runtime.*/k3s.io/*/rootfs/tmp/**,
+  
+  # Explicitly deny other host path mounts
+  deny mount options=(rw,bind) /etc/** -> /**,
+  deny mount options=(rw,bind) /var/** -> /**,
+  deny mount options=(rw,bind) /usr/** -> /**,
+  deny mount options=(rw,bind) /opt/** -> /**,
+  deny mount options=(rw,bind) /home/** -> /**,
+  deny mount options=(rw,bind) /root/** -> /**,
+  deny mount options=(rw,bind) /boot/** -> /**,
+  deny mount options=(rw,bind) /lib/** -> /**,
+  deny mount options=(rw,bind) /lib64/** -> /**,
+  deny mount options=(rw,bind) /bin/** -> /**,
+  deny mount options=(rw,bind) /sbin/** -> /**,
+  deny mount options=(rw,bind) /srv/** -> /**,
+  deny mount options=(rw,bind) /media/** -> /**,
+  deny mount options=(rw,bind) /mnt/** -> /**,
+  
+  # Umount operations
+  umount,
+  
+  # Pivot root for containers
+  pivot_root,
+}

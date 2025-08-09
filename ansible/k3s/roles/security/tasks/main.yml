@@ -1,0 +1,11 @@
+---
+- name: Security hardening
+  tags: security
+  block:
+    - name: Include mount restrictions
+      ansible.builtin.include_tasks: mount-restrictions.yml
+      tags: mount-restrictions
+
+    - name: Include OPA policy setup
+      ansible.builtin.include_tasks: opa-setup.yml
+      tags: opa-setup
