@@ -121,6 +121,11 @@ if [ -f "$USER_DATA_TMPL" ]; then
     CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
 fi
 
+# Copy files into image before starting VM
+sudo virt-customize -a "$IMAGE_PATH" \
+    --copy-in $REPO_ROOT/guest-tools/tests:/root \
+    --run-command 'find /root/tests -type f -name "*.sh" -exec chmod 755 {} \;'
+
 # Start the VM
 log "Starting VM $VM_NAME..."
 virt-install \

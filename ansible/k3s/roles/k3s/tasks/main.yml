@@ -6,7 +6,4 @@
 - name: Setup node
   ansible.builtin.include_tasks: setup_node.yml
   tags: k3s-node
-
-- name: Setup namespaces
-  ansible.builtin.include_tasks: setup_namespaces.yml
-  tags: namespaces
+  

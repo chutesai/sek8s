@@ -1,0 +1,28 @@
+---
+- name: Ensure namespaces exist with security labels
+  kubernetes.core.k8s:
+    name: "{{ item }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        labels:
+          pod-security.kubernetes.io/enforce: baseline
+          pod-security.kubernetes.io/audit: baseline
+          pod-security.kubernetes.io/warn: baseline
+  loop:
+    - chutes
+    - default
+    - monitoring
+
+- name: Create kube-system namespace exemption
+  kubernetes.core.k8s:
+    name: kube-system
+    api_version: v1
+    kind: Namespace
+    state: present
+    definition:
+      metadata:
+        labels:
+          pod-security.kubernetes.io/enforce: privileged

@@ -29,7 +29,6 @@
         - restart k3s
 
     - name: Set sysctl parameters for mount security
-      when: false
       ansible.posix.sysctl:
         name: "{{ item.name }}"
         value: "{{ item.value }}"

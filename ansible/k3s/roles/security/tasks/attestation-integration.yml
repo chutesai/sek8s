@@ -30,7 +30,7 @@
 - name: Deploy attestation service
   copy:
     src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item }}"
+    dest: "/etc/systemd/system/{{ item | basename }}"
     mode: '0644'
   loop:
     - module-attestation/module-attestation.service

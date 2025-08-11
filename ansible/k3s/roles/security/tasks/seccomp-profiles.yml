@@ -1,0 +1,74 @@
+---
+- name: Setup seccomp profiles
+  block:
+  - name: Create seccomp profile directory
+    file:
+      path: /var/lib/kubelet/seccomp
+      state: directory
+      mode: '0755'
+      owner: root
+      group: root
+
+  - name: Copy seccomp profiles
+    copy:
+      src: "{{ item }}"
+      dest: "/var/lib/kubelet/seccomp/{{ item | basename }}"
+      mode: '0644'
+      owner: root
+      group: root
+    loop:
+      - seccomp-profiles/default-deny-mount.json
+      - seccomp-profiles/user-workload.json
+      - seccomp-profiles/k3s-system.json
+
+  - name: Ensure k3s agent directory exists
+    file:
+      path: /var/lib/rancher/k3s/agent/kubelet
+      state: directory
+      mode: '0755'
+      owner: root
+      group: root
+
+  - name: Create symlink for k3s
+    file:
+      src: /var/lib/kubelet/seccomp
+      dest: /var/lib/rancher/k3s/agent/kubelet/seccomp
+      state: link
+      force: yes
+
+- name: Setup Conatinerd seccomp
+  block:
+  - name: Check if containerd config template exists
+    stat:
+      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+    register: containerd_template
+
+  - name: Copy current config to template if template doesn't exist
+    copy:
+      src: /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+      dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+      remote_src: yes
+      mode: '0644'
+    when: not containerd_template.stat.exists
+
+  - name: Check if seccomp already configured
+    lineinfile:
+      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+      regexp: '^\s*SeccompProfile\s*='
+      state: absent
+    check_mode: yes
+    register: seccomp_check
+
+  - name: Add seccomp configuration to existing runc options
+    lineinfile:
+      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+      insertafter: '^\[plugins.*\.runc\.options\]'
+      line: '  SeccompProfile = "/var/lib/kubelet/seccomp/user-workload.json"'
+      state: present
+    when: seccomp_check.found == 0
+
+  - name: Restart k3s to apply containerd config
+    systemd:
+      name: k3s
+      state: restarted
+    when: seccomp_check.changed

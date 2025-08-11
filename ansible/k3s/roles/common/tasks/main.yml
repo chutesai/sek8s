@@ -13,11 +13,6 @@
       - ansible_version.full is version('2.15', '>=')
     msg: Minimum ansible-core version required is 2.15
 
-- name: Setup hostnames
-  ansible.builtin.include_tasks: hostname.yml
-  tags:
-    - hostname
-
 - name: Setup system
   ansible.builtin.include_tasks: system.yml
   tags:

@@ -263,4 +263,4 @@ fi
 
 # Output result
 log "TDX guest image created: $FINAL_IMG_PATH"
-log "Run '$REPO_ROOT/guest-tools/scripts/test-image.sh' to test the image locally."
+log "Run '$REPO_ROOT/guest-tools/scripts/run-image.sh' to test the image locally."

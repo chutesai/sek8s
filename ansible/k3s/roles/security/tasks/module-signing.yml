@@ -1,6 +1,6 @@
 ---
 - name: Check if kernel supports module signatures
-  command: grep CONFIG_MODULE_SIG /boot/config-$(uname -r)
+  shell: grep CONFIG_MODULE_SIG /boot/config-$(uname -r)
   register: module_sig_support
   changed_when: false
   failed_when: false
@@ -20,12 +20,27 @@
     group: root
   notify: reload sysctl
 
-- name: Enable module signature enforcement in kernel cmdline
+- name: Check if cloud image GRUB config exists
+  stat:
+    path: /etc/default/grub.d/50-cloudimg-settings.cfg
+  register: cloud_grub
+
+- name: Enable module signature enforcement in cloud GRUB
+  lineinfile:
+    path: /etc/default/grub.d/50-cloudimg-settings.cfg
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 console=ttyS0 module.sig_enforce=1"'
+    backup: yes
+  when: cloud_grub.stat.exists
+  notify: update grub
+
+- name: Enable module signature enforcement in standard GRUB
   lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
     line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash module.sig_enforce=1"'
     backup: yes
+  when: not cloud_grub.stat.exists
   notify: update grub
 
 - name: Create module monitoring directory
@@ -47,7 +62,7 @@
 - name: Deploy module monitor service files
   copy:
     src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item }}"
+    dest: "/etc/systemd/system/{{ item | basename }}"
     mode: '0644'
   loop:
     - module-monitor/module-monitor.service
