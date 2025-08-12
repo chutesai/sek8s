@@ -19,7 +19,7 @@
 
     - name: Copy k3s mount restrictions drop-in
       ansible.builtin.copy:
-        src: files/k3s-mount-restrictions.conf
+        src: files/k3s.service.d/k3s-mount-restrictions.conf
         dest: /etc/systemd/system/k3s.service.d/mount-restrictions.conf
         owner: root
         group: root
@@ -29,7 +29,6 @@
         - restart k3s
 
     - name: Set sysctl parameters for mount security
-      when: false
       ansible.posix.sysctl:
         name: "{{ item.name }}"
         value: "{{ item.value }}"

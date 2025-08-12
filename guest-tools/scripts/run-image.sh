@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 UBUNTU_VERSION="25.04"
 IMAGE_PATH="$REPO_ROOT/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
 VM_NAME="tdx-test-vm"
-LOGFILE="tdx-test-vm.log"
+LOGFILE="$REPO_ROOT/tdx-test-vm.log"
 VNC_PORT="5900"
 USER_DATA_TMPL="${USER_DATA_TMPL:-$REPO_ROOT/local/user-data.tmpl.yaml}"
 USER_DATA_FILE="${USER_DATA_FILE:-$REPO_ROOT/local/user-data.yaml}"
@@ -120,6 +120,11 @@ if [ -f "$USER_DATA_TMPL" ]; then
     log "Using user-data file: $USER_DATA_TMPL"
     CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
 fi
+
+# Copy files into image before starting VM
+sudo virt-customize -a "$IMAGE_PATH" \
+    --copy-in $REPO_ROOT/guest-tools/tests:/root \
+    --run-command 'find /root/tests -type f -name "*.sh" -exec chmod 755 {} \;'
 
 # Start the VM
 log "Starting VM $VM_NAME..."

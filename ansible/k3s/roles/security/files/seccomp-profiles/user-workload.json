@@ -1,0 +1,36 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "architectures": ["SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_AARCH64"],
+  "syscalls": [
+    {
+      "names": ["mount", "umount", "umount2"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["pivot_root", "chroot"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["add_key", "keyctl", "request_key"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["bpf"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["kexec_load", "kexec_file_load"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["init_module", "finit_module", "delete_module"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    }
+  ]
+}

@@ -33,11 +33,11 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 echo "========================================="
-echo "Phase 1: Mount Restrictions Test Suite"
+echo "Mount Restrictions Test Suite"
 echo "========================================="
 
-# Test 1: Verify /cache directory exists and has correct permissions
-log_test "Test 1: Checking /cache directory"
+# Test: Verify /cache directory exists and has correct permissions
+log_test "Test: Checking /cache directory"
 if [ -d /cache ]; then
     PERMS=$(stat -c %a /cache)
     OWNER=$(stat -c %U:%G /cache)
@@ -50,8 +50,8 @@ else
     log_fail "/cache directory does not exist"
 fi
 
-# Test 2: Verify systemd drop-in for k3s exists
-log_test "Test 2: Checking k3s systemd drop-in configuration"
+# Test: Verify systemd drop-in for k3s exists
+log_test "Test: Checking k3s systemd drop-in configuration"
 DROPIN_FILE="/etc/systemd/system/k3s.service.d/mount-restrictions.conf"
 if [ -f "$DROPIN_FILE" ]; then
     if grep -q "ProtectSystem=full" "$DROPIN_FILE" && \
@@ -65,8 +65,8 @@ else
     log_fail "k3s systemd drop-in file not found"
 fi
 
-# Test 3: Test mounting to /cache (should succeed)
-log_test "Test 3: Testing mount to /cache"
+# Test: Test mounting to /cache (should succeed)
+log_test "Test: Testing mount to /cache"
 TEST_CACHE_DIR="/cache/test-mount-$"
 mkdir -p "$TEST_CACHE_DIR"
 if mount -t tmpfs tmpfs "$TEST_CACHE_DIR" 2>/dev/null; then
@@ -78,8 +78,8 @@ else
     rmdir "$TEST_CACHE_DIR" 2>/dev/null || true
 fi
 
-# Test 4: Test mounting outside /cache (should work at OS level but be restricted for k3s)
-log_test "Test 4: Testing mount outside /cache"
+# Test: Test mounting outside /cache (should work at OS level but be restricted for k3s)
+log_test "Test: Testing mount outside /cache"
 TEST_DIR="/tmp/test-mount-$"
 mkdir -p "$TEST_DIR"
 if mount -t tmpfs tmpfs "$TEST_DIR" 2>/dev/null; then
@@ -90,8 +90,8 @@ else
 fi
 rmdir "$TEST_DIR" 2>/dev/null || true
 
-# Test 5: Verify k3s service is running with restrictions
-log_test "Test 5: Checking k3s service with mount restrictions"
+# Test: Verify k3s service is running with restrictions
+log_test "Test: Checking k3s service with mount restrictions"
 if systemctl is-active k3s >/dev/null 2>&1; then
     # Check if ProtectSystem is active
     if systemctl show k3s -p ProtectSystem | grep -q "ProtectSystem=full"; then
@@ -103,8 +103,8 @@ else
     log_fail "k3s service is not running"
 fi
 
-# Test 6: Test k3s pod with cache mount (should succeed)
-log_test "Test 6: Testing k3s pod with /cache mount"
+# Test: Test k3s pod with cache mount (should succeed)
+log_test "Test: Testing k3s pod with /cache mount"
 if command -v kubectl >/dev/null 2>&1; then
     cat <<EOF | kubectl apply -f - >/dev/null 2>&1
 apiVersion: v1
@@ -142,8 +142,8 @@ else
     log_test "kubectl not available, skipping k8s pod tests"
 fi
 
-# Test 7: Test k3s pod with non-cache mount (OPA should block when configured)
-log_test "Test 7: Testing k3s pod with non-cache mount"
+# Test: Test k3s pod with non-cache mount (OPA should block when configured)
+log_test "Test: Testing k3s pod with non-cache mount"
 if command -v kubectl >/dev/null 2>&1; then
     cat <<EOF | kubectl apply -f - 2>/tmp/kubectl-error-$ >/dev/null
 apiVersion: v1
@@ -177,8 +177,8 @@ else
     log_test "kubectl not available, skipping k8s pod tests"
 fi
 
-# Test 8: Test k3s job with emptyDir for /tmp (should succeed)
-log_test "Test 8: Testing k3s job with emptyDir for /tmp"
+# Test: Test k3s job with emptyDir for /tmp (should succeed)
+log_test "Test: Testing k3s job with emptyDir for /tmp"
 if command -v kubectl >/dev/null 2>&1; then
     cat <<EOF | kubectl apply -f - >/dev/null 2>&1
 apiVersion: batch/v1
@@ -217,8 +217,8 @@ else
     log_test "kubectl not available, skipping k8s job tests"
 fi
 
-# Test 9: Check systemd security parameters
-log_test "Test 9: Checking systemd security parameters"
+# Test: Check systemd security parameters
+log_test "Test: Checking systemd security parameters"
 EXPECTED_PARAMS="ProtectSystem=full ProtectHome=yes PrivateMounts=yes MountFlags=slave"
 ALL_SET=true
 for param in $EXPECTED_PARAMS; do
@@ -232,8 +232,8 @@ for param in $EXPECTED_PARAMS; do
     fi
 done
 
-# Test 10: Verify sysctl security parameters
-log_test "Test 10: Checking sysctl security parameters"
+# Test: Verify sysctl security parameters
+log_test "Test: Checking sysctl security parameters"
 EXPECTED_SYSCTLS="fs.protected_regular=2 fs.protected_fifos=2 fs.protected_symlinks=1 fs.protected_hardlinks=1"
 ALL_SET=true
 for sysctl_param in $EXPECTED_SYSCTLS; do
@@ -249,8 +249,8 @@ if $ALL_SET; then
     log_pass "All sysctl security parameters are correctly set"
 fi
 
-# Test 11: Test bind mount from /cache (should succeed)
-log_test "Test 11: Testing bind mount from /cache"
+# Test: Test bind mount from /cache (should succeed)
+log_test "Test: Testing bind mount from /cache"
 mkdir -p /cache/source-$ /tmp/target-$
 echo "test" > /cache/source-$/testfile
 if mount --bind /cache/source-$ /tmp/target-$ 2>/dev/null; then
@@ -265,16 +265,16 @@ else
 fi
 rm -rf /cache/source-$ /tmp/target-$
 
-# Test 12: Verify OPA policy file exists (for future Phase 4)
-log_test "Test 12: Checking OPA volume policy"
+# Test: Verify OPA policy file exists (for future Phase 4)
+log_test "Test: Checking OPA volume policy"
 if [ -f /etc/opa/policies/volume-restrictions.rego ]; then
     log_pass "OPA volume restriction policy exists"
 else
     log_test "OPA volume restriction policy not found (will be added in Phase 4)"
 fi
 
-# Test 13: Verify no AppArmor profiles are enforced for k3s
-log_test "Test 13: Checking AppArmor is not applied to k3s"
+# Test: Verify no AppArmor profiles are enforced for k3s
+log_test "Test: Checking AppArmor is not applied to k3s"
 if command -v aa-status >/dev/null 2>&1; then
     if aa-status 2>/dev/null | grep -q "k3s-restrictions"; then
         log_fail "AppArmor k3s-restrictions profile is loaded (should not be used with systemd restrictions)"

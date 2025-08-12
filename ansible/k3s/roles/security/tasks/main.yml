@@ -1,6 +1,11 @@
 ---
 - name: Security hardening
   tags: security
+  vars:
+    enable_module_signing: true
+    attestation_endpoint: "https://api.example.com/attestation"
+    attestation_interval: 900  # 15 minutes
+    module_monitoring: true
   block:
     - name: Include mount restrictions
       ansible.builtin.include_tasks: mount-restrictions.yml
@@ -9,3 +14,15 @@
     - name: Include OPA policy setup
       ansible.builtin.include_tasks: opa-setup.yml
       tags: opa-setup
+
+    - name: Module signing
+      ansible.builtin.include_tasks: module-signing.yml
+      tags: module-signing
+
+    - name: Seccomp profiles
+      ansible.builtin.include_tasks: seccomp-profiles.yml
+      tags: seccomp-profiles
+    
+    - name: Attestation integration
+      ansible.builtin.include_tasks: attestation-integration.yml
+      tags: attestation

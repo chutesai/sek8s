@@ -6,7 +6,7 @@
 
 - name: Install GPU Operator
   ansible.builtin.command: >
-    helm install gpu-operator nvidia/gpu-operator
+    helm upgrade --install gpu-operator nvidia/gpu-operator
     --namespace gpu-operator
     --set driver.enabled=false
     --set toolkit.enabled=false
