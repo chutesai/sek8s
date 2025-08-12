@@ -1,0 +1,13 @@
+[Unit]
+Description=Run Binary Integrity Check Every 30 Minutes
+Requires=binary-attestation.service
+
+[Timer]
+# Run every 30 minutes
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=60
+Persistent=true
+
+[Install]
+WantedBy=timers.target

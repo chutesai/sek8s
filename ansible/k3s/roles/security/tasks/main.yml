@@ -26,3 +26,10 @@
     - name: Attestation integration
       ansible.builtin.include_tasks: attestation-integration.yml
       tags: attestation
+    
+    - name: Chroot and init hardening
+      ansible.builtin.include_tasks: chroot-hardening.yml
+      tags:
+        - chroot-hardening
+        - phase3
+        - init-hardening
