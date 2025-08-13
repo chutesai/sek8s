@@ -17,6 +17,15 @@
         group: root
         mode: "0755"
 
+    # Need to create this directory since it must exist for systemd restrictions to be valid
+    - name: Create /etc/kubernetes directory for GPU opeartor
+      ansible.builtin.file:
+        path: /etc/kubernetes
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Copy k3s mount restrictions drop-in
       ansible.builtin.copy:
         src: files/k3s.service.d/k3s-mount-restrictions.conf

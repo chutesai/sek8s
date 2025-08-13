@@ -7,3 +7,6 @@
   ansible.builtin.include_tasks: setup_node.yml
   tags: k3s-node
   
+- name: Setup init service
+  ansible.builtin.include_tasks: setup_init_service.yml
+  tags: k3s-init

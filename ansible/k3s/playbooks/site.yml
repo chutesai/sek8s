@@ -65,3 +65,19 @@
         name: chutes-gpu
         apply:
           tags: chutes-gpu
+
+
+- name: Cleanup to ensure fresh state for cloud init and k3s
+  hosts: server
+  become: true
+  tags:
+    - cleanup
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup
+      ansible.builtin.include_role:
+        name: cleanup
+        apply:
+          tags: cleanup

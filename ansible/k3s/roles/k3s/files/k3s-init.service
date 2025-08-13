@@ -1,0 +1,20 @@
+[Unit]
+Description=Initialize k3s Configuration
+Before=k3s.service
+After=network-online.target cloud-init.service
+Wants=network-online.target
+# Don't block cloud-init from finishing
+Before=cloud-final.service
+ConditionPathExists=!/var/lib/rancher/k3s/.initialized
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/k3s-init.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=k3s.service

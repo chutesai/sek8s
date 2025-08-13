@@ -223,24 +223,6 @@ virsh undefine "$VM_NAME" >> "$LOGFILE" 2>&1
 # Clean up cloud-init
 rm -rf "$CLOUD_INIT_DIR"
 
-# Clean cloud-init state from the offline image
-log "Cleaning cloud-init state for fresh deployments..."
-sudo virt-customize -a "$SEK8S_IMG_PATH" \
-    --delete /var/lib/cloud/instances \
-    --delete /var/lib/cloud/data \
-    --delete /var/lib/cloud/instance \
-    --delete /var/log/cloud-init.log \
-    --delete /var/log/cloud-init-output.log \
-    --run-command 'find /var/lib/cloud -name "*.pkl" -delete 2>/dev/null || true' \
-    --run-command 'mkdir -p /var/lib/cloud/instances /var/lib/cloud/data'
-
-if [ $? -eq 0 ]; then
-    log "Successfully cleaned cloud-init state"
-else
-    log "Error: Failed to clean cloud-init state"
-    exit 1
-fi
-
 # Copy to final image
 log "Copying $SEK8S_IMG_PATH to $FINAL_IMG_PATH..."
 sudo cp "$SEK8S_IMG_PATH" "$FINAL_IMG_PATH"

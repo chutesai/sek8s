@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 UBUNTU_VERSION="25.04"
 IMAGE_PATH="$REPO_ROOT/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
+TEST_IMAGE_PATH="$REPO_ROOT/guest-tools/image/tdx-guest-test.qcow2"
 VM_NAME="tdx-test-vm"
 LOGFILE="$REPO_ROOT/tdx-test-vm.log"
 VNC_PORT="5900"
@@ -121,8 +122,18 @@ if [ -f "$USER_DATA_TMPL" ]; then
     CLOUD_INIT_OPT="--cloud-init user-data=$USER_DATA_FILE"
 fi
 
+# Copy image to keep final image clean
+log "Copying $IMAGE_PATH to $TEST_IMAGE_PATH..."
+sudo cp "$IMAGE_PATH" "$TEST_IMAGE_PATH"
+if [ $? -eq 0 ]; then
+    log "Test image created at $TEST_IMAGE_PATH"
+else
+    log "Error: Failed to copy image"
+    exit 1
+fi
+
 # Copy files into image before starting VM
-sudo virt-customize -a "$IMAGE_PATH" \
+sudo virt-customize -a "$TEST_IMAGE_PATH" \
     --copy-in $REPO_ROOT/guest-tools/tests:/root \
     --run-command 'find /root/tests -type f -name "*.sh" -exec chmod 755 {} \;'
 
@@ -132,7 +143,7 @@ virt-install \
     --name $VM_NAME \
     --ram 3072 \
     --vcpus 2 \
-    --disk path=$IMAGE_PATH,format=qcow2 \
+    --disk path=$TEST_IMAGE_PATH,format=qcow2 \
     --os-variant ubuntu$UBUNTU_VERSION \
     --virt-type $VIRT_TYPE \
     --network network=default \
@@ -166,4 +177,4 @@ fi
 log "To stop and remove the VM after testing:"
 log "  virsh destroy $VM_NAME"
 log "  virsh undefine $VM_NAME"
-log "The guest image ($IMAGE_PATH) remains for cloud deployment."
+log "The guest image ($TEST_IMAGE_PATH) remains for cloud deployment."
