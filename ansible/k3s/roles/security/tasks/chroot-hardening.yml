@@ -116,3 +116,12 @@
     cmd: /usr/local/bin/binary-check.sh --report
   register: initial_report
   changed_when: false
+
+- name: Remove chroot binary
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/sbin/chroot
+    - /usr/bin/chroot
+  ignore_errors: yes
