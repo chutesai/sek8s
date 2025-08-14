@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: privileged-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: docker.io/library/nginx:latest
+    securityContext:
+      privileged: true  # Should be rejected
+    resources:
+      limits:
+        memory: "256Mi"

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: untrusted-registry-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: untrusted-registry.example.com/malicious:latest  # Should be rejected
+    resources:
+      limits:
+        memory: "256Mi"

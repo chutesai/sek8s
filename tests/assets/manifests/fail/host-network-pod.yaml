@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: host-network-pod
+  namespace: default
+spec:
+  hostNetwork: true  # Should be rejected
+  containers:
+  - name: app
+    image: docker.io/library/nginx:latest
+    resources:
+      limits:
+        memory: "256Mi"

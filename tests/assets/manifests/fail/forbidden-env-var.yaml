@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: forbidden-env-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: docker.io/library/nginx:latest
+    env:
+    - name: KUBECONFIG  # Should be rejected
+      value: "/etc/kubernetes/admin.conf"
+    resources:
+      limits:
+        memory: "256Mi"

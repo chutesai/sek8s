@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-limits-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: docker.io/library/nginx:latest
+    # Missing resource limits - should be rejected

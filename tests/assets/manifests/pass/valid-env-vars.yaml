@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: valid-env-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: docker.io/library/python:3.11-slim
+    env:
+    - name: HF_ENDPOINT
+      value: "https://huggingface.co"
+    - name: CUDA_VISIBLE_DEVICES
+      value: "0,1"
+    - name: APP_CONFIG
+      value: "production"
+    resources:
+      limits:
+        memory: "512Mi"
+        cpu: "1000m"

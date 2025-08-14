@@ -1,0 +1,35 @@
+[Unit]
+Description=Kubernetes Admission Controller
+After=network.target opa.service
+Wants=opa.service
+Before=k3s.service
+
+[Service]
+Type=simple
+User=admission
+Group=admission
+WorkingDirectory=/opt/admission-controller
+
+# Use Poetry virtual environment
+Environment="PATH=/opt/admission-controller/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/opt/admission-controller/.venv"
+
+# Configuration via environment
+Environment="CONFIG_FILE=/etc/admission-controller/config.json"
+Environment="PYTHONPATH=/opt/admission-controller"
+
+# Run
+ExecStart=/opt/admission-controller/.venv/bin/python -m admission_controller.main
+
+Restart=always
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=admission-controller
+
+[Install]
+WantedBy=multi-user.target

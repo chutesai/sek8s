@@ -1,0 +1,40 @@
+- name: Create admission controller systemd service for Poetry
+  ansible.builtin.template:
+    src: admission-controller-poetry.service.j2
+    dest: /etc/systemd/system/admission-controller.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create admission controller service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/admission-controller.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create security hardening drop-in
+  ansible.builtin.template:
+    src: admission-controller-security.conf.j2
+    dest: /etc/systemd/system/admission-controller.service.d/10-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd and start admission controller
+  ansible.builtin.systemd:
+    name: admission-controller
+    daemon_reload: yes
+    enabled: yes
+    state: started
+
+- name: Wait for admission controller to be ready
+  ansible.builtin.uri:
+    url: https://localhost:8443/health
+    validate_certs: no
+    status_code: 200
+  register: admission_health
+  until: admission_health.status == 200
+  retries: 30
+  delay: 2

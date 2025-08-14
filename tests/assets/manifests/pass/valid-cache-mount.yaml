@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: valid-cache-pod
+  namespace: default
+spec:
+  containers:
+  - name: app
+    image: docker.io/library/nginx:latest
+    resources:
+      limits:
+        memory: "256Mi"
+        cpu: "500m"
+    volumeMounts:
+    - name: cache
+      mountPath: /data
+  volumes:
+  - name: cache
+    hostPath:
+      path: /cache/app-data
+      type: DirectoryOrCreate

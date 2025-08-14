@@ -1,0 +1,33 @@
+# Git repository settings
+admission_controller_repo: "https://github.com/your-org/k3s-admission-controller.git"
+admission_controller_version: "main"
+update_repository: true
+update_dependencies: false
+
+# Use poetry run vs direct venv execution
+use_poetry_run: false
+
+# OPA settings
+opa_version: "0.68.0"
+opa_log_level: "info"
+opa_decision_logs: false
+
+# Admission controller settings
+admission_bind_address: "127.0.0.1"
+admission_port: 8443
+enforcement_mode: "enforce"
+cache_enabled: true
+cache_ttl: 300
+debug_mode: false
+metrics_enabled: true
+
+# Registry allowlist
+allowed_registries:
+  - docker.io
+  - gcr.io
+  - quay.io
+  - localhost:30500
+  - "*.amazonaws.com"
+
+# Run validation tests after deployment
+run_validation_tests: true
