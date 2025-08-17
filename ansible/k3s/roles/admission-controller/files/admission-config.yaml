@@ -1,0 +1,9 @@
+# K3s Admission Control Configuration
+apiVersion: apiserver.config.k8s.io/v1
+kind: AdmissionConfiguration
+plugins:
+  - name: ValidatingAdmissionWebhook  # For validation/enforcement
+    configuration:
+      apiVersion: apiserver.config.k8s.io/v1
+      kind: WebhookAdmissionConfiguration
+      kubeConfigFile: "/etc/rancher/k3s/validator-webhook.yaml"  # Path to the webhook kubeconfig file

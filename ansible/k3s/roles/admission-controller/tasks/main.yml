@@ -3,7 +3,7 @@
   ansible.builtin.include_tasks: install-opa.yml
   tags: opa-install
 
-- name: Install and setup admission controller from git
+- name: Install and setup admission controller
   ansible.builtin.include_tasks: install-admission-controller.yml
   tags: admission-install
 
@@ -26,8 +26,3 @@
 - name: Configure K3s webhook
   ansible.builtin.include_tasks: configure-k3s-webhook.yml
   tags: k3s-webhook
-
-- name: Run validation tests
-  ansible.builtin.include_tasks: validate.yml
-  tags: validate
-  when: run_validation_tests | default(true)

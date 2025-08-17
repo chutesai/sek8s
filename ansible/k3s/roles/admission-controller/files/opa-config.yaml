@@ -1,0 +1,21 @@
+# OPA Configuration
+services:
+  - name: authz
+    url: http://localhost:8181
+
+bundles:
+  authz:
+    resource: "/etc/opa/policies"
+    persist: true
+    polling:
+      min_delay_seconds: 5
+      max_delay_seconds: 10
+
+decision_logs:
+  console: false
+  reporting:
+    min_delay_seconds: 5
+    max_delay_seconds: 10
+
+status:
+  console: true

@@ -10,16 +10,13 @@ User=admission
 Group=admission
 WorkingDirectory=/opt/admission-controller
 
-# Use Poetry virtual environment
-Environment="PATH=/opt/admission-controller/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="VIRTUAL_ENV=/opt/admission-controller/.venv"
+# Use virtual environment
+Environment="PATH=/opt/admission-controller/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/opt/admission-controller/venv"
+EnvironmentFile=/etc/admission-controller/admission.env
 
-# Configuration via environment
-Environment="CONFIG_FILE=/etc/admission-controller/config.json"
-Environment="PYTHONPATH=/opt/admission-controller"
-
-# Run
-ExecStart=/opt/admission-controller/.venv/bin/python -m admission_controller.main
+# Run the admission controller
+ExecStart=/opt/admission-controller/venv/bin/python -m sek8s.admission_controller
 
 Restart=always
 RestartSec=5

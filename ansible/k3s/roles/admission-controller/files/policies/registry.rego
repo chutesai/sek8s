@@ -1,5 +1,9 @@
 package admission
 
+import future.keywords.contains
+import future.keywords.if
+import future.keywords.in
+
 # Define allowed registries
 allowed_registries := input.allowed_registries
 
@@ -9,7 +13,7 @@ deny contains msg if {
     container := input.request.object.spec.containers[_]
     image := container.image
     registry := get_registry(image)
-    not registry in allowed_registries
+    not allowed_registries[registry]
     
     msg := sprintf("Container image '%s' uses disallowed registry '%s'. Allowed registries: %v", [image, registry, allowed_registries])
 }
@@ -19,7 +23,7 @@ deny contains msg if {
     container := input.request.object.spec.initContainers[_]
     image := container.image
     registry := get_registry(image)
-    not registry in allowed_registries
+    not allowed_registries[registry]
     
     msg := sprintf("Init container image '%s' uses disallowed registry '%s'. Allowed registries: %v", [image, registry, allowed_registries])
 }
@@ -29,7 +33,7 @@ deny contains msg if {
     container := input.request.object.spec.ephemeralContainers[_]
     image := container.image
     registry := get_registry(image)
-    not registry in allowed_registries
+    not allowed_registries[registry]
     
     msg := sprintf("Ephemeral container image '%s' uses disallowed registry '%s'. Allowed registries: %v", [image, registry, allowed_registries])
 }
@@ -39,7 +43,7 @@ deny contains msg if {
     container := input.request.object.spec.template.spec.containers[_]
     image := container.image
     registry := get_registry(image)
-    not registry in allowed_registries
+    not allowed_registries[registry]
     
     msg := sprintf("Container image '%s' uses disallowed registry '%s'. Allowed registries: %v", [image, registry, allowed_registries])
 }
@@ -49,9 +53,16 @@ deny contains msg if {
     container := input.request.object.spec.template.spec.initContainers[_]
     image := container.image
     registry := get_registry(image)
-    not registry in allowed_registries
+    not allowed_registries[registry]
     
     msg := sprintf("Init container image '%s' uses disallowed registry '%s'. Allowed registries: %v", [image, registry, allowed_registries])
+}
+
+# Alternative: Helper function to check if registry is allowed
+# Use this if allowed_registries is an array instead of a set
+is_registry_allowed(registry) if {
+    some i
+    allowed_registries[i] == registry
 }
 
 # Extract registry from image name

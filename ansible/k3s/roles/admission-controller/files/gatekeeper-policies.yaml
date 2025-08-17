@@ -1,0 +1,190 @@
+---
+# ConstraintTemplate to protect webhook configurations
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: protectwebhookconfig
+  namespace: gatekeeper-system
+spec:
+  crd:
+    spec:
+      names:
+        kind: ProtectWebhookConfig
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            protectedWebhooks:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package protectwebhookconfig
+        
+        violation[{"msg": msg}] {
+          # Check if this is a webhook configuration
+          input.review.kind.kind in ["ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"]
+          
+          # Check if it's one of our protected webhooks
+          input.review.object.metadata.name in input.parameters.protectedWebhooks
+          
+          # Block any modification operations
+          input.review.operation in ["UPDATE", "DELETE", "PATCH"]
+          
+          msg := sprintf("Webhook configuration '%s' is protected and cannot be modified or deleted", 
+                        [input.review.object.metadata.name])
+        }
+        
+        violation[{"msg": msg}] {
+          # Prevent creating new webhooks that might bypass security
+          input.review.kind.kind in ["ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"]
+          input.review.operation == "CREATE"
+          
+          # Don't block our own webhooks during setup
+          not input.review.object.metadata.name in input.parameters.protectedWebhooks
+          not input.review.object.metadata.name == "gatekeeper-validating-webhook-configuration"
+          
+          msg := sprintf("Creating new webhook configuration '%s' is not allowed", 
+                        [input.review.object.metadata.name])
+        }
+
+---
+# Constraint to apply the webhook protection
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ProtectWebhookConfig
+metadata:
+  name: protect-critical-webhooks
+  namespace: gatekeeper-system
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["admissionregistration.k8s.io"]
+      kinds: ["ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"]
+  parameters:
+    protectedWebhooks:
+    - "admission-controller-webhook"
+    - "gatekeeper-validating-webhook-configuration"
+
+---
+# ConstraintTemplate to protect RBAC configurations
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: protectrbac
+  namespace: gatekeeper-system
+spec:
+  crd:
+    spec:
+      names:
+        kind: ProtectRBAC
+      validation:
+        openAPIV3Schema:
+          type: object
+          properties:
+            allowedSubjects:
+              type: array
+              items:
+                type: string
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package protectrbac
+        
+        violation[{"msg": msg}] {
+          # Check if this is an RBAC resource
+          input.review.kind.group == "rbac.authorization.k8s.io"
+          input.review.kind.kind in ["ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"]
+          
+          # Block modifications to admin roles
+          input.review.object.metadata.name in ["cluster-admin", "system:masters", "gatekeeper-manager-role"]
+          input.review.operation in ["UPDATE", "DELETE"]
+          
+          msg := sprintf("RBAC resource '%s' is protected and cannot be modified", 
+                        [input.review.object.metadata.name])
+        }
+        
+        violation[{"msg": msg}] {
+          # Prevent granting cluster-admin to new subjects
+          input.review.kind.kind == "ClusterRoleBinding"
+          input.review.object.roleRef.name == "cluster-admin"
+          input.review.operation in ["CREATE", "UPDATE"]
+          
+          # Check if any subjects are not in the allowed list
+          some subject in input.review.object.subjects
+          not subject.name in input.parameters.allowedSubjects
+          
+          msg := sprintf("Cannot grant cluster-admin to subject '%s'", [subject.name])
+        }
+
+---
+# Constraint to protect RBAC
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ProtectRBAC
+metadata:
+  name: protect-critical-rbac
+  namespace: gatekeeper-system
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+    - apiGroups: ["rbac.authorization.k8s.io"]
+      kinds: ["ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"]
+  parameters:
+    allowedSubjects:
+    - "system:masters"
+    - "system:kube-controller-manager"
+    - "system:kube-scheduler"
+
+---
+# ConstraintTemplate to protect Gatekeeper itself
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: protectgatekeeper
+  namespace: gatekeeper-system
+spec:
+  crd:
+    spec:
+      names:
+        kind: ProtectGatekeeper
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package protectgatekeeper
+        
+        violation[{"msg": msg}] {
+          # Protect Gatekeeper namespace
+          input.review.object.metadata.namespace == "gatekeeper-system"
+          input.review.operation in ["DELETE", "UPDATE"]
+          input.review.kind.kind in ["Deployment", "Service", "ServiceAccount", "ConfigMap"]
+          
+          msg := sprintf("Gatekeeper resources in namespace 'gatekeeper-system' cannot be modified", [])
+        }
+        
+        violation[{"msg": msg}] {
+          # Protect Gatekeeper CRDs
+          input.review.kind.kind in ["ConstraintTemplate", "Config"]
+          input.review.kind.group == "templates.gatekeeper.sh"
+          input.review.operation == "DELETE"
+          
+          msg := sprintf("Gatekeeper ConstraintTemplate '%s' cannot be deleted", 
+                        [input.review.object.metadata.name])
+        }
+
+---
+# Constraint to protect Gatekeeper
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ProtectGatekeeper
+metadata:
+  name: protect-gatekeeper-system
+  namespace: gatekeeper-system
+spec:
+  enforcementAction: deny
+  match:
+    namespaces: ["gatekeeper-system"]
+    kinds:
+    - apiGroups: ["*"]
+      kinds: ["*"]

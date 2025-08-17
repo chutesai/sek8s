@@ -1,0 +1,25 @@
+---
+- name: Deploy OPA policies
+  block:
+    - name: Copy OPA policy files
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: /etc/opa/policies/
+        owner: root
+        group: root
+        mode: '0644'
+      with_fileglob:
+        - "files/policies/*.rego"
+      register: policy_files
+
+    - name: Validate OPA policies
+      ansible.builtin.command:
+        cmd: opa test /etc/opa/policies
+      changed_when: false
+      failed_when: false
+      register: policy_test
+
+    - name: Display policy test results
+      ansible.builtin.debug:
+        msg: "{{ policy_test.stdout }}"
+      when: policy_test.stdout

@@ -1,0 +1,55 @@
+---
+- name: Setup TLS certificates for admission webhook
+  block:
+    - name: Check if certificates already exist
+      ansible.builtin.stat:
+        path: /etc/admission-controller/certs/server.crt
+      register: cert_exists
+
+    - name: Generate self-signed certificates
+      when: not cert_exists.stat.exists
+      block:
+        - name: Generate private key
+          ansible.builtin.command:
+            cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 2048
+          args:
+            creates: /etc/admission-controller/certs/server.key
+
+        - name: Generate certificate signing request
+          ansible.builtin.command:
+            cmd: >-
+              openssl req -new 
+              -key /etc/admission-controller/certs/server.key 
+              -out /etc/admission-controller/certs/server.csr 
+              -subj "/CN=admission-controller.kube-system.svc"
+          args:
+            creates: /etc/admission-controller/certs/server.csr
+
+        - name: Generate self-signed certificate
+          ansible.builtin.command:
+            cmd: >-
+              openssl x509 -req -days 365 
+              -in /etc/admission-controller/certs/server.csr 
+              -signkey /etc/admission-controller/certs/server.key 
+              -out /etc/admission-controller/certs/server.crt
+          args:
+            creates: /etc/admission-controller/certs/server.crt
+
+    - name: Set certificate permissions
+      ansible.builtin.file:
+        path: "{{ item }}"
+        owner: root
+        group: admission
+        mode: '0640'
+      loop:
+        - /etc/admission-controller/certs/server.key
+        - /etc/admission-controller/certs/server.crt
+
+    - name: Read certificate for webhook configuration
+      ansible.builtin.slurp:
+        src: /etc/admission-controller/certs/server.crt
+      register: webhook_cert
+
+    - name: Store certificate in fact for webhook configuration
+      ansible.builtin.set_fact:
+        admission_webhook_ca_bundle: "{{ webhook_cert.content }}"

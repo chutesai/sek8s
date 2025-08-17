@@ -1,0 +1,29 @@
+---
+- name: Configure OPA service
+  block:
+    - name: Copy OPA systemd service file
+      ansible.builtin.copy:
+        src: opa.service
+        dest: /etc/systemd/system/opa.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: yes
+
+    - name: Enable and start OPA service
+      ansible.builtin.systemd:
+        name: opa
+        enabled: yes
+        state: started
+
+    - name: Wait for OPA to be ready
+      ansible.builtin.uri:
+        url: http://localhost:8181/health
+        status_code: 200
+      register: opa_health
+      until: opa_health.status == 200
+      retries: 30
+      delay: 2

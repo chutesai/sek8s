@@ -32,7 +32,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-admission-controller = 'sek8s.main:run'
+admission-controller = 'sek8s.admission_controller:run'
 
 [tool.isort]
 profile = "black"

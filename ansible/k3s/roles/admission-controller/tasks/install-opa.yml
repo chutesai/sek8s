@@ -1,0 +1,50 @@
+---
+- name: Install OPA binary
+  block:
+    - name: Check if OPA is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/opa
+      register: opa_binary
+
+    - name: Get system architecture
+      ansible.builtin.command: uname -m
+      register: arch_result
+      changed_when: false
+
+    - name: Set OPA architecture
+      ansible.builtin.set_fact:
+        opa_arch: "{{ 'arm64' if arch_result.stdout == 'aarch64' else 'amd64' }}"
+
+    - name: Download OPA binary
+      ansible.builtin.get_url:
+        url: "https://openpolicyagent.org/downloads/v{{ opa_version }}/opa_linux_{{ opa_arch }}_static"
+        dest: /usr/local/bin/opa
+        mode: '0755'
+        owner: root
+        group: root
+      when: not opa_binary.stat.exists
+
+    - name: Verify OPA installation
+      ansible.builtin.command: /usr/local/bin/opa version
+      register: opa_version_check
+      changed_when: false
+
+    - name: Create OPA directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/opa
+        - /etc/opa/policies
+        - /var/log/opa
+
+    - name: Create OPA configuration
+      ansible.builtin.copy:
+        src: opa-config.yaml
+        dest: /etc/opa/opa.yaml
+        owner: root
+        group: root
+        mode: '0644'

@@ -1,19 +1,9 @@
 ---
-- name: reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: true
-
 - name: reload sysctl
   command: sysctl --system
 
 - name: update grub
   command: update-grub
-
-- name: restart k3s
-  ansible.builtin.systemd:
-    name: k3s
-    state: restarted
-  when: ansible_facts.services['k3s.service'] is defined
 
 - name: reload apparmor
   systemd:

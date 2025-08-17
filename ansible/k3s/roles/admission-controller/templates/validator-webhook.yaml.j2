@@ -1,0 +1,31 @@
+---
+# ValidatingWebhookConfiguration - loaded by K3s at startup
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: admission-controller-webhook
+  namespace: kube-system
+  annotations:
+    # Include hash for attestation verification
+    config.hash: "{{ (admission_webhook_config | to_json | hash('sha256'))[:16] }}"
+webhooks:
+  - name: validate.admission.local
+    clientConfig:
+      # Use localhost for local validator
+      url: https://127.0.0.1:{{ admission_port | default(8443) }}/validate
+      caBundle: {{ admission_webhook_ca_bundle }}
+    rules:
+      - operations: ["*"]
+        apiGroups: ["*"]
+        apiVersions: ["*"]
+        resources: ["*"]
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system  # Allow kube-system for initial setup only
+    failurePolicy: Fail  # Fail closed if validator is down
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    timeoutSeconds: 10

@@ -334,7 +334,7 @@ class AdmissionWebhookServer:
         )
 
 
-def main():
+def run():
     """Main entry point."""
     try:
         # Load configuration using Pydantic
@@ -360,4 +360,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run()
