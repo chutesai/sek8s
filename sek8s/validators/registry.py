@@ -1,7 +1,3 @@
-"""
-Registry allowlist validator.
-"""
-
 import logging
 from typing import Dict
 
@@ -28,6 +24,10 @@ class RegistryValidator(ValidatorBase):
         if self.config.is_namespace_exempt(namespace):
             return ValidationResult.allow(f"Namespace {namespace} is exempt")
         
+        # Delete requests have object set to None so no images to check
+        if request.get("operation", None) == "DELETE":
+            return ValidationResult.allow()
+
         # Extract images
         obj = request.get("object", {})
         images = self.extract_images(obj)
