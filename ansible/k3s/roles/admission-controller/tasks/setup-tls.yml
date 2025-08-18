@@ -12,27 +12,55 @@
         - name: Generate private key
           ansible.builtin.command:
             cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 2048
-          args:
             creates: /etc/admission-controller/certs/server.key
 
-        - name: Generate certificate signing request
+        - name: Create OpenSSL config for certificate with SANs
+          ansible.builtin.copy:
+            content: |
+              [req]
+              distinguished_name = req_distinguished_name
+              req_extensions = v3_req
+              prompt = no
+              
+              [req_distinguished_name]
+              CN = admission-controller
+              
+              [v3_req]
+              keyUsage = keyEncipherment, dataEncipherment
+              extendedKeyUsage = serverAuth
+              subjectAltName = @alt_names
+              
+              [alt_names]
+              DNS.1 = admission-controller
+              DNS.2 = admission-controller.kube-system.svc
+              DNS.3 = admission-controller.kube-system.svc.cluster.local
+              DNS.4 = localhost
+              IP.1 = 127.0.0.1
+              IP.2 = ::1
+              IP.3 = {{ ansible_default_ipv4.address | default('127.0.0.1') }}
+            dest: /etc/admission-controller/certs/openssl.cnf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Generate certificate signing request with SANs
           ansible.builtin.command:
             cmd: >-
-              openssl req -new 
-              -key /etc/admission-controller/certs/server.key 
-              -out /etc/admission-controller/certs/server.csr 
-              -subj "/CN=admission-controller.kube-system.svc"
-          args:
+              openssl req -new
+              -key /etc/admission-controller/certs/server.key
+              -out /etc/admission-controller/certs/server.csr
+              -config /etc/admission-controller/certs/openssl.cnf
             creates: /etc/admission-controller/certs/server.csr
 
-        - name: Generate self-signed certificate
+        - name: Generate self-signed certificate with SANs
           ansible.builtin.command:
             cmd: >-
-              openssl x509 -req -days 365 
-              -in /etc/admission-controller/certs/server.csr 
-              -signkey /etc/admission-controller/certs/server.key 
+              openssl x509 -req -days 365
+              -in /etc/admission-controller/certs/server.csr
+              -signkey /etc/admission-controller/certs/server.key
               -out /etc/admission-controller/certs/server.crt
-          args:
+              -extensions v3_req
+              -extfile /etc/admission-controller/certs/openssl.cnf
             creates: /etc/admission-controller/certs/server.crt
 
     - name: Set certificate permissions

@@ -10,8 +10,8 @@
 
     - name: Create external webhook manifest
       ansible.builtin.template:
-        src: validator-webhook.yaml.j2
-        dest: /var/lib/rancher/k3s/server/manifests/validator-webhook.yaml
+        src: admission-webhook.yaml.j2
+        dest: /var/lib/rancher/k3s/server/manifests/admission-webhook.yaml
         owner: root
         group: root
         mode: '0600'
@@ -24,7 +24,7 @@
 
     - name: Protect webhook manifest from modifications
       ansible.builtin.file:
-        path: /var/lib/rancher/k3s/server/manifests/validator-webhook.yaml
+        path: /var/lib/rancher/k3s/server/manifests/admission-webhook.yaml
         owner: root
         group: root
         mode: '0400'  # Read-only
@@ -32,7 +32,7 @@
 
     - name: Generate initial webhook manifest hash for attestation
       ansible.builtin.shell: |
-        sha256sum /var/lib/rancher/k3s/server/manifests/validator-webhook.yaml > \
+        sha256sum /var/lib/rancher/k3s/server/manifests/admission-webhook.yaml > \
           /etc/security/integrity/webhook-manifest.sha256
       args:
         creates: /etc/security/integrity/webhook-manifest.sha256
