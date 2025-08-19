@@ -26,7 +26,3 @@
 - name: Configure K3s webhook
   ansible.builtin.include_tasks: configure-k3s-webhook.yml
   tags: k3s-webhook
-
-- name: Setup gatekeeper
-  ansible.builtin.include_tasks: setup-gatekeeper.yml
-  tags: gatekeeper

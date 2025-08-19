@@ -1,0 +1,69 @@
+---
+- name: Create temporary directory for Helm operations
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: gatekeeper-helm
+  register: helm_temp_dir
+
+- name: Add Gatekeeper Helm repository
+  ansible.builtin.shell: |
+    helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+    helm repo update
+  environment:
+    HELM_CACHE_HOME: "{{ helm_temp_dir.path }}/.cache"
+    HELM_CONFIG_HOME: "{{ helm_temp_dir.path }}/.config"
+
+- name: Create Gatekeeper Helm values file
+  ansible.builtin.template:
+    src: gatekeeper-values.yaml.j2
+    dest: "{{ helm_temp_dir.path }}/values.yaml"
+    mode: '0644'
+
+- name: Clean manifests directory before generation
+  ansible.builtin.file:
+    path: "{{ helm_temp_dir.path }}/manifests"
+    state: absent
+
+- name: Generate Gatekeeper manifests using Helm template
+  ansible.builtin.shell: |
+    helm template gatekeeper gatekeeper/gatekeeper \
+      --namespace gatekeeper-system \
+      --version {{ gatekeeper_chart_version | default('3.15.0') }} \
+      --values {{ helm_temp_dir.path }}/values.yaml \
+      --output-dir {{ helm_temp_dir.path }}/manifests \
+      --skip-tests
+  environment:
+    HELM_CACHE_HOME: "{{ helm_temp_dir.path }}/.cache"
+    HELM_CONFIG_HOME: "{{ helm_temp_dir.path }}/.config"
+
+- name: Clean and recreate Gatekeeper manifests directory
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests/gatekeeper
+    state: "{{ item }}"
+    mode: '0755'
+  loop:
+    - absent
+    - directory
+
+- name: Add system labels to generated manifests
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: '^  labels:$'
+    replace: |2
+        labels:
+          gatekeeper.sh/system: "yes"
+  with_fileglob:
+    - "{{ helm_temp_dir.path }}/manifests/gatekeeper/*.yaml"
+
+- name: Copy manifests to Gatekeeper subdirectory
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/var/lib/rancher/k3s/server/manifests/gatekeeper/{{ item | basename }}"
+    mode: '0644'
+    force: yes
+  with_fileglob:
+    - "{{ helm_temp_dir.path }}/manifests/gatekeeper/*.yaml"
+
+- name: Store Helm temp directory for cleanup
+  ansible.builtin.set_fact:
+    gatekeeper_helm_temp: "{{ helm_temp_dir.path }}"

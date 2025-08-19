@@ -1,0 +1,12 @@
+---
+- name: Generate Gatekeeper manifests from Helm chart
+  ansible.builtin.include_tasks: generate-helm-manifests.yml
+  tags: gatekeeper-helm-generate
+
+- name: Deploy generated static manifests
+  ansible.builtin.include_tasks: deploy-static-manifests.yml
+  tags: gatekeeper-manifests
+
+- name: Deploy custom policies
+  ansible.builtin.include_tasks: deploy-policies.yml
+  tags: gatekeeper-policies

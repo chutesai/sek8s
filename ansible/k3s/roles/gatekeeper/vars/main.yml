@@ -1,0 +1,27 @@
+---
+# Generated manifest files (will be populated by Helm template)
+gatekeeper_helm_manifests: []
+
+# Gatekeeper system labels
+gatekeeper_labels:
+  gatekeeper.sh/system: "yes"
+
+# Namespace exclusions for Gatekeeper
+gatekeeper_excluded_namespaces:
+  - "gatekeeper-system"
+  - "kube-system"
+  - "kube-public"
+  - "kube-node-lease"
+
+# CRD groups managed by Gatekeeper
+gatekeeper_crd_groups:
+  - "config.gatekeeper.sh"
+  - "templates.gatekeeper.sh"
+  - "constraints.gatekeeper.sh"
+  - "status.gatekeeper.sh"
+
+# Critical Gatekeeper components (Helm-generated names)
+gatekeeper_critical_components:
+  - "gatekeeper-controller-manager"
+  - "gatekeeper-webhook-service"
+  - "gatekeeper-admin"

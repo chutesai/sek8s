@@ -1,0 +1,43 @@
+# Helm chart configuration
+gatekeeper_chart_version: "3.15.0"
+gatekeeper_image_tag: "v3.15.0"
+
+# Deployment configuration
+gatekeeper_replicas: 1
+
+# Webhook configuration
+gatekeeper_failure_policy: "Fail"
+gatekeeper_mutation_failure_policy: "Ignore"
+gatekeeper_timeout: 10
+
+# Feature flags
+gatekeeper_enable_mutation: false
+gatekeeper_enable_external_data: false
+
+# Logging configuration
+gatekeeper_log_level: "INFO"
+gatekeeper_log_denies: false
+gatekeeper_emit_events: false
+
+# Resource limits
+gatekeeper_cpu_limit: "500m"
+gatekeeper_memory_limit: "512Mi"
+gatekeeper_cpu_request: "100m"
+gatekeeper_memory_request: "256Mi"
+
+# Custom policies configuration
+protected_webhooks:
+  - "gatekeeper-validating-webhook-configuration"
+  - "gatekeeper-mutating-webhook-configuration"
+  - "admission-controller-webhook"
+
+exempt_namespaces:
+  - "kube-system"
+  - "gatekeeper-system"
+  - "kube-public"
+  - "kube-node-lease"
+
+exempt_images: []
+
+# Chart repository
+gatekeeper_chart_repo: "https://open-policy-agent.github.io/gatekeeper/charts"

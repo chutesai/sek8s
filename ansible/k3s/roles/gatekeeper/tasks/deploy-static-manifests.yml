@@ -1,0 +1,57 @@
+---
+- name: Ensure K3s manifests directory exists
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Find generated Helm manifests
+  ansible.builtin.find:
+    paths: /tmp/gatekeeper-manifests
+    patterns: "*.yaml"
+  register: helm_manifests
+
+- name: Copy Helm-generated manifests to K3s manifests directory
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "/var/lib/rancher/k3s/server/manifests/{{ item.path | basename }}"
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0600'
+  loop: "{{ helm_manifests.files }}"
+
+- name: Create custom Gatekeeper configuration overlay
+  ansible.builtin.copy:
+    src: manifests/gatekeeper-config-overlay.yaml
+    dest: /var/lib/rancher/k3s/server/manifests/gatekeeper-config-overlay.yaml
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Protect all manifests from modification
+  ansible.builtin.file:
+    path: "{{ item.path | regex_replace('/tmp/gatekeeper-manifests/', '/var/lib/rancher/k3s/server/manifests/') }}"
+    owner: root
+    group: root
+    mode: '0400'
+    attributes: '+i'  # Immutable flag
+  loop: "{{ helm_manifests.files }}"
+
+- name: Protect custom config overlay
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests/gatekeeper-config-overlay.yaml
+    owner: root
+    group: root
+    mode: '0400'
+    attributes: '+i'
+
+- name: Cleanup Helm temporary files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ gatekeeper_helm_temp }}"
+    - /tmp/gatekeeper-manifests
