@@ -62,14 +62,3 @@ deny contains msg if {
     
     msg := "Gatekeeper bypass annotations/labels are not allowed"
 }
-
-# Prevent modification of our own webhook configuration (mutual protection)
-deny contains msg if {
-    input.request.kind.kind == "ValidatingWebhookConfiguration"
-    input.request.name == "admission-controller-webhook"
-    input.request.operation in ["UPDATE", "DELETE"]
-    not helpers.is_bootstrap_operation
-    not helpers.is_k3s_system_operation
-    
-    msg := "External admission controller webhook configuration is protected"
-}

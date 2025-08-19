@@ -272,18 +272,14 @@ deny contains msg if {
 
 # List of forbidden environment variables (customize as needed)
 is_forbidden_env_var(name) if {
-    startswith(name, "KUBERNETES_")
-    not name in [
-        "KUBERNETES_SERVICE_HOST",
-        "KUBERNETES_SERVICE_PORT"
-    ]
-}
-
-is_forbidden_env_var(name) if {
     name in [
         "KUBECONFIG",
         "KUBE_TOKEN"
     ]
+}
+
+is_forbidden_env_var(name) if {
+    name not in allowed_env_vars
 }
 
 # Allow certain environment variables that are needed
