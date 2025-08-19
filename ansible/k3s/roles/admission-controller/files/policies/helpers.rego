@@ -1,5 +1,9 @@
 package helpers
 
+import future.keywords.contains
+import future.keywords.if
+import future.keywords.in
+
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================

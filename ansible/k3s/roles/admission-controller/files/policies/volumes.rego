@@ -4,13 +4,15 @@ import future.keywords.contains
 import future.keywords.if
 import future.keywords.in
 
+import data.helpers
+
 # =============================================================================
 # VOLUME MOUNT RESTRICTIONS
 # =============================================================================
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check Pod directly
     input.request.kind.kind == "Pod"
@@ -23,7 +25,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check Deployment/StatefulSet/DaemonSet templates
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
@@ -35,7 +37,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check Job templates
     input.request.kind.kind == "Job"
@@ -47,7 +49,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check CronJob templates
     input.request.kind.kind == "CronJob"

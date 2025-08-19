@@ -12,7 +12,7 @@ import data.helpers
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check containers in Pod
     input.request.kind.kind == "Pod"
@@ -23,7 +23,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check containers in templates
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
@@ -51,7 +51,7 @@ has_dangerous_capability(container) if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for privileged containers
     input.request.kind.kind == "Pod"
@@ -62,7 +62,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for host network
     input.request.kind.kind == "Pod"
@@ -72,7 +72,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for host PID
     input.request.kind.kind == "Pod"
@@ -82,7 +82,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for host IPC
     input.request.kind.kind == "Pod"
@@ -92,7 +92,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for privilege escalation in templates
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
@@ -156,7 +156,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check images in Pod containers
     input.request.kind.kind == "Pod"
@@ -209,7 +209,7 @@ extract_registry(image) := "docker.io" if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for missing resource limits
     input.request.kind.kind == "Pod"
@@ -220,7 +220,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for missing memory limits specifically
     input.request.kind.kind == "Pod"
@@ -232,7 +232,7 @@ deny contains msg if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for excessive CPU requests
     input.request.kind.kind == "Pod"
@@ -260,7 +260,7 @@ parse_cpu(cpu_str) := value if {
 
 deny contains msg if {
     helpers.is_pod_resource
-    not is_system_namespace
+    not helpers.is_system_namespace
     
     # Check for forbidden environment variables
     input.request.kind.kind == "Pod"
@@ -279,7 +279,7 @@ is_forbidden_env_var(name) if {
 }
 
 is_forbidden_env_var(name) if {
-    name not in allowed_env_vars
+    not name in allowed_env_vars
 }
 
 # Allow certain environment variables that are needed
