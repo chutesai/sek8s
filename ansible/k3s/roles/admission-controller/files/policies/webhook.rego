@@ -25,7 +25,7 @@ deny contains msg if {
 deny contains msg if {
     input.request.kind.kind in ["ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"]
     input.request.operation == "CREATE"
-    input.request.name not in [
+    not input.request.name in [
         "admission-controller-webhook",
         "gatekeeper-validating-webhook-configuration",
         "gatekeeper-mutating-webhook-configuration"
