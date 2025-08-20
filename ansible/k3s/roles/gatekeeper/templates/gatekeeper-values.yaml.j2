@@ -1,9 +1,5 @@
 # Gatekeeper Helm values for static manifest generation
 
-# Basic configuration
-nameOverride: ""
-fullnameOverride: ""
-
 # Replica configuration
 replicas: {{ gatekeeper_replicas | default(1) }}
 
@@ -12,50 +8,7 @@ image:
   repository: openpolicyagent/gatekeeper
   crdRepository: openpolicyagent/gatekeeper-crds
   release: {{ gatekeeper_image_tag | default('v3.15.0') }}
-  pullPolicy: Always
   pullSecrets: []
-
-# Webhook configuration
-webhook:
-  port: 8443
-  timeoutSeconds: {{ gatekeeper_timeout | default(10) }}
-  failurePolicy: {{ gatekeeper_failure_policy | default('Fail') }}
-  namespaceSelector:
-    matchExpressions:
-    - key: kubernetes.io/metadata.name
-      operator: NotIn
-      values: ["gatekeeper-system", "kube-system", "kube-public", "kube-node-lease"]
-
-# Validation webhook configuration
-validatingWebhookConfiguration:
-  namespaceSelector:
-    matchExpressions:
-    - key: kubernetes.io/metadata.name
-      operator: NotIn
-      values: ["gatekeeper-system", "kube-system", "kube-public", "kube-node-lease"]
-
-# Mutation webhook (disable by default)
-mutatingWebhookConfiguration:
-  enabled: {{ gatekeeper_enable_mutation | default(false) }}
-  failurePolicy: {{ gatekeeper_mutation_failure_policy | default('Ignore') }}
-
-# Pod security context
-podSecurityContext:
-  runAsGroup: 999
-  runAsNonRoot: true
-  runAsUser: 1000
-  fsGroup: 999
-
-# Container security context  
-securityContext:
-  allowPrivilegeEscalation: false
-  capabilities:
-    drop:
-    - ALL
-  readOnlyRootFilesystem: true
-  runAsGroup: 999
-  runAsNonRoot: true
-  runAsUser: 1000
 
 # Resource limits
 resources:
@@ -71,77 +24,19 @@ priorityClassName: system-cluster-critical
 
 # Service account
 serviceAccount:
-  create: true
   name: gatekeeper-admin
-
-# RBAC
-rbac:
-  create: true
-
-# Pod disruption budget
-podDisruptionBudget:
-  enabled: false
 
 # Logging configuration
 logLevel: {{ gatekeeper_log_level | default('INFO') }}
 logDenies: {{ gatekeeper_log_denies | default(false) }}
-emitAdmissionEvents: {{ gatekeeper_emit_events | default(false) }}
-
-# Audit configuration
-auditInterval: 60
-auditMatchKindOnly: false
-constraintViolationsLimit: 20
-auditFromCache: false
-auditChunkSize: 500
-logMutations: false
-logLevel: INFO
 
 # Controller manager configuration
 controllerManager:
-  exempt: true
-  priorityClassName: system-cluster-critical
-  dnsPolicy: ClusterFirst
-  port: 8443
-  metricsPort: 8080
-  healthPort: 9090
-  readinessTimeout: 1
-  livenessTimeout: 1
   exemptNamespaces: ["gatekeeper-system"]
-  exemptNamespaceLabels: []
 
-# Disable cert manager (we'll generate our own certs)
-enableDeleteOperations: false
+# External data and cert rotation
 enableExternalData: {{ gatekeeper_enable_external_data | default(false) }}
-enableGeneratorResourceExpansion: false
-enableTLSHealthcheck: false
 disableCertRotation: true
-
-# Custom configuration
-customResourceDefinitions:
-  # Let Helm manage CRDs
-  create: true
-
-# Violations
-violations:
-  allowedUsers: []
-  allowedKinds: []
-
-# Maximum serving threads (-1 for auto)
-maxServingThreads: -1
-
-# Metrics configuration
-metrics:
-  enabled: true
-  port: 8080
-
-# Health check configuration
-health:
-  enabled: true
-  port: 9090
-
-# Network policy (disabled)
-networkPolicy:
-  enabled: false
 
 # Pod annotations
 podAnnotations:
@@ -151,44 +46,8 @@ podAnnotations:
 podLabels:
   gatekeeper.sh/system: "yes"
 
-# Common labels to add to all resources
-commonLabels:
-  gatekeeper.sh/system: "yes"
+# Disable VAP
+enableK8sNativeValidation: false
 
-# Tolerations
-tolerations: []
-
-# Affinity rules
-affinity: {}
-
-# TopologySpreadConstraints
-topologySpreadConstraints: []
-
-# Gatekeeper config
-config:
-  # Namespace exclusions - system namespaces excluded by default
-  matches:
-    - excludedNamespaces: ["gatekeeper-system", "kube-system", "kube-public", "kube-node-lease"]
-      processes: ["*"]
-  validation:
-    traces:
-      - user:
-          kind:
-            group: "user"
-            version: "v1"
-            kind: "User"
-        kind:
-          group: ""
-          version: "v1"
-          kind: "Namespace"
-  parameters: {}
-  readiness:
-    statsEnabled: true
-  sync:
-    syncOnly: []
-
-# Upgrades
-upgradeStrategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 1
+# Allow CONNECT intercepts
+enableConnectOperations: true
