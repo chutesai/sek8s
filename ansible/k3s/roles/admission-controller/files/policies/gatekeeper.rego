@@ -19,6 +19,7 @@ deny contains msg if {
     ]
     input.request.operation in ["UPDATE", "DELETE"]
     not helpers.is_bootstrap_operation
+    not helpers.is_gatekeeper_internal_operation
     not helpers.is_k3s_system_operation
     
     msg := sprintf("Gatekeeper CRD '%s/%s' is protected from modification", [
