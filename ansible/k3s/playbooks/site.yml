@@ -66,21 +66,6 @@
         apply:
           tags: chutes-gpu
 
-- name: Setup gatekeeper
-  hosts: server
-  become: true
-  tags:
-    - gatekeeper
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Gatekeeper
-      ansible.builtin.include_role:
-        name: gatekeeper
-        apply:
-          tags: gatekeeper
-
 - name: Setup admission controller
   hosts: server
   become: true

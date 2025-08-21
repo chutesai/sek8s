@@ -9,11 +9,12 @@ spec:
     resourceRules:
     - apiGroups: ["admissionregistration.k8s.io"]
       apiVersions: ["v1"]
-      operations: ["CREATE", "DELETE", "UPDATE"]
+      operations: ["CREATE", "UPDATE", "DELETE"]
       resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
       scope: "Cluster"
   validations:
-    message: "All VWCs actions are forbidden"
+  - expression: "!(request.operation in ['CREATE', 'UPDATE', 'DELETE'])"
+    message: "VWC actions are forbidden"
 
 ---
 apiVersion: admissionregistration.k8s.io/v1
