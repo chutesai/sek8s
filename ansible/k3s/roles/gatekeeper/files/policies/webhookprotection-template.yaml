@@ -34,8 +34,8 @@ spec:
               package webhookprotection
 
               violation contains {"msg": msg} if {
-                  # Protect ValidatingAdmissionWebhook
-                  input.review.kind.kind == "ValidatingAdmissionWebhook"
+                  # Protect ValidatingWebhookConfiguration
+                  input.review.kind.kind == "ValidatingWebhookConfiguration"
                   input.review.kind.group == "admissionregistration.k8s.io"
                   
                   # Check if this is a protected webhook
@@ -46,12 +46,12 @@ spec:
                   operation := input.review.operation
                   not operation in input.parameters.allowedOperations
                   
-                  msg := sprintf("Operation '%s' on protected ValidatingAdmissionWebhook '%s' is not allowed", [operation, webhook_name])
+                  msg := sprintf("Operation '%s' on protected ValidatingWebhookConfiguration '%s' is not allowed", [operation, webhook_name])
               }
 
               violation contains {"msg": msg} if {
-                  # Protect MutatingAdmissionWebhook
-                  input.review.kind.kind == "MutatingAdmissionWebhook"
+                  # Protect ValidatingWebhookConfiguration
+                  input.review.kind.kind == "ValidatingWebhookConfiguration"
                   input.review.kind.group == "admissionregistration.k8s.io"
                   
                   # Check if this is a protected webhook
@@ -62,7 +62,7 @@ spec:
                   operation := input.review.operation
                   not operation in input.parameters.allowedOperations
                   
-                  msg := sprintf("Operation '%s' on protected MutatingAdmissionWebhook '%s' is not allowed", [operation, webhook_name])
+                  msg := sprintf("Operation '%s' on protected ValidatingWebhookConfiguration '%s' is not allowed", [operation, webhook_name])
               }
 
               violation contains {"msg": msg} if {

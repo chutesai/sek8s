@@ -9,15 +9,7 @@ spec:
   match:
     kinds:
       - apiGroups: ["admissionregistration.k8s.io"]
-        kinds: ["ValidatingAdmissionWebhook", "MutatingAdmissionWebhook"]
-      - apiGroups: ["apps"]
-        kinds: ["Deployment"]
-      - apiGroups: [""]
-        kinds: ["Service", "ServiceAccount"]
-      - apiGroups: ["rbac.authorization.k8s.io"]
-        kinds: ["ClusterRole", "ClusterRoleBinding", "Role", "RoleBinding"]
-      - apiGroups: ["apiextensions.k8s.io"]
-        kinds: ["CustomResourceDefinition"]
+        kinds: ["ValidatingWebhookConfiguration", "MutatingWebhookConfiguration"]
   parameters:
     protectedWebhooks:
       - "gatekeeper-validating-webhook-configuration"
