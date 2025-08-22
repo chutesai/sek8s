@@ -25,3 +25,31 @@ spec:
   policyName: protect-vwcs
   validationActions: [Deny]  # Enforce denial on failure
   matchResources: {}  # Empty matchResources applies to all namespaces/resources
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: protect-vaps
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["admissionregistration.k8s.io"]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE", "DELETE"]
+      resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+      scope: "Cluster"
+  validations:
+  - expression: "'system:masters' in request.userInfo.groups"
+    message: "Operation on ValidatingAdmissionPolicy or Binding forbidden: only cluster-admin (system:masters) users are allowed"
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: protect-vaps-binding
+spec:
+  policyName: protect-vaps
+  validationActions: [Deny]
+  matchResources: {}  # Cluster-wide scope

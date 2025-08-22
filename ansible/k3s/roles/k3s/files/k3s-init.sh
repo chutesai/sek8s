@@ -35,7 +35,6 @@ node-name: $HOSTNAME
 node-ip: $NODE_IP
 node-external-ip: $NODE_IP
 advertise-address: $NODE_IP
-bind-address: 0.0.0.0
 tls-san:
   - $NODE_IP
   - $HOSTNAME
