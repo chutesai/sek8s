@@ -15,6 +15,7 @@ BOOT_SCRIPTS_DIR="${BOOT_SCRIPTS_DIR:-$REPO_ROOT/guest-tools/scripts/boot}"
 LOGFILE="$REPO_ROOT/tdx-image-build.log"
 GUEST_IMG_PATH="$TDX_REPO/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2"
 IMG_DIR="$REPO_ROOT/guest-tools/image"
+COSIGN_KEY_PATH="${COSIGN_KEY_PATH:-~/.cosign/cosign.pub}"
 SEK8S_IMG_PATH="$IMG_DIR/tdx-guest-ubuntu-$UBUNTU_VERSION.qcow2"
 FINAL_IMG_PATH="$IMG_DIR/tdx-guest-ubuntu-$UBUNTU_VERSION-final.qcow2"
 VM_NAME="tdx-build"
@@ -93,10 +94,12 @@ sudo virt-customize -a "$SEK8S_IMG_PATH" \
     --install ansible,python3,python3-pip,curl,docker.io \
     --mkdir /root/ansible \
     --mkdir /root/scripts/boot \
+    --mkdir /root/.cosign \
     --copy-in "$BOOT_SCRIPT:/root/" \
     --copy-in "$ANSIBLE_DIR:/root/" \
     --copy-in "$CHARTS_DIR:/root/" \
     --copy-in "$BOOT_SCRIPTS_DIR:/root/scripts" \
+    --copy-in "$COSIGN_KEY_PATH:/root/.cosign" \
     --chmod 755:/root/setup-server.sh \
     --run-command 'find /root/scripts/boot -type f -name "*.sh" -exec chmod 755 {} \;'
 if [ $? -eq 0 ]; then

@@ -65,15 +65,42 @@
       ansible.builtin.package_facts:
         manager: auto
 
-    - name: Stop and disable unattended upgrades
-      ansible.builtin.systemd:
-        name: unattended-upgrades
-        state: stopped
-        enabled: false
-      failed_when:
-        - unattended_upgrades_result.failed is defined
-        - unattended_upgrades_result.failed
-        - "'Could not find the requested service' not in unattended_upgrades_result.msg"
+    - name: Stop and disable ALL unattended upgrade components
+      block:
+        - name: Stop and disable unattended upgrade services and timers
+          ansible.builtin.systemd:
+            name: "{{ item }}"
+            state: stopped
+            enabled: false
+            masked: true  # This prevents them from being started by other services
+          loop:
+            - unattended-upgrades.service
+            - apt-daily.service
+            - apt-daily.timer
+            - apt-daily-upgrade.service
+            - apt-daily-upgrade.timer
+          ignore_errors: true
+          register: service_stops
+
+        - name: Wait for processes to actually die
+          ansible.builtin.shell: |
+            timeout=60
+            while [ $timeout -gt 0 ] && pgrep -f "(unattended-upgrade|apt.*daily)" >/dev/null 2>&1; do
+              echo "Waiting for apt processes to terminate..."
+              sleep 2
+              timeout=$((timeout - 2))
+            done
+          changed_when: false
+
+        - name: Remove any stale lock files after killing processes
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /var/lib/dpkg/lock
+            - /var/lib/dpkg/lock-frontend
+            - /var/cache/apt/archives/lock
+          ignore_errors: true
 
     - name: Install system packages
       ansible.builtin.package:

@@ -50,6 +50,32 @@
       failed_when: false
       changed_when: true
 
+    # Adding this help mitigate lock conflicts when installing cuda keyring
+    - name: Package environment cleanup
+      block:
+        - name: Check what's holding the dpkg lock
+          shell: lsof /var/lib/dpkg/lock* 2>/dev/null || echo "No active locks"
+          register: lock_holders
+          changed_when: false
+
+        - name: Display lock holders
+          debug:
+            var: lock_holders.stdout_lines
+
+        - name: Wait for any existing package operations to complete
+          shell: |
+            timeout=300  # 5 minutes
+            while [ $timeout -gt 0 ] && fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+              echo "Waiting for package lock to be released... ($timeout seconds remaining)"
+              sleep 10
+              timeout=$((timeout - 10))
+            done
+            if [ $timeout -le 0 ]; then
+              echo "Timeout waiting for package lock"
+              exit 1
+            fi
+          changed_when: false
+
     - name: Download and install CUDA keyring
       block:
         - name: Download keyring
