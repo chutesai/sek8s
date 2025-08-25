@@ -11,10 +11,6 @@
       ansible.builtin.include_tasks: mount-restrictions.yml
       tags: mount-restrictions
 
-    - name: Include OPA policy setup
-      ansible.builtin.include_tasks: opa-setup.yml
-      tags: opa-setup
-
     - name: Module signing
       ansible.builtin.include_tasks: module-signing.yml
       tags: module-signing

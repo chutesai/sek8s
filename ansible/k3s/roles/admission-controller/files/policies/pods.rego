@@ -293,7 +293,12 @@ allowed_env_vars := {
     "USER",
     "LANG",
     "LC_ALL",
-    "TZ"
+    "TZ",
+    "MINER_SEED",
+    "MINER_SS58",
+    "VALIDATORS",
+    "CLUSTER_NAME",
+    "CONTROL_PLANE_URL_FILE"
 }
 
 # =============================================================================

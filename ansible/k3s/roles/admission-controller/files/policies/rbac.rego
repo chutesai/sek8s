@@ -9,6 +9,7 @@ deny contains msg if {
     input.request.kind.group == "rbac.authorization.k8s.io"
     input.request.operation in ["CREATE", "UPDATE", "DELETE"]
     not is_initial_setup
+    not allow_rbac_modification
     msg := sprintf("RBAC modifications are locked down. Operation %s on %s/%s is denied", 
                    [input.request.operation, input.request.kind.kind, input.request.name])
 }
@@ -37,4 +38,20 @@ is_initial_setup if {
     
     # Option 2: Always false after deployment
     false
+}
+
+# Allow RBAC operations from system controllers
+allow_rbac_modification if {
+    # Allow operations from system namespaces
+    input.request.userInfo.username == "system:k3s-supervisor"
+}
+
+allow_rbac_modification if {
+    # Allow NVIDIA operator
+    startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
+}
+
+allow_rbac_modification if {
+    # Allow other system service accounts
+    startswith(input.request.userInfo.username, "system:serviceaccount:kube-system:")
 }
