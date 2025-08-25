@@ -1,0 +1,7 @@
+- name: Configure cosign
+  block:
+    - name: Apply registry configuration
+      ansbile.builtin.copy:
+        src: cosign-registries.json
+        dest: /etc/admission-controller/cosign-registries.json
+      notify: restart admission-controller

@@ -1,0 +1,6 @@
+- name: Restart admission-controller
+  ansible.builtin.systemd:
+    name: admission-controller
+    state: restarted
+    daemon_reload: yes
+  listen: restart admission-controller
