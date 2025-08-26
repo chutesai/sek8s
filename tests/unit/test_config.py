@@ -279,6 +279,7 @@ class TestOPAConfig:
             OPAConfig(opa_log_level="invalid")
 
 
+
 class TestCosignConfig:
     """Tests for CosignConfig."""
     
@@ -286,46 +287,236 @@ class TestCosignConfig:
         """Test default Cosign configuration."""
         config = CosignConfig()
         
-        
-        assert config.fulcio_url == "https://fulcio.sigstore.dev"
-        assert len(config.registry_configs) == 1
         assert config.cache_ttl == 3600
-
-
-        for registry in config.registry_configs:
-            assert registry.require_signature is True
-            assert registry.public_key is None
-            assert registry.keyless_identity_regex is None
-            assert registry.rekor_url == "https://rekor.sigstore.dev"    
-    
-    def test_cosign_config_with_key(self):
-        """Test Cosign config with public key."""
-        with patch("pathlib.Path.exists", return_value=True):
-            config = CosignConfig(
-                cosign_enabled=True,
-                cosign_public_key="/path/to/key.pub"
-            )
-            
-            assert config.cosign_enabled is True
-            assert config.cosign_public_key == Path("/path/to/key.pub")
-    
-    def test_cosign_missing_key_file(self):
-        """Test Cosign config with missing key file."""
-        with patch("pathlib.Path.exists", return_value=False):
-            with pytest.raises(ValueError, match="Cosign public key not found"):
-                CosignConfig(cosign_public_key="/nonexistent/key.pub")
-    
-    def test_cosign_keyless_mode(self):
-        """Test Cosign keyless mode configuration."""
-        config = CosignConfig(
-            cosign_enabled=True,
-            cosign_keyless=True,
-            cosign_fulcio_url="https://custom.fulcio.dev"
-        )
+        assert config.oidc_identity_regex == "^https://github.com/your-org/.*"
+        assert config.oidc_issuer == "https://token.actions.githubusercontent.com"
+        assert config.cosign_rekor_url == "https://rekor.sigstore.dev"
+        assert config.fulcio_url == "https://fulcio.sigstore.dev"
         
-        assert config.cosign_enabled is True
-        assert config.cosign_keyless is True
-        assert config.cosign_fulcio_url == "https://custom.fulcio.dev"
+        # Should have exactly one default registry configuration
+        assert len(config.registry_configs) == 1
+        default_registry = config.registry_configs[0]
+        assert default_registry.registry == "*"
+        assert default_registry.require_signature is True
+        assert default_registry.verification_method == "key"
+        assert default_registry.public_key == Path("/root/.cosign/cosign.pub")
+    
+    def test_cosign_config_from_env(self):
+        """Test Cosign config with environment variables."""
+        os.environ["COSIGN_CACHE_TTL"] = "7200"
+        os.environ["COSIGN_OIDC_IDENTITY_REGEX"] = "^https://github.com/myorg/.*"
+        os.environ["COSIGN_OIDC_ISSUER"] = "https://custom.issuer.com"
+        
+        try:
+            config = CosignConfig()
+            
+            assert config.cache_ttl == 7200
+            assert config.oidc_identity_regex == "^https://github.com/myorg/.*"
+            assert config.oidc_issuer == "https://custom.issuer.com"
+        finally:
+            # Cleanup
+            for var in ["COSIGN_CACHE_TTL", "COSIGN_OIDC_IDENTITY_REGEX", "COSIGN_OIDC_ISSUER"]:
+                os.environ.pop(var, None)
+    
+    def test_cosign_config_with_registry_configs_list(self):
+        """Test Cosign config with registry configurations from list."""
+        registry_configs = [
+            {
+                "registry": "localhost:5000",
+                "require_signature": True,
+                "verification_method": "key",
+                "public_key": "/path/to/key.pub"
+            },
+            {
+                "registry": "docker.io",
+                "require_signature": False,
+                "verification_method": "disabled"
+            }
+        ]
+        
+        with patch("pathlib.Path.exists", return_value=True):
+            config = CosignConfig(registry_configs=registry_configs)
+            
+            assert len(config.registry_configs) == 2
+            
+            # Check first config
+            local_config = config.registry_configs[0]
+            assert local_config.registry == "localhost:5000"
+            assert local_config.require_signature is True
+            assert local_config.verification_method == "key"
+            assert local_config.public_key == Path("/path/to/key.pub")
+            
+            # Check second config
+            docker_config = config.registry_configs[1]
+            assert docker_config.registry == "docker.io"
+            assert docker_config.require_signature is False
+            assert docker_config.verification_method == "disabled"
+    
+    def test_cosign_config_with_config_file(self):
+        """Test Cosign config loading from JSON file."""
+        import tempfile
+        
+        config_data = {
+            "registries": [
+                {
+                    "registry": "gcr.io",
+                    "require_signature": True,
+                    "verification_method": "keyless",
+                    "keyless_identity_regex": "^https://github.com/.*",
+                    "keyless_issuer": "https://token.actions.githubusercontent.com"
+                },
+                {
+                    "registry": "localhost:5000",
+                    "require_signature": True,
+                    "verification_method": "key",
+                    "public_key": "/test/key.pub"
+                }
+            ]
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json.dump(config_data, f)
+            config_file = f.name
+        
+        try:
+            with patch("pathlib.Path.exists", return_value=True):
+                config = CosignConfig(config_file=Path(config_file))
+                
+                assert len(config.registry_configs) == 2
+                
+                # Check keyless config
+                gcr_config = None
+                for reg_config in config.registry_configs:
+                    if reg_config.registry == "gcr.io":
+                        gcr_config = reg_config
+                        break
+                
+                assert gcr_config is not None
+                assert gcr_config.verification_method == "keyless"
+                assert gcr_config.keyless_identity_regex == "^https://github.com/.*"
+                assert gcr_config.keyless_issuer == "https://token.actions.githubusercontent.com"
+        finally:
+            os.unlink(config_file)
+    
+    def test_get_registry_config_exact_match(self):
+        """Test getting registry config with exact match."""
+        registry_configs = [
+            {
+                "registry": "gcr.io",
+                "require_signature": True,
+                "verification_method": "key",
+                "public_key": "/gcr/key.pub"
+            },
+            {
+                "registry": "docker.io",
+                "require_signature": False,
+                "verification_method": "disabled"
+            }
+        ]
+        
+        with patch("pathlib.Path.exists", return_value=True):
+            config = CosignConfig(registry_configs=registry_configs)
+            
+            gcr_config = config.get_registry_config("gcr.io")
+            assert gcr_config is not None
+            assert gcr_config.registry == "gcr.io"
+            assert gcr_config.verification_method == "key"
+            
+            docker_config = config.get_registry_config("docker.io")
+            assert docker_config is not None
+            assert docker_config.verification_method == "disabled"
+    
+    def test_get_registry_config_pattern_match(self):
+        """Test getting registry config with pattern matching."""
+        registry_configs = [
+            {
+                "registry": "docker.io/*",
+                "require_signature": False,
+                "verification_method": "disabled"
+            },
+            {
+                "registry": "*",
+                "require_signature": True,
+                "verification_method": "key",
+                "public_key": "/default/key.pub"
+            }
+        ]
+        
+        with patch("pathlib.Path.exists", return_value=True):
+            config = CosignConfig(registry_configs=registry_configs)
+            
+            # Should match pattern
+            docker_config = config.get_registry_config("docker.io")
+            assert docker_config is not None
+            assert docker_config.registry == "docker.io/*"
+            
+            # Should match wildcard
+            unknown_config = config.get_registry_config("unknown.registry.com")
+            assert unknown_config is not None
+            assert unknown_config.registry == "*"
+    
+    def test_get_registry_config_no_match(self):
+        """Test getting registry config when no match found."""
+        registry_configs = [
+            {
+                "registry": "gcr.io",
+                "require_signature": True,
+                "verification_method": "key",
+                "public_key": "/gcr/key.pub"
+            }
+        ]
+        
+        with patch("pathlib.Path.exists", return_value=True):
+            config = CosignConfig(registry_configs=registry_configs)
+            
+            # No match should return None
+            result = config.get_registry_config("docker.io")
+            assert result is None
+    
+    def test_cosign_registry_config_validation(self):
+        """Test CosignRegistryConfig validation."""
+        from sek8s.config import CosignRegistryConfig
+        
+        # Test valid key-based config
+        with patch("pathlib.Path.exists", return_value=True):
+            config = CosignRegistryConfig(
+                registry="localhost:5000",
+                require_signature=True,
+                verification_method="key",
+                public_key="/path/to/key.pub"
+            )
+            assert config.verification_method == "key"
+            assert config.public_key == Path("/path/to/key.pub")
+        
+        # Test keyless config
+        config = CosignRegistryConfig(
+            registry="gcr.io",
+            require_signature=True,
+            verification_method="keyless",
+            keyless_identity_regex="^https://github.com/.*",
+            keyless_issuer="https://token.actions.githubusercontent.com"
+        )
+        assert config.verification_method == "keyless"
+        assert config.keyless_identity_regex == "^https://github.com/.*"
+        
+        # Test disabled config
+        config = CosignRegistryConfig(
+            registry="docker.io",
+            require_signature=False,
+            verification_method="disabled"
+        )
+        assert config.verification_method == "disabled"
+        assert config.require_signature is False
+    
+    def test_invalid_verification_method(self):
+        """Test invalid verification method."""
+        from sek8s.config import CosignRegistryConfig
+        
+        with pytest.raises(ValueError):
+            CosignRegistryConfig(
+                registry="test.registry",
+                verification_method="invalid"
+            )
 
 
 class TestLoadConfig:
