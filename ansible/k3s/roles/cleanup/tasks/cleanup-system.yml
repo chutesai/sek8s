@@ -1,0 +1,24 @@
+- name: Restore automatic update services for production use
+  block:
+    - name: Unmask and re-enable unattended upgrade services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        masked: false
+        enabled: true
+        daemon_reload: yes
+      loop:
+        - unattended-upgrades.service
+        - apt-daily.service
+        - apt-daily.timer
+        - apt-daily-upgrade.service
+        - apt-daily-upgrade.timer
+      ignore_errors: true
+
+    - name: Start apt-daily timers for normal operation
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      ignore_errors: true

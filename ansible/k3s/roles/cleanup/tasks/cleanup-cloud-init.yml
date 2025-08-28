@@ -1,0 +1,54 @@
+---
+- name: Clean cloud-init state
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/cloud/instances
+    - /var/lib/cloud/instance
+    - /var/lib/cloud/data
+    - /var/log/cloud-init.log
+    - /var/log/cloud-init-output.log
+
+- name: Clean cloud-init sem directory (locks/semaphores)
+  ansible.builtin.file:
+    path: /var/lib/cloud/sem
+    state: absent
+
+- name: Clean cloud-init pkl files
+  ansible.builtin.shell: |
+    find /var/lib/cloud -name "*.pkl" -delete 2>/dev/null || true
+
+- name: Recreate cloud-init directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /var/lib/cloud/instances
+    - /var/lib/cloud/data
+
+- name: Clean package manager cache
+  ansible.builtin.apt:
+    autoclean: yes
+    autoremove: yes
+
+- name: Clean apt lists
+  ansible.builtin.shell: |
+    rm -rf /var/lib/apt/lists/*
+
+- name: Clean temporary files
+  ansible.builtin.shell: |
+    rm -rf /tmp/* /var/tmp/*
+
+- name: Clear bash history
+  ansible.builtin.shell: |
+    history -c
+    > /root/.bash_history
+  ignore_errors: yes
+
+- name: Create success marker
+  ansible.builtin.file:
+    path: /root/cleanup-complete
+    state: touch
+    mode: '0644'
