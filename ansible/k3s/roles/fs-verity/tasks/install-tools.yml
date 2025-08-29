@@ -1,0 +1,33 @@
+---
+- name: Check kernel fs-verity support
+  ansible.builtin.stat:
+    path: /sys/fs/verity
+  register: fs_verity_support
+
+- name: Fail if kernel doesn't support fs-verity
+  ansible.builtin.fail:
+    msg: "Kernel does not support fs-verity. Enable CONFIG_FS_VERITY=y"
+  when: not fs_verity_support.stat.exists
+
+- name: Check if fsverity tools already installed
+  ansible.builtin.command: fsverity --version
+  register: fsverity_check
+  changed_when: false
+  failed_when: false
+
+- name: Install fs-verity tools
+  ansible.builtin.apt:
+    name:
+      - fsverity-utils
+    state: present
+    update_cache: yes
+  when: fsverity_check.rc != 0
+
+- name: Verify fsverity installation
+  ansible.builtin.command: fsverity --version
+  register: fsverity_version
+  changed_when: false
+
+- name: Display fsverity version
+  ansible.builtin.debug:
+    msg: "Installed fsverity: {{ fsverity_version.stdout }}"

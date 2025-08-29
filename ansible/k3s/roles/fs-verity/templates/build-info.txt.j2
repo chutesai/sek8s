@@ -1,0 +1,58 @@
+TEE VM Image Build Complete
+===========================
+Build Date: {{ ansible_date_time.iso8601 }}
+VM Hostname: {{ ansible_hostname }}
+Kernel: {{ ansible_kernel }}
+Root Filesystem: {{ ansible_mounts | selectattr('mount', 'equalto', '/') | map(attribute='fstype') | first }}
+
+Security Status:
+- fs-verity: Enabled (keyless mode)
+- Protected Files: {{ measured_files }}/{{ critical_files | length }}
+- Measurements File: {{ fs_verity_measurements_txt }}
+- TDX Integration: Ready (measurements included in TDX attestation)
+- Success Rate: {{ success_rate }}%
+
+Components Installed and Protected:
+{% set k3s_files = measurements_data | selectattr('file', 'match', '.*/k3s$') | selectattr('status', 'equalto', 'protected') | list %}
+{% if k3s_files %}
+- K3s: {{ k3s_files[0].file }} ({{ k3s_files[0].measurement[:16] }}...)
+{% else %}
+- K3s: Not found or not protected
+{% endif %}
+{% set opa_files = measurements_data | selectattr('file', 'match', '.*/opa$') | selectattr('status', 'equalto', 'protected') | list %}
+{% if opa_files %}
+- OPA: {{ opa_files[0].file }} ({{ opa_files[0].measurement[:16] }}...)
+{% else %}
+- OPA: Not found or not protected
+{% endif %}
+- fs-verity tools: {{ ansible_facts.packages['fsverity-utils'][0].version if 'fsverity-utils' in ansible_facts.packages else 'Not available' }}
+
+TDX Integration:
+- fs-verity measurements will be included in TDX attestation
+- Any file changes will result in different TDX measurements
+- Keyless mode relies on TDX for build authenticity verification
+
+Critical System Files Protected:
+{% for item in measurements_data %}
+{% if item.status == 'protected' %}
+- {{ item.file }}: {{ item.measurement[:16] }}...
+{% endif %}
+{% endfor %}
+
+{% if failed_files is defined and failed_files | length > 0 %}
+Files That Could Not Be Protected:
+{% for file in failed_files %}
+- {{ file }}
+{% endfor %}
+{% endif %}
+
+Image Status: READY FOR DISTRIBUTION
+Critical files are now immutable and tamper-protected.
+
+Verification Commands:
+- Check all measurements: fsverity measure $(grep -v '^#' {{ fs_verity_measurements_txt }} | awk '{print $2}')
+- Verify specific file: fsverity measure <file_path>
+- Test immutability: echo "test" >> <protected_file> (should fail)
+
+Build Process: Complete
+Next Steps: VM is ready for shutdown and image capture

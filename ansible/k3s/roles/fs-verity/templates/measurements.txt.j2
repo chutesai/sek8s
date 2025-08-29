@@ -1,0 +1,59 @@
+# Keyless fs-verity measurements for TEE VM build
+# Generated on: {{ ansible_date_time.iso8601 }}
+# Hostname: {{ ansible_hostname }}
+# Kernel: {{ ansible_kernel }}
+# Total files: {{ critical_files | length }}
+# Protected files: {{ measured_files }}
+# Unprotected files: {{ unmeasured_files }}
+# Discovery method: Secure discovery script (/usr/local/bin/discover-critical-files.sh)
+#
+# Format: <measurement> <file_path>
+
+{% for item in measurements_data %}
+{% if item.status == 'protected' %}
+{{ item.measurement }} {{ item.file }}
+{% else %}
+# UNPROTECTED: {{ item.file }}
+{% endif %}
+{% endfor %}
+
+# Build Information
+# =================
+# Build date: {{ ansible_date_time.iso8601 }}
+# VM hostname: {{ ansible_hostname }}
+# Kernel version: {{ ansible_kernel }}
+# Ansible user: {{ ansible_user | default('unknown') }}
+# Total protected files: {{ measured_files }}/{{ critical_files | length }}
+
+# Key Components Protected
+# ========================
+{% set k3s_files = measurements_data | selectattr('file', 'match', '.*/k3s$') | selectattr('status', 'equalto', 'protected') | list %}
+{% if k3s_files %}
+# K3s binary: {{ k3s_files | length }} file(s)
+{% endif %}
+{% set opa_files = measurements_data | selectattr('file', 'match', '.*/opa$') | selectattr('status', 'equalto', 'protected') | list %}
+{% if opa_files %}
+# OPA binary: {{ opa_files | length }} file(s)
+{% endif %}
+{% set service_files = measurements_data | selectattr('file', 'match', '.*\.service$') | selectattr('status', 'equalto', 'protected') | list %}
+{% if service_files %}
+# Systemd services: {{ service_files | length }} file(s)
+{% endif %}
+{% set config_files = measurements_data | selectattr('file', 'match', '.*/etc/.*') | selectattr('status', 'equalto', 'protected') | list %}
+{% if config_files %}
+# Configuration files: {{ config_files | length }} file(s)
+{% endif %}
+
+# File Integrity Verification
+# ============================
+# To verify a file's integrity, run:
+#   fsverity measure <file_path>
+# Compare the output with the measurement above.
+#
+# To verify all files at once:
+#   grep -v '^#' {{ fs_verity_measurements_txt }} | while read measurement file; do
+#     current=$(fsverity measure "$file" 2>/dev/null | cut -d' ' -f1)
+#     if [ "$current" != "$measurement" ]; then
+#       echo "INTEGRITY VIOLATION: $file"
+#     fi
+#   done

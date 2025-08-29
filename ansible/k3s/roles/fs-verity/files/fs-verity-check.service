@@ -1,0 +1,55 @@
+[Unit]
+Description=fs-verity Integrity Check
+Documentation=man:fsverity(1)
+After=multi-user.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fs-verity-check.sh
+User=root
+Group=root
+
+# Security hardening for the service
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# File system access
+ReadWritePaths=/var/log /var/lib/fs-verity
+ReadOnlyPaths=/etc /usr/local/bin /usr/bin /var/lib/rancher
+
+# System call filtering
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @reboot @swap @module @mount @clock @cpu-emulation @debug @keyring @ipc @raw-io @obsolete
+
+# Network restrictions (no network access needed)
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# Resource limits
+LimitNOFILE=1024
+MemoryMax=100M
+CPUQuota=10%
+TasksMax=50
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fs-verity-check
+
+[Install]
+WantedBy=multi-user.target

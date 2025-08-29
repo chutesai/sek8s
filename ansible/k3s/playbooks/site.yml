@@ -81,6 +81,21 @@
         apply:
           tags: admission-controller
 
+- name: Enable fs-verity Protection
+  hosts: server
+  become: true
+  tags:
+    - fs-verity
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include fs-verity role
+      ansible.builtin.include_role:
+        name: fs-verity
+        apply:
+          tags: fs-verity
+
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: server
   become: true

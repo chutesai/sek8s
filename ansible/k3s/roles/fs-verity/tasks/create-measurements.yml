@@ -1,0 +1,70 @@
+---
+- name: Get fs-verity measurements for all critical files
+  ansible.builtin.command:
+    cmd: fsverity measure "{{ item }}"
+  loop: "{{ critical_files }}"
+  register: file_measurements
+  failed_when: false
+  changed_when: false
+
+- name: Build measurements data structure
+  ansible.builtin.set_fact:
+    measurements_data: []
+
+- name: Process measurements results
+  ansible.builtin.set_fact:
+    measurements_data: "{{ measurements_data + [{'file': item.item, 'measurement': item.stdout.split()[0] if item.rc == 0 else 'FAILED', 'status': 'protected' if item.rc == 0 else 'unprotected'}] }}"
+  loop: "{{ file_measurements.results }}"
+
+- name: Calculate measurement statistics
+  ansible.builtin.set_fact:
+    measured_files: "{{ measurements_data | selectattr('status', 'equalto', 'protected') | list | length }}"
+    unmeasured_files: "{{ measurements_data | selectattr('status', 'equalto', 'unprotected') | list | length }}"
+
+- name: Create measurements text file
+  ansible.builtin.template:
+    src: measurements.txt.j2
+    dest: /etc/fs-verity-measurements.txt
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create measurements JSON file
+  ansible.builtin.copy:
+    content: |
+      {
+        "timestamp": "{{ ansible_date_time.iso8601 }}",
+        "hostname": "{{ ansible_hostname }}",
+        "kernel_version": "{{ ansible_kernel }}",
+        "total_files": {{ critical_files | length }},
+        "protected_files": {{ measured_files }},
+        "unprotected_files": {{ unmeasured_files }},
+        "measurements": {{ measurements_data | to_nice_json(indent=2) | indent(2) }}
+      }
+    dest: /etc/fs-verity-measurements.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Display measurements summary
+  ansible.builtin.debug:
+    msg: |
+      fs-verity Measurements Summary:
+      - Total files: {{ critical_files | length }}
+      - Protected files: {{ measured_files }}
+      - Unprotected files: {{ unmeasured_files }}
+      - Measurements saved to: /etc/fs-verity-measurements.txt and /etc/fs-verity-measurements.json
+
+- name: Verify measurements files were created
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/fs-verity-measurements.txt
+    - /etc/fs-verity-measurements.json
+  register: measurements_files
+
+- name: Confirm measurements files exist
+  ansible.builtin.debug:
+    msg: "Measurements file {{ item.item }} created successfully ({{ item.stat.size }} bytes)"
+  loop: "{{ measurements_files.results }}"
+  when: item.stat.exists

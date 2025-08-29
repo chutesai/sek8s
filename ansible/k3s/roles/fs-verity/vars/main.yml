@@ -1,0 +1,13 @@
+---
+# fs-verity role variables (keyless configuration)
+
+# Directories and paths
+fs_verity_measurements_txt: /etc/fs-verity-measurements.txt
+fs_verity_measurements_json: /etc/fs-verity-measurements.json
+fs_verity_discovery_script: /usr/local/bin/discover-critical-files.sh
+
+# Protection thresholds
+fs_verity_max_failure_rate: 20  # Maximum percentage of files that can fail protection
+
+# Note: File discovery is now handled by the secure discovery script
+# This ensures consistency between build-time and runtime attestation

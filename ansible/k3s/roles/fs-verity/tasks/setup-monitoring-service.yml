@@ -1,0 +1,79 @@
+---
+- name: Create fs-verity status directory
+  ansible.builtin.file:
+    path: /var/lib/fs-verity
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install fs-verity check script
+  ansible.builtin.copy:
+    src: fs-verity-check.sh
+    dest: /usr/local/bin/fs-verity-check.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install fs-verity check systemd service
+  ansible.builtin.copy:
+    src: fs-verity-check.service
+    dest: /etc/systemd/system/fs-verity-check.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install fs-verity check systemd timer
+  ansible.builtin.copy:
+    src: fs-verity-check.timer
+    dest: /etc/systemd/system/fs-verity-check.timer
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Enable fs-verity check timer
+  ansible.builtin.systemd:
+    name: fs-verity-check.timer
+    enabled: yes
+    state: started
+
+# ToDo: Might want to move this to later in the process depending on what else changes
+- name: Run initial fs-verity check to create status file
+  ansible.builtin.systemd:
+    name: fs-verity-check.service
+    state: started
+  register: initial_check
+  failed_when: false
+
+- name: Display initial check results
+  ansible.builtin.debug:
+    msg: "Initial fs-verity check completed with status: {{ 'success' if initial_check.failed == false else 'warning/error - check logs' }}"
+
+- name: Verify status file was created
+  ansible.builtin.stat:
+    path: /var/lib/fs-verity/status.json
+  register: status_file
+
+- name: Display status file info
+  ansible.builtin.debug:
+    msg: "fs-verity status file created: {{ status_file.stat.path }} ({{ status_file.stat.size }} bytes)"
+  when: status_file.stat.exists
+
+- name: Add fs-verity monitoring files to protection list
+  ansible.builtin.set_fact:
+    critical_files: "{{ critical_files + ['/usr/local/bin/fs-verity-check.sh', '/etc/systemd/system/fs-verity-check.service', '/etc/systemd/system/fs-verity-check.timer'] }}"
+
+- name: Display monitoring service setup summary
+  ansible.builtin.debug:
+    msg: |
+      fs-verity Monitoring Service Setup:
+      - Service: fs-verity-check.service (oneshot)
+      - Timer: fs-verity-check.timer (every 10 minutes)
+      - Status file: /var/lib/fs-verity/status.json
+      - Log file: /var/log/fs-verity-check.log
+      - Script: /usr/local/bin/fs-verity-check.sh (will be fs-verity protected)
+      - Service files: will be fs-verity protected

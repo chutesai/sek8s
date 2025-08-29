@@ -1,0 +1,31 @@
+---
+- name: Install fs-verity tools
+  ansible.builtin.include_tasks: install-tools.yml
+  tags: fs-verity-install
+
+# Keys not needed for keyless fs-verity
+
+- name: Discover critical files
+  ansible.builtin.include_tasks: discover-files.yml
+  tags: fs-verity-discover
+
+- name: Setup monitoring service
+  ansible.builtin.include_tasks: setup-monitoring-service.yml
+  tags: fs-verity-monitoring
+
+- name: Enable fs-verity protection
+  ansible.builtin.include_tasks: enable-protection.yml
+  tags: fs-verity-enable
+
+- name: Create measurements file
+  ansible.builtin.include_tasks: create-measurements.yml
+  tags: fs-verity-measurements
+
+- name: Create build completion marker
+  ansible.builtin.template:
+    src: build-info.txt.j2
+    dest: /etc/tee-vm-final-state.txt
+    owner: root
+    group: root
+    mode: '0644'
+  tags: fs-verity-complete

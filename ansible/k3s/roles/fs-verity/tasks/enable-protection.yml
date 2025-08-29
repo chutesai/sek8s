@@ -1,0 +1,91 @@
+---
+- name: Initialize protection counters
+  ansible.builtin.set_fact:
+    protected_files: []
+    failed_files: []
+    already_protected: []
+
+- name: Check which files already have fs-verity enabled
+  ansible.builtin.command:
+    cmd: fsverity measure "{{ item }}"
+  loop: "{{ critical_files }}"
+  register: existing_measurements
+  failed_when: false
+  changed_when: false
+
+- name: Categorize existing fs-verity status
+  ansible.builtin.set_fact:
+    already_protected: "{{ already_protected + [item.item] }}"
+  loop: "{{ existing_measurements.results }}"
+  when: item.rc == 0
+
+- name: Display already protected files
+  ansible.builtin.debug:
+    msg: "{{ already_protected | length }} files already have fs-verity enabled"
+  when: already_protected | length > 0
+
+- name: Get files needing protection
+  ansible.builtin.set_fact:
+    files_to_protect: "{{ critical_files | difference(already_protected) }}"
+
+- name: Enable keyless fs-verity on critical files
+  ansible.builtin.command:
+    cmd: fsverity enable "{{ item }}"
+  loop: "{{ files_to_protect }}"
+  register: fsverity_results
+  failed_when: false
+
+- name: Categorize fs-verity results
+  ansible.builtin.set_fact:
+    protected_files: "{{ protected_files + [item.item] }}"
+  loop: "{{ fsverity_results.results }}"
+  when: item.rc == 0
+
+- name: Categorize failed files
+  ansible.builtin.set_fact:
+    failed_files: "{{ failed_files + [item.item] }}"
+  loop: "{{ fsverity_results.results }}"
+  when: item.rc != 0
+
+- name: Display protection results for failed files
+  ansible.builtin.debug:
+    msg: "Failed to protect {{ item.item }}: {{ item.stderr }}"
+  loop: "{{ fsverity_results.results }}"
+  when: item.rc != 0
+
+- name: Calculate protection statistics
+  ansible.builtin.set_fact:
+    total_files: "{{ critical_files | length }}"
+    total_protected: "{{ (already_protected + protected_files) | length }}"
+    total_failed: "{{ failed_files | length }}"
+    success_rate: "{{ (((already_protected + protected_files) | length) * 100 / (critical_files | length)) | int }}"
+    failure_rate: "{{ (failed_files | length * 100 / critical_files | length) | int }}"
+
+- name: Display protection summary
+  ansible.builtin.debug:
+    msg: |
+      Keyless fs-verity Protection Summary:
+      - Total files processed: {{ total_files }}
+      - Successfully protected: {{ total_protected }}
+      - Already protected: {{ already_protected | length }}
+      - Newly protected: {{ protected_files | length }}
+      - Failed to protect: {{ total_failed }}
+      - Success rate: {{ success_rate }}%
+      - Failure rate: {{ failure_rate }}%
+
+- name: Fail if too many files failed protection
+  ansible.builtin.fail:
+    msg: |
+      Too many files failed fs-verity protection ({{ failure_rate }}% failure rate).
+      This exceeds the acceptable threshold of 20%.
+      Failed files: {{ failed_files | join(', ') }}
+  when: failure_rate > 20
+
+- name: Log protection details
+  ansible.builtin.debug:
+    msg: |
+      Protection Details:
+      Already protected: {{ already_protected }}
+      Newly protected: {{ protected_files }}
+      Failed files: {{ failed_files }}
+    verbosity: 1

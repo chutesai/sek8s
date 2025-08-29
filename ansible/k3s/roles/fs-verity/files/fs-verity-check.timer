@@ -1,0 +1,21 @@
+[Unit]
+Description=Run fs-verity Integrity Check Every 10 Minutes
+Documentation=man:systemd.timer(5)
+Requires=fs-verity-check.service
+
+[Timer]
+# Run every 10 minutes
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+# Add randomization to prevent thundering herd if multiple VMs
+RandomizedDelaySec=60
+
+# Persist across reboots
+Persistent=yes
+
+# Don't run if system is not active
+WakeSystem=no
+
+[Install]
+WantedBy=timers.target
