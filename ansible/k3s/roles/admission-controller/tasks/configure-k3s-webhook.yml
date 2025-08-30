@@ -28,7 +28,6 @@
         owner: root
         group: root
         mode: '0400'  # Read-only
-        attributes: '+i'  # Immutable flag (requires root to remove)
 
     - name: Generate initial webhook manifest hash for attestation
       ansible.builtin.shell: |

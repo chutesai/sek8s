@@ -27,18 +27,15 @@ check_file() {
 
 # K3s binaries (primary targets)
 safe_find /usr/local/bin -name "k3s" -type f
-safe_find /usr/bin -name "k3s" -type f
 
 # OPA binaries
 safe_find /usr/local/bin -name "opa" -type f
-safe_find /usr/bin -name "opa" -type f
 
 # Systemd service files (all services in system directory)
 safe_find /etc/systemd/system -name "*.service" -type f
 
 # Boot and initialization scripts
-check_file "/usr/local/bin/k3s-init.sh"
-check_file "/usr/local/bin/setup-server.sh"
+safe_find /root/scripts/boot -name "*.sh" -type f
 
 # OPA policy files
 safe_find /etc/opa/policies -name "*.rego" -type f -o -name "*.json" -type f
@@ -50,7 +47,6 @@ safe_find /etc/admission-controller -type f \( -name "*.json" -o -name "*.yaml" 
 safe_find /var/lib/rancher/k3s/server/manifests -name "*.yaml" -type f -o -name "*.yml" -type f
 
 # Critical system configuration files (check if they exist)
-check_file "/etc/rancher/k3s/config.yaml"
 check_file "/etc/security/limits.conf"
 check_file "/etc/sysctl.conf"
 check_file "/etc/audit/auditd.conf"
@@ -59,21 +55,9 @@ check_file "/etc/pam.d/common-password"
 check_file "/etc/ssh/sshd_config"
 check_file "/etc/sudoers"
 
-# Important system binaries (if present)
-check_file "/usr/bin/sudo"
-check_file "/usr/sbin/sshd"
-check_file "/usr/bin/systemctl"
-check_file "/usr/bin/journalctl"
-
-# Container runtime binaries
-check_file "/usr/bin/containerd"
-check_file "/usr/bin/runc"
-check_file "/usr/bin/ctr"
-check_file "/usr/bin/crictl"
-
-# Network and security tools
-check_file "/usr/sbin/iptables"
-check_file "/usr/sbin/ip6tables"
+# Protect all binaries except sshd and sudo since they will be removed
+safe_find /usr/bin -type f -executable ! -name sudo | sort
+safe_find /usr/sbin -type f -executable ! -name sshd | sort
 
 # This discovery script itself (important for runtime integrity)
 check_file "/usr/local/bin/discover-critical-files.sh"
