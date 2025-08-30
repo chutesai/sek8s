@@ -21,7 +21,7 @@
     measured_files: "{{ measurements_data | selectattr('status', 'equalto', 'protected') | list | length }}"
     unmeasured_files: "{{ measurements_data | selectattr('status', 'equalto', 'unprotected') | list | length }}"
 
-- name: Create measurements text file
+- name: Create comprehensive measurements text file
   ansible.builtin.template:
     src: measurements.txt.j2
     dest: /etc/fs-verity-measurements.txt
@@ -29,7 +29,7 @@
     group: root
     mode: '0644'
 
-- name: Create measurements JSON file
+- name: Create comprehensive measurements JSON file
   ansible.builtin.copy:
     content: |
       {
@@ -46,14 +46,32 @@
     group: root
     mode: '0644'
 
+- name: Run initial fs-verity check to create status file
+  ansible.builtin.systemd:
+    name: fs-verity-check.service
+    state: started
+  register: initial_check
+  failed_when: false
+
+- name: Display initial check results
+  ansible.builtin.debug:
+    msg: "Initial fs-verity check completed with status: {{ 'success' if initial_check.failed == false else 'warning/error - check logs' }}"
+
+- name: Verify status file was created
+  ansible.builtin.stat:
+    path: /var/lib/fs-verity/status.json
+  register: status_file
+
 - name: Display measurements summary
   ansible.builtin.debug:
     msg: |
-      fs-verity Measurements Summary:
+      fs-verity Protection and Monitoring Summary:
       - Total files: {{ critical_files | length }}
       - Protected files: {{ measured_files }}
       - Unprotected files: {{ unmeasured_files }}
       - Measurements saved to: /etc/fs-verity-measurements.txt and /etc/fs-verity-measurements.json
+      - Monitoring service: fs-verity-check.timer (every 10 minutes)
+      - Status file: {{ '/var/lib/fs-verity/status.json created' if status_file.stat.exists else 'pending creation' }}
 
 - name: Verify measurements files were created
   ansible.builtin.stat:

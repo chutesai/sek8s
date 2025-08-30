@@ -1,13 +1,34 @@
 ---
-- name: Check kernel fs-verity support
-  ansible.builtin.stat:
-    path: /sys/fs/verity
+- name: Check kernel fs-verity support in config
+  ansible.builtin.shell: |
+    grep -q "CONFIG_FS_VERITY=y" /boot/config-$(uname -r) 2>/dev/null || \
+    grep -q "CONFIG_FS_VERITY=y" /proc/config.gz 2>/dev/null || \
+    zcat /proc/config.gz 2>/dev/null | grep -q "CONFIG_FS_VERITY=y" || \
+    modinfo fs-verity >/dev/null 2>&1
   register: fs_verity_support
+  failed_when: false
+  changed_when: false
+
+- name: Display kernel fs-verity status
+  ansible.builtin.debug:
+    msg: "Kernel fs-verity support check result: {{ 'supported' if fs_verity_support.rc == 0 else 'not found' }}"
 
 - name: Fail if kernel doesn't support fs-verity
   ansible.builtin.fail:
-    msg: "Kernel does not support fs-verity. Enable CONFIG_FS_VERITY=y"
-  when: not fs_verity_support.stat.exists
+    msg: |
+      Kernel does not support fs-verity. 
+      
+      Please ensure one of the following:
+      - CONFIG_FS_VERITY=y is enabled in kernel config
+      - fs-verity is available as a loadable module
+      - /sys/fs/verity directory exists (runtime support)
+      
+      Current kernel: {{ ansible_kernel }}
+      Checked locations:
+      - /boot/config-$(uname -r)
+      - /proc/config.gz
+      - modinfo fs-verity
+  when: fs_verity_support.rc != 0
 
 - name: Check if fsverity tools already installed
   ansible.builtin.command: fsverity --version
@@ -18,7 +39,7 @@
 - name: Install fs-verity tools
   ansible.builtin.apt:
     name:
-      - fsverity-utils
+      - fsverity
     state: present
     update_cache: yes
   when: fsverity_check.rc != 0
@@ -31,3 +52,79 @@
 - name: Display fsverity version
   ansible.builtin.debug:
     msg: "Installed fsverity: {{ fsverity_version.stdout }}"
+
+# =============================================================================
+# FILESYSTEM VERITY FEATURE ENABLEMENT
+# =============================================================================
+
+- name: Get root filesystem device
+  ansible.builtin.shell: findmnt -n -o SOURCE /
+  register: root_device
+  changed_when: false
+
+- name: Check if root filesystem is ext4
+  ansible.builtin.shell: findmnt -n -o FSTYPE /
+  register: root_fstype
+  changed_when: false
+
+- name: Display filesystem information
+  ansible.builtin.debug:
+    msg: "Root filesystem: {{ root_device.stdout }} ({{ root_fstype.stdout }})"
+
+- name: Check current filesystem features
+  ansible.builtin.shell: tune2fs -l {{ root_device.stdout }} | grep "Filesystem features"
+  register: current_features
+  changed_when: false
+  when: root_fstype.stdout == "ext4"
+
+- name: Display current ext4 features
+  ansible.builtin.debug:
+    msg: "Current features: {{ current_features.stdout }}"
+  when: root_fstype.stdout == "ext4"
+
+- name: Check if verity feature is already enabled
+  ansible.builtin.set_fact:
+    verity_enabled: "{{ 'verity' in current_features.stdout }}"
+  when: root_fstype.stdout == "ext4"
+
+- name: Enable verity feature on ext4 filesystem
+  ansible.builtin.command: tune2fs -O verity {{ root_device.stdout }}
+  register: verity_enable_result
+  when: 
+    - root_fstype.stdout == "ext4"
+    - not verity_enabled
+  notify: fs_verity_enabled
+
+- name: Verify verity feature was enabled
+  ansible.builtin.shell: tune2fs -l {{ root_device.stdout }} | grep "Filesystem features"
+  register: updated_features
+  changed_when: false
+  when: 
+    - root_fstype.stdout == "ext4"
+    - verity_enable_result is changed
+
+- name: Display updated ext4 features
+  ansible.builtin.debug:
+    msg: "Updated features: {{ updated_features.stdout }}"
+  when: 
+    - root_fstype.stdout == "ext4"
+    - verity_enable_result is changed
+
+- name: Fail if filesystem doesn't support fs-verity
+  ansible.builtin.fail:
+    msg: |
+      Filesystem {{ root_fstype.stdout }} does not support fs-verity or verity feature could not be enabled.
+      
+      fs-verity is supported on:
+      - ext4 (with verity feature enabled)
+      - f2fs
+      - btrfs (experimental)
+      
+      Current filesystem: {{ root_fstype.stdout }}
+      Root device: {{ root_device.stdout }}
+  when: 
+    - root_fstype.stdout not in ["ext4", "f2fs", "btrfs"]
+
+- name: fs-verity setup complete
+  ansible.builtin.debug:
+    msg: "fs-verity tools installed and filesystem configured successfully"

@@ -25,7 +25,7 @@ Components Installed and Protected:
 {% else %}
 - OPA: Not found or not protected
 {% endif %}
-- fs-verity tools: {{ ansible_facts.packages['fsverity-utils'][0].version if 'fsverity-utils' in ansible_facts.packages else 'Not available' }}
+- fs-verity tools: {{ ansible_facts.packages['fsverity'][0].version if 'fsverity' in ansible_facts.packages else 'Not available' }}
 
 TDX Integration:
 - fs-verity measurements will be included in TDX attestation

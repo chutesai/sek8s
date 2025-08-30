@@ -72,14 +72,20 @@
       - Failed to protect: {{ total_failed }}
       - Success rate: {{ success_rate }}%
       - Failure rate: {{ failure_rate }}%
-
-- name: Fail if too many files failed protection
+      
+- name: Fail if any critical files failed protection
   ansible.builtin.fail:
     msg: |
-      Too many files failed fs-verity protection ({{ failure_rate }}% failure rate).
-      This exceeds the acceptable threshold of 20%.
+      Critical files failed fs-verity protection ({{ failure_rate }}% failure rate).
+      All critical files must be protected for security integrity.
       Failed files: {{ failed_files | join(', ') }}
-  when: failure_rate > 20
+      
+      This may indicate:
+      - Files are on a filesystem that doesn't support fs-verity
+      - Files are already open/in use
+      - Insufficient permissions
+      - Files don't exist at expected locations
+  when: total_failed | int > 0
 
 - name: Log protection details
   ansible.builtin.debug:
