@@ -93,7 +93,6 @@
   when: 
     - root_fstype.stdout == "ext4"
     - not verity_enabled
-  notify: fs_verity_enabled
 
 - name: Verify verity feature was enabled
   ansible.builtin.shell: tune2fs -l {{ root_device.stdout }} | grep "Filesystem features"

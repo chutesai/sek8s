@@ -7,9 +7,17 @@
     group: root
     mode: '0755'
 
-- name: Discover critical files using secure script
+- name: Install files discovery script
+  ansible.builtin.copy:
+    src: discover-files.sh
+    dest: /usr/local/bin/discover-files.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Discover all files using secure script
   ansible.builtin.command:
-    cmd: /usr/local/bin/discover-critical-files.sh
+    cmd: /usr/local/bin/discover-files.sh
   register: discovered_files_raw
   changed_when: false
 
@@ -17,14 +25,14 @@
   ansible.builtin.set_fact:
     critical_files: "{{ discovered_files_raw.stdout_lines | select('match', '^/.+') | list | unique | sort }}"
 
-- name: Display discovered critical files summary
+- name: Display discovered files summary
   ansible.builtin.debug:
-    msg: "Discovered {{ critical_files | length }} critical files for fs-verity protection using secure discovery script"
+    msg: "Discovered {{ critical_files | length }} files for fs-verity protection using secure discovery script"
 
-- name: Log critical files list (verbose)
-  ansible.builtin.debug:
-    msg: "{{ critical_files }}"
-    verbosity: 1
+# - name: Log critical files list (verbose)
+#   ansible.builtin.debug:
+#     msg: "{{ critical_files }}"
+#     verbosity: 1
 
 - name: Verify discovery script will be protected
   ansible.builtin.set_fact:
@@ -32,4 +40,4 @@
 
 - name: Final critical files count
   ansible.builtin.debug:
-    msg: "Total critical files including discovery script: {{ critical_files | length }}"
+    msg: "Total files including discovery script: {{ critical_files | length }}"

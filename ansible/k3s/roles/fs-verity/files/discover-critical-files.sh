@@ -25,12 +25,6 @@ check_file() {
     fi
 }
 
-# K3s binaries (primary targets)
-safe_find /usr/local/bin -name "k3s" -type f
-
-# OPA binaries
-safe_find /usr/local/bin -name "opa" -type f
-
 # Systemd service files (all services in system directory)
 safe_find /etc/systemd/system -name "*.service" -type f
 
@@ -42,8 +36,9 @@ safe_find /etc/opa/policies -name "*.rego" -type f -o -name "*.json" -type f
 
 # Admission controller configuration files
 safe_find /etc/admission-controller -type f \( -name "*.json" -o -name "*.yaml" -o -name "*.yml" -o -name "*.conf" \)
+safe_find /etc/admission-controller/sek8s -type f
 
-# K3s manifests (critical for cluster configuration)
+# K3s manifests
 safe_find /var/lib/rancher/k3s/server/manifests -name "*.yaml" -type f -o -name "*.yml" -type f
 
 # Critical system configuration files (check if they exist)
@@ -56,8 +51,19 @@ check_file "/etc/ssh/sshd_config"
 check_file "/etc/sudoers"
 
 # Protect all binaries except sshd and sudo since they will be removed
-safe_find /usr/bin -type f -executable ! -name sudo | sort
-safe_find /usr/sbin -type f -executable ! -name sshd | sort
+safe_find /usr/bin -type f -executable | sort
+safe_find /usr/sbin -type f -executable | sort
+safe_find /usr/local/bin -type f -executable | sort
 
-# This discovery script itself (important for runtime integrity)
+# Third party apps
+safe_find /opt -type f executable | sort
+
+# Discovery scripts themselves (important for runtime integrity)
 check_file "/usr/local/bin/discover-critical-files.sh"
+check_file "/usr/local/bin/discover-files.sh"
+
+# Cosign Key
+safe_find /root/.cosign -type f | sort
+
+# ETCD database
+check_file "/var/lib/rancher/k3s/server/db/state.db"
