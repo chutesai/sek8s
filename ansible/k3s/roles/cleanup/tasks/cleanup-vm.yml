@@ -1,0 +1,42 @@
+- name: Shutdown VM
+  ansible.builtin.command: virsh shutdown "{{ vm_name }}"
+  register: shutdown_result
+  changed_when: shutdown_result.rc == 0
+  failed_when: false
+
+- name: Wait for VM shutdown
+  ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
+  register: vm_shutdown
+  retries: 60
+  delay: 5
+  until: vm_shutdown.rc != 0
+  changed_when: false
+  failed_when: vm_shutdown.rc == 0
+
+- name: Undefine VM
+  ansible.builtin.command: virsh undefine "{{ vm_name }}"
+  changed_when: false
+  failed_when: false
+
+- name: Copy sek8s image to final image
+  ansible.builtin.command: cp "{{ sek8s_img_path }}" "{{ final_img_path }}"
+  register: copy_result
+  changed_when: copy_result.rc == 0
+  failed_when: copy_result.rc != 0
+
+- name: Set permissions on final image
+  ansible.builtin.file:
+    path: "{{ final_img_path }}"
+    mode: '0640'
+    owner: root
+    group: libvirt-qemu
+
+- name: Verify final image
+  ansible.builtin.command: qemu-img check "{{ final_img_path }}"
+  register: verify_result
+  changed_when: false
+  failed_when: verify_result.rc != 0
+
+- name: Output final image path
+  ansible.builtin.debug:
+    msg: "TDX guest image created: {{ final_img_path }}"

@@ -112,6 +112,7 @@
 
     - name: Copy k3s kubeconfig
       ansible.builtin.copy:
+        remote_src: true
         src: /etc/rancher/k3s/k3s.yaml
         dest: ~/.kube/config
         mode: "0600"

@@ -1,0 +1,17 @@
+#!/bin/sh
+# /etc/initramfs-tools/hooks/fetch_key
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /bin/ip
+copy_exec /usr/bin/curl
+copy_exec /sbin/dhcpcd
+copy_exec /usr/sbin/cryptsetup
+copy_exec /usr/bin/trustauthority-cli
+mkdir -p $DESTDIR/etc/network
+cp /etc/netplan/*.yaml $DESTDIR/etc/network/
+mkdir -p $DESTDIR/etc/ssl/certs
+cp /etc/ssl/certs/ca-certificates.crt $DESTDIR/etc/ssl/certs/

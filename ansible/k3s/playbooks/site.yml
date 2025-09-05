@@ -1,6 +1,33 @@
 ---
+- name: Run TDX guest image
+  hosts: host
+  become: true
+  tags:
+    - run-vm
+    # - always
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include run TDX vm role
+      ansible.builtin.include_role:
+        name: run-vm
+
+- name: Setup TDX guest image
+  hosts: vm
+  become: true
+  tags:
+    - setup-vm
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include TDX vm setup role 
+      ansible.builtin.include_role:
+        name: setup-vm
+
 - name: Common Setup
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - common
@@ -13,7 +40,7 @@
         name: common
 
 - name: Setup K3S clusters
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - k3s
@@ -26,7 +53,7 @@
         name: k3s
 
 - name: Security Hardening
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - security
@@ -39,7 +66,7 @@
         name: security
 
 - name: GPU Setup
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - gpu
@@ -52,7 +79,7 @@
         name: gpu
 
 - name: Setup Chutes GPU Clusters
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - chutes-gpu
@@ -67,7 +94,7 @@
           tags: chutes-gpu
 
 - name: Setup admission controller
-  hosts: server
+  hosts: vm
   become: true
   tags:
     - admission-controller
@@ -82,7 +109,7 @@
           tags: admission-controller
 
 - name: Cleanup to ensure fresh state for cloud init and k3s
-  hosts: server
+  hosts: all
   become: true
   tags:
     - cleanup
@@ -95,3 +122,18 @@
         name: cleanup
         apply:
           tags: cleanup
+
+- name: Encrypt disk
+  hosts: host
+  become: true
+  tags:
+    - luks
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Encrypt disk
+      ansible.builtin.include_role:
+        name: luks
+        apply:
+          tags: luks

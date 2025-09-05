@@ -1,0 +1,16 @@
+---
+- name: Create boot directory
+  ansible.builtin.file:
+    path: "/root/scripts/boot"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Copy boot scripts to VM
+  ansible.builtin.copy:
+    src: "files/boot/"
+    dest: "/root/scripts/boot/"
+    owner: root
+    group: root
+    mode: '0755'

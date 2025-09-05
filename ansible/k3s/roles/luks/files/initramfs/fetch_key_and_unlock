@@ -1,0 +1,29 @@
+#!/bin/sh
+# Needs to be placed in init-premount
+# /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock
+PREREQ="network"
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+ip link set dev enp1s0 up
+dhcpcd enp1s0
+
+# Generate TDX quote
+QUOTE=$(trustauthority-cli evidence)  # Fetch MRTD and RTMR measurements
+
+KEY=$(curl -s -f --cacert /etc/ssl/certs/ca-certificates.crt \
+      -H "Authorization: Bearer YOUR_API_TOKEN" \
+      -d "quote=$QUOTE&vm_id=$(cat /sys/class/net/enp0s3/address)" \
+      https://your-api.example.com/get-luks-key)
+
+if [ -z "$KEY" ]; then
+    echo "Failed to fetch LUKS key. Falling back to manual unlock."
+    /lib/cryptsetup/askpass "Enter LUKS passphrase manually: "
+    exit 0
+fi
+
+echo "$KEY" | cryptsetup luksOpen /dev/vda1 encrypted_root --
+
+exit 0

@@ -8,3 +8,19 @@
         group: root
         mode: '0644'
       notify: restart admission-controller
+
+- name: Create cosign directory
+  ansible.builtin.file:
+    path: "/root/.cosign"
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Setup cosign key
+  ansible.builtin.copy:
+    src: "{{ cosign_public_key_path }}"
+    dest: "/root/.cosign"
+    owner: root
+    group: root
+    mode: '0644'

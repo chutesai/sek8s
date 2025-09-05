@@ -1,1 +1,2 @@
 monitoring_namespace: monitoring
+chutes_charts: "{{ playbook_dir }}/../../../charts/chutes-miner-gpu"

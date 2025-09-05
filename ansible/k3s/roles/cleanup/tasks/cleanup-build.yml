@@ -1,0 +1,6 @@
+- name: Clean build artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /root/charts

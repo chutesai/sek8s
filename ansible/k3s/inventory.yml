@@ -2,12 +2,14 @@
 # inventory.yml
 all:
   children:
-    server:
+    vm:
+      hosts: # Dynamically populated by playbook
+    host:
       hosts:
         localhost:
           ansible_connection: local
-          ansible_python_interpreter: "{{ ansible_playbook_python }}"
 
   vars:
     ansible_user: "{{ lookup('env', 'USER') }}"
-    cosign_public_key_path: "/path/to/cosign.pub"
+    cosign_public_key_path: "~/.cosign/cosign.pub"
+    luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"

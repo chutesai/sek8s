@@ -1,0 +1,183 @@
+---
+- name: Install dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - libguestfs-tools
+      - virtinst
+      - genisoimage
+      - libvirt-daemon-system
+      - qemu-utils
+      - cryptsetup
+    state: present
+    update_cache: yes
+
+- name: Ensure libvirt default network is active
+  ansible.builtin.command: virsh net-start default
+  changed_when: false
+  failed_when: false
+
+- name: Set libvirt default network to autostart
+  ansible.builtin.command: virsh net-autostart default
+  changed_when: false
+  failed_when: false
+
+- name: Check if base image exists
+  ansible.builtin.stat:
+    path: "{{ guest_img_path }}"
+  register: base_image
+  failed_when: not base_image.stat.exists
+
+- name: Remove existing sek8s image if NO_CACHE is true
+  ansible.builtin.file:
+    path: "{{ sek8s_img_path }}"
+    state: absent
+  when: no_cache == 'true'
+
+- name: Create image directory
+  ansible.builtin.file:
+    path: "{{ img_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Copy base image to sek8s image
+  ansible.builtin.copy:
+    src: "{{ guest_img_path }}"
+    dest: "{{ sek8s_img_path }}"
+    mode: '0640'
+    owner: root
+    group: libvirt-qemu
+  when: no_cache == 'true'
+
+- name: Create cloud-init user-data with SSH key
+  ansible.builtin.copy:
+    content: |
+      #cloud-config
+      hostname: build-node
+      timezone: UTC
+      users:
+        - name: root
+          ssh-authorized-keys:
+            - "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+    dest: "{{ user_data_file }}"
+    mode: '0644'
+
+- name: Fix permissions for sek8s image
+  ansible.builtin.file:
+    path: "{{ sek8s_img_path }}"
+    owner: root
+    group: libvirt-qemu
+    mode: '0640'
+
+# - name: Set execute permissions on parent directories
+#   ansible.builtin.file:
+#     path: "{{ item }}"
+#     mode: 'o+x'
+#   loop: "{{ lookup('pipe', 'dirname ' + sek8s_img_path + ' | xargs -I {} sh -c \"while [ {} != / ]; do echo {}; dirname {}; done\"') | split('\n') }}"
+#   when: item != ansible_env.HOME
+
+# - name: Set execute permissions on home directory
+#   ansible.builtin.file:
+#     path: "{{ ansible_env.HOME }}"
+#     mode: 'o+x'
+
+- name: Check if KVM is available
+  ansible.builtin.command: kvm-ok
+  register: kvm_check
+  changed_when: false
+  failed_when: false
+
+- name: Set virt_type based on KVM availability
+  ansible.builtin.set_fact:
+    virt_type: "{{ 'kvm' if kvm_check.rc == 0 else 'qemu' }}"
+
+- name: Check if VM exists
+  ansible.builtin.shell: virsh list --all | grep -q "{{ vm_name }}"
+  register: vm_exists
+  changed_when: false
+  failed_when: false
+
+- name: Debug
+  ansible.builtin.debug:
+    msg: "{{ vm_exists }}"
+
+- name: Destroy existing VM
+  ansible.builtin.command: virsh destroy "{{ vm_name }}"
+  when: vm_exists.rc == 0 and (no_cache == 'true' or vm_exists.stdout != '')
+  changed_when: false
+  failed_when: false
+
+- name: Undefine existing VM
+  ansible.builtin.command: virsh undefine "{{ vm_name }}"
+  when: vm_exists.rc == 0 and (no_cache == 'true' or vm_exists.stdout != '')
+  changed_when: false
+  failed_when: false
+
+- name: Start temporary VM
+  ansible.builtin.command: |
+    virt-install \
+      --name "{{ vm_name }}" \
+      --ram 3072 \
+      --vcpus 2 \
+      --disk path="{{ sek8s_img_path }}",format=qcow2 \
+      --os-variant ubuntu{{ ubuntu_version }} \
+      --virt-type "{{ virt_type }}" \
+      --network network=default \
+      --graphics vnc,listen=0.0.0.0,port="{{ vnc_port }}" \
+      --import \
+      --cloud-init user-data="{{ user_data_file }}" \
+      --noautoconsole
+  register: virt_install_result
+  when: vm_exists.rc != 0 or no_cache == 'true'  # Only run if VM does not exist
+  changed_when: virt_install_result.rc == 0
+  failed_when: virt_install_result.rc != 0
+
+- name: Check if VM is running
+  ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
+  register: vm_running
+  changed_when: false
+  failed_when: false
+  when: vm_exists.rc == 0 or no_cache == 'true'  # Only check if VM exists
+
+- name: Start existing VM if not running
+  ansible.builtin.command: virsh start "{{ vm_name }}"
+  when: vm_exists.rc == 0 and vm_running.rc != 0 and no_cache == 'false'  # Run if VM exists but isn't running
+  register: virt_start_result
+  changed_when: virt_start_result.rc == 0
+  failed_when: virt_start_result.rc != 0
+
+- name: Wait for VM to be running
+  ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
+  register: vm_running
+  retries: 60
+  delay: 10
+  until: vm_running.rc == 0
+  failed_when: vm_running.rc != 0
+  changed_when: false
+
+- name: Extract VM IP from libvirt
+  ansible.builtin.shell: |
+    virsh domifaddr "{{ vm_name }}" | grep -oE '192\.168\.122\.[0-9]+' | head -1
+  retries: 10
+  delay: 5
+  register: vm_ip
+  until: vm_ip.rc == 0 and vm_ip.stdout != ''
+  changed_when: false
+  failed_when: vm_ip.rc != 0 or vm_ip.stdout == ''
+
+- name: Update VM host with dynamic IP
+  ansible.builtin.add_host:
+    name: build-node
+    ansible_host: "{{ vm_ip.stdout }}"
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ ansible_env.HOME }}/.ssh/id_rsa"
+    test_image_path: "{{ sek8s_img_path }}"
+    groups: vm
+
+- name: Wait for SSH to be available
+  ansible.builtin.wait_for:
+    host: "{{ vm_ip.stdout }}"
+    port: 22
+    state: started
+    timeout: 600
+  delegate_to: localhost

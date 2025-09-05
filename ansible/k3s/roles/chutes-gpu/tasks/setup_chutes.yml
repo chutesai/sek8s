@@ -1,4 +1,9 @@
 ---
+- name: Copy Chutes Miner charts
+  ansible.builtin.copy:
+    src: "{{ chutes_charts }}"
+    dest: ~/charts
+
 - name: Install Chutes Miner charts
   ansible.builtin.command: >
     helm upgrade --install chutes ~/charts/chutes-miner-gpu
