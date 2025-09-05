@@ -128,7 +128,7 @@
       --cloud-init user-data="{{ user_data_file }}" \
       --noautoconsole
   register: virt_install_result
-  when: vm_exists.rc != 0  # Only run if VM does not exist
+  when: vm_exists.rc != 0 or no_cache == 'true'  # Only run if VM does not exist
   changed_when: virt_install_result.rc == 0
   failed_when: virt_install_result.rc != 0
 
@@ -137,11 +137,11 @@
   register: vm_running
   changed_when: false
   failed_when: false
-  when: vm_exists.rc == 0  # Only check if VM exists
+  when: vm_exists.rc == 0 or no_cache == 'true'  # Only check if VM exists
 
 - name: Start existing VM if not running
   ansible.builtin.command: virsh start "{{ vm_name }}"
-  when: vm_exists.rc == 0 and vm_running.rc != 0  # Run if VM exists but isn't running
+  when: vm_exists.rc == 0 and vm_running.rc != 0 and no_cache == 'false'  # Run if VM exists but isn't running
   register: virt_start_result
   changed_when: virt_start_result.rc == 0
   failed_when: virt_start_result.rc != 0

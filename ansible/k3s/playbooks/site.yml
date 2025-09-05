@@ -4,7 +4,7 @@
   become: true
   tags:
     - run-vm
-    - always
+    # - always
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"

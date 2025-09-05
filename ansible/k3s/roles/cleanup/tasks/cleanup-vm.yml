@@ -8,7 +8,7 @@
   ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
   register: vm_shutdown
   retries: 60
-  delay: 2
+  delay: 5
   until: vm_shutdown.rc != 0
   changed_when: false
   failed_when: vm_shutdown.rc == 0

@@ -133,9 +133,9 @@ else
 fi
 
 # Copy files into image before starting VM
-sudo virt-customize -a "$TEST_IMAGE_PATH" \
-    --copy-in $REPO_ROOT/guest-tools/tests:/root \
-    --run-command 'find /root/tests -type f -name "*.sh" -exec chmod 755 {} \;'
+# sudo virt-customize -a "$TEST_IMAGE_PATH" \
+#     --copy-in $REPO_ROOT/guest-tools/tests:/root \
+#     --run-command 'find /root/tests -type f -name "*.sh" -exec chmod 755 {} \;'
 
 # Start the VM
 log "Starting VM $VM_NAME..."
