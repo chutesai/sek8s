@@ -9,26 +9,26 @@
     name: "{{ encrypted_root_name }}"
     state: closed
   when: luks_stat.stat.exists
-  ignore_errors: true  # Ignore errors if already closed or not present
+  ignore_errors: true
 
 - name: Check if nbd device is connected
   ansible.builtin.command: qemu-nbd --check {{ nbd_device }}
   register: nbd_check_result
-  failed_when: false  # Don’t fail if not connected
+  failed_when: false
   changed_when: false
 
 - name: Disconnect nbd device if connected
   ansible.builtin.command: qemu-nbd --disconnect {{ nbd_device }}
-  when: nbd_check_result.rc == 0  # Only run if device is connected
+  when: nbd_check_result.rc == 0
   register: nbd_disconnect_result
   changed_when: nbd_disconnect_result.rc == 0
-  ignore_errors: true  # Ignore errors if disconnect fails
+  ignore_errors: true
 
-- name: Unmount all possible partitions if mounted (cleanup from previous runs)
+- name: Unmount all possible partitions if mounted
   ansible.builtin.mount:
     path: "{{ item }}"
     state: unmounted
-  ignore_errors: true  # Ignore if not mounted or busy
+  ignore_errors: true
   loop:
     - "{{ newroot_mount }}/sys/firmware/efi/efivars"
     - "{{ newroot_mount }}/proc"
@@ -135,7 +135,7 @@
     owner: root
     group: root
 
-- name: Wipe existing superblock (optional, for safety)
+- name: Wipe existing superblock
   ansible.builtin.command: wipefs -a {{ root_partition }}
   register: wipefs_result
   changed_when: wipefs_result.rc == 0
@@ -146,7 +146,7 @@
     device: "{{ root_partition }}"
     state: present
     passphrase: "{{ luks_passphrase }}"
-  no_log: true  # Hide passphrase in logs
+  no_log: true
 
 - name: Open LUKS container
   community.crypto.luks_device:
@@ -202,14 +202,35 @@
     - dev
     - run
 
-- name: Chroot and install cryptsetup and e2fsprogs
+# Install TDX quote generator and dependencies
+- name: Install build dependencies in chroot
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       apt-get update &&
-      apt-get install -y cryptsetup e2fsprogs
+      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates
     "
-  register: chroot_install_result
-  changed_when: chroot_install_result.rc == 0
+  register: chroot_deps_result
+  changed_when: chroot_deps_result.rc == 0
+
+# Copy and compile TDX quote generator
+- name: Create TDX quote generator source file
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('file', 'files/tdx-quote-generator.c') }}
+    dest: "{{ newroot_mount }}/tmp/tdx-quote-generator.c"
+    mode: '0644'
+
+- name: Compile TDX quote generator in chroot
+  ansible.builtin.shell: |
+    chroot {{ newroot_mount }} /bin/bash -c "
+      cd /tmp &&
+      gcc -o tdx-quote-generator tdx-quote-generator.c &&
+      mv tdx-quote-generator /usr/bin/ &&
+      chmod 755 /usr/bin/tdx-quote-generator &&
+      rm tdx-quote-generator.c
+    "
+  register: compile_result
+  changed_when: compile_result.rc == 0
 
 - name: Get UUID of LUKS partition
   ansible.builtin.command: blkid -o value -s UUID {{ root_partition }}
@@ -230,7 +251,7 @@
     replace: '/dev/mapper/{{ encrypted_root_name }}\t/\text4\tdiscard,errors=remount-ro\t0 1'
     backup: yes
 
-- name: Copy fetch_key hooks
+- name: Copy TDX initramfs hooks
   ansible.builtin.copy:
     src: files/initramfs/fetch_key
     dest: "{{ newroot_mount }}/etc/initramfs-tools/hooks/fetch_key"
@@ -238,13 +259,36 @@
     owner: root
     group: root
 
-- name: Copy fetch_key script
+- name: Copy updated TDX unlock script
   ansible.builtin.copy:
-    src: files/initramfs/fetch_key_and_unlock
+    content: |
+      {{ lookup('file', playbook_dir + '/files/initramfs/fetch_key_and_unlock') }}
     dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
     mode: '0755'
     owner: root
     group: root
+
+- name: Create TDX environment configuration
+  ansible.builtin.copy:
+    content: |
+      # TDX LUKS Configuration
+      TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://your-api.example.com/luks-key') }}"
+      LUKS_DEVICE="{{ root_partition }}"
+      LUKS_NAME="{{ encrypted_root_name }}"
+      TDX_TIMEOUT="30"
+      TDX_RETRY_COUNT="3"
+    dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
+    mode: '0644'
+    owner: root
+    group: root
+
+- name: Source TDX config in initramfs script
+  ansible.builtin.replace:
+    path: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
+    regexp: '# Configuration'
+    replace: |
+      # Configuration
+      [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
 - name: Update initramfs and grub in chroot
   ansible.builtin.shell: |
@@ -289,3 +333,8 @@
     - "{{ root_mount }}"
     - "{{ newroot_mount }}"
     - "{{ backup_dir }}"
+
+- name: Clean up temporary files
+  ansible.builtin.file:
+    path: "/tmp/luks_keyfile"
+    state: absent

@@ -6,12 +6,39 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /usr/share/initramfs-tools/hook-functions
 
+# Copy essential binaries
 copy_exec /bin/ip
 copy_exec /usr/bin/curl
 copy_exec /sbin/dhcpcd
 copy_exec /usr/sbin/cryptsetup
-copy_exec /usr/bin/trustauthority-cli
+copy_exec /usr/bin/tdx-quote-generator
+copy_exec /usr/bin/base64
+
+# Copy critical libraries for our tools
+copy_exec /lib/x86_64-linux-gnu/libc.so.6
+copy_exec /lib/x86_64-linux-gnu/libcrypto.so.3
+copy_exec /lib/x86_64-linux-gnu/libssl.so.3
+
+# Network configuration
 mkdir -p $DESTDIR/etc/network
-cp /etc/netplan/*.yaml $DESTDIR/etc/network/
+if [ -d /etc/netplan ]; then
+    cp /etc/netplan/*.yaml $DESTDIR/etc/network/ 2>/dev/null || true
+fi
+
+# SSL certificates for HTTPS
 mkdir -p $DESTDIR/etc/ssl/certs
 cp /etc/ssl/certs/ca-certificates.crt $DESTDIR/etc/ssl/certs/
+
+# TDX configuration
+if [ -f /etc/tdx-luks.conf ]; then
+    cp /etc/tdx-luks.conf $DESTDIR/etc/
+fi
+
+# Device nodes that might be needed
+mkdir -p $DESTDIR/dev
+mknod $DESTDIR/dev/tdx_guest c 10 125 2>/dev/null || true
+
+# Add kernel modules that might be needed
+manual_add_modules vsock
+manual_add_modules vmw_vsock_virtio_transport
+manual_add_modules vmw_vsock_virtio_transport_common

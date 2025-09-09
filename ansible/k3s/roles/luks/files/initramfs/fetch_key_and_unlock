@@ -1,5 +1,4 @@
 #!/bin/sh
-# Needs to be placed in init-premount
 # /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock
 PREREQ="network"
 prereqs() { echo "$PREREQ"; }
@@ -7,23 +6,248 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
-ip link set dev enp1s0 up
-dhcpcd enp1s0
+# Configuration
+API_ENDPOINT="${TDX_API_ENDPOINT:-https://your-api.example.com/luks-key}"
+DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
+LUKS_NAME="${LUKS_NAME:-encrypted_root}"
+TIMEOUT="${TDX_TIMEOUT:-30}"
+RETRY_COUNT="${TDX_RETRY_COUNT:-3}"
 
-# Generate TDX quote
-QUOTE=$(trustauthority-cli evidence)  # Fetch MRTD and RTMR measurements
+log_begin_msg "Starting TDX-based disk unlock"
 
-KEY=$(curl -s -f --cacert /etc/ssl/certs/ca-certificates.crt \
-      -H "Authorization: Bearer YOUR_API_TOKEN" \
-      -d "quote=$QUOTE&vm_id=$(cat /sys/class/net/enp0s3/address)" \
-      https://your-api.example.com/get-luks-key)
+# Function to get network interface
+get_network_interface() {
+    # Try common interface names
+    for iface in enp1s0 enp0s3 eth0 ens3; do
+        if [ -e "/sys/class/net/$iface" ]; then
+            echo "$iface"
+            return 0
+        fi
+    done
+    # Fallback: find first non-loopback interface
+    for iface in /sys/class/net/*; do
+        iface=$(basename "$iface")
+        if [ "$iface" != "lo" ]; then
+            echo "$iface"
+            return 0
+        fi
+    done
+    return 1
+}
 
-if [ -z "$KEY" ]; then
-    echo "Failed to fetch LUKS key. Falling back to manual unlock."
-    /lib/cryptsetup/askpass "Enter LUKS passphrase manually: "
-    exit 0
-fi
+# Function to setup network
+setup_network() {
+    local iface
+    iface=$(get_network_interface)
+    if [ -z "$iface" ]; then
+        log_failure_msg "No network interface found"
+        return 1
+    fi
+    
+    log_begin_msg "Setting up network on $iface"
+    
+    # Bring up interface
+    ip link set dev "$iface" up
+    if [ $? -ne 0 ]; then
+        log_failure_msg "Failed to bring up $iface"
+        return 1
+    fi
+    
+    # Try DHCP
+    dhcpcd "$iface" -w "$TIMEOUT" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        log_failure_msg "DHCP failed on $iface"
+        return 1
+    fi
+    
+    # Verify we have an IP
+    if ! ip addr show "$iface" | grep -q "inet "; then
+        log_failure_msg "No IP address assigned to $iface"
+        return 1
+    fi
+    
+    log_success_msg "Network setup complete"
+    return 0
+}
 
-echo "$KEY" | cryptsetup luksOpen /dev/vda1 encrypted_root --
+# Function to generate quote and get VM ID
+generate_quote_and_vmid() {
+    local quote_file="/tmp/tdx_quote.bin"
+    local vm_id
+    
+    log_begin_msg "Generating TDX quote"
+    
+    # Generate quote using the C program
+    if ! /usr/bin/tdx-quote-generator -o "$quote_file" 2>/dev/null; then
+        log_failure_msg "Failed to generate TDX quote"
+        return 1
+    fi
+    
+    if [ ! -f "$quote_file" ]; then
+        log_failure_msg "Quote file not created"
+        return 1
+    fi
+    
+    # Get VM identifier (MAC address of first interface)
+    vm_id=$(cat /sys/class/net/$(get_network_interface)/address 2>/dev/null)
+    if [ -z "$vm_id" ]; then
+        vm_id="unknown"
+    fi
+    
+    # Base64 encode the quote for HTTP transmission
+    QUOTE_B64=$(base64 -w 0 < "$quote_file")
+    VM_ID="$vm_id"
+    
+    rm -f "$quote_file"
+    log_success_msg "TDX quote generated"
+    return 0
+}
 
-exit 0
+# Function to fetch LUKS key from API
+fetch_luks_key() {
+    local attempt=1
+    local key
+    local http_code
+    local response_file="/tmp/api_response"
+    
+    while [ $attempt -le $RETRY_COUNT ]; do
+        log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
+        
+        # Make API request
+        http_code=$(curl -s -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: TDX-LUKS-Client/1.0" \
+            --max-time $TIMEOUT \
+            --retry 0 \
+            --cacert /etc/ssl/certs/ca-certificates.crt \
+            -d "{\"quote\":\"$QUOTE_B64\",\"vm_id\":\"$VM_ID\",\"timestamp\":$(date +%s)}" \
+            -o "$response_file" \
+            "$API_ENDPOINT")
+        
+        # Check HTTP response code
+        case "$http_code" in
+            200)
+                # Success - extract key
+                key=$(grep -o '"key":"[^"]*"' "$response_file" 2>/dev/null | cut -d'"' -f4)
+                if [ -n "$key" ]; then
+                    echo "$key"
+                    rm -f "$response_file"
+                    log_success_msg "LUKS key retrieved successfully"
+                    return 0
+                else
+                    log_failure_msg "API response missing key field"
+                fi
+                ;;
+            401|403)
+                log_failure_msg "Authentication failed (HTTP $http_code)"
+                break # Don't retry auth failures
+                ;;
+            404)
+                log_failure_msg "API endpoint not found (HTTP $http_code)"
+                break # Don't retry 404s
+                ;;
+            429)
+                log_begin_msg "Rate limited, waiting before retry..."
+                sleep $((attempt * 2))
+                ;;
+            5*)
+                log_failure_msg "Server error (HTTP $http_code), retrying..."
+                ;;
+            000)
+                log_failure_msg "Connection failed, retrying..."
+                ;;
+            *)
+                log_failure_msg "Unexpected HTTP response: $http_code"
+                ;;
+        esac
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -le $RETRY_COUNT ]; then
+            sleep 2
+        fi
+    done
+    
+    rm -f "$response_file"
+    return 1
+}
+
+# Function to unlock LUKS device
+unlock_device() {
+    local key="$1"
+    
+    log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
+    
+    # Attempt to unlock with retrieved key
+    if echo "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+        log_success_msg "LUKS device unlocked successfully"
+        return 0
+    else
+        log_failure_msg "Failed to unlock LUKS device"
+        return 1
+    fi
+}
+
+# Function to handle failure and shutdown
+handle_failure() {
+    local reason="$1"
+    
+    log_failure_msg "TDX unlock failed: $reason"
+    log_failure_msg "VM will shut down in 10 seconds..."
+    
+    # Log to kernel ring buffer for debugging
+    echo "TDX-LUKS-UNLOCK-FAILED: $reason" > /dev/kmsg
+    
+    # Give time to see the message
+    sleep 10
+    
+    # Power off the system
+    poweroff -f
+}
+
+# Main execution
+main() {
+    # Check if we're in a TDX environment
+    if [ ! -c "/dev/tdx_guest" ]; then
+        handle_failure "TDX device not found - not running in TDX environment"
+        return 1
+    fi
+    
+    # Setup network
+    if ! setup_network; then
+        handle_failure "Network setup failed"
+        return 1
+    fi
+    
+    # Generate quote and VM ID
+    if ! generate_quote_and_vmid; then
+        handle_failure "Quote generation failed"
+        return 1
+    fi
+    
+    # Fetch LUKS key from API
+    key=$(fetch_luks_key)
+    if [ -z "$key" ]; then
+        handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
+        return 1
+    fi
+    
+    # Unlock the device
+    if unlock_device "$key"; then
+        # Clear key from memory
+        key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
+        unset key
+        log_success_msg "TDX-based unlock completed successfully"
+        return 0
+    else
+        handle_failure "Device unlock failed with retrieved key"
+        return 1
+    fi
+}
+
+# Run main function
+main
+exit_code=$?
+
+log_end_msg $exit_code
+exit $exit_code
