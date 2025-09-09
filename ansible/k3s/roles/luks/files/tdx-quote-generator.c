@@ -80,7 +80,6 @@ int generate_quote(const char* user_data, const char* output_file) {
     }
 
     fprintf(stderr, "TDREPORT generated successfully (%d bytes)\n", TDX_REPORT_LEN);
-    print_hex("TDREPORT (first 32 bytes)", req.tdreport, 32);
 
     close(fd);
     fd = -1;
@@ -131,8 +130,6 @@ int generate_quote(const char* user_data, const char* output_file) {
     if (bytes_received < 1000) {
         fprintf(stderr, "Warning: Quote seems too small (%zd bytes)\n", bytes_received);
         print_hex("Response", buffer, bytes_received < 64 ? bytes_received : 64);
-    } else {
-        print_hex("Quote (first 32 bytes)", buffer, 32);
     }
 
     // Open output file if specified
