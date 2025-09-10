@@ -7,7 +7,8 @@ case $1 in prereqs) prereqs; exit 0;; esac
 . /scripts/functions
 
 # Configuration
-API_ENDPOINT="${TDX_API_ENDPOINT:-https://your-api.example.com/luks-key}"
+API_ENDPOINT="${TDX_API_ENDPOINT:-http://api.chutes.ai/boot/attestation}"
+NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-http://api.chutes.ai/boot/nonce}"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
@@ -70,15 +71,100 @@ setup_network() {
     return 0
 }
 
+# Function to fetch nonce from API
+fetch_nonce() {
+    local attempt=1
+    local response_file="/tmp/nonce_response"
+    local nonce
+    
+    while [ $attempt -le $RETRY_COUNT ]; do
+        log_begin_msg "Fetching nonce from $NONCE_ENDPOINT (attempt $attempt/$RETRY_COUNT)"
+        
+        # Make API request
+        http_code=$(curl -s -w "%{http_code}" \
+            -X GET \
+            --max-time $TIMEOUT \
+            --retry 0 \
+            --cacert /etc/ssl/certs/ca-certificates.crt \
+            -o "$response_file" \
+            "$NONCE_ENDPOINT")
+        
+        # Check HTTP response code
+        case "$http_code" in
+            200)
+                # Extract nonce from JSON
+                nonce=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                if [ -n "$nonce" ]; then
+                    # Convert to hex if not already (assume text or hex input)
+                    nonce_hex=$(echo -n "$nonce" | xxd -p | tr -d '\n')
+                    len=$(( ${#nonce_hex} / 2 ))
+                    if [ $len -lt 64 ]; then
+                        # Pad to 64 bytes
+                        nonce_hex="${nonce_hex}$(printf '0%.0s' $(seq $((128 - ${#nonce_hex}))))"
+                    elif [ $len -gt 64 ]; then
+                        # Truncate to 64 bytes
+                        nonce_hex="${nonce_hex:0:128}"
+                    fi
+                    echo "$nonce_hex"
+                    rm -f "$response_file"
+                    log_success_msg "Nonce retrieved successfully"
+                    return 0
+                else
+                    log_failure_msg "API response missing nonce field"
+                fi
+                ;;
+            401|403)
+                log_failure_msg "Authentication failed (HTTP $http_code)"
+                break
+                ;;
+            404)
+                log_failure_msg "Nonce endpoint not found (HTTP $http_code)"
+                break
+                ;;
+            429)
+                log_begin_msg "Rate limited, waiting before retry..."
+                sleep $((attempt * 2))
+                ;;
+            5*)
+                log_failure_msg "Server error (HTTP $http_code), retrying..."
+                ;;
+            000)
+                log_failure_msg "Connection failed, retrying..."
+                ;;
+            *)
+                log_failure_msg "Unexpected HTTP response: $http_code"
+                ;;
+        esac
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -le $RETRY_COUNT ]; then
+            sleep 2
+        fi
+    done
+    
+    rm -f "$response_file"
+    return 1
+}
+
 # Function to generate quote and get VM ID
 generate_quote_and_vmid() {
     local quote_file="/tmp/tdx_quote.bin"
     local vm_id
+    local nonce
     
-    log_begin_msg "Generating TDX quote"
+    log_begin_msg "Fetching nonce for TDX quote"
     
-    # Generate quote using the C program
-    if ! /usr/bin/tdx-quote-generator -o "$quote_file" 2>/dev/null; then
+    # Fetch nonce
+    nonce=$(fetch_nonce)
+    if [ -z "$nonce" ]; then
+        log_failure_msg "Failed to fetch nonce"
+        return 1
+    fi
+    
+    log_begin_msg "Generating TDX quote with nonce"
+    
+    # Generate quote using the C program with nonce
+    if ! /usr/bin/tdx-quote-generator --user-data "$nonce" -o "$quote_file" 2>/dev/null; then
         log_failure_msg "Failed to generate TDX quote"
         return 1
     fi
@@ -103,17 +189,17 @@ generate_quote_and_vmid() {
     return 0
 }
 
-# Function to fetch LUKS key from API
+# Function to fetch LUKS key from APIthen
 fetch_luks_key() {
     local attempt=1
-    local key
+    local keyhex 
     local http_code
     local response_file="/tmp/api_response"
     
     while [ $attempt -le $RETRY_COUNT ]; do
         log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
         
-        # Make API request
+        # Make API request with quote and measurements
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
@@ -121,7 +207,7 @@ fetch_luks_key() {
             --max-time $TIMEOUT \
             --retry 0 \
             --cacert /etc/ssl/certs/ca-certificates.crt \
-            -d "{\"quote\":\"$QUOTE_B64\",\"vm_id\":\"$VM_ID\",\"timestamp\":$(date +%s)}" \
+            -d "{\"quote\":\"$QUOTE_B64\",\"vm_id\":\"$VM_ID\"" \
             -o "$response_file" \
             "$API_ENDPOINT")
         
@@ -141,11 +227,11 @@ fetch_luks_key() {
                 ;;
             401|403)
                 log_failure_msg "Authentication failed (HTTP $http_code)"
-                break # Don't retry auth failures
+                break
                 ;;
             404)
                 log_failure_msg "API endpoint not found (HTTP $http_code)"
-                break # Don't retry 404s
+                break
                 ;;
             429)
                 log_begin_msg "Rate limited, waiting before retry..."
