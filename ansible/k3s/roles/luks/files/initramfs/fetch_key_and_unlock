@@ -95,17 +95,7 @@ fetch_nonce() {
                 # Extract nonce from JSON
                 nonce=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
                 if [ -n "$nonce" ]; then
-                    # Convert to hex if not already (assume text or hex input)
-                    nonce_hex=$(echo -n "$nonce" | xxd -p | tr -d '\n')
-                    len=$(( ${#nonce_hex} / 2 ))
-                    if [ $len -lt 64 ]; then
-                        # Pad to 64 bytes
-                        nonce_hex="${nonce_hex}$(printf '0%.0s' $(seq $((128 - ${#nonce_hex}))))"
-                    elif [ $len -gt 64 ]; then
-                        # Truncate to 64 bytes
-                        nonce_hex="${nonce_hex:0:128}"
-                    fi
-                    echo "$nonce_hex"
+                    echo $nonce
                     rm -f "$response_file"
                     log_success_msg "Nonce retrieved successfully"
                     return 0
