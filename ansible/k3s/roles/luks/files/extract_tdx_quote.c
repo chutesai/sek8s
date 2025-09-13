@@ -9,20 +9,19 @@
 typedef struct {
     uint16_t version;        // Quote version (e.g., 4 for TDX)
     uint16_t att_key_type;   // Attestation key type (e.g., 2 for ECDSA-256)
-    uint32_t att_key_data_0; // Reserved
-    uint32_t att_key_data_1; // Reserved
-    uint16_t tee_type;       // TEE type (0x81 for TDX, 0x9a93 for your case)
-    uint16_t reserved1;      // Reserved
-    uint8_t reserved2[28];   // Reserved (to make header 48 bytes)
+    uint32_t tee_type;       // TEE type (0x00000081 for TDX)
+    uint32_t reserved;       // Reserved
+    uint8_t qe_vendor_id[16]; // QE Vendor ID
+    uint8_t user_data[20];   // User data
 } tdx_quote_header_t;
 
-// TD Report field offsets (based on actual analysis of your quote)
-#define TD_REPORT_MRTD_OFFSET           0     // 48 bytes - Trust Domain measurement  
-#define TD_REPORT_RTMR0_OFFSET          112   // 48 bytes
-#define TD_REPORT_RTMR1_OFFSET          160   // 48 bytes  
-#define TD_REPORT_RTMR2_OFFSET          208   // 48 bytes
-#define TD_REPORT_RTMR3_OFFSET          256   // 48 bytes
-#define TD_REPORT_REPORTDATA_OFFSET     520   // 64 bytes
+// TD Report field offsets (relative to TD report start, based on Intel TDX specification)
+#define TD_REPORT_MRTD_OFFSET           136     // 48 bytes - MR_TD (Trust Domain measurement)
+#define TD_REPORT_RTMR0_OFFSET          328     // 48 bytes
+#define TD_REPORT_RTMR1_OFFSET          376     // 48 bytes  
+#define TD_REPORT_RTMR2_OFFSET          424     // 48 bytes
+#define TD_REPORT_RTMR3_OFFSET          472     // 48 bytes
+#define TD_REPORT_REPORTDATA_OFFSET     520     // 64 bytes
 
 void print_hex(uint8_t *data, size_t len, const char *name) {
     printf("%s: ", name);
@@ -147,11 +146,17 @@ int main(int argc, char *argv[]) {
     // Parse header
     tdx_quote_header_t *header = (tdx_quote_header_t *)quote;
     if (!json_output) {
-        printf("Quote Header: version=%u, tee_type=0x%04x\n", header->version, header->tee_type);
+        printf("Quote Header: version=%u, tee_type=0x%08x\n", header->version, header->tee_type);
     }
     
     if (header->version != 4) {
         fprintf(stderr, "Invalid quote: version=%u (expected 4)\n", header->version);
+        free(quote);
+        return 1;
+    }
+
+    if (header->tee_type != 0x00000081) {
+        fprintf(stderr, "Invalid quote: tee_type=0x%08x (expected 0x00000081 for TDX)\n", header->tee_type);
         free(quote);
         return 1;
     }
@@ -161,11 +166,11 @@ int main(int argc, char *argv[]) {
     
     // Extract fields using the actual offsets discovered through analysis
     uint8_t *reportdata = td_report + TD_REPORT_REPORTDATA_OFFSET;  // offset 520
-    uint8_t *mrtd = td_report + TD_REPORT_MRTD_OFFSET;              // offset 0  
-    uint8_t *rtmr0 = td_report + TD_REPORT_RTMR0_OFFSET;            // offset 112
-    uint8_t *rtmr1 = td_report + TD_REPORT_RTMR1_OFFSET;            // offset 160
-    uint8_t *rtmr2 = td_report + TD_REPORT_RTMR2_OFFSET;            // offset 208
-    uint8_t *rtmr3 = td_report + TD_REPORT_RTMR3_OFFSET;            // offset 256
+    uint8_t *mrtd = td_report + TD_REPORT_MRTD_OFFSET;              // offset 136  
+    uint8_t *rtmr0 = td_report + TD_REPORT_RTMR0_OFFSET;            // offset 328
+    uint8_t *rtmr1 = td_report + TD_REPORT_RTMR1_OFFSET;            // offset 376
+    uint8_t *rtmr2 = td_report + TD_REPORT_RTMR2_OFFSET;            // offset 424
+    uint8_t *rtmr3 = td_report + TD_REPORT_RTMR3_OFFSET;            // offset 472
 
     // Output results
     if (json_output) {
