@@ -115,5 +115,5 @@ RUN poetry install
 RUN chown ${APP_USER}:${APP_GROUP} .
 
 # Copy over custom entrypoint for k3d to start adminssion-controller
-COPY --chmod=744 scripts/k3d-entrypoint-custom.sh /bin/k3d-entrypoint-custom.sh
+COPY --chmod=744 docker/scripts/k3d-entrypoint-custom.sh /bin/k3d-entrypoint-custom.sh
 # USER ${APP_USER}

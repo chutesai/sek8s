@@ -1,7 +1,0 @@
-write-kubeconfig-mode: "644"
-disable:
-  - traefik      # We'll use our own ingress
-  - servicelb    # Use MetalLB or similar instead
-  - metrics-server  # Use custom monitoring
-cluster-init: true
-data-dir: /var/lib/rancher/k3s
