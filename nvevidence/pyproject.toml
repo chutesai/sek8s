@@ -8,16 +8,25 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 autoflake = "^2.3.1"
+nv-attestation-sdk = "^2.6.2"
+typer = "^0.19.2"
+loguru = "^0.7.3"
 
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
-pytest-cov = "^4.1.0"
 bandit = "^1.7.8"
 flake8 = "^7.0.0"
 black = "^24.3.0"
 isort = "^5.13.2"
 mypy = "^1.9.0"
+
+[tool.poetry.scripts]
+chutes-nvevidence = "chutes_nvevidence.cli:app"
+
+[[tool.mypy.overrides]]
+module = "nv_attestation_sdk.*"
+follow_untyped_imports = true
 
 [build-system]
 requires = ["poetry-core"]
