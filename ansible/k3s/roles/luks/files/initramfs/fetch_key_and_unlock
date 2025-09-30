@@ -25,14 +25,6 @@ get_network_interface() {
             return 0
         fi
     done
-    # Fallback: find first non-loopback interface
-    for iface in /sys/class/net/*; do
-        iface=$(basename "$iface")
-        if [ "$iface" != "lo" ]; then
-            echo "$iface"
-            return 0
-        fi
-    done
     return 1
 }
 
