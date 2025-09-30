@@ -1,0 +1,47 @@
+services:
+
+  shell:
+    volumes:
+    - "../:/app"
+    stdin_open: true
+    tty: true
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["bash"]
+  
+  bandit:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["bandit"]
+
+  black:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["black"]
+  
+  flake8:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["flake8"]
+
+  isort:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["isort"]
+
+  mypy:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["mypy"]
+
+  test:
+    extends:
+      file: docker-compose.base.yaml
+      service: base
+    entrypoint: ["/app/scripts/test.sh"]
