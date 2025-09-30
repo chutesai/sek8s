@@ -14,7 +14,7 @@ venv:
 buid: ##@development Build the docker images
 build: prod_image ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
 build: dev_image ?= ${PROJECT}_development:${BRANCH_NAME}-${BUILD_NUMBER}
-build: args ?= -f docker/Dockerfile --build-arg PROJECT_DIR=. --network=host --build-arg BUILDKIT_INLINE_CACHE=1
+build: args ?= -f docker/Dockerfile --build-arg PROJECT_DIR=${PROJECT} --network=host --build-arg BUILDKIT_INLINE_CACHE=1
 build:
 	DOCKER_BUILDKIT=1 docker build --progress=plain --target production -t ${prod_image} ${args} .
 	DOCKER_BUILDKIT=1 docker build --progress=plain --target development -t ${dev_image} --cache-from ${prod_image} ${args} .
@@ -35,7 +35,7 @@ clean:
 .PHONY: k3s-infrastructure
 k3s-infrastructure: ##@development Set up infrastructure for tests
 k3s-infrastructure:
-	k3d cluster create dev --config config/k3d-config.yml
+	k3d cluster create dev --config docker/config/k3d-config.yml
 
 .PHONY: k3s-clean
 k3s-clean: ##@development Clean up any dependencies
@@ -44,8 +44,8 @@ k3s-clean:
 
 .PHONY: redeploy
 redeploy: ##@development Redeploy infrastructure
-redeploy: clean infrastructure
+redeploy: k3s-clean k3s-infrastructure
 
-.PHONY: config
+.PHONY: ci
 ci: ##@development Run CI pipeline
 ci: clean build infrastructure lint test clean

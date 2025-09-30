@@ -8,7 +8,7 @@ import json
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
-from sek8s.admission_controller import AdmissionController, AdmissionWebhookServer
+from sek8s.services.admission_controller import AdmissionController, AdmissionWebhookServer
 from sek8s.validators.base import ValidationResult
 from sek8s.metrics import MetricsCollector
 

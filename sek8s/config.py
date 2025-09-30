@@ -23,17 +23,21 @@ class NamespacePolicy(BaseSettings):
         case_sensitive=False
     )
 
+class ServerConfig(BaseSettings):
 
-class AdmissionConfig(BaseSettings):
-    """Main configuration for admission controller using Pydantic v2."""
-    
     # Server configuration
     bind_address: str = Field(default="127.0.0.1", alias="ADMISSION_BIND_ADDRESS")
     port: int = Field(default=8443, alias="ADMISSION_PORT", ge=1, le=65535)
-    
+
     # TLS configuration
     tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
     tls_key_path: Optional[Path] = Field(default=None, alias="TLS_KEY_PATH")
+
+    # Debug mode
+    debug: bool = Field(default=False, alias="DEBUG")
+
+class AdmissionConfig(ServerConfig):
+    """Main configuration for admission controller using Pydantic v2."""
     
     # OPA configuration
     opa_url: str = Field(default="http://localhost:8181", alias="OPA_URL")
@@ -72,9 +76,6 @@ class AdmissionConfig(BaseSettings):
         alias="NAMESPACE_POLICIES",
         description="JSON object of namespace policies"
     )
-    
-    # Debug mode
-    debug: bool = Field(default=False, alias="DEBUG")
     
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")

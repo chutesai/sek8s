@@ -9,7 +9,7 @@ from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
 from unittest.mock import Mock, AsyncMock, patch
 
-from sek8s.admission_controller import AdmissionWebhookServer
+from sek8s.services.admission_controller import AdmissionWebhookServer
 from sek8s.config import AdmissionConfig
 from sek8s.validators.base import ValidationResult
 

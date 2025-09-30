@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, AsyncMock
 from pathlib import Path
 
-from sek8s.admission_controller import AdmissionController, AdmissionWebhookServer
+from sek8s.services.admission_controller import AdmissionController, AdmissionWebhookServer
 from sek8s.config import AdmissionConfig, NamespacePolicy
 from sek8s.validators.base import ValidationResult
 
