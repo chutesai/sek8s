@@ -24,7 +24,6 @@ PCI_HOLE_BASE_GB=2048
 
 # Per-GPU MMIO allocation (in MB) 
 # H200 has 141GB VRAM, but start smaller to avoid soft lockups
-# Default: 32GB per GPU (was 141GB), increase gradually if needed
 GPU_MMIO_MB=262144
 
 # Per-NVSwitch MMIO allocation (in MB)
@@ -236,9 +235,6 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func") )
   fi
   
   DEV_OPTS+=( -device vfio-pci,host=${NVSW[j]},bus=${id},addr=0x0,iommufd=iommufd0 )
-  
-  # Convert MB to bytes for fw_cfg
-  DEV_OPTS+=( -fw_cfg name=opt/ovmf/X-PciMmio64Mb$(( ${#GPUS[@]} + j + 1 )),string=${NVSWITCH_MMIO_MB} )
   
   echo "NVSwitch $((j+1)): ${NVSW[j]} -> bus=${id}, MMIO=${NVSWITCH_MMIO_MB}MB"
   
