@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Configuration
 TDX_REPO="$REPO_ROOT/tdx"
-UBUNTU_VERSION="25.04"
+UBUNTU_VERSION="24.04"
 LOGFILE="$REPO_ROOT/tdx-base-image-build.log"
 CREATE_TD_SCRIPT="$TDX_REPO/guest-tools/image/create-td-image.sh"
 GUEST_IMG_PATH="$TDX_REPO/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2"
