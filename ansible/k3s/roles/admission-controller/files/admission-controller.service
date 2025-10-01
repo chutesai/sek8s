@@ -16,7 +16,7 @@ Environment="VIRTUAL_ENV=/opt/admission-controller/venv"
 EnvironmentFile=/etc/admission-controller/admission.env
 
 # Run the admission controller
-ExecStart=/opt/admission-controller/venv/bin/python -m sek8s.admission_controller
+ExecStart=/opt/admission-controller/venv/bin/python -m sek8s.services.admission_controller
 
 Restart=always
 RestartSec=5
