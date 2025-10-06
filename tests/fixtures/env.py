@@ -2,7 +2,7 @@ import os
 import pytest
 
 
-@pytest.fixture(autouse=True, scope='module')
+@pytest.fixture(autouse=True, scope="module")
 def env():
     original_env = os.environ.copy()
 

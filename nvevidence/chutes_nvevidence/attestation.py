@@ -1,7 +1,7 @@
 from nv_attestation_sdk import attestation
 
-class NvClient:
 
+class NvClient:
     def gather_evidence(self, name: str, nonce: str):
         client = attestation.Attestation()
         client.set_name(name)

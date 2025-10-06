@@ -10,7 +10,7 @@ app = typer.Typer(no_args_is_help=True)
 
 def gather_nv_evidence(
     name: str = typer.Option(..., help="Name of the node"),
-    nonce: str = typer.Option(..., help="The nonce to include in the evidence")
+    nonce: str = typer.Option(..., help="The nonce to include in the evidence"),
 ):
     try:
         client = NvClient()
