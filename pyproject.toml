@@ -17,6 +17,7 @@ pydantic = "^2.11.7"
 pydantic-settings = "^2.10.1"
 loguru = "^0.7.3"
 pytest-asyncio = "^1.2.0"
+fastapi = "^0.118.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -33,7 +34,8 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-admission-controller = 'sek8s.admission_controller:run'
+admission-controller = 'sek8s.serivces.admission_controller:run'
+chutes-quote-service = 'sek8s.services.tdx_quote:run'
 
 [tool.isort]
 profile = "black"
