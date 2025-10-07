@@ -45,6 +45,6 @@ class WebServer:
 
         uvicorn.run(
             self.app,
-            log_level="debug" if self.config.debug else "info"
+            log_level="debug" if self.config.debug else "info",
             **uvicorn_kwargs
         )
