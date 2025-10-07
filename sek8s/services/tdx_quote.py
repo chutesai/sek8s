@@ -16,22 +16,24 @@ class TdxQuoteServer(WebServer):
         """Setup web routes."""
         self.app.router.add_get("/quote", self.get_quote)
 
-    async def get_quote(self, nonce: str = Query(None, description="Nonce to include in the quote")):
+    async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:
             with tempfile.NamedTemporaryFile(mode="r", suffix=".bin") as fp:
                 result = await asyncio.create_subprocess_exec(
-                    [QUOTE_GENERATOR_BINARY, "--user-data", nonce, "--output", fp.name],
-                    capture_output=True,
-                    check=True,
+                    *[QUOTE_GENERATOR_BINARY, "--user-data", nonce, "--output", fp.name],
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
 
                 await result.wait()
 
                 if result.returncode == 0:
                     # Return base64 encoded content of file
+                    logger.info("Successfully generated quote.")
+                    logger.info(result.stdout.read())
                     return
                 else:
-                    logger.error(f"Failed to generate quote:{result.stdout}")
+                    logger.error(f"Failed to generate quote:{result.stderr.read()}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail=f"Failed to generate quote.",
