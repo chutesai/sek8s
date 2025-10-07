@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import tempfile
 from fastapi import HTTPException, Query, status
 import logging
@@ -29,11 +30,18 @@ class TdxQuoteServer(WebServer):
 
                 if result.returncode == 0:
                     # Return base64 encoded content of file
-                    logger.info("Successfully generated quote.")
-                    logger.info(result.stdout.read())
-                    return
+                    result_output = await result.stdout.read()
+                    logger.info(f"Successfully generated quote.\n{result_output.decode()}")
+                    
+                    # Read the quote from the file
+                    fp.seek(0)  # Reset file pointer to beginning
+                    quote_content = fp.read()
+                    
+                    # Return as base64-encoded string
+                    return base64.b64encode(quote_content).decode('utf-8')
                 else:
-                    logger.error(f"Failed to generate quote:{result.stderr.read()}")
+                    result_output = await result.stdout.read()
+                    logger.error(f"Failed to generate quote:{result_output.decode()}")
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail=f"Failed to generate quote.",
