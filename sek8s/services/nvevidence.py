@@ -12,7 +12,7 @@ class NvEvidenceServer(WebServer):
     
     def _setup_routes(self):
         """Setup web routes."""
-        self.app.router.add_get('/evidence', self.get_evidence)
+        self.app.router.get('/evidence', self.get_evidence)
 
     def get_evidence(
             name: str = Query(

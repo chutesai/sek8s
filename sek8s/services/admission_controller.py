@@ -223,11 +223,11 @@ class AdmissionWebhookServer(WebServer):
 
     def _setup_routes(self):
         """Setup web routes."""
-        self.app.router.add_post("/validate", self.handle_validate)
-        self.app.router.add_post("/mutate", self.handle_mutate)  # For future use
-        self.app.router.add_get("/health", self.handle_health)
-        self.app.router.add_get("/ready", self.handle_ready)
-        self.app.router.add_get("/metrics", self.handle_metrics)
+        self.app.router.post("/validate", self.handle_validate)
+        self.app.router.post("/mutate", self.handle_mutate)  # For future use
+        self.app.router.get("/health", self.handle_health)
+        self.app.router.get("/ready", self.handle_ready)
+        self.app.router.get("/metrics", self.handle_metrics)
 
     async def handle_validate(self, request: web.Request) -> web.Response:
         """Handle validation webhook requests."""
