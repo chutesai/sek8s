@@ -19,7 +19,7 @@ class TdxQuoteServer(WebServer):
 
     async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:
-            with tempfile.NamedTemporaryFile(mode="r", suffix=".bin") as fp:
+            with tempfile.NamedTemporaryFile(mode="rb", suffix=".bin") as fp:
                 result = await asyncio.create_subprocess_exec(
                     *[QUOTE_GENERATOR_BINARY, "--user-data", nonce, "--output", fp.name],
                     stdout=asyncio.subprocess.PIPE,
