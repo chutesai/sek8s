@@ -1,6 +1,4 @@
-from asyncio import subprocess
-import json
-from tempfile import TemporaryFile
+import asyncio
 import tempfile
 from fastapi import HTTPException, Query, status
 import logging
@@ -18,14 +16,16 @@ class TdxQuoteServer(WebServer):
         """Setup web routes."""
         self.app.router.add_get("/quote", self.get_quote)
 
-    def get_quote(nonce: str = Query(None, description="Nonce to include in the quote")):
+    async def get_quote(self, nonce: str = Query(None, description="Nonce to include in the quote")):
         try:
             with tempfile.NamedTemporaryFile(mode="r", suffix=".bin") as fp:
-                result = subprocess.run(
+                result = await asyncio.create_subprocess_exec(
                     [QUOTE_GENERATOR_BINARY, "--user-data", nonce, "--output", fp.name],
                     capture_output=True,
                     check=True,
                 )
+
+                await result.wait()
 
                 if result.returncode == 0:
                     # Return base64 encoded content of file
@@ -39,10 +39,10 @@ class TdxQuoteServer(WebServer):
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Unexpected error gathering GPU evidence:{e}")
+            logger.error(f"Unexpected error generating TDX quote:{e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Unexpected error gathering GPU evidence.",
+                detail=f"Unexpected error generating TDX quote.",
             )
 
 
@@ -67,7 +67,7 @@ def run():
         server.run()
 
     except Exception as e:
-        logger.exception("Failed to start admission controller: %s", e)
+        logger.exception("Failed to start TDX Quote service: %s", e)
         raise
 
 

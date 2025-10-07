@@ -24,7 +24,7 @@ class WebServer:
     def run(self):
         """Run the webhook server."""
         logger.info(
-            "Starting admission webhook server on %s:%d", self.config.bind_address, self.config.port
+            f"Starting admission webhook server on {self.config.bind_address}:{self.config.port}"
         )
 
         # Setup SSL if configured
