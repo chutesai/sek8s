@@ -4,7 +4,7 @@ import json
 from fastapi import HTTPException, Query, status
 import logging
 from loguru import logger
-from sek8s.config import ServerConfig
+from sek8s.config import NvEvidenceServiceConfig, ServerConfig
 from sek8s.server import WebServer
 
 class NvEvidenceServer(WebServer):
@@ -52,7 +52,7 @@ def run():
     """Main entry point."""
     try:
         # Load configuration using Pydantic
-        config = ServerConfig()
+        config = NvEvidenceServiceConfig()
         
         # Setup logging level based on config
         if config.debug:

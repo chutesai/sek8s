@@ -25,8 +25,9 @@ class NamespacePolicy(BaseSettings):
 
 class ServerConfig(BaseSettings):
     # Server configuration
-    bind_address: str = Field(default="127.0.0.1", alias="ADMISSION_BIND_ADDRESS")
-    port: int = Field(default=8443, alias="ADMISSION_PORT", ge=1, le=65535)
+    bind_address: str = Field(default="127.0.0.1", alias="BIND_ADDRESS")
+    port: int = Field(default=8443, alias="PORT", ge=1, le=65535)
+    uds_path: Optional[Path] = Field(default=None, alias="UDS_PATH")
 
     # TLS configuration
     tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
@@ -35,9 +36,57 @@ class ServerConfig(BaseSettings):
     # Debug mode
     debug: bool = Field(default=False, alias="DEBUG")
 
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_prefix="",  # No prefix in base class; subclasses set their own
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="ignore",
+    )
+
+    @field_validator("tls_cert_path", "tls_key_path", "uds_path", mode="after")
+    @classmethod
+    def validate_paths(cls, v: Optional[Path]) -> Optional[Path]:
+        """Validate that paths exist if specified."""
+        if v is not None and not v.exists():
+            raise ValueError(f"Path does not exist: {v}")
+        return v
+
+class TdxServiceConfig(ServerConfig):
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_prefix="TDX_",
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="ignore",
+    )
+
+class NvEvidenceServiceConfig(ServerConfig):
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_prefix="NV_",
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="ignore",
+    )
 
 class AdmissionConfig(ServerConfig):
     """Main configuration for admission controller using Pydantic v2."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_prefix="ADMISSION_",
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="ignore",
+    )
 
     # OPA configuration
     opa_url: str = Field(default="http://localhost:8181", alias="OPA_URL")

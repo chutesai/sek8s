@@ -4,7 +4,7 @@ import tempfile
 from fastapi import HTTPException, Query, status
 import logging
 from loguru import logger
-from sek8s.config import ServerConfig
+from sek8s.config import ServerConfig, TdxServiceConfig
 from sek8s.server import WebServer
 
 QUOTE_GENERATOR_BINARY = "/usr/bin/tdx-quote-generator"
@@ -34,7 +34,7 @@ class TdxQuoteServer(WebServer):
                     logger.info(f"Successfully generated quote.\n{result_output.decode()}")
                     
                     # Read the quote from the file
-                    fp.seek(0)  # Reset file pointer to beginning
+                    fp.seek(0)
                     quote_content = fp.read()
                     
                     # Return as base64-encoded string
@@ -60,7 +60,7 @@ def run():
     """Main entry point."""
     try:
         # Load configuration using Pydantic
-        config = ServerConfig()
+        config = TdxServiceConfig()
 
         # Setup logging level based on config
         if config.debug:
