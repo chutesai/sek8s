@@ -14,7 +14,7 @@ class TdxQuoteServer(WebServer):
 
     def _setup_routes(self):
         """Setup web routes."""
-        self.app.router.get("/quote", self.get_quote)
+        self.app.add_api_route("/quote", self.get_quote, methods=["GET"])
 
     async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:
