@@ -7,14 +7,44 @@ case $1 in prereqs) prereqs; exit 0;; esac
 . /scripts/functions
 
 # Configuration
-API_ENDPOINT="${TDX_API_ENDPOINT:-http://api.chutes.ai/boot/attestation}"
-NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-http://api.chutes.ai/boot/nonce}"
+API_ENDPOINT="${TDX_API_ENDPOINT:-https://api.chutes.ai/servers/boot/attestation}"
+NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
 RETRY_COUNT="${TDX_RETRY_COUNT:-3}"
+# Paths for self-signed client cert in initramfs (generated at boot)
+CLIENT_CERT="/tmp/client_cert.pem"
+CLIENT_KEY="/tmp/client_key.pem"
+API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"  # Existing CA bundle for server verification
 
 log_begin_msg "Starting TDX-based disk unlock"
+
+# Function to generate self-signed client certificate
+generate_client_cert() {
+    log_begin_msg "Generating self-signed client certificate"
+    
+    # Use openssl to create a self-signed cert (in TDX trust domain)
+    # Minimal size for initramfs; store in /tmp (tmpfs, not persisted)
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+        -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" -days 1 \
+        -subj "/CN=tdx-vm-$(date +%s)" 2>/dev/null; then
+        log_failure_msg "Failed to generate client certificate"
+        return 1
+    fi
+    
+    # Compute SHA-256 hash of cert's public key for REPORTDATA
+    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout | \
+                openssl pkey -pubin -outform der | \
+                sha256sum | cut -d' ' -f1)
+    if [ -z "$CERT_HASH" ]; then
+        log_failure_msg "Failed to compute cert hash"
+        return 1
+    fi
+    
+    log_success_msg "Client certificate generated"
+    return 0
+}
 
 # Function to get network interface
 get_network_interface() {
@@ -72,12 +102,14 @@ fetch_nonce() {
     while [ $attempt -le $RETRY_COUNT ]; do
         log_begin_msg "Fetching nonce from $NONCE_ENDPOINT (attempt $attempt/$RETRY_COUNT)"
         
-        # Make API request
+        # Make API request, use mTLS with client cert and key
         http_code=$(curl -s -w "%{http_code}" \
             -X GET \
             --max-time $TIMEOUT \
             --retry 0 \
-            --cacert /etc/ssl/certs/ca-certificates.crt \
+            --cacert "$API_CA_CERT" \
+            --cert "$CLIENT_CERT" \
+            --key "$CLIENT_KEY" \
             -o "$response_file" \
             "$NONCE_ENDPOINT")
         
@@ -87,7 +119,7 @@ fetch_nonce() {
                 # Extract nonce from JSON
                 nonce=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
                 if [ -n "$nonce" ]; then
-                    echo $nonce
+                    echo "$nonce"
                     rm -f "$response_file"
                     log_success_msg "Nonce retrieved successfully"
                     return 0
@@ -131,7 +163,6 @@ fetch_nonce() {
 # Function to generate quote and get VM ID
 generate_quote_and_vmid() {
     local quote_file="/tmp/tdx_quote.bin"
-    local vm_id
     local nonce
     
     log_begin_msg "Fetching nonce for TDX quote"
@@ -143,10 +174,14 @@ generate_quote_and_vmid() {
         return 1
     fi
     
-    log_begin_msg "Generating TDX quote with nonce"
+    log_begin_msg "Generating TDX quote with nonce and cert hash"
     
-    # Generate quote using the C program with nonce
-    if ! /usr/bin/tdx-quote-generator --user-data "$nonce" -o "$quote_file" 2>/dev/null; then
+    # Compute combined hash for REPORTDATA (nonce + cert pubkey)
+    NONCE_HASH=$(echo -n "$nonce" | sha256sum | cut -d' ' -f1)
+    REPORTDATA=$(echo -n "${NONCE_HASH}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
+    
+    # Generate quote with REPORTDATA
+    if ! /usr/bin/tdx-quote-generator --user-data "$REPORTDATA" -o "$quote_file" 2>/dev/null; then
         log_failure_msg "Failed to generate TDX quote"
         return 1
     fi
@@ -156,48 +191,39 @@ generate_quote_and_vmid() {
         return 1
     fi
     
-    # Get VM identifier (MAC address of first interface)
-    vm_id=$(cat /sys/class/net/$(get_network_interface)/address 2>/dev/null)
-    if [ -z "$vm_id" ]; then
-        vm_id="unknown"
-    fi
-    
     # Base64 encode the quote for HTTP transmission
     QUOTE_B64=$(base64 -w 0 < "$quote_file")
-    VM_ID="$vm_id"
     
     rm -f "$quote_file"
     log_success_msg "TDX quote generated"
     return 0
 }
 
-# Function to fetch LUKS key from APIthen
+# Function to fetch LUKS key from API
 fetch_luks_key() {
     local attempt=1
-    local keyhex 
-    local http_code
     local response_file="/tmp/api_response"
     
     while [ $attempt -le $RETRY_COUNT ]; do
         log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
         
-        # Make API request with quote and measurements
+        # Make API request, use mTLS for API request
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
             -H "User-Agent: TDX-LUKS-Client/1.0" \
             --max-time $TIMEOUT \
             --retry 0 \
-            --cacert /etc/ssl/certs/ca-certificates.crt \
-            -d "{\"quote\":\"$QUOTE_B64\",\"vm_id\":\"$VM_ID\"" \
+            --cacert "$API_CA_CERT" \
+            --cert "$CLIENT_CERT" \
+            --key "$CLIENT_KEY" \
+            -d "{\"quote\":\"$QUOTE_B64\"}" \
             -o "$response_file" \
             "$API_ENDPOINT")
         
-        # Check HTTP response code
         case "$http_code" in
             200)
-                # Success - extract key
-                key=$(grep -o '"key":"[^"]*"' "$response_file" 2>/dev/null | cut -d'"' -f4)
+                key=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
                 if [ -n "$key" ]; then
                     echo "$key"
                     rm -f "$response_file"
@@ -281,7 +307,12 @@ main() {
         return 1
     fi
     
-    # Setup network
+    # Generate self-signed client cert
+    if ! generate_client_cert; then
+        handle_failure "Client certificate generation failed"
+        return 1
+    fi
+    
     if ! setup_network; then
         handle_failure "Network setup failed"
         return 1
@@ -305,6 +336,8 @@ main() {
         # Clear key from memory
         key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
         unset key
+        # Clean up cert and key
+        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
         log_success_msg "TDX-based unlock completed successfully"
         return 0
     else
