@@ -49,7 +49,7 @@ class ServerConfig(BaseSettings):
     @classmethod
     def validate_paths(cls, v: Optional[Path]) -> Optional[Path]:
         """Validate that paths exist if specified."""
-        if v is not None and not v.exists():
+        if v and not v.exists():
             raise ValueError(f"Path does not exist: {v}")
         return v
 
