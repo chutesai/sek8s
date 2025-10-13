@@ -95,89 +95,66 @@ setup_network() {
 
 # Function to fetch nonce from API
 fetch_nonce() {
-    local attempt=1
     local response_file="/tmp/nonce_response"
-    local nonce
     
-    while [ $attempt -le $RETRY_COUNT ]; do
-        log_begin_msg "Fetching nonce from $NONCE_ENDPOINT (attempt $attempt/$RETRY_COUNT)"
-        
-        # Make API request, use mTLS with client cert and key
-        http_code=$(curl -s -w "%{http_code}" \
-            -X GET \
-            --max-time $TIMEOUT \
-            --retry 0 \
-            --cacert "$API_CA_CERT" \
-            --cert "$CLIENT_CERT" \
-            --key "$CLIENT_KEY" \
-            -o "$response_file" \
-            "$NONCE_ENDPOINT")
-        
-        # Check HTTP response code
-        case "$http_code" in
-            200)
-                # Extract nonce from JSON
-                nonce=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
-                if [ -n "$nonce" ]; then
-                    echo "$nonce"
-                    rm -f "$response_file"
-                    log_success_msg "Nonce retrieved successfully"
-                    return 0
-                else
-                    log_failure_msg "API response missing nonce field"
-                fi
-                ;;
-            401|403)
-                log_failure_msg "Authentication failed (HTTP $http_code)"
-                break
-                ;;
-            404)
-                log_failure_msg "Nonce endpoint not found (HTTP $http_code)"
-                break
-                ;;
-            429)
-                log_begin_msg "Rate limited, waiting before retry..."
-                sleep $((attempt * 2))
-                ;;
-            5*)
-                log_failure_msg "Server error (HTTP $http_code), retrying..."
-                ;;
-            000)
-                log_failure_msg "Connection failed, retrying..."
-                ;;
-            *)
-                log_failure_msg "Unexpected HTTP response: $http_code"
-                ;;
-        esac
-        
-        attempt=$((attempt + 1))
-        if [ $attempt -le $RETRY_COUNT ]; then
-            sleep 2
-        fi
-    done
+    log_begin_msg "Fetching nonce from $NONCE_ENDPOINT"
+    
+    # Make API request, use mTLS with client cert and key
+    http_code=$(curl -s -w "%{http_code}" \
+        -X GET \
+        --max-time $TIMEOUT \
+        --retry 0 \
+        --cacert "$API_CA_CERT" \
+        --cert "$CLIENT_CERT" \
+        --key "$CLIENT_KEY" \
+        -o "$response_file" \
+        "$NONCE_ENDPOINT")
+    
+    # Check HTTP response code
+    case "$http_code" in
+        200)
+            # Extract nonce from JSON
+            NONCE=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
+            if [ -n "$NONCE" ]; then
+                rm -f "$response_file"
+                log_success_msg "Nonce retrieved successfully: $NONCE"
+                return 0
+            else
+                log_failure_msg "API response missing nonce field"
+            fi
+            ;;
+        401|403)
+            log_failure_msg "Authentication failed (HTTP $http_code)"
+            ;;
+        404)
+            log_failure_msg "Nonce endpoint not found (HTTP $http_code)"
+            ;;
+        429)
+            log_failure_msg "Rate limited (HTTP $http_code)"
+            ;;
+        5*)
+            log_failure_msg "Server error (HTTP $http_code)"
+            ;;
+        000)
+            log_failure_msg "Connection failed"
+            ;;
+        *)
+            log_failure_msg "Unexpected HTTP response: $http_code"
+            ;;
+    esac
     
     rm -f "$response_file"
     return 1
 }
 
-# Function to generate quote and get VM ID
-generate_quote_and_vmid() {
+# Function to generate quote with nonce and cert hash
+generate_quote() {
     local quote_file="/tmp/tdx_quote.bin"
-    local nonce
-    
-    log_begin_msg "Fetching nonce for TDX quote"
-    
-    # Fetch nonce
-    nonce=$(fetch_nonce)
-    if [ -z "$nonce" ]; then
-        log_failure_msg "Failed to fetch nonce"
-        return 1
-    fi
     
     log_begin_msg "Generating TDX quote with nonce and cert hash"
     
     # Compute combined hash for REPORTDATA (nonce + cert pubkey)
-    NONCE_HASH=$(echo -n "$nonce" | sha256sum | cut -d' ' -f1)
+    NONCE_HASH=$(echo -n "$NONCE" | sha256sum | cut -d' ' -f1)
     REPORTDATA=$(echo -n "${NONCE_HASH}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
     
     # Generate quote with REPORTDATA
@@ -199,7 +176,7 @@ generate_quote_and_vmid() {
     return 0
 }
 
-# Function to fetch LUKS key from API
+# Function to fetch LUKS key from API with fresh nonce for each attempt
 fetch_luks_key() {
     local attempt=1
     local response_file="/tmp/api_response"
@@ -207,11 +184,32 @@ fetch_luks_key() {
     while [ $attempt -le $RETRY_COUNT ]; do
         log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
         
+        # Fetch fresh nonce for this attempt
+        if ! fetch_nonce; then
+            log_failure_msg "Failed to fetch nonce for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
+        # Generate quote with the fresh nonce
+        if ! generate_quote; then
+            log_failure_msg "Failed to generate quote for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
         # Make API request, use mTLS for API request
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
             -H "User-Agent: TDX-LUKS-Client/1.0" \
+            -H "X-Chutes-Nonce: $NONCE" \
             --max-time $TIMEOUT \
             --retry 0 \
             --cacert "$API_CA_CERT" \
@@ -235,7 +233,7 @@ fetch_luks_key() {
                 ;;
             401|403)
                 log_failure_msg "Authentication failed (HTTP $http_code)"
-                break
+                # Don't break - might be a transient issue, try with fresh nonce
                 ;;
             404)
                 log_failure_msg "API endpoint not found (HTTP $http_code)"
@@ -318,13 +316,7 @@ main() {
         return 1
     fi
     
-    # Generate quote and VM ID
-    if ! generate_quote_and_vmid; then
-        handle_failure "Quote generation failed"
-        return 1
-    fi
-    
-    # Fetch LUKS key from API
+    # Fetch LUKS key from API (nonce and quote generated per attempt)
     key=$(fetch_luks_key)
     if [ -z "$key" ]; then
         handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
