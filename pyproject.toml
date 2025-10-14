@@ -36,7 +36,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 admission-controller = 'sek8s.serivces.admission_controller:run'
-chutes-quote-service = 'sek8s.services.tdx_quote:run'
+attestation-service = 'sek8s.services.attestation:run'
 
 [tool.isort]
 profile = "black"

@@ -36,6 +36,8 @@ class ServerConfig(BaseSettings):
     # Debug mode
     debug: bool = Field(default=False, alias="DEBUG")
 
+    hostname: str = Field(alias="HOSTNAME")
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
@@ -53,23 +55,12 @@ class ServerConfig(BaseSettings):
             raise ValueError(f"Path does not exist: {v}")
         return v
 
-class TdxServiceConfig(ServerConfig):
+class AttestationServiceConfig(ServerConfig):
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="TDX_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
-    )
-
-class NvEvidenceServiceConfig(ServerConfig):
-
-    model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        env_prefix="NV_",
+        env_prefix="ATTEST_",
         populate_by_name=True,
         validate_assignment=True,
         extra="ignore",
