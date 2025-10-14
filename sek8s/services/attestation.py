@@ -24,8 +24,8 @@ class AttestationServer(WebServer):
             tdx_provider = TdxQuoteProvider()
             nvtrust_provider = NvEvidenceProvider()
 
-            quote_content = tdx_provider.get_quote(nonce)
-            nvtrust_evidence = nvtrust_provider.get_evidence(self.config.host, nonce)
+            quote_content = await tdx_provider.get_quote(nonce)
+            nvtrust_evidence = await nvtrust_provider.get_evidence(self.config.host, nonce)
 
             return AttestationResponse(
                 tdx_quote=base64.b64encode(quote_content).decode('utf-8'),
