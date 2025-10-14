@@ -37,7 +37,7 @@ class ServerConfig(BaseSettings):
     # Debug mode
     debug: bool = Field(default=False, alias="DEBUG")
 
-    hostname: str = os.environ.get("HOSTNAME")
+    hostname: str = os.getenv("HOSTNAME")
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",

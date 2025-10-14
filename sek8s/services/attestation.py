@@ -33,9 +33,15 @@ class AttestationServer(WebServer):
             )
 
         except AttestationException as e:
-            pass
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details=str(e)
+            )
         except Exception as e:
-            pass
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                details=f"Unexpected exception encountered generating attestaion data: {e}"
+            )
 
     async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:
