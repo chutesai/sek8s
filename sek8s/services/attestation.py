@@ -73,7 +73,10 @@ class AttestationServer(WebServer):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Unexpected error gathering GPU evidence."
             )
-async def _run():
+
+
+def run():
+    """Main entry point."""
     try:
         # Load configuration using Pydantic
         config = AttestationServiceConfig()
@@ -95,10 +98,6 @@ async def _run():
     except Exception as e:
         logger.exception("Failed to start Attestation service: %s", e)
         raise
-
-def run():
-    """Main entry point."""
-    asyncio.run(_run())
 
 
 if __name__ == "__main__":
