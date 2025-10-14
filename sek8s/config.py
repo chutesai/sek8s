@@ -2,6 +2,7 @@
 Configuration management for admission controller using Pydantic v2.
 """
 
+import os
 from typing import List, Optional, Dict, Literal, Any
 from pathlib import Path
 from pydantic import Field, field_validator
@@ -36,7 +37,7 @@ class ServerConfig(BaseSettings):
     # Debug mode
     debug: bool = Field(default=False, alias="DEBUG")
 
-    hostname: str = Field(alias="HOSTNAME")
+    hostname: str = os.environ.get("HOSTNAME")
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
