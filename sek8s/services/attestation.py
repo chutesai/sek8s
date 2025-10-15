@@ -5,6 +5,7 @@ import logging
 from loguru import logger
 from sek8s.config import AttestationServiceConfig
 from sek8s.exceptions import AttestationException
+from sek8s.providers.gpu import GpuDeviceProvider
 from sek8s.providers.nvtrust import NvEvidenceProvider
 from sek8s.providers.tdx import TdxQuoteProvider
 from sek8s.responses import AttestationResponse
@@ -16,6 +17,7 @@ class AttestationServer(WebServer):
     def _setup_routes(self):
         """Setup web routes."""
         self.app.add_api_route("/attest", self.attest, methods=["GET"])
+        self.app.add_api_route("/devices", self.get_device_info, methods=["GET"])
         self.app.add_api_route("/tdx/quote", self.get_quote, methods=["GET"])
         self.app.add_api_route("/nvtrust/evidence", self.get_evidence, methods=["GET"])
 
@@ -44,6 +46,20 @@ class AttestationServer(WebServer):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Unexpected exception encountered generating attestaion data."
             )
+        
+    async def get_device_info(self):
+        try:
+            gpu_provider = GpuDeviceProvider()
+            device_info = gpu_provider.get_device_info()
+
+            return device_info
+        except Exception as e:
+            logger.error(f"Unexpected exception encountered getting device info: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unexpected exception encountered getting device info."
+            )
+    
 
     async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:

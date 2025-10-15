@@ -1240,6 +1240,18 @@ files = [
 ]
 
 [[package]]
+name = "nvidia-ml-py"
+version = "13.580.82"
+description = "Python Bindings for the NVIDIA Management Library"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "nvidia_ml_py-13.580.82-py3-none-any.whl", hash = "sha256:4361db337b0c551e2d101936dae2e9a60f957af26818e8c0c3a1f32b8db8d0a7"},
+    {file = "nvidia_ml_py-13.580.82.tar.gz", hash = "sha256:0c028805dc53a0e2a6985ea801888197765ac2ef8f1c9e29a7bf0d3616a5efc7"},
+]
+
+[[package]]
 name = "packaging"
 version = "24.2"
 description = "Core utilities for Python packages"
@@ -2129,4 +2141,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "c9f3a83836b4fad9e76e13ca5752401f73fb20200a57394ea5edf29c86cedb02"
+content-hash = "a872ad9574a07cc75b922a213cabd4f4f195c402ab3233722de87cd523cd9b36"

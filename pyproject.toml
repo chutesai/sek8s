@@ -19,6 +19,7 @@ loguru = "^0.7.3"
 pytest-asyncio = "^1.2.0"
 fastapi = "^0.118.0"
 uvicorn = "^0.37.0"
+nvidia-ml-py = "^13.580.82"
 
 
 [tool.poetry.group.dev.dependencies]
