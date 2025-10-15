@@ -4,7 +4,8 @@ from fastapi import HTTPException, Query, status
 import logging
 from loguru import logger
 from sek8s.config import AttestationServiceConfig
-from sek8s.exceptions import AttestationException
+from sek8s.exceptions import AttestationException, NvmlException
+from sek8s.models import GPU
 from sek8s.providers.gpu import GpuDeviceProvider
 from sek8s.providers.nvtrust import NvEvidenceProvider
 from sek8s.providers.tdx import TdxQuoteProvider
@@ -47,12 +48,18 @@ class AttestationServer(WebServer):
                 detail=f"Unexpected exception encountered generating attestaion data."
             )
         
-    async def get_device_info(self):
+    async def get_device_info(self) -> list[GPU]:
         try:
             gpu_provider = GpuDeviceProvider()
             device_info = gpu_provider.get_device_info()
 
             return device_info
+        except NvmlException as e:
+            logger.error(f"Exception getting device info: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                defail="Failed to get device info."
+            )
         except Exception as e:
             logger.error(f"Unexpected exception encountered getting device info: {e}")
             raise HTTPException(
