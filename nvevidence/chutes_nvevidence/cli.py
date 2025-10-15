@@ -16,6 +16,11 @@ def gather_nv_evidence(
         client = NvClient()
         evidence = client.gather_evidence(name, nonce)
 
+        # Check if evidence is empty or invalid
+        if not evidence or (isinstance(evidence, list) and len(evidence) == 0):
+            logger.error("Failed to gather GPU evidence: No evidence returned")
+            sys.exit(1)
+
         print(json.dumps(evidence))
         sys.exit(0)
     except Exception as e:
