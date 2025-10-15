@@ -6,7 +6,7 @@ import pynvml
 
 class GpuDeviceProvider:
 
-    def get_device_info() -> list[GPU]:
+    def get_device_info(self) -> list[GPU]:
         try:
             pynvml.nvmlInit()
             device_count = pynvml.nvmlDeviceGetCount()
