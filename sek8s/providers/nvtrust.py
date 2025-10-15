@@ -9,7 +9,7 @@ from sek8s.exceptions import NvTrustException
 class NvEvidenceProvider:
     """Async web server for admission webhook."""
 
-    async def get_evidence(name: str, nonce: str) -> str:
+    async def get_evidence(self, name: str, nonce: str) -> str:
         try:
             result = await asyncio.create_subprocess_exec(
                 *["chutes-nvevidence", "gather-evidence", "--name", name, "--nonce", nonce],
