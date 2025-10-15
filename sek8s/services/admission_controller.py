@@ -12,6 +12,8 @@ from typing import Dict, List
 
 from aiohttp import web
 from cachetools import TTLCache
+from fastapi import Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from sek8s.config import AdmissionConfig
 from sek8s.server import WebServer
@@ -223,37 +225,41 @@ class AdmissionWebhookServer(WebServer):
 
     def _setup_routes(self):
         """Setup web routes."""
-        self.app.router.post("/validate", self.handle_validate)
-        self.app.router.post("/mutate", self.handle_mutate)  # For future use
-        self.app.router.get("/health", self.handle_health)
-        self.app.router.get("/ready", self.handle_ready)
-        self.app.router.get("/metrics", self.handle_metrics)
+        self.app.add_api_route("/validate", self.handle_validate, methods=["POST"])
+        self.app.add_api_route("/mutate", self.handle_mutate, methods=["POST"])
+        self.app.add_api_route("/health", self.handle_health, methods=["GET"])
+        self.app.add_api_route("/ready", self.handle_ready, methods=["GET"])
+        self.app.add_api_route("/metrics", self.handle_metrics, methods=["GET"])
 
-    async def handle_validate(self, request: web.Request) -> web.Response:
+    async def handle_validate(self, request: Request) -> JSONResponse:
         """Handle validation webhook requests."""
         try:
             admission_review = await request.json()
 
             # Validate request structure
             if not admission_review.get("request"):
-                return web.json_response(
-                    {"error": "Invalid admission review: missing request"}, status=400
+                return JSONResponse(
+                    content={"error": "Invalid admission review: missing request"}, 
+                    status_code=400
                 )
 
             # Process admission
             response = await self.controller.validate_admission(admission_review)
 
-            return web.json_response(response)
+            return JSONResponse(content=response)
 
         except json.JSONDecodeError as e:
             logger.error("Invalid JSON in request: %s", e)
-            return web.json_response({"error": "Invalid JSON"}, status=400)
+            return JSONResponse(
+                content={"error": "Invalid JSON"}, 
+                status_code=400
+            )
         except Exception as e:
             logger.exception("Error handling validation request")
 
             # Return a valid admission response that denies the request
-            return web.json_response(
-                {
+            return JSONResponse(
+                content={
                     "apiVersion": "admission.k8s.io/v1",
                     "kind": "AdmissionReview",
                     "response": {
@@ -264,38 +270,46 @@ class AdmissionWebhookServer(WebServer):
                 }
             )
 
-    async def handle_mutate(self, request: web.Request) -> web.Response:
+    async def handle_mutate(self, request: Request) -> JSONResponse:
         """Handle mutation webhook requests (placeholder for future)."""
-        return web.json_response(
-            {
-                "apiVersion": "admission.k8s.io/v1",
-                "kind": "AdmissionReview",
-                "response": {
-                    "uid": (await request.json()).get("request", {}).get("uid", "unknown"),
-                    "allowed": True,
-                },
-            }
-        )
+        try:
+            request_data = await request.json()
+            return JSONResponse(
+                content={
+                    "apiVersion": "admission.k8s.io/v1",
+                    "kind": "AdmissionReview",
+                    "response": {
+                        "uid": request_data.get("request", {}).get("uid", "unknown"),
+                        "allowed": True,
+                    },
+                }
+            )
+        except Exception as e:
+            logger.exception("Error handling mutation request")
+            return JSONResponse(
+                content={"error": "Invalid request"}, 
+                status_code=400
+            )
 
-    async def handle_health(self, request: web.Request) -> web.Response:
+    async def handle_health(self, request: Request) -> JSONResponse:
         """Health check endpoint."""
         health_status = await self.controller.health_check()
         status_code = 200 if health_status["healthy"] else 503
-        return web.json_response(health_status, status=status_code)
+        return JSONResponse(content=health_status, status_code=status_code)
 
-    async def handle_ready(self, request: web.Request) -> web.Response:
+    async def handle_ready(self, request: Request) -> JSONResponse:
         """Readiness check endpoint."""
         # Simple readiness for now - could check OPA connection, etc.
         health_status = await self.controller.health_check()
         if health_status["healthy"]:
-            return web.json_response({"ready": True})
+            return JSONResponse(content={"ready": True})
         else:
-            return web.json_response({"ready": False}, status=503)
+            return JSONResponse(content={"ready": False}, status_code=503)
 
-    async def handle_metrics(self, request: web.Request) -> web.Response:
+    async def handle_metrics(self, request: Request) -> PlainTextResponse:
         """Prometheus metrics endpoint."""
         metrics = self.controller.metrics.export_prometheus()
-        return web.Response(text=metrics, content_type="text/plain")
+        return PlainTextResponse(content=metrics, media_type="text/plain")
 
 
 def run():
