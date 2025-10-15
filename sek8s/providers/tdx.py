@@ -35,7 +35,7 @@ class TdxQuoteProvider():
 
                     return quote_content
                 else:
-                    result_output = await result.stdout.read()
+                    result_output = await result.stderr.read()
                     logger.error(f"Failed to generate quote: {result_output.decode()}")
                     raise TdxQuoteException(f"Failed to generate quote.")
         except Exception as e:

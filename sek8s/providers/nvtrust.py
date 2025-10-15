@@ -24,7 +24,8 @@ class NvEvidenceProvider:
                 logger.info(f"Successfully generated NVTrust evidence.\n{result_output.decode()}")
                 return result_output
             else:
-                logger.error(f"Failed to gather GPU evidence:{result.stdout}")
+                result_output = await result.stderr.read()
+                logger.error(f"Failed to gather GPU evidence:{result_output}")
                 raise NvTrustException(f"Failed to gather evidence.")
         except Exception as e:
             logger.error(f"Unexpected error gathering GPU evidence:{e}")
