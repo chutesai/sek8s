@@ -17,11 +17,7 @@ class DeviceInfo(BaseModel):
     memory: int = Field(..., description="")
     major: Optional[int] = Field(..., description="")
     minor: Optional[int] = Field(..., description="")
-    processors: int = Field(..., description="")
-    sxm: Optional[bool] = Field(..., description="")
     clock_rate: float = Field(..., description="")
-    max_threads_per_processor: int = Field(..., description="")
-    concurrent_kernels: Optional[bool] = Field(..., description="")
     ecc: Optional[bool] = Field(..., description="")
 
     class Config:

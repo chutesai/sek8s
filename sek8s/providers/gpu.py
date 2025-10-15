@@ -27,11 +27,7 @@ class GpuDeviceProvider:
                     memory=pynvml.nvmlDeviceGetMemoryInfo(handle).total,
                     major=compute_capability[0],
                     minor=compute_capability[1],
-                    processors="", # not available?
-                    sxm=None, # Not needed since we are not using GraVal
                     clock_rate=pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS),
-                    max_threads_per_processor="", # not available?
-                    concurrent_kernels="", # not available?
                     ecc=bool(pynvml.nvmlDeviceGetEccMode(handle)[0])
                 ),
                 model_short_ref=name.lower().split()[-1]  # e.g., 'a6000'
