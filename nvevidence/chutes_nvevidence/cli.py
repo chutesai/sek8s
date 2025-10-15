@@ -4,6 +4,8 @@ import typer
 
 from loguru import logger
 from chutes_nvevidence.attestation import NvClient
+from chutes_nvevidence.exceptions import NonceError
+from chutes_nvevidence.util import validate_and_format_nonce
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -14,7 +16,8 @@ def gather_nv_evidence(
 ):
     try:
         client = NvClient()
-        evidence = client.gather_evidence(name, nonce)
+        formatted_nonce = validate_and_format_nonce(nonce)
+        evidence = client.gather_evidence(name, formatted_nonce)
 
         # Check if evidence is empty or invalid
         if not evidence or (isinstance(evidence, list) and len(evidence) == 0):
@@ -23,6 +26,9 @@ def gather_nv_evidence(
 
         print(json.dumps(evidence))
         sys.exit(0)
+    except NonceError as e:
+        logger.error(F"Invalid nonce: {e}")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to gather GPU evidence:\n{e}")
         sys.exit(1)
