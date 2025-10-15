@@ -25,7 +25,7 @@ class AttestationServer(WebServer):
             nvtrust_provider = NvEvidenceProvider()
 
             quote_content = await tdx_provider.get_quote(nonce)
-            nvtrust_evidence = await nvtrust_provider.get_evidence(self.config.host, nonce)
+            nvtrust_evidence = await nvtrust_provider.get_evidence(self.config.hostname, nonce)
 
             return AttestationResponse(
                 tdx_quote=base64.b64encode(quote_content).decode('utf-8'),
@@ -33,14 +33,16 @@ class AttestationServer(WebServer):
             )
 
         except AttestationException as e:
+            logger.error(f"Error generating attestation evidence: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(e)
             )
         except Exception as e:
+            logger.error(f"Unexpected exception encountered generating attestaion data: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Unexpected exception encountered generating attestaion data: {e}"
+                detail=f"Unexpected exception encountered generating attestaion data."
             )
 
     async def get_quote(self, nonce: str = Query(..., description="Nonce to include in the quote")):
