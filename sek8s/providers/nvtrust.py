@@ -12,7 +12,7 @@ class NvEvidenceProvider:
     async def get_evidence(self, name: str, nonce: str) -> str:
         try:
             result = await asyncio.create_subprocess_exec(
-                *["chutes-nvevidence", "gather-evidence", "--name", name, "--nonce", nonce],
+                *["chutes-nvevidence", "--name", name, "--nonce", nonce],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
