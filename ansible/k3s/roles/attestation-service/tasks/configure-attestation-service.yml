@@ -1,0 +1,44 @@
+---
+- name: Configure attestation service
+  block:
+    - name: Create attestation systemd service
+      ansible.builtin.copy:
+        src: attestation-service.service
+        dest: /etc/systemd/system/attestation-service.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create attestation service override directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/attestation-service.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create security hardening drop-in
+      ansible.builtin.copy:
+        src: attestation-service.conf
+        dest: /etc/systemd/system/attestation-service.service.d/10-security.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Reload systemd and start attestation
+      ansible.builtin.systemd:
+        name: attestation-service
+        daemon_reload: yes
+        
+        enabled: yes
+        state: started
+
+    - name: Wait for attestation to be ready
+      ansible.builtin.uri:
+        url: https://localhost:8080/health
+        validate_certs: no
+        status_code: 200
+      register: attestation_health
+      until: attestation_health.status == 200
+      retries: 30
+      delay: 2

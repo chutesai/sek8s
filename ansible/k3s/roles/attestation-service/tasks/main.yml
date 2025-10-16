@@ -1,0 +1,12 @@
+---
+- name: Install and setup attestation service
+  ansible.builtin.include_tasks: install-attestation-service.yml
+  tags: admission-install
+
+- name: Setup TLS certificates
+  ansible.builtin.include_tasks: setup-tls.yml
+  tags: tls-setup
+
+- name: Configure admission controller service
+  ansible.builtin.include_tasks: configure-attestation-service.yml
+  tags: admission-service

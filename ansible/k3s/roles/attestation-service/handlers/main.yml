@@ -1,0 +1,6 @@
+- name: Restart attestation-service
+  ansible.builtin.systemd:
+    name: attestation-service
+    state: restarted
+    daemon_reload: yes
+  listen: restart attestation-service

@@ -1,0 +1,98 @@
+---
+- name: Install system dependencies for Python and Git
+  ansible.builtin.apt:
+    name:
+      - python3
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - git
+      - build-essential
+      - curl
+    state: present
+    update_cache: yes
+
+- name: Create temporary build directory
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: sek8s
+  register: build_dir
+
+- name: Clone sek8s repository to temp directory
+  ansible.builtin.git:
+    repo: "{{ sek8s_repo }}"
+    dest: "{{ build_dir.path }}"
+    version: "{{ sek8s_version }}"
+    depth: 1  # Shallow clone to save bandwidth
+
+- name: Create application directory
+  ansible.builtin.file:
+    path: /opt/sek8s
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy Python package files
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/{{ item }}"
+    dest: /opt/sek8s/{{ item }}
+    remote_src: yes
+    owner: root
+    group: root
+    mode: preserve
+  loop:
+    - sek8s/
+    - pyproject.toml
+  ignore_errors: yes
+
+- name: Fix directory permissions
+  ansible.builtin.shell: |
+    find /opt/seks8 -type d -exec chmod 755 {} \;
+    find /opt/seks8 -type f -name "*.py" -exec chmod 644 {} \;
+  changed_when: false
+
+- name: Copy README if exists (for metadata)
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/README.md"
+    dest: /opt/seks8/README.md
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  ignore_errors: yes
+
+- name: Create Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/seks8/venv
+    creates: /opt/seks8/venv
+
+- name: Upgrade pip in virtual environment
+  ansible.builtin.pip:
+    name: 
+      - pip
+      - setuptools
+      - wheel
+    state: latest
+    virtualenv: /opt/seks8/venv
+
+- name: Install sek8s package with pip
+  ansible.builtin.pip:
+    name: /opt/seks8/
+    virtualenv: /opt/seks8/venv
+    state: present
+    extra_args: "-e"  # Editable install since we're installing from local directory
+
+- name: Clean up temporary build directory
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}"
+    state: absent
+
+- name: Set ownership and permissions for entire application directory
+  ansible.builtin.file:
+    path: /opt/seks8
+    state: directory
+    owner: root
+    group: sek8s
+    mode: '0755'
+    recurse: yes
