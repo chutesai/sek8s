@@ -1,10 +1,10 @@
 ---
 - name: Create attestation service user
   ansible.builtin.user:
-    name: admission
+    name: tdx-attest
     system: yes
     shell: /bin/false
-    home: /var/lib/admission
+    home: /var/lib/tdx-attest
     create_home: yes
 
 - name: Create required directories
@@ -23,7 +23,27 @@
 - name: Create environment file for attestation service
   ansible.builtin.template:
     src: attestation-service.env.j2
-    dest: /etc/attestation-service/attestation.env
+    dest: /etc/attestation-service/attestation-service.env
     owner: root
     group: tdx-attest
     mode: '0640'
+
+- name: Configure log rotation for attestation service
+  ansible.builtin.copy:
+    content: |
+      /var/log/attestation-service/*.log {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 644 tdx-attest tdx-attest
+          postrotate
+              systemctl reload attestation-service
+          endscript
+      }
+    dest: /etc/logrotate.d/attestation-service
+    owner: root
+    group: root
+    mode: '0644'

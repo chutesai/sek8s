@@ -15,7 +15,7 @@ Environment="VIRTUAL_ENV=/opt/sek8s/venv"
 EnvironmentFile=/etc/attestation-service/attestation-service.env
 
 # Run the admission controller
-ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.attestation-service
+ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.attestation
 
 Restart=always
 RestartSec=5

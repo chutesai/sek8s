@@ -40,8 +40,6 @@
 
 - name: Set executable permission on boot scripts
   ansible.builtin.shell: chmod +x /root/scripts/boot/*.sh
-  args:
-    warn: false
 
 - name: Create cloud-init first-boot configuration
   ansible.builtin.copy:

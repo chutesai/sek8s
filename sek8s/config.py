@@ -33,11 +33,11 @@ class ServerConfig(BaseSettings):
     # TLS configuration
     tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
     tls_key_path: Optional[Path] = Field(default=None, alias="TLS_KEY_PATH")
+    client_ca_path: Optional[Path] = Field(default=None, alias="CLIENT_CA_PATH")
+    mtls_required: bool = Field(default=False, alias="MTLS_REQUIRED")
 
     # Debug mode
     debug: bool = Field(default=False, alias="DEBUG")
-
-    hostname: str = os.getenv("HOSTNAME")
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
@@ -48,7 +48,7 @@ class ServerConfig(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("tls_cert_path", "tls_key_path", "uds_path", mode="after")
+    @field_validator("tls_cert_path", "tls_key_path", "uds_path", "client_ca_path", mode="after")
     @classmethod
     def validate_paths(cls, v: Optional[Path]) -> Optional[Path]:
         """Validate that paths exist if specified."""
@@ -58,10 +58,23 @@ class ServerConfig(BaseSettings):
 
 class AttestationServiceConfig(ServerConfig):
 
+    hostname: str = os.getenv("HOSTNAME")
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="ATTEST_",
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="ignore",
+    )
+
+class AttestationProxyConfig(ServerConfig):
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        env_prefix="PROXY_",
         populate_by_name=True,
         validate_assignment=True,
         extra="ignore",

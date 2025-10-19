@@ -18,12 +18,17 @@
     suffix: sek8s
   register: build_dir
 
-- name: Clone sek8s repository to temp directory
-  ansible.builtin.git:
-    repo: "{{ sek8s_repo }}"
+# - name: Clone sek8s repository to temp directory
+#   ansible.builtin.git:
+#     repo: "{{ sek8s_repo }}"
+#     dest: "{{ build_dir.path }}"
+#     version: "{{ sek8s_version }}"
+#     depth: 1  # Shallow clone to save bandwidth
+
+- name: Copy sek8s source to temp directory
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../sek8s"
     dest: "{{ build_dir.path }}"
-    version: "{{ sek8s_version }}"
-    depth: 1  # Shallow clone to save bandwidth
 
 - name: Create application directory
   ansible.builtin.file:
@@ -48,14 +53,14 @@
 
 - name: Fix directory permissions
   ansible.builtin.shell: |
-    find /opt/seks8 -type d -exec chmod 755 {} \;
-    find /opt/seks8 -type f -name "*.py" -exec chmod 644 {} \;
+    find /opt/sek8s -type d -exec chmod 755 {} \;
+    find /opt/sek8s -type f -name "*.py" -exec chmod 644 {} \;
   changed_when: false
 
 - name: Copy README if exists (for metadata)
   ansible.builtin.copy:
     src: "{{ build_dir.path }}/README.md"
-    dest: /opt/seks8/README.md
+    dest: /opt/sek8s/README.md
     remote_src: yes
     owner: root
     group: root
@@ -64,8 +69,8 @@
 
 - name: Create Python virtual environment
   ansible.builtin.command:
-    cmd: python3 -m venv /opt/seks8/venv
-    creates: /opt/seks8/venv
+    cmd: python3 -m venv /opt/sek8s/venv
+    creates: /opt/sek8s/venv
 
 - name: Upgrade pip in virtual environment
   ansible.builtin.pip:
@@ -74,12 +79,12 @@
       - setuptools
       - wheel
     state: latest
-    virtualenv: /opt/seks8/venv
+    virtualenv: /opt/sek8s/venv
 
 - name: Install sek8s package with pip
   ansible.builtin.pip:
-    name: /opt/seks8/
-    virtualenv: /opt/seks8/venv
+    name: /opt/sek8s/
+    virtualenv: /opt/sek8s/venv
     state: present
     extra_args: "-e"  # Editable install since we're installing from local directory
 
@@ -88,9 +93,15 @@
     path: "{{ build_dir.path }}"
     state: absent
 
+- name: Create sek8s group with specific GID
+  group:
+    name: sek8s
+    state: present
+    system: yes
+
 - name: Set ownership and permissions for entire application directory
   ansible.builtin.file:
-    path: /opt/seks8
+    path: /opt/sek8s
     state: directory
     owner: root
     group: sek8s

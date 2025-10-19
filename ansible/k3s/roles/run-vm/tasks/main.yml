@@ -58,7 +58,7 @@
       users:
         - name: root
           ssh-authorized-keys:
-            - "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+            - "{{ lookup('file', '~/.ssh/id_rsa.pub' | expanduser)  }}"
     dest: "{{ user_data_file }}"
     mode: '0644'
 
