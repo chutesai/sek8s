@@ -15,6 +15,7 @@ VERSION := $(shell head VERSION | grep -Eo "\d+.\d+.\d+")
 .EXPORT_ALL_VARIABLES:
 
 include makefiles/development.mk
+include makefiles/images.mk
 include makefiles/help.mk
 include makefiles/lint.mk
 include makefiles/local.mk
