@@ -3,7 +3,7 @@ FROM python:3.12 AS base
 ENV \
   PYTHONUNBUFFERED=1 \
   PYTHONDONTWRITEBYTECODE=1 \
-  POETRY_VERSION=1.5.1 \
+  POETRY_VERSION=2.1.2 \
   POETRY_VIRTUALENVS_IN_PROJECT=true \
   POETRY_NO_INTERACTION=1 \
   POETRY_HOME="/opt/poetry" \
@@ -20,8 +20,9 @@ FROM base AS build
 RUN curl -sSL https://install.python-poetry.org | python3 - \
     && chmod a+x /opt/poetry/bin/poetry
 
-WORKDIR /app/${PROJECT_DIR}
-COPY pyproject.toml poetry.lock ./
+WORKDIR /app
+COPY pyproject.toml poetry.lock README.md ./
+COPY ${PROJECT_DIR} ${PROJECT_DIR}/
 RUN poetry install --only main
 
 ##################################################
@@ -39,12 +40,9 @@ ENV APP_GROUP=chutes
 RUN useradd ${APP_USER} -s /bin/bash -d /home/${APP_USER} && mkdir -p /home/${APP_USER} && chown ${APP_USER}:${APP_GROUP} /home/${APP_USER}
 
 WORKDIR /app
-COPY --chown=${APP_USER}:${APP_GROUP} ${PROJECT_DIR}/ ./
 COPY --from=build /app .
 
 USER ${APP_USER}
-
-ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
 ##################################################
 ## DEVELOPMENT ##
@@ -62,7 +60,7 @@ RUN useradd ${APP_USER} -s /bin/bash -d /home/${APP_USER} && mkdir -p /home/${AP
 
 USER root
 
-WORKDIR /app/${PROJECT_DIR}
+WORKDIR /app
 COPY --chown=${APP_USER}:${APP_GROUP} ./${PROJECT_DIR} ./
 RUN poetry install
 RUN chown ${APP_USER}:${APP_GROUP} .
