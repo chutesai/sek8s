@@ -21,6 +21,7 @@ fastapi = "^0.118.0"
 uvicorn = "^0.37.0"
 nvidia-ml-py = "^13.580.82"
 httpx = "^0.28.1"
+orjson = "^3.11.3"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -39,6 +40,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.scripts]
 admission-controller = 'sek8s.serivces.admission_controller:run'
 attestation-service = 'sek8s.services.attestation:run'
+attestation-proxy = 'sek8s.services.attestation_proxy:run'
 
 [tool.isort]
 profile = "black"
