@@ -17,10 +17,14 @@ class AttestationServer(WebServer):
 
     def _setup_routes(self):
         """Setup web routes."""
+        self.app.add_api_route("/health", self.ping, methods=["GET"])
         self.app.add_api_route("/attest", self.attest, methods=["GET"])
         self.app.add_api_route("/devices", self.get_device_info, methods=["GET"])
         self.app.add_api_route("/tdx/quote", self.get_quote, methods=["GET"])
         self.app.add_api_route("/nvtrust/evidence", self.get_evidence, methods=["GET"])
+
+    async def ping(self):
+        return "pong"
 
     async def attest(self, nonce: str = Query(..., description="Nonce to include in the quote")):
         try:
