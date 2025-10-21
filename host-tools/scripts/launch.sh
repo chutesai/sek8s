@@ -274,7 +274,7 @@ if [ -n "$USER_DATA" ]; then
       echo "Error: Meta-data file $META_DATA not found."
       exit 1
     fi
-    META_DATA_CONTENT=$(cat "$META_DATA")
+    META_DATA_FILE="$META_DATA"
   else
     # Generate dynamic instance-id (requires uuidgen or fallback to timestamp)
     if command -v uuidgen >/dev/null 2>&1; then
@@ -282,14 +282,28 @@ if [ -n "$USER_DATA" ]; then
     else
       INSTANCE_ID="tdx-guest-$(date +%s)"
     fi
-    META_DATA_CONTENT="instance-id: $INSTANCE_ID"
+    META_DATA_FILE="/tmp/tdx-meta-data.$$"
+    echo "instance-id: $INSTANCE_ID" > "$META_DATA_FILE" || {
+      echo "Error: Failed to write meta-data to $META_DATA_FILE."
+      exit 1
+    }
   fi
 
-  # Generate NoCloud datasource ISO (requires cloud-localds)
-  cloud-localds "$CIDATA_FILE" "$USER_DATA" --metadata <(echo "$META_DATA_CONTENT") || {
-    echo "Error: Failed to generate cloud-init datasource. Ensure cloud-utils is installed."
+  # Generate NoCloud datasource ISO using cloud-localds
+  if command -v cloud-localds >/dev/null 2>&1; then
+    cloud-localds "$CIDATA_FILE" "$USER_DATA" "$META_DATA_FILE" || {
+      echo "Error: Failed to generate cloud-init ISO. Ensure cloud-utils is installed and up-to-date."
+      [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
+      exit 1
+    }
+  else
+    echo "Error: cloud-localds not found. Ensure cloud-utils is installed."
+    [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
     exit 1
-  }
+  fi
+
+  # Clean up temporary meta-data file if generated
+  [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
 
   echo "Cloud-init datasource generated: $CIDATA_FILE"
   echo "Attaching to QEMU as secondary drive."
