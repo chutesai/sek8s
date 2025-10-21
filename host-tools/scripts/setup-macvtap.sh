@@ -13,7 +13,7 @@ VM_DNS="8.8.8.8"  # VM DNS server
 PUBLIC_IFACE="ens9f0np0"  # Host’s public interface (e.g., ens9f0np0 with 172.16.80.27)
 SSH_PORT=2222  # Host port for SSH forwarding to VM:22
 K3S_API_PORT=6443  # k3s API port
-NODE_PORTS="30000-32767"  # k3s NodePort range
+NODE_PORTS="30000:32767"  # k3s NodePort range
 
 # Infer VM_GATEWAY from BRIDGE_IP
 VM_GATEWAY="${BRIDGE_IP%/*}"  # Strip netmask (e.g., 192.168.100.1/24 → 192.168.100.1)
