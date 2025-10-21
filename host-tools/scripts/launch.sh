@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
-#              provide configurable networking for public IP and virtconsole.
+#              use preconfigured macvtap interface for networking.
 # Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
 
 set -x
 
 # Default values
-IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
+IMG="tdx/guest-tools/image/tdx-guest.qcow2"
 BIOS="/usr/share/ovmf/OVMF.fd"  # Replace with TDX-optimized OVMF
 MEM="1536G"
 VCPUS="24"
 FOREGROUND=false
 PIDFILE="/tmp/tdx-demo-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
-SSH_PORT=10022
-NETWORK_TYPE="macvtap"  # Default to macvtap for security/perf; options: user, bridge, macvtap
-PHYSICAL_NIC="eth0"  # Default physical NIC for bridge/macvtap; change via --physical-nic
+NET_IFACE=""  # Macvtap interface from setup-macvtap.sh
+VM_IP=""  # VM static IP from setup-macvtap.sh
+VM_GATEWAY=""  # VM gateway from setup-macvtap.sh
+VM_DNS="8.8.8.8"  # Default DNS server
+SSH_PORT=2222  # Host port for SSH (maps to VM:22)
 
 # Cloud-init variables
 USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
@@ -78,12 +80,24 @@ while [[ $# -gt 0 ]]; do
       FOREGROUND=true
       shift
       ;;
-    --network-type)
-      NETWORK_TYPE="$2"
+    --net-iface)
+      NET_IFACE="$2"
       shift 2
       ;;
-    --physical-nic)
-      PHYSICAL_NIC="$2"
+    --vm-ip)
+      VM_IP="$2"
+      shift 2
+      ;;
+    --vm-gateway)
+      VM_GATEWAY="$2"
+      shift 2
+      ;;
+    --vm-dns)
+      VM_DNS="$2"
+      shift 2
+      ;;
+    --ssh-port)
+      SSH_PORT="$2"
       shift 2
       ;;
     --hostname)
@@ -117,8 +131,8 @@ while [[ $# -gt 0 ]]; do
           else
             echo "Serial log ($LOGFILE) is empty or missing."
           fi
-          # For bridge/macvtap, no port forward; check serial log instead
-          echo "For SSH, use guest public IP:22 (check serial log for IP)."
+          echo "For SSH, use: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+          echo "For k3s, use: <host_public_ip>:6443 (API), <host_public_ip>:30000-32767 (NodePorts)"
         else
           echo "QEMU process ($PID) is not running."
         fi
@@ -151,7 +165,6 @@ while [[ $# -gt 0 ]]; do
         echo "No PID file found. No VM to clean."
       fi
       rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"
-      [ -n "$NET_IFACE" ] && sudo ip link delete "$NET_IFACE" 2>/dev/null
       exit 0
       ;;
     --help)
@@ -164,8 +177,11 @@ while [[ $# -gt 0 ]]; do
       echo "  --nvswitch-mmio-mb SIZE   MMIO allocation per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
       echo "  --pci-hole-base-gb SIZE   Base PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo "  --foreground              Run in foreground"
-      echo "  --network-type TYPE       Networking mode: user, bridge, macvtap (default: macvtap)"
-      echo "  --physical-nic NIC        Physical NIC for bridge/macvtap (default: eth0)"
+      echo "  --net-iface IFACE         Macvtap interface from setup-macvtap.sh"
+      echo "  --vm-ip IP                VM static IP from setup-macvtap.sh"
+      echo "  --vm-gateway IP           VM gateway from setup-macvtap.sh"
+      echo "  --vm-dns IP               VM DNS server (default: $VM_DNS)"
+      echo "  --ssh-port PORT           Host port for SSH forwarding (default: $SSH_PORT)"
       echo "  --hostname NAME           VM hostname for generated user-data"
       echo "  --miner-ss58 VALUE        Content for /root/miner-ss58 file"
       echo "  --miner-seed VALUE        Content for /root/miner-seed file"
@@ -178,8 +194,8 @@ while [[ $# -gt 0 ]]; do
       echo "Example for conservative testing:"
       echo "  $0 --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
       echo ""
-      echo "Example with generated user-data and macvtap:"
-      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed'"
+      echo "Example with macvtap networking:"
+      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --ssh-port 2222"
       exit 0
       ;;
     *)
@@ -190,37 +206,44 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Generate user-data if params provided and no custom user-data
-if [ -z "$USER_DATA" ] && [ -n "$HOSTNAME" ] && [ -n "$MINER_SS58" ] && [ -n "$MINER_SEED" ]; then
-  echo "#cloud-config" > "$GENERATED_USER_DATA"
-  echo "hostname: $HOSTNAME" >> "$GENERATED_USER_DATA"
-  echo "" >> "$GENERATED_USER_DATA"
-  echo "write_files:" >> "$GENERATED_USER_DATA"
-  echo "  - path: /root/miner-ss58" >> "$GENERATED_USER_DATA"
-  echo "    content: \"$MINER_SS58\"" >> "$GENERATED_USER_DATA"
-  echo "    permissions: '0600'" >> "$GENERATED_USER_DATA"
-  echo "    owner: root:root" >> "$GENERATED_USER_DATA"
-  echo "  - path: /root/miner-seed" >> "$GENERATED_USER_DATA"
-  echo "    content: \"$MINER_SEED\"" >> "$GENERATED_USER_DATA"
-  echo "    permissions: '0600'" >> "$GENERATED_USER_DATA"
-  echo "    owner: root:root" >> "$GENERATED_USER_DATA"
-  USER_DATA="$GENERATED_USER_DATA"
-elif [ -n "$HOSTNAME" ] || [ -n "$MINER_SS58" ] || [ -n "$MINER_SEED" ]; then
-  echo "Warning: --hostname, --miner-ss58, --miner-seed ignored since custom --cloud-init-user-data provided."
+# Validate required params
+if [ -z "$NET_IFACE" ] || [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; then
+  echo "Error: --net-iface, --vm-ip, and --vm-gateway are required."
+  exit 1
+fi
+if [ -z "$USER_DATA" ] && { [ -z "$HOSTNAME" ] || [ -z "$MINER_SS58" ] || [ -z "$MINER_SEED" ]; }; then
+  echo "Error: --hostname, --miner-ss58, and --miner-seed are required unless --cloud-init-user-data is provided."
+  exit 1
 fi
 
-# Setup network interface based on type
-NET_IFACE=""
-if [ "$NETWORK_TYPE" = "bridge" ] || [ "$NETWORK_TYPE" = "macvtap" ]; then
-  NET_IFACE="vmnet-$(uuidgen | cut -c1-8)"
-  if [ "$NETWORK_TYPE" = "bridge" ]; then
-    sudo ip tuntap add mode tap name "$NET_IFACE" || { echo "Error: Failed to create tap $NET_IFACE."; exit 1; }
-    sudo ip link set "$NET_IFACE" master br0 || { echo "Error: Bridge br0 not found. Create it first."; sudo ip link delete "$NET_IFACE"; exit 1; }
-    sudo ip link set "$NET_IFACE" up || { echo "Error: Failed to up $NET_IFACE."; sudo ip link delete "$NET_IFACE"; exit 1; }
-  elif [ "$NETWORK_TYPE" = "macvtap" ]; then
-    sudo ip link add link "$PHYSICAL_NIC" name "$NET_IFACE" type macvtap mode bridge || { echo "Error: Failed to create macvtap $NET_IFACE on $PHYSICAL_NIC."; exit 1; }
-    sudo ip link set "$NET_IFACE" up || { echo "Error: Failed to up $NET_IFACE."; sudo ip link delete "$NET_IFACE"; exit 1; }
-  fi
+# Generate user-data if params provided and no custom user-data
+if [ -z "$USER_DATA" ]; then
+  cat > "$GENERATED_USER_DATA" <<EOF
+#cloud-config
+hostname: $HOSTNAME
+
+write_files:
+  - path: /root/miner-ss58
+    content: "$MINER_SS58"
+    permissions: '0600'
+    owner: root:root
+  - path: /root/miner-seed
+    content: "$MINER_SEED"
+    permissions: '0600'
+    owner: root:root
+network:
+  version: 2
+  ethernets:
+    enp0s1:
+      addresses:
+        - $VM_IP/24
+      gateway4: $VM_GATEWAY
+      nameservers:
+        addresses: [$VM_DNS]
+EOF
+  USER_DATA="$GENERATED_USER_DATA"
+elif [ -n "$USER_DATA" ] && { [ -n "$HOSTNAME" ] || [ -n "$MINER_SS58" ] || [ -n "$MINER_SEED" ]; }; then
+  echo "Warning: --hostname, --miner-ss58, --miner-seed ignored since custom --cloud-init-user-data provided."
 fi
 
 CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
@@ -265,20 +288,9 @@ echo ""
 ##############################################################################
 # 2. build dynamic -device list
 ##############################################################################
-DEV_OPTS=()
-if [ "$NETWORK_TYPE" = "user" ]; then
-  DEV_OPTS+=(
-    -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22
-    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
-  )
-  echo "Warning: User mode networking used. No NodePort forwarding; VM not directly public."
-elif [ "$NETWORK_TYPE" = "bridge" ] || [ "$NETWORK_TYPE" = "macvtap" ]; then
-  DEV_OPTS+=(
-    -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
-    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
-  )
-fi
-DEV_OPTS+=(
+DEV_OPTS=(
+  -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
+  -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
   -device vhost-vsock-pci,guest-cid=3
 )
 
@@ -394,16 +406,18 @@ echo "Command preview:"
 echo "PCI hole: ${CALCULATED_PCI_HOLE_GB}G"
 echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
-echo "Network: $NETWORK_TYPE"
-if [ -n "$NET_IFACE" ]; then
-  echo "Interface: $NET_IFACE on $PHYSICAL_NIC"
-fi
+echo "Network: macvtap interface $NET_IFACE"
+echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
 if [ -n "$USER_DATA" ]; then
   echo "Cloud-init: Enabled with user-data from $USER_DATA"
   [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
 else
   echo "Cloud-init: Disabled (no user-data provided)"
 fi
+echo "Access VM via:"
+echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+echo "  k3s API: <host_public_ip>:6443"
+echo "  k3s NodePorts: <host_public_ip>:30000-32767"
 echo ""
 
 /usr/bin/qemu-system-x86_64 \
@@ -428,7 +442,10 @@ echo ""
 if [ "$FOREGROUND" = false ]; then
   echo "VM daemonized with PID: $(cat $PIDFILE)"
   echo "Serial log: $LOGFILE"
-  echo "For SSH and public IP access, check serial log for guest IP (e.g., ip addr show)."
+  echo "Access VM via:"
+  echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+  echo "  k3s API: <host_public_ip>:6443"
+  echo "  k3s NodePorts: <host_public_ip>:30000-32767"
   echo ""
   echo "=== TDX H200 nvidia-smi Troubleshooting Notes ==="
   echo "Current memory settings:"
@@ -454,5 +471,5 @@ if [ "$FOREGROUND" = false ]; then
   exit 0
 fi
 
-# Clean up cidata file and net interface on exit (foreground mode)
-trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"; [ -n "$NET_IFACE" ] && sudo ip link delete "$NET_IFACE" 2>/dev/null' EXIT
+# Clean up cidata file on exit (foreground mode)
+trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"' EXIT
