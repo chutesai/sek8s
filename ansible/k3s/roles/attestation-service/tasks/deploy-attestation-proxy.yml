@@ -1,0 +1,19 @@
+---
+- name: Deploy Attesattion Proxy to K3s
+  block:
+    - name: Copy policy files
+      ansible.builtin.copy:
+        src: "files/manifests/proxy-manifests.yaml"
+        dest: /var/lib/rancher/k3s/server/manifests
+        owner: root
+        group: root
+        mode: '0600'
+      notify: restart k3s
+
+    - name: Protect webhook manifest from modifications
+      ansible.builtin.file:
+        path: /var/lib/rancher/k3s/server/manifests/proxy-manifests.yaml
+        owner: root
+        group: root
+        mode: '0400'  # Read-only
+        attributes: '+i'  # Immutable flag (requires root to remove)

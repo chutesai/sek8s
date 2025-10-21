@@ -108,21 +108,6 @@
         apply:
           tags: sek8s
 
-- name: Setup admission controller
-  hosts: vm
-  become: true
-  tags:
-    - admission-controller
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Admission controller
-      ansible.builtin.include_role:
-        name: admission-controller
-        apply:
-          tags: admission-controller
-
 - name: Setup attestation-service
   hosts: vm
   become: true
@@ -137,6 +122,21 @@
         name: attestation-service
         apply:
           tags: attestation-service
+
+- name: Setup admission controller
+  hosts: vm
+  become: true
+  tags:
+    - admission-controller
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Admission controller
+      ansible.builtin.include_role:
+        name: admission-controller
+        apply:
+          tags: admission-controller
 
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all

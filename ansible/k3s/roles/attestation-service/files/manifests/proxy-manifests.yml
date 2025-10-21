@@ -36,11 +36,16 @@ spec:
       tolerations:
       - operator: Exists  # Run on all nodes
       nodeSelector:
-        node-role.kubernetes.io/control-plane: ""  # Only control plane nodes
+        node-role.kubernetes.io/control-plane: "true"  # Only control plane nodes
+      securityContext:
+        supplementalGroups:
+        - 987  # tdx-attest group GID
       containers:
       - name: attestation-proxy
-        image: your-registry/attestation-proxy:latest  # Replace with your image
-        imagePullPolicy: IfNotPresent
+        image: parachutes/sek8s:latest
+        imagePullPolicy: Always
+        command:
+        - attestation-proxy
         ports:
         - name: https
           containerPort: 8443
@@ -64,7 +69,11 @@ spec:
         - name: TLS_KEY_PATH
           value: "/etc/ssl/host-certs/server.key"
         - name: CLIENT_CA_PATH
-          value: "/etc/ssl/host-certs/client-ca.crt"
+          value: "/etc/ssl/certs/ca-certificates.crt"
+        - name: PROXY_BIND_ADDRESS
+          value: "0.0.0.0"
+        - name: PROXY_PORT
+          value: "8443"
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
@@ -116,7 +125,7 @@ spec:
       volumes:
       - name: attestation-socket
         hostPath:
-          path: /var/run/attestation
+          path: /run/attestation-service
           type: Directory
       - name: host-certs
         hostPath:

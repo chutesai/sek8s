@@ -18,12 +18,14 @@
     suffix: sek8s
   register: build_dir
 
-# - name: Clone sek8s repository to temp directory
-#   ansible.builtin.git:
-#     repo: "{{ sek8s_repo }}"
-#     dest: "{{ build_dir.path }}"
-#     version: "{{ sek8s_version }}"
-#     depth: 1  # Shallow clone to save bandwidth
+- name: Copy sek8s build artifacts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../{{ item }}"
+    dest: "{{ build_dir.path }}"
+  loop:
+    - pyproject.toml
+    - poetry.lock
+    - README.md
 
 - name: Copy sek8s source to temp directory
   ansible.builtin.copy:
