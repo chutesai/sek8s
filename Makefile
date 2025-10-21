@@ -1,6 +1,6 @@
 SHELL := /bin/bash -e -o pipefail
 PROJECT ?= sek8s
-BRANCH_NAME ?= local
+BRANCH_NAME ?= $(shell git rev-parse --abbrev-ref HEAD)
 BUILD_NUMBER ?= 0
 IMAGE ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
 COMPOSE_FILE=docker/docker-compose.yaml
