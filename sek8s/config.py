@@ -48,12 +48,20 @@ class ServerConfig(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("tls_cert_path", "tls_key_path", "uds_path", "client_ca_path", mode="after")
+    @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="after")
     @classmethod
     def validate_paths(cls, v: Optional[Path]) -> Optional[Path]:
         """Validate that paths exist if specified."""
         if v and not v.exists():
             raise ValueError(f"Path does not exist: {v}")
+        return v
+    
+    @field_validator("uds_path", mode="after")
+    @classmethod
+    def validate_uds_directory(cls, v: Optional[Path]) -> Optional[Path]:
+        """Validate that parent dir exist if specified."""
+        if v and not v.parent.exists():
+            raise ValueError(f"Directory for UDS path does not exist: {v}")
         return v
 
 class AttestationServiceConfig(ServerConfig):
