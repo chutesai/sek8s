@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
 #              provide virtio-net (NAT) and virtconsole.
-# Enhanced for TDX + H200 compatibility with configurable memory settings
+# Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
 
 set -x
 
@@ -14,6 +14,11 @@ FOREGROUND=false
 PIDFILE="/tmp/tdx-demo-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
 SSH_PORT=10022
+
+# Cloud-init variables
+USER_DATA=""  # Path to user-data YAML file (optional)
+META_DATA=""  # Path to meta-data YAML file (optional)
+CIDATA_FILE="/tmp/tdx-cidata.iso"  # Temporary file for cloud-init datasource
 
 # ======================================================================
 # MEMORY CONFIGURATION VARIABLES - Adjust these for testing
@@ -67,6 +72,14 @@ while [[ $# -gt 0 ]]; do
       FOREGROUND=true
       shift
       ;;
+    --cloud-init-user-data)
+      USER_DATA="$2"
+      shift 2
+      ;;
+    --cloud-init-meta-data)
+      META_DATA="$2"
+      shift 2
+      ;;
     --status)
       if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -114,6 +127,7 @@ while [[ $# -gt 0 ]]; do
       else
         echo "No PID file found. No VM to clean."
       fi
+      rm -f "$CIDATA_FILE"
       exit 0
       ;;
     --help)
@@ -126,6 +140,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --nvswitch-mmio-mb SIZE   MMIO allocation per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
       echo "  --pci-hole-base-gb SIZE   Base PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo "  --foreground              Run in foreground"
+      echo "  --cloud-init-user-data FILE  Path to cloud-init user-data YAML file"
+      echo "  --cloud-init-meta-data FILE  Path to cloud-init meta-data YAML file (optional)"
       echo "  --status                  Show VM status"
       echo "  --clean                   Stop and clean VM"
       echo "  --help                    Show this help"
@@ -135,6 +151,9 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Example for higher memory (if conservative works):"
       echo "  $0 --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
+      echo ""
+      echo "Example with cloud-init:"
+      echo "  $0 --cloud-init-user-data /path/to/user-data.yaml"
       exit 0
       ;;
     *)
@@ -242,6 +261,43 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func") )
   if ((func==8)); then func=0; ((slot++)); fi
 done
 
+# Cloud-init: Generate cidata ISO if user-data provided
+if [ -n "$USER_DATA" ]; then
+  if [ ! -f "$USER_DATA" ]; then
+    echo "Error: User-data file $USER_DATA not found."
+    exit 1
+  fi
+
+  # If meta-data file provided, use it; otherwise, generate minimal meta-data with dynamic instance-id
+  if [ -n "$META_DATA" ]; then
+    if [ ! -f "$META_DATA" ]; then
+      echo "Error: Meta-data file $META_DATA not found."
+      exit 1
+    fi
+    META_DATA_CONTENT=$(cat "$META_DATA")
+  else
+    # Generate dynamic instance-id (requires uuidgen or fallback to timestamp)
+    if command -v uuidgen >/dev/null 2>&1; then
+      INSTANCE_ID=$(uuidgen)
+    else
+      INSTANCE_ID="tdx-guest-$(date +%s)"
+    fi
+    META_DATA_CONTENT="instance-id: $INSTANCE_ID"
+  fi
+
+  # Generate NoCloud datasource ISO (requires cloud-localds)
+  cloud-localds "$CIDATA_FILE" "$USER_DATA" --metadata <(echo "$META_DATA_CONTENT") || {
+    echo "Error: Failed to generate cloud-init datasource. Ensure cloud-utils is installed."
+    exit 1
+  }
+
+  echo "Cloud-init datasource generated: $CIDATA_FILE"
+  echo "Attaching to QEMU as secondary drive."
+
+  # Add to DEV_OPTS (attach as read-only VirtIO drive)
+  DEV_OPTS+=( -drive file="$CIDATA_FILE",if=virtio,format=raw,readonly=on )
+fi
+
 if [ "$FOREGROUND" = true ]; then
   SERIAL_OPTS=( -serial mon:stdio )
 else
@@ -254,6 +310,12 @@ echo "Command preview:"
 echo "PCI hole: ${CALCULATED_PCI_HOLE_GB}G"
 echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
+if [ -n "$USER_DATA" ]; then
+  echo "Cloud-init: Enabled with user-data from $USER_DATA"
+  [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
+else
+  echo "Cloud-init: Disabled (no user-data provided)"
+fi
 echo ""
 
 /usr/bin/qemu-system-x86_64 \
@@ -311,6 +373,7 @@ if [ "$FOREGROUND" = false ]; then
           echo "  Moderate:     --gpu-mmio-mb 32768 --pci-hole-base-gb 2048 (current)"
           echo "  Aggressive:   --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
           echo "  Maximum:      --gpu-mmio-mb 147456 --pci-hole-base-gb 8192"
+          rm -f "$CIDATA_FILE"
           exit 0
         fi
       else
@@ -326,3 +389,6 @@ if [ "$FOREGROUND" = false ]; then
   echo "SSH not ready after 120 seconds. Check $LOGFILE and /tmp/qemu.log for details."
   exit 1
 fi
+
+# Clean up cidata file on exit (foreground mode)
+trap 'rm -f "$CIDATA_FILE"' EXIT
