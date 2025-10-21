@@ -188,7 +188,7 @@ echo ""
 # 2. build dynamic -device list
 ##############################################################################
 DEV_OPTS=(
-  -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22
+  -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22,hostfwd::30000-32767-:30000-32767
   -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
   -device vhost-vsock-pci,guest-cid=3
 )
