@@ -4,7 +4,7 @@
 set -euo pipefail
 
 # Configuration
-ENV_CONFIG_FILE="/etc/attestation-service/attestation.env"
+ENV_CONFIG_FILE="/etc/attestation-service/attestation-service.env"
 
 # Logging function
 log() {
@@ -17,18 +17,18 @@ hostname=$(hostname)
 
 # Check if HOSTNAME is already set in the config file
 if [ -f "$ENV_CONFIG_FILE" ] && grep -q "^HOSTNAME=" "$ENV_CONFIG_FILE"; then
-    current_hostname=$(grep "^HOSTNAME=" "$ENV_CONFIG_FILE" | cut -d'=' -f2)
+    current_hostname=$(grep "^HOSTNAME=" "$ENV_CONFIG_FILE" | cut -d'=' -f2 | cut -d'#' -f1 | sed 's/ *$//')
     log "HOSTNAME already set to: $current_hostname"
     
-    # # Optionally update if different
-    # if [ "$current_hostname" != "$hostname" ]; then
-    #     log "Current hostname ($hostname) differs from config ($current_hostname). Updating..."
-    #     # Use sed to replace the existing HOSTNAME line
-    #     sed -i "s/^HOSTNAME=.*/HOSTNAME=$hostname/" "$ENV_CONFIG_FILE"
-    #     log "Updated hostname in config to: $hostname"
-    # else
-    #     log "Hostname matches current setting. No update needed."
-    # fi
+    # Update if different
+    if [[ "$current_hostname" != "$hostname" && "$current_hostname" == "tdx-build" ]]; then
+        log "Setting hostname for production..."
+        # Use sed to replace the existing HOSTNAME line
+        sed -i "s/^HOSTNAME=.*/HOSTNAME=$hostname/" "$ENV_CONFIG_FILE"
+        log "Updated hostname in config to: $hostname"
+    else
+        log "Hostname matches current setting. No update needed."
+    fi
 else
     # File doesn't exist or HOSTNAME not set, so add it
     echo "HOSTNAME=$hostname" >> "$ENV_CONFIG_FILE"
