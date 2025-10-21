@@ -3,7 +3,7 @@
 #              use preconfigured macvtap interface for networking.
 # Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
 
-set -x
+# set -x
 
 # Default values
 IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
