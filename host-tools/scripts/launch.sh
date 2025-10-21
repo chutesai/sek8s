@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
-#              provide virtio-net (NAT) and virtconsole.
+#              provide configurable networking for public IP and virtconsole.
 # Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
 
 set -x
@@ -14,11 +14,17 @@ FOREGROUND=false
 PIDFILE="/tmp/tdx-demo-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
 SSH_PORT=10022
+NETWORK_TYPE="macvtap"  # Default to macvtap for security/perf; options: user, bridge, macvtap
+PHYSICAL_NIC="eth0"  # Default physical NIC for bridge/macvtap; change via --physical-nic
 
 # Cloud-init variables
-USER_DATA=""  # Path to user-data YAML file (optional)
+USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
 META_DATA=""  # Path to meta-data YAML file (optional)
 CIDATA_FILE="/tmp/tdx-cidata.iso"  # Temporary file for cloud-init datasource
+HOSTNAME=""  # Generated user-data param
+MINER_SS58=""  # Generated user-data param
+MINER_SEED=""  # Generated user-data param
+GENERATED_USER_DATA="/tmp/generated-user-data.yaml"  # Temp file if generating user-data
 
 # ======================================================================
 # MEMORY CONFIGURATION VARIABLES - Adjust these for testing
@@ -72,6 +78,26 @@ while [[ $# -gt 0 ]]; do
       FOREGROUND=true
       shift
       ;;
+    --network-type)
+      NETWORK_TYPE="$2"
+      shift 2
+      ;;
+    --physical-nic)
+      PHYSICAL_NIC="$2"
+      shift 2
+      ;;
+    --hostname)
+      HOSTNAME="$2"
+      shift 2
+      ;;
+    --miner-ss58)
+      MINER_SS58="$2"
+      shift 2
+      ;;
+    --miner-seed)
+      MINER_SEED="$2"
+      shift 2
+      ;;
     --cloud-init-user-data)
       USER_DATA="$2"
       shift 2
@@ -91,11 +117,8 @@ while [[ $# -gt 0 ]]; do
           else
             echo "Serial log ($LOGFILE) is empty or missing."
           fi
-          if ssh -p "$SSH_PORT" -o ConnectTimeout=2 -o StrictHostKeyChecking=no root@localhost whoami >/dev/null 2>&1; then
-            echo "SSH is ready on port $SSH_PORT"
-          else
-            echo "SSH is not yet available on port $SSH_PORT"
-          fi
+          # For bridge/macvtap, no port forward; check serial log instead
+          echo "For SSH, use guest public IP:22 (check serial log for IP)."
         else
           echo "QEMU process ($PID) is not running."
         fi
@@ -127,7 +150,8 @@ while [[ $# -gt 0 ]]; do
       else
         echo "No PID file found. No VM to clean."
       fi
-      rm -f "$CIDATA_FILE"
+      rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"
+      [ -n "$NET_IFACE" ] && sudo ip link delete "$NET_IFACE" 2>/dev/null
       exit 0
       ;;
     --help)
@@ -140,8 +164,13 @@ while [[ $# -gt 0 ]]; do
       echo "  --nvswitch-mmio-mb SIZE   MMIO allocation per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
       echo "  --pci-hole-base-gb SIZE   Base PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo "  --foreground              Run in foreground"
-      echo "  --cloud-init-user-data FILE  Path to cloud-init user-data YAML file"
-      echo "  --cloud-init-meta-data FILE  Path to cloud-init meta-data YAML file (optional)"
+      echo "  --network-type TYPE       Networking mode: user, bridge, macvtap (default: macvtap)"
+      echo "  --physical-nic NIC        Physical NIC for bridge/macvtap (default: eth0)"
+      echo "  --hostname NAME           VM hostname for generated user-data"
+      echo "  --miner-ss58 VALUE        Content for /root/miner-ss58 file"
+      echo "  --miner-seed VALUE        Content for /root/miner-seed file"
+      echo "  --cloud-init-user-data FILE  Custom user-data YAML (overrides generated)"
+      echo "  --cloud-init-meta-data FILE  Custom meta-data YAML (optional)"
       echo "  --status                  Show VM status"
       echo "  --clean                   Stop and clean VM"
       echo "  --help                    Show this help"
@@ -149,11 +178,8 @@ while [[ $# -gt 0 ]]; do
       echo "Example for conservative testing:"
       echo "  $0 --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
       echo ""
-      echo "Example for higher memory (if conservative works):"
-      echo "  $0 --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
-      echo ""
-      echo "Example with cloud-init:"
-      echo "  $0 --cloud-init-user-data /path/to/user-data.yaml"
+      echo "Example with generated user-data and macvtap:"
+      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed'"
       exit 0
       ;;
     *)
@@ -163,6 +189,39 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Generate user-data if params provided and no custom user-data
+if [ -z "$USER_DATA" ] && [ -n "$HOSTNAME" ] && [ -n "$MINER_SS58" ] && [ -n "$MINER_SEED" ]; then
+  echo "#cloud-config" > "$GENERATED_USER_DATA"
+  echo "hostname: $HOSTNAME" >> "$GENERATED_USER_DATA"
+  echo "" >> "$GENERATED_USER_DATA"
+  echo "write_files:" >> "$GENERATED_USER_DATA"
+  echo "  - path: /root/miner-ss58" >> "$GENERATED_USER_DATA"
+  echo "    content: \"$MINER_SS58\"" >> "$GENERATED_USER_DATA"
+  echo "    permissions: '0600'" >> "$GENERATED_USER_DATA"
+  echo "    owner: root:root" >> "$GENERATED_USER_DATA"
+  echo "  - path: /root/miner-seed" >> "$GENERATED_USER_DATA"
+  echo "    content: \"$MINER_SEED\"" >> "$GENERATED_USER_DATA"
+  echo "    permissions: '0600'" >> "$GENERATED_USER_DATA"
+  echo "    owner: root:root" >> "$GENERATED_USER_DATA"
+  USER_DATA="$GENERATED_USER_DATA"
+elif [ -n "$HOSTNAME" ] || [ -n "$MINER_SS58" ] || [ -n "$MINER_SEED" ]; then
+  echo "Warning: --hostname, --miner-ss58, --miner-seed ignored since custom --cloud-init-user-data provided."
+fi
+
+# Setup network interface based on type
+NET_IFACE=""
+if [ "$NETWORK_TYPE" = "bridge" ] || [ "$NETWORK_TYPE" = "macvtap" ]; then
+  NET_IFACE="vmnet-$(uuidgen | cut -c1-8)"
+  if [ "$NETWORK_TYPE" = "bridge" ]; then
+    sudo ip tuntap add mode tap name "$NET_IFACE" || { echo "Error: Failed to create tap $NET_IFACE."; exit 1; }
+    sudo ip link set "$NET_IFACE" master br0 || { echo "Error: Bridge br0 not found. Create it first."; sudo ip link delete "$NET_IFACE"; exit 1; }
+    sudo ip link set "$NET_IFACE" up || { echo "Error: Failed to up $NET_IFACE."; sudo ip link delete "$NET_IFACE"; exit 1; }
+  elif [ "$NETWORK_TYPE" = "macvtap" ]; then
+    sudo ip link add link "$PHYSICAL_NIC" name "$NET_IFACE" type macvtap mode bridge || { echo "Error: Failed to create macvtap $NET_IFACE on $PHYSICAL_NIC."; exit 1; }
+    sudo ip link set "$NET_IFACE" up || { echo "Error: Failed to up $NET_IFACE."; sudo ip link delete "$NET_IFACE"; exit 1; }
+  fi
+fi
 
 CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
 
@@ -206,9 +265,20 @@ echo ""
 ##############################################################################
 # 2. build dynamic -device list
 ##############################################################################
-DEV_OPTS=(
-  -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22,hostfwd=tcp::30000-32767-:30000-32767
-  -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+DEV_OPTS=()
+if [ "$NETWORK_TYPE" = "user" ]; then
+  DEV_OPTS+=(
+    -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22
+    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+  )
+  echo "Warning: User mode networking used. No NodePort forwarding; VM not directly public."
+elif [ "$NETWORK_TYPE" = "bridge" ] || [ "$NETWORK_TYPE" = "macvtap" ]; then
+  DEV_OPTS+=(
+    -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
+    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+  )
+fi
+DEV_OPTS+=(
   -device vhost-vsock-pci,guest-cid=3
 )
 
@@ -324,6 +394,10 @@ echo "Command preview:"
 echo "PCI hole: ${CALCULATED_PCI_HOLE_GB}G"
 echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
+echo "Network: $NETWORK_TYPE"
+if [ -n "$NET_IFACE" ]; then
+  echo "Interface: $NET_IFACE on $PHYSICAL_NIC"
+fi
 if [ -n "$USER_DATA" ]; then
   echo "Cloud-init: Enabled with user-data from $USER_DATA"
   [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
@@ -352,57 +426,33 @@ echo ""
   "${DEV_OPTS[@]}"
 
 if [ "$FOREGROUND" = false ]; then
-  echo "Waiting for VM to boot and SSH to be ready..."
-  for i in {1..60}; do
-    sleep 2
-    if [ -f "$PIDFILE" ]; then
-      PID=$(cat "$PIDFILE")
-      if ps -p "$PID" > /dev/null; then
-        if ssh -p "$SSH_PORT" -o ConnectTimeout=2 -o StrictHostKeyChecking=no root@localhost whoami >/dev/null 2>&1; then
-          echo "SSH is ready!"
-          echo "TD started by QEMU with PID: $PID."
-          echo "To log in with the non-root user (default: tdx / password: 123456), use:"
-          echo "   ssh -p $SSH_PORT tdx@localhost"
-          echo "To log in as root (default password: 123456), use:"
-          echo "   ssh -p $SSH_PORT root@localhost"
-          echo "Serial log: $LOGFILE"
-          echo ""
-          echo "=== TDX H200 nvidia-smi Troubleshooting Notes ==="
-          echo "Current memory settings:"
-          echo "  - PCI hole: ${CALCULATED_PCI_HOLE_GB}GB"
-          echo "  - GPU MMIO: ${GPU_MMIO_MB}MB per GPU"
-          echo "  - NVSwitch MMIO: ${NVSWITCH_MMIO_MB}MB per switch"
-          echo ""
-          echo "If nvidia-smi shows 'No devices were found':"
-          echo "1. Check lspci shows devices: lspci | grep NVIDIA"
-          echo "2. Check dmesg for NVIDIA errors: dmesg | grep -i nvidia"
-          echo "3. Try disabling GSP firmware: echo 'options nvidia NVreg_EnableGpuFirmware=0' >> /etc/modprobe.d/nvidia.conf"
-          echo "4. Check driver version compatibility with TDX"
-          echo "5. Try different memory settings:"
-          echo "   - Lower if soft lockups: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
-          echo "   - Higher if BAR allocation fails: --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
-          echo ""
-          echo "Memory testing progression:"
-          echo "  Conservative: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
-          echo "  Moderate:     --gpu-mmio-mb 32768 --pci-hole-base-gb 2048 (current)"
-          echo "  Aggressive:   --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
-          echo "  Maximum:      --gpu-mmio-mb 147456 --pci-hole-base-gb 8192"
-          rm -f "$CIDATA_FILE"
-          exit 0
-        fi
-      else
-        echo "QEMU process ($PID) stopped unexpectedly."
-        exit 1
-      fi
-      echo "Waiting for SSH (attempt $i/60)..."
-    else
-      echo "PID file not found. VM failed to start."
-      exit 1
-    fi
-  done
-  echo "SSH not ready after 120 seconds. Check $LOGFILE and /tmp/qemu.log for details."
-  exit 1
+  echo "VM daemonized with PID: $(cat $PIDFILE)"
+  echo "Serial log: $LOGFILE"
+  echo "For SSH and public IP access, check serial log for guest IP (e.g., ip addr show)."
+  echo ""
+  echo "=== TDX H200 nvidia-smi Troubleshooting Notes ==="
+  echo "Current memory settings:"
+  echo "  - PCI hole: ${CALCULATED_PCI_HOLE_GB}GB"
+  echo "  - GPU MMIO: ${GPU_MMIO_MB}MB per GPU"
+  echo "  - NVSwitch MMIO: ${NVSWITCH_MMIO_MB}MB per switch"
+  echo ""
+  echo "If nvidia-smi shows 'No devices were found':"
+  echo "1. Check lspci shows devices: lspci | grep NVIDIA"
+  echo "2. Check dmesg for NVIDIA errors: dmesg | grep -i nvidia"
+  echo "3. Try disabling GSP firmware: echo 'options nvidia NVreg_EnableGpuFirmware=0' >> /etc/modprobe.d/nvidia.conf"
+  echo "4. Check driver version compatibility with TDX"
+  echo "5. Try different memory settings:"
+  echo "   - Lower if soft lockups: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
+  echo "   - Higher if BAR allocation fails: --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
+  echo ""
+  echo "Memory testing progression:"
+  echo "  Conservative: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
+  echo "  Moderate:     --gpu-mmio-mb 32768 --pci-hole-base-gb 2048 (current)"
+  echo "  Aggressive:   --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
+  echo "  Maximum:      --gpu-mmio-mb 147456 --pci-hole-base-gb 8192"
+  rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"
+  exit 0
 fi
 
-# Clean up cidata file on exit (foreground mode)
-trap 'rm -f "$CIDATA_FILE"' EXIT
+# Clean up cidata file and net interface on exit (foreground mode)
+trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"; [ -n "$NET_IFACE" ] && sudo ip link delete "$NET_IFACE" 2>/dev/null' EXIT
