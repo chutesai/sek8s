@@ -227,7 +227,7 @@ if [ -z "$NET_IFACE" ] && [ "$NETWORK_TYPE" != "user" ]; then
   echo "Error: --net-iface is required for $NETWORK_TYPE."
   exit 1
 fi
-if [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; then
+if [ -z "$NETWORK_CONFIG" ] && { [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; }; then
   echo "Error: --vm-ip and --vm-gateway are required."
   exit 1
 fi
