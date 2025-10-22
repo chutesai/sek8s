@@ -28,5 +28,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=admission-controller
 
+# Resources
+LimitNPROC=65536
+
 [Install]
 WantedBy=multi-user.target
