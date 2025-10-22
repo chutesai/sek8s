@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
-#              use preconfigured macvtap interface for networking.
+#              use preconfigured network interface for flexible networking.
 # Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
-
-# set -x
 
 # Default values
 IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
@@ -13,11 +11,12 @@ VCPUS="24"
 FOREGROUND=false
 PIDFILE="/tmp/tdx-demo-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
-NET_IFACE=""  # Macvtap interface from setup-macvtap.sh
-VM_IP=""  # VM static IP from setup-macvtap.sh
-VM_GATEWAY=""  # VM gateway from setup-macvtap.sh
+NET_IFACE=""  # Network interface from setup script (e.g., macvtap, tap)
+VM_IP=""  # VM static IP from setup script
+VM_GATEWAY=""  # VM gateway from setup script
 VM_DNS="8.8.8.8"  # Default DNS server
 SSH_PORT=2222  # Host port for SSH (maps to VM:22)
+NETWORK_TYPE=""  # Network backend: tap, macvtap, user
 
 # Cloud-init variables
 USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
@@ -79,6 +78,10 @@ while [[ $# -gt 0 ]]; do
     --foreground)
       FOREGROUND=true
       shift
+      ;;
+    --network-type)
+      NETWORK_TYPE="$2"
+      shift 2
       ;;
     --net-iface)
       NET_IFACE="$2"
@@ -177,9 +180,10 @@ while [[ $# -gt 0 ]]; do
       echo "  --nvswitch-mmio-mb SIZE   MMIO allocation per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
       echo "  --pci-hole-base-gb SIZE   Base PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo "  --foreground              Run in foreground"
-      echo "  --net-iface IFACE         Macvtap interface from setup-macvtap.sh"
-      echo "  --vm-ip IP                VM static IP from setup-macvtap.sh"
-      echo "  --vm-gateway IP           VM gateway from setup-macvtap.sh"
+      echo "  --network-type TYPE       Network backend: tap, macvtap, user (required)"
+      echo "  --net-iface IFACE         Network interface from setup script"
+      echo "  --vm-ip IP                VM static IP from setup script"
+      echo "  --vm-gateway IP           VM gateway from setup script"
       echo "  --vm-dns IP               VM DNS server (default: $VM_DNS)"
       echo "  --ssh-port PORT           Host port for SSH forwarding (default: $SSH_PORT)"
       echo "  --hostname NAME           VM hostname for generated user-data"
@@ -195,7 +199,7 @@ while [[ $# -gt 0 ]]; do
       echo "  $0 --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
       echo ""
       echo "Example with macvtap networking:"
-      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --ssh-port 2222"
+      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type macvtap --ssh-port 2222"
       exit 0
       ;;
     *)
@@ -207,8 +211,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required params
-if [ -z "$NET_IFACE" ] || [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; then
-  echo "Error: --net-iface, --vm-ip, and --vm-gateway are required."
+if [ -z "$NETWORK_TYPE" ]; then
+  echo "Error: --network-type is required (tap, macvtap, user)."
+  exit 1
+fi
+if [ -z "$NET_IFACE" ] && [ "$NETWORK_TYPE" != "user" ]; then
+  echo "Error: --net-iface is required for $NETWORK_TYPE."
+  exit 1
+fi
+if [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; then
+  echo "Error: --vm-ip and --vm-gateway are required."
   exit 1
 fi
 if [ -z "$USER_DATA" ] && { [ -z "$HOSTNAME" ] || [ -z "$MINER_SS58" ] || [ -z "$MINER_SEED" ]; }; then
@@ -288,9 +300,60 @@ echo ""
 ##############################################################################
 # 2. build dynamic -device list
 ##############################################################################
-DEV_OPTS=(
-  -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
-  -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+# Validate network type
+case "$NETWORK_TYPE" in
+  tap|macvtap|user)
+    ;;
+  *)
+    echo "Error: Invalid --network-type '$NETWORK_TYPE'. Use tap, macvtap, or user."
+    exit 1
+    ;;
+esac
+
+# Build network device options
+DEV_OPTS=()
+if [ "$NETWORK_TYPE" = "macvtap" ]; then
+  if [ -z "$NET_IFACE" ]; then
+    echo "Error: --net-iface must be specified for macvtap."
+    exit 1
+  fi
+  # Find the macvtap subdirectory (e.g., tap26)
+  MACVTAP_SUBDIR=$(ls /sys/class/net/"$NET_IFACE"/macvtap/ 2>/dev/null | grep '^tap[0-9]\+$' | head -n 1)
+  if [ -z "$MACVTAP_SUBDIR" ]; then
+    echo "Error: No macvtap subdirectory found for $NET_IFACE. Ensure it is a macvtap interface."
+    exit 1
+  fi
+  # Derive device name from subdirectory (e.g., tap26 -> /dev/tap26)
+  MACVTAP_DEVICE="/dev/$MACVTAP_SUBDIR"
+  if [ ! -c "$MACVTAP_DEVICE" ]; then
+    echo "Error: Device $MACVTAP_DEVICE does not exist."
+    exit 1
+  fi
+  exec 3>"$MACVTAP_DEVICE" || {
+    echo "Error: Failed to open $MACVTAP_DEVICE for $NET_IFACE."
+    exit 1
+  }
+  DEV_OPTS+=(
+    -netdev tap,id=n0,fd=3
+    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+  )
+elif [ "$NETWORK_TYPE" = "tap" ]; then
+  if [ -z "$NET_IFACE" ]; then
+    echo "Error: --net-iface must be specified for tap."
+    exit 1
+  fi
+  DEV_OPTS+=(
+    -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
+    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+  )
+elif [ "$NETWORK_TYPE" = "user" ]; then
+  DEV_OPTS+=(
+    -netdev user,id=n0,ipv6=off,hostfwd=tcp::"${SSH_PORT}"-:22,hostfwd=tcp::6443-:6443
+    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
+  )
+  echo "Warning: User mode networking used. k3s NodePorts (30000-32767) not forwarded; configure manually if needed."
+fi
+DEV_OPTS+=(
   -device vhost-vsock-pci,guest-cid=3
 )
 
@@ -406,7 +469,7 @@ echo "Command preview:"
 echo "PCI hole: ${CALCULATED_PCI_HOLE_GB}G"
 echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
-echo "Network: macvtap interface $NET_IFACE"
+echo "Network: $NETWORK_TYPE interface $NET_IFACE"
 echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
 if [ -n "$USER_DATA" ]; then
   echo "Cloud-init: Enabled with user-data from $USER_DATA"
