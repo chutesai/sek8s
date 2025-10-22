@@ -2,6 +2,7 @@
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
 #              use preconfigured network interface for flexible networking.
 # Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
+# FIXED: Properly separate user-data and network-config for cloud-init
 
 # Default values
 IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
@@ -9,7 +10,7 @@ BIOS="/usr/share/ovmf/OVMF.fd"  # Replace with TDX-optimized OVMF
 MEM="1536G"
 VCPUS="24"
 FOREGROUND=false
-PIDFILE="/tmp/tdx-demo-td-pid.pid"
+PIDFILE="/tmp/tdx-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
 NET_IFACE=""  # Network interface from setup script (e.g., macvtap, tap)
 VM_IP=""  # VM static IP from setup script
@@ -21,11 +22,13 @@ NETWORK_TYPE=""  # Network backend: tap, macvtap, user
 # Cloud-init variables
 USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
 META_DATA=""  # Path to meta-data YAML file (optional)
+NETWORK_CONFIG=""  # Path to network-config YAML file (optional)
 CIDATA_FILE="/tmp/tdx-cidata.iso"  # Temporary file for cloud-init datasource
 HOSTNAME=""  # Generated user-data param
 MINER_SS58=""  # Generated user-data param
 MINER_SEED=""  # Generated user-data param
 GENERATED_USER_DATA="/tmp/generated-user-data.yaml"  # Temp file if generating user-data
+GENERATED_NETWORK_CONFIG="/tmp/generated-network-config.yaml"  # Temp file for network config
 
 # ======================================================================
 # MEMORY CONFIGURATION VARIABLES - Adjust these for testing
@@ -123,6 +126,10 @@ while [[ $# -gt 0 ]]; do
       META_DATA="$2"
       shift 2
       ;;
+    --cloud-init-network-config)
+      NETWORK_CONFIG="$2"
+      shift 2
+      ;;
     --status)
       if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -167,7 +174,7 @@ while [[ $# -gt 0 ]]; do
       else
         echo "No PID file found. No VM to clean."
       fi
-      rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"
+      rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"
       exit 0
       ;;
     --help)
@@ -189,8 +196,9 @@ while [[ $# -gt 0 ]]; do
       echo "  --hostname NAME           VM hostname for generated user-data"
       echo "  --miner-ss58 VALUE        Content for /root/miner-ss58 file"
       echo "  --miner-seed VALUE        Content for /root/miner-seed file"
-      echo "  --cloud-init-user-data FILE  Custom user-data YAML (overrides generated)"
-      echo "  --cloud-init-meta-data FILE  Custom meta-data YAML (optional)"
+      echo "  --cloud-init-user-data FILE     Custom user-data YAML (overrides generated)"
+      echo "  --cloud-init-meta-data FILE     Custom meta-data YAML (optional)"
+      echo "  --cloud-init-network-config FILE Custom network-config YAML (overrides generated)"
       echo "  --status                  Show VM status"
       echo "  --clean                   Stop and clean VM"
       echo "  --help                    Show this help"
@@ -236,26 +244,41 @@ hostname: $HOSTNAME
 
 write_files:
   - path: /root/miner-ss58
-    content: "$MINER_SS58"
+    content: |
+      $MINER_SS58
     permissions: '0600'
     owner: root:root
-  - path: /root/miner-seed
-    content: "$MINER_SEED"
+
+  - path: /root/miner-seed  
+    content: |
+      $MINER_SEED
     permissions: '0600'
     owner: root:root
-network:
-  version: 2
-  ethernets:
-    enp0s1:
-      addresses:
-        - $VM_IP/24
-      gateway4: $VM_GATEWAY
-      nameservers:
-        addresses: [$VM_DNS]
 EOF
   USER_DATA="$GENERATED_USER_DATA"
 elif [ -n "$USER_DATA" ] && { [ -n "$HOSTNAME" ] || [ -n "$MINER_SS58" ] || [ -n "$MINER_SEED" ]; }; then
   echo "Warning: --hostname, --miner-ss58, --miner-seed ignored since custom --cloud-init-user-data provided."
+fi
+
+# Generate network-config if not provided
+if [ -z "$NETWORK_CONFIG" ]; then
+  cat > "$GENERATED_NETWORK_CONFIG" <<EOF
+version: 2
+ethernets:
+  eth0:
+    addresses:
+      - $VM_IP/24
+    routes:
+      - to: default
+        via: $VM_GATEWAY
+    nameservers:
+      addresses:
+        - $VM_DNS
+EOF
+  NETWORK_CONFIG="$GENERATED_NETWORK_CONFIG"
+  echo "Generated network-config: $NETWORK_CONFIG"
+elif [ -n "$NETWORK_CONFIG" ] && { [ -n "$VM_IP" ] || [ -n "$VM_GATEWAY" ] || [ -n "$VM_DNS" ]; }; then
+  echo "Warning: --vm-ip, --vm-gateway, --vm-dns ignored since custom --cloud-init-network-config provided."
 fi
 
 CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
@@ -406,10 +429,15 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func") )
   if ((func==8)); then func=0; ((slot++)); fi
 done
 
-# Cloud-init: Generate cidata ISO if user-data provided
+# Cloud-init: Generate cidata ISO with proper user-data and network-config separation
 if [ -n "$USER_DATA" ]; then
   if [ ! -f "$USER_DATA" ]; then
     echo "Error: User-data file $USER_DATA not found."
+    exit 1
+  fi
+
+  if [ -n "$NETWORK_CONFIG" ] && [ ! -f "$NETWORK_CONFIG" ]; then
+    echo "Error: Network-config file $NETWORK_CONFIG not found."
     exit 1
   fi
 
@@ -434,13 +462,13 @@ if [ -n "$USER_DATA" ]; then
     }
   fi
 
-  # Generate NoCloud datasource ISO using cloud-localds
+  # Generate NoCloud datasource ISO using cloud-localds with network-config
   if command -v cloud-localds >/dev/null 2>&1; then
-    cloud-localds "$CIDATA_FILE" "$USER_DATA" "$META_DATA_FILE" || {
-      echo "Error: Failed to generate cloud-init ISO. Ensure cloud-utils is installed and up-to-date."
-      [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
-      exit 1
-    }
+      cloud-localds --network-config "$NETWORK_CONFIG" "$CIDATA_FILE" "$USER_DATA" "$META_DATA_FILE" || {
+        echo "Error: Failed to generate cloud-init ISO. Ensure cloud-utils is installed and up-to-date."
+        [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
+        exit 1
+      }
   else
     echo "Error: cloud-localds not found. Ensure cloud-utils is installed."
     [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
@@ -474,6 +502,7 @@ echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
 if [ -n "$USER_DATA" ]; then
   echo "Cloud-init: Enabled with user-data from $USER_DATA"
   [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
+  [ -n "$NETWORK_CONFIG" ] && echo "Cloud-init network-config: $NETWORK_CONFIG" || echo "Cloud-init network-config: Not provided"
 else
   echo "Cloud-init: Disabled (no user-data provided)"
 fi
@@ -530,9 +559,9 @@ if [ "$FOREGROUND" = false ]; then
   echo "  Moderate:     --gpu-mmio-mb 32768 --pci-hole-base-gb 2048 (current)"
   echo "  Aggressive:   --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
   echo "  Maximum:      --gpu-mmio-mb 147456 --pci-hole-base-gb 8192"
-  rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"
+  rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"
   exit 0
 fi
 
 # Clean up cidata file on exit (foreground mode)
-trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA"' EXIT
+trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"' EXIT
