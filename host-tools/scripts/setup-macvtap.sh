@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
       echo "Options:"
       echo "  --vm-ip IP/MASK           VM static IP and netmask (default: $VM_IP)"
       echo "  --vm-dns IP               VM DNS server (default: $VM_DNS)"
-      echo "  --public-iface IFACE      Host’s public interface (default: $PUBLIC_IFACE)"
+      echo "  --public-iface IFACE      Host's public interface (default: $PUBLIC_IFACE)"
       echo "  --clean                   Remove bridge, macvtap, and iptables rules"
       echo "  --help                    Show this help"
       echo ""
@@ -87,7 +87,7 @@ echo "1. Creating direct macvtap interface..."
 
 # Create macvtap DIRECTLY on physical interface
 MACVTAP_IFACE="vmnet-$(uuidgen | cut -c1-8)"
-sudo ip link add link "$PUBLIC_IFACE" name "$MACVTAP_IFACE" type macvtap mode bridge
+sudo ip link add link "$PUBLIC_IFACE" name "$MACVTAP_IFACE" type macvtap mode vepa
 sudo ip link set "$MACVTAP_IFACE" up
 
 echo "   ✓ Macvtap interface: $MACVTAP_IFACE"
@@ -96,10 +96,14 @@ echo "   ✓ No bridge layer - maximum performance"
 
 echo "2. Configuring host routing for VM subnet..."
 
+# Add host IP to macvtap interface (required for gateway functionality)
+sudo ip addr add "$VM_GATEWAY/24" dev "$MACVTAP_IFACE"
+
 # Add route for VM subnet - host knows how to reach VM
 VM_NETWORK="${VM_IP%/*}/32"  # Single host route, not subnet
 sudo ip route add "$VM_NETWORK" dev "$MACVTAP_IFACE" 2>/dev/null || true
 
+echo "   ✓ Host gateway IP: $VM_GATEWAY added to $MACVTAP_IFACE"
 echo "   ✓ Route added: $VM_NETWORK via $MACVTAP_IFACE"
 
 echo "3. Enabling IP forwarding..."
