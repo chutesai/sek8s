@@ -265,7 +265,7 @@ if [ -z "$NETWORK_CONFIG" ]; then
   cat > "$GENERATED_NETWORK_CONFIG" <<EOF
 version: 2
 ethernets:
-  eth0:
+  enp0s1:
     addresses:
       - $VM_IP/24
     routes:
