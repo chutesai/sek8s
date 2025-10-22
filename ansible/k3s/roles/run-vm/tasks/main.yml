@@ -58,7 +58,7 @@
       users:
         - name: root
           ssh-authorized-keys:
-            - "{{ lookup('file', ssh_key_path | expanduser)  }}"
+            - "{{ lookup('file', ssh_public_key_path | expanduser)  }}"
     dest: "{{ user_data_file }}"
     mode: '0644'
 
@@ -170,7 +170,7 @@
     name: build-node
     ansible_host: "{{ vm_ip.stdout }}"
     ansible_user: root
-    ansible_ssh_private_key_file: "{{ ssh_key_path | expanduser }}"
+    ansible_ssh_private_key_file: "{{ ssh_private_key_path | expanduser }}"
     test_image_path: "{{ sek8s_img_path }}"
     groups: vm
 
