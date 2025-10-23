@@ -7,12 +7,12 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-config-init.log
 }
 
-# Function to notify systemd we're still alive
-notify_systemd() {
-    if [ -n "$NOTIFY_SOCKET" ]; then
-        systemd-notify --status="$1" || true
-    fi
-}
+# Check if already initialized
+INIT_MARKER="/var/lib/rancher/k3s/.initialized"
+if [ -f "$INIT_MARKER" ]; then
+    log "k3s configuration already initialized (marker file exists), skipping"
+    exit 0
+fi
 
 # Public IP detection configuration
 INCLUDE_PUBLIC_IP="${INCLUDE_PUBLIC_IP:-true}"
@@ -51,9 +51,6 @@ get_public_ip() {
 }
 
 log "Starting k3s configuration generation..."
-
-# Tell systemd we're starting
-notify_systemd "Generating k3s configuration"
 
 # Get current hostname and local IP
 HOSTNAME=$(hostname)
@@ -154,6 +151,7 @@ fi
 log "TLS SANs: ${TLS_SANS[*]}"
 log "======================================="
 
-notify_systemd "Configuration generation complete"
-systemd-notify --ready
+# Create configuration marker
+mkdir -p "$(dirname "$INIT_MARKER")"
+touch "$INIT_MARKER"
 log "k3s configuration generation complete - ready for k3s.service to start"

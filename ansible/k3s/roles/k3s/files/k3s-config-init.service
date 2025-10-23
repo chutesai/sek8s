@@ -6,11 +6,9 @@ Wants=network-online.target
 Requires=admission-controller.service
 # Don't block cloud-init from finishing
 Before=cloud-final.service
-ConditionPathExists=!/var/lib/rancher/k3s/.initialized
 
 [Service]
-Type=notify
-NotifyAccess=all
+Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/k3s-config-init.sh
 StandardOutput=journal
