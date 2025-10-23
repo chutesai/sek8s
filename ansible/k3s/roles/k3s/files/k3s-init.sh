@@ -50,6 +50,134 @@ get_public_ip() {
     return 1
 }
 
+# Enhanced function to wait for API server to be fully ready
+wait_for_api_server() {
+    local max_attempts=60
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        # Check if process is still alive
+        if ! check_k3s_alive; then
+            return 1
+        fi
+        
+        # Check basic API connectivity
+        if kubectl get --raw='/readyz' >/dev/null 2>&1; then
+            log "API server readiness check passed"
+            return 0
+        fi
+        
+        # Send watchdog keepalive
+        systemd-notify WATCHDOG=1 || true
+        
+        if [ $((attempt % 10)) -eq 0 ]; then
+            log "Still waiting for API server readiness... ($attempt/$max_attempts)"
+        fi
+        
+        sleep 2
+        ((attempt++))
+    done
+    
+    log "ERROR: API server not ready after $max_attempts attempts"
+    return 1
+}
+
+# Enhanced function to safely delete a node with retries
+safe_delete_node() {
+    local node_name="$1"
+    local max_attempts=5
+    local attempt=1
+    
+    log "Attempting to delete node: $node_name"
+    
+    while [ $attempt -le $max_attempts ]; do
+        # Check if process is still alive
+        if ! check_k3s_alive; then
+            log "ERROR: k3s process died during node deletion"
+            return 1
+        fi
+        
+        # Check if node still exists
+        if ! kubectl get node "$node_name" >/dev/null 2>&1; then
+            log "Node $node_name no longer exists (already deleted)"
+            return 0
+        fi
+        
+        log "Delete attempt $attempt/$max_attempts for node: $node_name"
+        
+        # Try to delete the node with timeout
+        if timeout 30 kubectl delete node "$node_name" --wait=false 2>/dev/null; then
+            log "Delete command issued successfully for node: $node_name"
+            
+            # Wait a bit and verify deletion
+            sleep 5
+            if ! kubectl get node "$node_name" >/dev/null 2>&1; then
+                log "Node $node_name successfully deleted"
+                return 0
+            else
+                log "Node $node_name still exists after delete command"
+            fi
+        else
+            log "Delete command failed for node: $node_name (attempt $attempt)"
+        fi
+        
+        # Send watchdog keepalive
+        systemd-notify WATCHDOG=1 || true
+        
+        sleep 5
+        ((attempt++))
+    done
+    
+    log "WARNING: Failed to delete node $node_name after $max_attempts attempts"
+    return 1
+}
+
+# Enhanced function to drain a node with better error handling
+safe_drain_node() {
+    local node_name="$1"
+    
+    log "Draining node: $node_name..."
+    
+    # Check if process is still alive
+    if ! check_k3s_alive; then
+        return 1
+    fi
+    
+    # Cordon first to prevent new pods
+    kubectl cordon "$node_name" 2>/dev/null || log "Failed to cordon node $node_name"
+    
+    # Send watchdog keepalive
+    systemd-notify WATCHDOG=1 || true
+    
+    # Try standard drain first with reasonable timeout
+    if kubectl drain "$node_name" \
+        --ignore-daemonsets \
+        --delete-emptydir-data \
+        --force \
+        --grace-period=10 \
+        --timeout=60s 2>/dev/null; then
+        log "Standard drain successful for node: $node_name"
+        return 0
+    fi
+    
+    log "Standard drain failed, attempting with disable-eviction..."
+    
+    # Try with disable-eviction
+    if kubectl drain "$node_name" \
+        --ignore-daemonsets \
+        --delete-emptydir-data \
+        --force \
+        --grace-period=5 \
+        --timeout=60s \
+        --disable-eviction 2>/dev/null; then
+        log "Drain with disable-eviction successful for node: $node_name"
+        return 0
+    fi
+    
+    log "Both drain methods failed for node: $node_name, but continuing with deletion..."
+    return 1
+}
+
 log "Starting k3s initialization..."
 
 # Tell systemd we're starting
@@ -189,8 +317,16 @@ if [ "$API_READY" != "true" ]; then
     exit 1
 fi
 
-# Give k3s some time since it may restart for certificates etc.
-sleep 15 
+# Wait for API server to be fully ready for operations
+log "Waiting for API server to be fully ready..."
+if ! wait_for_api_server; then
+    log "ERROR: API server failed to become fully ready"
+    exit 1
+fi
+
+# Give k3s additional time to stabilize
+log "Allowing k3s to stabilize..."
+sleep 20
 
 # Wait for current node to be ready
 log "Waiting for node $HOSTNAME to be ready..."
@@ -242,45 +378,20 @@ if [ -n "$OLD_NODES" ]; then
     log "Found old node(s) to clean up: $OLD_NODES"
     
     for OLD_NODE in $OLD_NODES; do
-        log "Draining old node: $OLD_NODE..."
+        log "Processing old node: $OLD_NODE..."
         
-        # Check if webhook is accessible before attempting drain
-        WEBHOOK_AVAILABLE=false
-        if curl -k -s --connect-timeout 2 https://127.0.0.1:8443/validate >/dev/null 2>&1; then
-            WEBHOOK_AVAILABLE=true
-            log "Webhook at 127.0.0.1:8443 is accessible"
-        else
-            log "Warning: Webhook at 127.0.0.1:8443 is not accessible, drain may encounter errors"
-        fi
-        
-        # Cordon first to prevent new pods
-        kubectl cordon "$OLD_NODE" || true
+        # Attempt to drain the node (but don't fail if it doesn't work)
+        safe_drain_node "$OLD_NODE" || log "Drain failed for $OLD_NODE, but continuing with deletion"
         
         # Send watchdog keepalive
         systemd-notify WATCHDOG=1 || true
         
-        # Drain the node - this will evict all pods
-        # Try drain with shorter timeout first, then fallback to force delete
-        if ! kubectl drain "$OLD_NODE" \
-            --ignore-daemonsets \
-            --delete-emptydir-data \
-            --force \
-            --grace-period=15 \
-            --timeout=30s 2>/dev/null; then
-            
-            log "Standard drain failed, attempting with disable-eviction..."
-            kubectl drain "$OLD_NODE" \
-                --ignore-daemonsets \
-                --delete-emptydir-data \
-                --force \
-                --grace-period=15 \
-                --timeout=30s \
-                --disable-eviction || log "Drain with disable-eviction also failed, continuing..."
+        # Attempt to delete the node with retries
+        if safe_delete_node "$OLD_NODE"; then
+            log "Successfully removed old node: $OLD_NODE"
+        else
+            log "Failed to remove old node: $OLD_NODE (this may need manual cleanup)"
         fi
-        
-        # Delete the node
-        kubectl delete node "$OLD_NODE" || log "Failed to delete node $OLD_NODE"
-        log "Removed old node: $OLD_NODE"
         
         # Send watchdog keepalive
         systemd-notify WATCHDOG=1 || true
@@ -298,10 +409,28 @@ else
     log "k3s server certificate not found (may not be created yet)"
 fi
 
+# Give some extra time for any pending operations to complete
+log "Allowing time for any pending operations to complete..."
+sleep 10
+
 # Stop the k3s process
 log "Stopping k3s process..."
 if kill -0 $K3S_PID 2>/dev/null; then
     kill $K3S_PID
+    
+    # Wait for process to stop gracefully
+    local stop_attempts=10
+    while [ $stop_attempts -gt 0 ] && kill -0 $K3S_PID 2>/dev/null; do
+        sleep 1
+        ((stop_attempts--))
+    done
+    
+    # Force kill if still running
+    if kill -0 $K3S_PID 2>/dev/null; then
+        log "Force killing k3s process..."
+        kill -9 $K3S_PID || true
+    fi
+    
     wait $K3S_PID 2>/dev/null || true
     log "k3s process stopped"
 else
@@ -312,7 +441,9 @@ fi
 sleep 5
 
 # Clean up temp log
-rm /var/log/k3s-init-process.log
+if [ -f /var/log/k3s-init-process.log ]; then
+    rm /var/log/k3s-init-process.log
+fi
 
 # Create marker file
 mkdir -p /var/lib/rancher/k3s
