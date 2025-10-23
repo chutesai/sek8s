@@ -3,8 +3,7 @@ set -e
 
 # Log function
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> /var/log/first-boot-miner-kubeconfig.log
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-miner-kubeconfig.log
 }
 
 # Configuration
@@ -41,13 +40,15 @@ get_public_ip() {
     for service in "${services[@]}"; do
         public_ip=$(curl -s --max-time "$PUBLIC_IP_TIMEOUT" "$service" 2>/dev/null | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' || true)
         if [[ -n "$public_ip" ]]; then
-            log "Detected public IP from $service: $public_ip"
+            # Log to stderr to avoid contaminating the return value
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Detected public IP from $service: $public_ip" >&2
             echo "$public_ip"
             return 0
         fi
     done
     
-    log "Warning: Could not detect public IP address"
+    # Log to stderr to avoid contaminating the return value  
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Warning: Could not detect public IP address" >&2
     return 1
 }
 
