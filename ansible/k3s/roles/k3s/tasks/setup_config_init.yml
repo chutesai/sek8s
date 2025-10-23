@@ -24,4 +24,4 @@
   ansible.builtin.systemd:
     daemon_reload: yes
 
-# Don't enable k3s-init yet - cleanup role will do this
+# Don't enable k3s-config-init yet - cleanup role will do this

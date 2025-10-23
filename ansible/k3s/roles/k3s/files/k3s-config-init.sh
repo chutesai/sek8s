@@ -155,4 +155,5 @@ log "TLS SANs: ${TLS_SANS[*]}"
 log "======================================="
 
 notify_systemd "Configuration generation complete"
+systemd-notify --ready
 log "k3s configuration generation complete - ready for k3s.service to start"
