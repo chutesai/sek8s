@@ -1,33 +1,4 @@
 ---
-- name: Create attestation service group
-  ansible.builtin.group:
-    name: tdx-attest
-    gid: 987
-    system: yes
-    state: present
-
-- name: Create attestation service user
-  ansible.builtin.user:
-    name: tdx-attest
-    system: yes
-    shell: /bin/false
-    home: /var/lib/tdx-attest
-    group: tdx-attest
-    create_home: yes
-
-- name: Create required directories
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: directory
-    owner: "{{ item.owner | default('tdx-attest') }}"
-    group: "{{ item.group | default('tdx-attest') }}"
-    mode: "{{ item.mode | default('0755') }}"
-  loop:
-    - { path: /etc/attestation-service, owner: root, mode: '0755' }
-    - { path: /etc/attestation-service/certs, owner: root, group: tdx-attest, mode: '0750' }
-    - { path: /var/log/attestation-service, owner: tdx-attest }
-    - { path: /run/attestation-service, owner: tdx-attest }
-
 - name: Create environment file for attestation service
   ansible.builtin.template:
     src: attestation-service.env.j2
@@ -55,3 +26,60 @@
     owner: root
     group: root
     mode: '0644'
+
+- name: Create attestation systemd service
+  ansible.builtin.copy:
+    src: attestation-service.service
+    dest: /etc/systemd/system/attestation-service.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create attestation service override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/attestation-service.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create security hardening drop-in
+  ansible.builtin.copy:
+    src: attestation-service.conf
+    dest: /etc/systemd/system/attestation-service.service.d/10-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start attestation service
+  ansible.builtin.systemd:
+    name: attestation-service.service
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Check attestation service init status
+  ansible.builtin.systemd:
+    name: attestation-service-init.service
+  register: init_service_status
+
+- name: Check main attestation service status
+  ansible.builtin.systemd:
+    name: attestation-service.service
+  register: main_service_status
+
+- name: Display service status
+  ansible.builtin.debug:
+    msg:
+      - "Init service status: {{ init_service_status.status.ActiveState }}"
+      - "Main service status: {{ main_service_status.status.ActiveState }}"
+
+- name: Wait for attestation service to be ready
+  ansible.builtin.uri:
+    url: http://localhost/health
+    unix_socket: /run/attestation-service/attestation.sock
+    status_code: 200
+  register: attestation_health
+  until: attestation_health.status == 200
+  retries: 30
+  delay: 2

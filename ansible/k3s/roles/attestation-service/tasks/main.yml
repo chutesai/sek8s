@@ -1,10 +1,14 @@
 ---
-- name: Install and setup attestation service
-  ansible.builtin.include_tasks: install-attestation-service.yml
+- name: Attestation service common setup
+  ansible.builtin.include_tasks: common-setup.yml
+  tags: attestation-service-common
+
+- name: Install attestation-init service
+  ansible.builtin.include_tasks: install-attestation-init-service.yml
   tags: attestation-service
 
-- name: Configure attestation service
-  ansible.builtin.include_tasks: configure-attestation-service.yml
+- name: Install attestation service
+  ansible.builtin.include_tasks: install-attestation-service.yml
   tags: attestation-service
 
 - name: Deploy attestation service proxy

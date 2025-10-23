@@ -1,7 +1,8 @@
 [Unit]
 Description=Attestation Service
-Wants=network-online.target
-After=network-online.target
+Wants=network-online.target attestation-service-init.service
+After=network-online.target attestation-service-init.service
+Requires=attestation-service-init.service
 
 [Service]
 Type=simple

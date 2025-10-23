@@ -8,7 +8,7 @@ ENV_CONFIG_FILE="/etc/attestation-service/attestation-service.env"
 
 # Logging function
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-attestation-env.log
 }
 
 log "Setting hostname for attestation service"

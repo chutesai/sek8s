@@ -32,7 +32,7 @@ fi
 
 # Logging function
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-attestation-tls.log
 }
 
 # Function to check if an interface should be excluded

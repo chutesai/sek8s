@@ -1,0 +1,29 @@
+---
+- name: Create attestation service group
+  ansible.builtin.group:
+    name: tdx-attest
+    gid: 987
+    system: yes
+    state: present
+
+- name: Create attestation service user
+  ansible.builtin.user:
+    name: tdx-attest
+    system: yes
+    shell: /bin/false
+    home: /var/lib/tdx-attest
+    group: tdx-attest
+    create_home: yes
+
+- name: Create required directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('tdx-attest') }}"
+    group: "{{ item.group | default('tdx-attest') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: /etc/attestation-service, owner: root, mode: '0755' }
+    - { path: /etc/attestation-service/certs, owner: root, group: tdx-attest, mode: '0750' }
+    - { path: /var/log/attestation-service, owner: tdx-attest }
+    - { path: /run/attestation-service, owner: tdx-attest }

@@ -1,0 +1,15 @@
+---
+- name: Stop attestation service
+  ansible.builtin.systemd:
+    name: attestation-service
+    state: stopped
+
+- name: Remove temporary certificates
+  ansible.builtin.file:
+    path: /etc/attestation-service/certs
+    state: absent
+
+- name: Cleanup temporary environment file
+  ansible.builtin.file:
+    path: /etc/attestation-service/attestation-service.env
+    state: absent
