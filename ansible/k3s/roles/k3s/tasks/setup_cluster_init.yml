@@ -40,7 +40,7 @@
     mode: '0755'
     backup: yes
   with_fileglob:
-    - "files/k3s-init-scripts/*.sh"
+    - "files/cluster-init/*.sh"
 
 - name: Reload systemd daemon
   ansible.builtin.systemd:
