@@ -19,8 +19,6 @@
     group: root
     mode: '0755'
     backup: yes
-  notify:
-    - restart k3s-cluster-init
 
 - name: Install k3s cluster initialization service
   copy:
@@ -32,7 +30,6 @@
     backup: yes
   notify:
     - reload systemd
-    - restart k3s-cluster-init
 
 - name: Copy k3s initialization scripts
   copy:
