@@ -46,7 +46,7 @@
       "registry": "*",
       "require_signature": true,
       "verification_method": "key",
-      "public_key": "/root/.cosign/cosign.pub",
+      "public_key": "/etc/admission-controller/.cosign/cosign.pub",
       "rekor_url": "https://rekor.sigstore.dev"
     }
   ]

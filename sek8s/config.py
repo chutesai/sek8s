@@ -367,7 +367,7 @@ class CosignConfig(BaseSettings):
                     registry="*",
                     require_signature=True,
                     verification_method="key",
-                    public_key=Path("/root/.cosign/cosign.pub"),
+                    public_key=Path("/etc/admission-controller/.cosign/cosign.pub"),
                 )
             ]
 
