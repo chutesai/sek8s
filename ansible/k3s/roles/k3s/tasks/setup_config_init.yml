@@ -1,18 +1,18 @@
 ---
 # This role just creates the service - cleanup role adds the dependency
 
-- name: Create k3s-init script
+- name: Create k3s-config-init script
   ansible.builtin.copy:
-    src: files/k3s-init.sh
-    dest: /usr/local/bin/k3s-init.sh
+    src: files/k3s-config-init.sh
+    dest: /usr/local/bin/k3s-config-init.sh
     owner: root
     group: root
     mode: '0755'
 
-- name: Create k3s-init systemd service
+- name: Create k3s-config-init systemd service
   ansible.builtin.copy:
-    src: files/k3s-init.service
-    dest: /etc/systemd/system/k3s-init.service
+    src: files/k3s-config-init.service
+    dest: /etc/systemd/system/k3s-config-init.service
     owner: root
     group: root
     mode: '0644'

@@ -3,7 +3,7 @@ set -e
 
 # Log function
 log() {
-    echo "$1" >> /var/log/first-boot-k3s-label.log
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-k3s-label.log
 }
 
 # Configure k3s node label

@@ -1,0 +1,47 @@
+[Unit]
+Description=k3s Cluster Initialization Scripts
+Documentation=man:k3s(1)
+After=k3s.service
+Wants=k3s.service
+Requires=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+User=root
+Group=root
+
+# Main script that orchestrates all initialization scripts
+ExecStart=/usr/local/bin/k3s-cluster-init.sh
+
+# Restart policy - only restart on failure, not on clean exit
+Restart=on-failure
+RestartSec=30
+StartLimitInterval=300
+StartLimitBurst=3
+
+# Timeout settings
+TimeoutStartSec=600
+TimeoutStopSec=60
+
+# Watchdog settings - script will send keepalives
+WatchdogSec=120
+NotifyAccess=main
+
+# Environment
+Environment=KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# Security settings
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=false
+ProtectHome=true
+ReadWritePaths=/var/lib/rancher/k3s /var/log /etc/rancher/k3s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=k3s-cluster-init
+
+[Install]
+WantedBy=multi-user.target

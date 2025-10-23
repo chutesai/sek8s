@@ -75,9 +75,15 @@
     group: root
     mode: '0644'
 
-- name: Enable k3s-init service for first boot
+- name: Enable k3s-config-init service for first boot
   ansible.builtin.systemd:
-    name: k3s-init
+    name: k3s-config-init
+    enabled: yes
+    daemon_reload: yes
+
+- name: Enable k3s-cluster-init service for first boot
+  ansible.builtin.systemd:
+    name: k3s-cluster-init
     enabled: yes
     daemon_reload: yes
 
