@@ -6,3 +6,7 @@
 - name: Configure attestation service
   ansible.builtin.include_tasks: configure-attestation-service.yml
   tags: attestation-service
+
+- name: Deploy attestation service proxy
+  ansible.builtin.include_tasks: deploy-attestation-proxy.yml
+  tags: attestation-proxy
