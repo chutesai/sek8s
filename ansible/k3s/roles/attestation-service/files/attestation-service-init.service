@@ -6,8 +6,6 @@ Before=attestation-service.service
 
 [Service]
 Type=oneshot
-User=tdx-attest
-Group=tdx-attest
 WorkingDirectory=/etc/attestation-service
 
 # Set up environment
