@@ -38,13 +38,15 @@ get_public_ip() {
     for service in "${services[@]}"; do
         public_ip=$(curl -s --max-time "$PUBLIC_IP_TIMEOUT" "$service" 2>/dev/null | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' || true)
         if [[ -n "$public_ip" ]]; then
-            log "Detected public IP from $service: $public_ip"
+            # Log to stderr to avoid contaminating the return value
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Detected public IP from $service: $public_ip" >&2
             echo "$public_ip"
             return 0
         fi
     done
     
-    log "Warning: Could not detect public IP address"
+    # Log to stderr to avoid contaminating the return value  
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Warning: Could not detect public IP address" >&2
     return 1
 }
 
@@ -242,6 +244,15 @@ if [ -n "$OLD_NODES" ]; then
     for OLD_NODE in $OLD_NODES; do
         log "Draining old node: $OLD_NODE..."
         
+        # Check if webhook is accessible before attempting drain
+        WEBHOOK_AVAILABLE=false
+        if curl -k -s --connect-timeout 2 https://127.0.0.1:8443/validate >/dev/null 2>&1; then
+            WEBHOOK_AVAILABLE=true
+            log "Webhook at 127.0.0.1:8443 is accessible"
+        else
+            log "Warning: Webhook at 127.0.0.1:8443 is not accessible, drain may encounter errors"
+        fi
+        
         # Cordon first to prevent new pods
         kubectl cordon "$OLD_NODE" || true
         
@@ -249,12 +260,23 @@ if [ -n "$OLD_NODES" ]; then
         systemd-notify WATCHDOG=1 || true
         
         # Drain the node - this will evict all pods
-        kubectl drain "$OLD_NODE" \
+        # Try drain with shorter timeout first, then fallback to force delete
+        if ! kubectl drain "$OLD_NODE" \
             --ignore-daemonsets \
             --delete-emptydir-data \
             --force \
-            --grace-period=30 \
-            --timeout=60s || true
+            --grace-period=15 \
+            --timeout=30s 2>/dev/null; then
+            
+            log "Standard drain failed, attempting with disable-eviction..."
+            kubectl drain "$OLD_NODE" \
+                --ignore-daemonsets \
+                --delete-emptydir-data \
+                --force \
+                --grace-period=15 \
+                --timeout=30s \
+                --disable-eviction || log "Drain with disable-eviction also failed, continuing..."
+        fi
         
         # Delete the node
         kubectl delete node "$OLD_NODE" || log "Failed to delete node $OLD_NODE"
