@@ -145,7 +145,7 @@ wait_for_k3s() {
         if ! systemctl is-active --quiet k3s; then
             log "k3s service is not active, waiting..."
             sleep 5
-            ((attempt += 5))
+            attempt=$((attempt + 5))
             continue
         fi
         
@@ -163,7 +163,7 @@ wait_for_k3s() {
         fi
         
         sleep 2
-        ((attempt++))
+        attempt=$((attempt + 1))
     done
     
     log "ERROR: API server not ready after $max_attempts attempts"
@@ -222,7 +222,7 @@ main() {
     
     # Process each script
     while IFS= read -r script_path; do
-        ((current_script++))
+        current_script=$((current_script + 1))
         local script_name=$(basename "$script_path")
         
         log "Processing script $current_script/$total_scripts: $script_name"
@@ -231,10 +231,10 @@ main() {
         send_watchdog
         
         if run_script "$script_path"; then
-            ((successful_scripts++))
+            successful_scripts=$((successful_scripts + 1))
             log "✓ Script $script_name completed successfully"
         else
-            ((failed_scripts++))
+            failed_scripts=$((failed_scripts + 1))
             log "✗ Script $script_name failed (continuing with remaining scripts)"
         fi
         

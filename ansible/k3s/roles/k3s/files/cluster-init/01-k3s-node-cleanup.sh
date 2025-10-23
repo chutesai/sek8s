@@ -1,6 +1,7 @@
 #!/bin/bash
 # /usr/local/bin/k3s-node-cleanup.sh
 # k3s-node-cleanup: Clean up old nodes after k3s is stable and running
+# Assumes build nodes were pre-drained before image creation
 set -e
 
 log() {
@@ -14,29 +15,26 @@ notify_systemd() {
     fi
 }
 
-# Enhanced function to wait for API server to be fully ready
+# Wait for API server to be fully ready
 wait_for_api_server() {
-    local max_attempts=120  # Increased timeout since k3s should already be starting
+    local max_attempts=120
     local attempt=1
     
     log "Waiting for k3s API server to be ready..."
     
     while [ $attempt -le $max_attempts ]; do
-        # Check if k3s service is running
         if ! systemctl is-active --quiet k3s; then
             log "k3s service is not active, waiting..."
             sleep 5
-            ((attempt += 5))
+            attempt=$((attempt + 5))
             continue
         fi
         
-        # Check basic API connectivity
         if kubectl get --raw='/readyz' >/dev/null 2>&1; then
             log "API server readiness check passed"
             return 0
         fi
         
-        # Send watchdog keepalive
         systemd-notify WATCHDOG=1 || true
         
         if [ $((attempt % 15)) -eq 0 ]; then
@@ -44,156 +42,104 @@ wait_for_api_server() {
         fi
         
         sleep 2
-        ((attempt++))
+        attempt=$((attempt + 1))
     done
     
     log "ERROR: API server not ready after $max_attempts attempts"
     return 1
 }
 
-# Enhanced function to safely delete a node with retries
-safe_delete_node() {
+# Force delete old build nodes (they were pre-drained, so no drain needed)
+force_delete_old_node() {
     local node_name="$1"
     local max_attempts=5
     local attempt=1
     
-    log "Attempting to delete node: $node_name"
+    log "Deleting old build node: $node_name (pre-drained at build time)"
     
     while [ $attempt -le $max_attempts ]; do
-        # Check if k3s service is still running
-        if ! systemctl is-active --quiet k3s; then
-            log "ERROR: k3s service stopped during node deletion"
-            return 1
-        fi
-        
-        # Check if node still exists
         if ! kubectl get node "$node_name" >/dev/null 2>&1; then
-            log "Node $node_name no longer exists (already deleted)"
+            log "Node $node_name no longer exists"
             return 0
         fi
         
         log "Delete attempt $attempt/$max_attempts for node: $node_name"
         
-        # Try to delete the node with timeout
-        if timeout 30 kubectl delete node "$node_name" --wait=false 2>/dev/null; then
-            log "Delete command issued successfully for node: $node_name"
+        # Delete without waiting for graceful shutdown (it's already drained)
+        if kubectl delete node "$node_name" --wait=false --grace-period=0 2>&1 | tee -a /var/log/k3s-node-cleanup.log; then
+            log "Delete command issued for node: $node_name"
             
-            # Wait a bit and verify deletion
-            sleep 5
+            sleep 3
             if ! kubectl get node "$node_name" >/dev/null 2>&1; then
                 log "Node $node_name successfully deleted"
                 return 0
-            else
-                log "Node $node_name still exists after delete command"
             fi
-        else
-            log "Delete command failed for node: $node_name (attempt $attempt)"
         fi
         
-        # Send watchdog keepalive
         systemd-notify WATCHDOG=1 || true
-        
-        sleep 5
-        ((attempt++))
+        sleep 2
+        attempt=$((attempt + 1))
     done
     
     log "WARNING: Failed to delete node $node_name after $max_attempts attempts"
     return 1
 }
 
-# Enhanced function to drain a node with better error handling
-safe_drain_node() {
+# Clean up any orphaned pods (shouldn't be many if build cleanup worked)
+cleanup_orphaned_pods() {
     local node_name="$1"
     
-    log "Draining node: $node_name..."
+    log "Checking for orphaned pods on node: $node_name"
     
-    # Check if k3s service is running
-    if ! systemctl is-active --quiet k3s; then
-        log "ERROR: k3s service not running"
-        return 1
+    local orphaned_pods=$(kubectl get pods --all-namespaces -o json 2>/dev/null | \
+        jq -r ".items[] | select(.spec.nodeName == \"$node_name\") | \"\(.metadata.namespace)/\(.metadata.name)\"" 2>/dev/null || true)
+    
+    if [ -n "$orphaned_pods" ]; then
+        log "WARNING: Found orphaned pods (build cleanup may have failed), force deleting..."
+        echo "$orphaned_pods" | while read pod_ref; do
+            if [ -n "$pod_ref" ]; then
+                local namespace=$(echo "$pod_ref" | cut -d'/' -f1)
+                local pod_name=$(echo "$pod_ref" | cut -d'/' -f2)
+                log "Force deleting pod: $namespace/$pod_name"
+                kubectl delete pod "$pod_name" -n "$namespace" --grace-period=0 --force 2>&1 | tee -a /var/log/k3s-node-cleanup.log || true
+            fi
+        done
+        log "Orphaned pod cleanup completed"
+    else
+        log "No orphaned pods found (as expected with build-time cleanup)"
     fi
-    
-    # Cordon first to prevent new pods
-    kubectl cordon "$node_name" 2>/dev/null || log "Failed to cordon node $node_name"
-    
-    # Send watchdog keepalive
-    systemd-notify WATCHDOG=1 || true
-    
-    # Try standard drain first with reasonable timeout
-    if kubectl drain "$node_name" \
-        --ignore-daemonsets \
-        --delete-emptydir-data \
-        --force \
-        --grace-period=10 \
-        --timeout=60s 2>/dev/null; then
-        log "Standard drain successful for node: $node_name"
-        return 0
-    fi
-    
-    log "Standard drain failed, attempting with disable-eviction..."
-    
-    # Try with disable-eviction
-    if kubectl drain "$node_name" \
-        --ignore-daemonsets \
-        --delete-emptydir-data \
-        --force \
-        --grace-period=5 \
-        --timeout=60s \
-        --disable-eviction 2>/dev/null; then
-        log "Drain with disable-eviction successful for node: $node_name"
-        return 0
-    fi
-    
-    log "Both drain methods failed for node: $node_name, but continuing with deletion..."
-    return 1
 }
 
 log "Starting k3s node cleanup..."
-
-# Tell systemd we're starting
 notify_systemd "Starting node cleanup"
 
 HOSTNAME=$(hostname)
-
-# Set up kubectl
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-# Wait for API server to be ready
+# Wait for API server
 if ! wait_for_api_server; then
     log "ERROR: API server failed to become ready"
     notify_systemd "ERROR: API server not ready"
     exit 1
 fi
 
-# Give k3s additional time to stabilize
+# Give k3s time to stabilize
 log "Allowing k3s to stabilize before cleanup..."
 sleep 30
 
 # Wait for current node to be ready
 log "Waiting for node $HOSTNAME to be ready..."
-NODE_READY=false
 for i in {1..60}; do
-    # Check if k3s service is still running
     if ! systemctl is-active --quiet k3s; then
         log "ERROR: k3s service stopped"
         exit 1
     fi
     
-    # Try to get node status
-    if NODE_OUTPUT=$(kubectl get node "$HOSTNAME" -o json 2>&1); then
-        NODE_STATUS=$(echo "$NODE_OUTPUT" | jq -r '.status.conditions[] | select(.type=="Ready") | .status' 2>/dev/null || echo "Unknown")
-        if [ "$NODE_STATUS" = "True" ]; then
-            log "Node $HOSTNAME is ready"
-            NODE_READY=true
-            break
-        else
-            log "Node status: $NODE_STATUS"
-        fi
-    else
-        log "Failed to get node: $NODE_OUTPUT"
+    if kubectl get node "$HOSTNAME" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
+        log "Node $HOSTNAME is ready"
+        break
     fi
     
-    # Send watchdog keepalive
     systemd-notify WATCHDOG=1 || true
     
     if [ $((i % 10)) -eq 0 ]; then
@@ -203,45 +149,42 @@ for i in {1..60}; do
     sleep 2
 done
 
-if [ "$NODE_READY" != "true" ]; then
-    log "WARNING: Node $HOSTNAME not ready after 60 attempts, continuing with cleanup anyway"
-fi
-
-# Find any nodes that don't match current hostname
-log "Checking for old nodes to clean up..."
+# Find old nodes (build nodes that were pre-drained)
+log "Checking for old build nodes to clean up..."
 OLD_NODES=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | grep -v "^${HOSTNAME}$" || true)
 
 if [ -n "$OLD_NODES" ]; then
-    log "Found old node(s) to clean up: $OLD_NODES"
-    
-    notify_systemd "Cleaning up old nodes"
+    log "Found old build node(s) to clean up: $OLD_NODES"
+    notify_systemd "Cleaning up old build nodes"
     
     for OLD_NODE in $OLD_NODES; do
-        log "Processing old node: $OLD_NODE..."
+        log "Processing old build node: $OLD_NODE..."
         
-        # Attempt to drain the node (but don't fail if it doesn't work)
-        safe_drain_node "$OLD_NODE" || log "Drain failed for $OLD_NODE, but continuing with deletion"
+        # Get node status
+        NODE_STATUS=$(kubectl get node "$OLD_NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "Unknown")
+        log "Node $OLD_NODE status: $NODE_STATUS"
         
-        # Send watchdog keepalive
-        systemd-notify WATCHDOG=1 || true
-        
-        # Attempt to delete the node with retries
-        if safe_delete_node "$OLD_NODE"; then
-            log "Successfully removed old node: $OLD_NODE"
+        # Delete the old node (it was pre-drained at build time)
+        if force_delete_old_node "$OLD_NODE"; then
+            log "Successfully removed old build node: $OLD_NODE"
         else
-            log "Failed to remove old node: $OLD_NODE (this may need manual cleanup)"
+            log "WARNING: Failed to remove node: $OLD_NODE (may need manual cleanup)"
         fi
         
-        # Send watchdog keepalive
+        systemd-notify WATCHDOG=1 || true
+        
+        # Clean up any orphaned pods (shouldn't be many)
+        cleanup_orphaned_pods "$OLD_NODE"
+        
         systemd-notify WATCHDOG=1 || true
     done
     
-    log "Old node cleanup completed"
+    log "Old build node cleanup completed"
 else
-    log "No old nodes found - cleanup not needed"
+    log "No old build nodes found - cleanup not needed"
 fi
 
-# Create cleanup completion marker
+# Create completion marker
 touch /var/lib/rancher/k3s/.cleanup-completed
 
 notify_systemd "Node cleanup complete"
