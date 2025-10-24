@@ -36,6 +36,10 @@ class CosignValidator(ValidatorBase):
         ]:
             return ValidationResult.allow()
 
+        operation = request.get("operation", None)
+        if operation == "DELETE":
+            return ValidationResult.allow()
+
         # Extract images
         obj = request.get("object", {})
         images = self.extract_images(obj)
