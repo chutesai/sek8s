@@ -13,21 +13,14 @@ HOST_ATTESTATION_URL = "http://unix:/var/run/attestation/attestation.sock"
 WORKLOAD_NAMESPACE = "chutes"
 CLUSTER_DOMAIN = "svc.cluster.local"
 
-# HTTP client with Unix socket support
-class UnixSocketTransport(httpx.AsyncHTTPTransport):
-    def __init__(self, socket_path: str):
-        self.socket_path = socket_path
-        super().__init__()
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Initialize HTTP clients on startup"""
     global unix_client, http_client
     
     # Client for Unix socket communication (host service)
-    unix_transport = UnixSocketTransport("/var/run/attestation/attestation.sock")
     unix_client = httpx.AsyncClient(
-        transport=unix_transport,
+        transport=httpx.AsyncHTTPTransport(uds="/var/run/attestation/attestation.sock"),
         base_url="http://localhost",
         timeout=httpx.Timeout(30.0)
     )
