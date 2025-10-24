@@ -16,5 +16,4 @@ StandardError=journal
 TimeoutStartSec=300
 
 [Install]
-WantedBy=multi-user.target
 RequiredBy=k3s.service
