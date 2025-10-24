@@ -1,5 +1,5 @@
 #!/bin/bash
-# TLS Certificate Setup Script for Attestation Service (Bare Metal)
+# TLS Certificate Setup Script for Attestation Proxy
 # Generates self-signed certificates with network interface detection
 
 set -euo pipefail

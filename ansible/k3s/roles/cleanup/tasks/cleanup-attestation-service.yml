@@ -8,8 +8,3 @@
   ansible.builtin.file:
     path: /etc/attestation-service/certs
     state: absent
-
-- name: Cleanup temporary environment file
-  ansible.builtin.file:
-    path: /etc/attestation-service/attestation-service.env
-    state: absent
