@@ -1,7 +1,7 @@
 [Unit]
 Description=k3s Cluster Initialization Scripts
 Documentation=man:k3s(1)
-After=k3s.service cloud-final.service
+After=admission-controller.service k3s.service cloud-final.service
 Wants=k3s.service
 Requires=network-online.target
 After=network-online.target
