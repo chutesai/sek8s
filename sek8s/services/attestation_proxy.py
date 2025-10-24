@@ -220,7 +220,7 @@ class AttestationProxyServer(WebServer):
             use_unix_socket=False
         )
     
-    def extract_client_cert_info(request: Request) -> Dict[str, str]:
+    def extract_client_cert_info(self, request: Request) -> Dict[str, str]:
         """Extract client certificate information from headers"""
         return {
             "X-Client-Cert": request.headers.get("X-Client-Cert", ""),
