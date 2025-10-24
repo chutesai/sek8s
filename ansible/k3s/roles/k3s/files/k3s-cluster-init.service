@@ -44,4 +44,4 @@ StandardError=journal
 SyslogIdentifier=k3s-cluster-init
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=k3s.service

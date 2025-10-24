@@ -8,13 +8,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-node-cleanup.log
 }
 
-# Function to notify systemd we're still alive
-notify_systemd() {
-    if [ -n "$NOTIFY_SOCKET" ]; then
-        systemd-notify --status="$1" || true
-    fi
-}
-
 # Wait for API server to be fully ready
 wait_for_api_server() {
     local max_attempts=120
@@ -111,7 +104,6 @@ cleanup_orphaned_pods() {
 }
 
 log "Starting k3s node cleanup..."
-notify_systemd "Starting node cleanup"
 
 HOSTNAME=$(hostname)
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -119,7 +111,6 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 # Wait for API server
 if ! wait_for_api_server; then
     log "ERROR: API server failed to become ready"
-    notify_systemd "ERROR: API server not ready"
     exit 1
 fi
 
@@ -155,7 +146,6 @@ OLD_NODES=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' 2>/dev/nul
 
 if [ -n "$OLD_NODES" ]; then
     log "Found old build node(s) to clean up: $OLD_NODES"
-    notify_systemd "Cleaning up old build nodes"
     
     for OLD_NODE in $OLD_NODES; do
         log "Processing old build node: $OLD_NODE..."
@@ -187,5 +177,4 @@ fi
 # Create completion marker
 touch /var/lib/rancher/k3s/.cleanup-completed
 
-notify_systemd "Node cleanup complete"
 log "k3s node cleanup completed successfully"
