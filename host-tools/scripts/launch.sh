@@ -243,13 +243,13 @@ if [ -z "$USER_DATA" ]; then
 hostname: $HOSTNAME
 
 write_files:
-  - path: /root/miner-ss58
+  - path: /var/lib/rancher/k3s/credentials/miner-ss58
     content: |
       $MINER_SS58
     permissions: '0600'
     owner: root:root
 
-  - path: /root/miner-seed  
+  - path: /var/lib/rancher/k3s/credentials/miner-seed  
     content: |
       $MINER_SEED
     permissions: '0600'

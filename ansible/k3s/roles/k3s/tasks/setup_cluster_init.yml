@@ -9,6 +9,7 @@
   loop:
     - /usr/local/bin/k3s-init-scripts
     - /var/lib/rancher/k3s/init-markers
+    - /var/lib/rancher/k3s/credentials
     - /var/log
 
 - name: Install k3s cluster initialization script
