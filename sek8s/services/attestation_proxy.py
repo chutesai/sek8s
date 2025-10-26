@@ -10,7 +10,7 @@ import httpx
 
 # Configuration
 HOST_ATTESTATION_URL = "http://unix:/var/run/attestation/attestation.sock"
-WORKLOAD_NAMESPACE = "chutes"
+SERVICE_NAMESPACE = "chutes"
 CLUSTER_DOMAIN = "svc.cluster.local"
 
 @asynccontextmanager
@@ -53,7 +53,7 @@ class AttestationProxyServer(WebServer):
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
         self.app.add_exception_handler(404, self.not_found_handler)
         self.app.add_api_route("/server/{path:path}", self.proxy_to_host_service, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-        self.app.add_api_route("/workload/{workload_name}/{path:path}", self.proxy_to_workload_service, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+        self.app.add_api_route("/service/{service_name}/{path:path}", self.proxy_to_service, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 
     async def health_check(self):
         """Health check endpoint"""
@@ -172,19 +172,19 @@ class AttestationProxyServer(WebServer):
             use_unix_socket=True
         )
 
-    async def proxy_to_workload_service(
+    async def proxy_to_service(
         self,
-        workload_name: str,
+        service_name: str,
         path: str,
         request: Request
     ):
         """
         Proxy requests to K8s workload services
-        /workload/chute-abcd-123/_get_devices -> GET /_get_devices to chute-abcd-123.chutes.svc.cluster.local
+        /service/chute-abcd-123/_get_devices -> GET /_get_devices to chute-abcd-123.chutes.svc.cluster.local
         """
         # Validate workload name (basic security)
-        if not workload_name.replace("-", "").replace("_", "").isalnum():
-            raise HTTPException(status_code=400, detail="Invalid workload name")
+        if not service_name.replace("-", "").replace("_", "").isalnum():
+            raise HTTPException(status_code=400, detail="Invalid service name")
         
         # Get request details
         method = request.method
@@ -200,7 +200,7 @@ class AttestationProxyServer(WebServer):
                 headers[key] = value
         
         # Build K8s service URL
-        service_url = f"http://{workload_name}.{WORKLOAD_NAMESPACE}.{CLUSTER_DOMAIN}"
+        service_url = f"http://{service_name}.{SERVICE_NAMESPACE}.{CLUSTER_DOMAIN}"
         
         # Proxy to K8s workload service
         return await self.proxy_request(

@@ -15,6 +15,10 @@ from sek8s.server import WebServer
 class AttestationServer(WebServer):
     """Async web server for admission webhook."""
 
+    def __init__(self, config: AttestationServiceConfig):
+        super().__init__(config)
+        self.config = config
+
     def _setup_routes(self):
         """Setup web routes."""
         self.app.add_api_route("/health", self.ping, methods=["GET"])
