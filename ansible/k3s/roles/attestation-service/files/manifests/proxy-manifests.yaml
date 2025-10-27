@@ -100,7 +100,7 @@ spec:
             port: 8443
             scheme: HTTPS
           initialDelaySeconds: 15
-          periodSeconds: 15
+          periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 2
         readinessProbe:
@@ -108,7 +108,7 @@ spec:
             path: /health
             port: 8443
             scheme: HTTPS
-          initialDelaySeconds: 30
+          initialDelaySeconds: 15
           periodSeconds: 30
           timeoutSeconds: 3
           failureThreshold: 3
