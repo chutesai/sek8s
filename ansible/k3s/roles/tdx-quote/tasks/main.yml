@@ -1,0 +1,17 @@
+# Copy and compile TDX quote generator
+- name: Create TDX quote generator source file
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('file', 'files/tdx-quote-generator.c') }}
+    dest: "/tmp/tdx-quote-generator.c"
+    mode: '0644'
+
+- name: Compile TDX quote generator in chroot
+  ansible.builtin.shell: |
+    cd /tmp &&
+    gcc -o tdx-quote-generator tdx-quote-generator.c &&
+    mv tdx-quote-generator /usr/bin/ &&
+    chmod 755 /usr/bin/tdx-quote-generator &&
+    rm tdx-quote-generator.c
+  register: compile_result
+  changed_when: compile_result.rc == 0

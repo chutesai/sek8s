@@ -212,26 +212,6 @@
   register: chroot_deps_result
   changed_when: chroot_deps_result.rc == 0
 
-# Copy and compile TDX quote generator
-- name: Create TDX quote generator source file
-  ansible.builtin.copy:
-    content: |
-      {{ lookup('file', 'files/tdx-quote-generator.c') }}
-    dest: "{{ newroot_mount }}/tmp/tdx-quote-generator.c"
-    mode: '0644'
-
-- name: Compile TDX quote generator in chroot
-  ansible.builtin.shell: |
-    chroot {{ newroot_mount }} /bin/bash -c "
-      cd /tmp &&
-      gcc -o tdx-quote-generator tdx-quote-generator.c &&
-      mv tdx-quote-generator /usr/bin/ &&
-      chmod 755 /usr/bin/tdx-quote-generator &&
-      rm tdx-quote-generator.c
-    "
-  register: compile_result
-  changed_when: compile_result.rc == 0
-
 - name: Get UUID of LUKS partition
   ansible.builtin.command: blkid -o value -s UUID {{ root_partition }}
   register: blkid_result
