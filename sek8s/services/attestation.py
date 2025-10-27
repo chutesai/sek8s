@@ -66,7 +66,7 @@ class AttestationServer(WebServer):
             logger.error(f"Exception getting device info: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                defail="Failed to get device info."
+                detail="Failed to get device info."
             )
         except Exception as e:
             logger.error(f"Unexpected exception encountered getting device info: {e}")
