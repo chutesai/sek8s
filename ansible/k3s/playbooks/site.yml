@@ -108,21 +108,6 @@
         apply:
           tags: sek8s
 
-- name: Install quote generator
-  hosts: vm
-  become: true
-  tags:
-    - tdx-quote
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: tdx-quote
-      ansible.builtin.include_role:
-        name: tdx-quote
-        apply:
-          tags: tdx-quote
-
 - name: Setup attestation-service
   hosts: vm
   become: true
