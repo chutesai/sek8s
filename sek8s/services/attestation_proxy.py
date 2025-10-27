@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import logging
 import os
+import stat
 from typing import Dict, Optional
 from urllib.parse import urljoin
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -64,18 +65,20 @@ class AttestationProxyServer(WebServer):
             base_url="http://localhost",
             timeout=httpx.Timeout(30.0)
         )
+    
+    def _is_valid_socket(self) -> bool:
+        """Check if socket path exists and is a valid socket file"""
+        try:
+            if not os.path.exists(SOCKET_PATH):
+                return False
+            
+            stat_info = os.stat(SOCKET_PATH)
+            return stat.S_ISSOCK(stat_info.st_mode)
+        except OSError as e:
+            logger.warning(f"Error checking socket {SOCKET_PATH}: {e}")
+            return False
 
-    async def _recreate_unix_client_on_error(self):
-        """Force recreation of Unix client after an error"""
-        async with self.unix_client_lock:
-            if self.unix_client:
-                logger.info("Closing stale Unix socket client")
-                try:
-                    await self.unix_client.aclose()
-                except Exception as e:
-                    logger.warning(f"Error closing stale client: {e}")
 
-            self.unix_client = self._create_unix_client()
 
     def _setup_routes(self):
         """Setup web routes."""
@@ -87,25 +90,37 @@ class AttestationProxyServer(WebServer):
     async def health_check(self):
         """
         Health check endpoint
-        Returns unhealthy if too many consecutive socket failures
+        Returns unhealthy immediately if socket is invalid (stale mount) or after consecutive failures
         """
-        socket_exists = os.path.exists(SOCKET_PATH)
+        socket_valid = self._is_valid_socket()
         too_many_failures = self.consecutive_socket_failures >= MAX_CONSECUTIVE_FAILURES
         
-        status = "healthy"
-        if too_many_failures:
-            status = "unhealthy"
-        elif not socket_exists:
-            status = "degraded"
+        # Fail immediately if socket is invalid - indicates stale mount
+        if not socket_valid:
+            logger.error(f"Health check failed: Unix socket invalid or missing at {SOCKET_PATH}")
+            return Response(
+                content="unhealthy: unix socket unavailable",
+                status_code=503,
+                media_type="text/plain"
+            )
         
+        # Also fail if too many consecutive failures
+        if too_many_failures:
+            logger.error(f"Health check failed: too many consecutive failures ({self.consecutive_socket_failures})")
+            return Response(
+                content=f"unhealthy: {self.consecutive_socket_failures} consecutive socket failures",
+                status_code=503,
+                media_type="text/plain"
+            )
+        
+        # Everything is healthy
         return {
-            "status": status,
+            "status": "healthy",
             "service": "attestation-proxy",
-            "socket_exists": socket_exists,
+            "socket_valid": socket_valid,
             "unix_client_active": self.unix_client is not None,
             "http_client_active": self.http_client is not None,
-            "consecutive_failures": self.consecutive_socket_failures,
-            "details": "Socket unavailable" if not socket_exists else None
+            "consecutive_failures": self.consecutive_socket_failures
         }
     
     async def not_found_handler(self, request: Request, exc):
@@ -134,7 +149,7 @@ class AttestationProxyServer(WebServer):
     ) -> Response:
         """
         Proxy a request to the target service with automatic retry on connection errors.
-        For Unix socket requests, automatically recreates the client on connection failure.
+        Consecutive failures will cause health check to fail and trigger pod restart.
         """
         # Determine which client to use
         client = self.unix_client if use_unix_socket else self.http_client
@@ -188,9 +203,11 @@ class AttestationProxyServer(WebServer):
             logger.error(f"Connection failed: {e}")
             if use_unix_socket:
                 self.consecutive_socket_failures += 1
-                # Recreate client before backoff retries
-                await self._recreate_unix_client_on_error()
-            raise  # Let backoff handle the retry
+                logger.warning(
+                    f"Unix socket connection failed ({self.consecutive_socket_failures} consecutive failures). "
+                    f"Health check will trigger pod restart at {MAX_CONSECUTIVE_FAILURES} failures."
+                )
+            raise  # Let backoff handle the retry (one more attempt)
         except httpx.RequestError as e:
             logger.error(f"Request failed: {e}")
             if use_unix_socket:
