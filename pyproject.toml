@@ -22,6 +22,7 @@ uvicorn = "^0.37.0"
 nvidia-ml-py = "^13.580.82"
 httpx = "^0.28.1"
 orjson = "^3.11.3"
+backoff = "^2.2.1"
 
 
 [tool.poetry.group.dev.dependencies]

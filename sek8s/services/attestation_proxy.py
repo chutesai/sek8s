@@ -1,52 +1,81 @@
 from contextlib import asynccontextmanager
 import logging
-from typing import Dict
+import os
+from typing import Dict, Optional
 from urllib.parse import urljoin
 from fastapi import FastAPI, HTTPException, Request, Response
 from loguru import logger
 from sek8s.config import AttestationProxyConfig
 from sek8s.server import WebServer
 import httpx
+import asyncio
+import backoff
 
 # Configuration
-HOST_ATTESTATION_URL = "http://unix:/var/run/attestation/attestation.sock"
 SERVICE_NAMESPACE = "chutes"
 CLUSTER_DOMAIN = "svc.cluster.local"
+SOCKET_PATH = "/var/run/attestation/attestation.sock"
+MAX_CONSECUTIVE_FAILURES = 5  # Fail health check after this many failures
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    """Initialize HTTP clients on startup"""
-    global unix_client, http_client
-    
-    # Client for Unix socket communication (host service)
-    unix_client = httpx.AsyncClient(
-        transport=httpx.AsyncHTTPTransport(uds="/var/run/attestation/attestation.sock"),
-        base_url="http://localhost",
-        timeout=httpx.Timeout(30.0)
-    )
-    
-    # Client for K8s service communication (workloads)
-    http_client = httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0),
-        verify=False  # Internal cluster communication
-    )
-    
-    logger.info("Attestation proxy started successfully")
-
-    yield 
-
-    if unix_client:
-        await unix_client.aclose()
-    if http_client:
-        await http_client.aclose()
-
-    logger.info("Attestation proxy shutdown complete")
 
 class AttestationProxyServer(WebServer):
-    """Async web server for admission webhook."""
+    """Async web server for attestation proxy with resilient Unix socket handling."""
 
     def __init__(self, config: AttestationProxyConfig):
-        super().__init__(config, lifespan=lifespan)
+        super().__init__(config, lifespan=self._lifespan)
+        
+        # Instance variables for clients
+        self.unix_client: Optional[httpx.AsyncClient] = None
+        self.http_client: Optional[httpx.AsyncClient] = None
+        self.unix_client_lock = asyncio.Lock()
+        self.consecutive_socket_failures = 0
+
+    @asynccontextmanager
+    async def _lifespan(self, _: FastAPI):
+        """Initialize HTTP clients on startup"""
+        
+        # Client for K8s service communication (workloads)
+        self.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            verify=False  # Internal cluster communication
+        )
+        
+        try:
+            self.unix_client = self._create_unix_client()
+            logger.info("Unix socket client initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Unix socket client: {e}")
+        
+        logger.info("Attestation proxy started successfully")
+
+        yield 
+
+        if self.unix_client:
+            await self.unix_client.aclose()
+        if self.http_client:
+            await self.http_client.aclose()
+
+        logger.info("Attestation proxy shutdown complete")
+
+    def _create_unix_client(self) -> httpx.AsyncClient:
+        """Create a new Unix socket client"""
+        return httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(uds=SOCKET_PATH),
+            base_url="http://localhost",
+            timeout=httpx.Timeout(30.0)
+        )
+
+    async def _recreate_unix_client_on_error(self):
+        """Force recreation of Unix client after an error"""
+        async with self.unix_client_lock:
+            if self.unix_client:
+                logger.info("Closing stale Unix socket client")
+                try:
+                    await self.unix_client.aclose()
+                except Exception as e:
+                    logger.warning(f"Error closing stale client: {e}")
+
+            self.unix_client = self._create_unix_client()
 
     def _setup_routes(self):
         """Setup web routes."""
@@ -56,12 +85,27 @@ class AttestationProxyServer(WebServer):
         self.app.add_api_route("/service/{service_name}/{path:path}", self.proxy_to_service, methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
 
     async def health_check(self):
-        """Health check endpoint"""
+        """
+        Health check endpoint
+        Returns unhealthy if too many consecutive socket failures
+        """
+        socket_exists = os.path.exists(SOCKET_PATH)
+        too_many_failures = self.consecutive_socket_failures >= MAX_CONSECUTIVE_FAILURES
+        
+        status = "healthy"
+        if too_many_failures:
+            status = "unhealthy"
+        elif not socket_exists:
+            status = "degraded"
+        
         return {
-            "status": "healthy",
+            "status": status,
             "service": "attestation-proxy",
-            "unix_client": unix_client is not None,
-            "http_client": http_client is not None
+            "socket_exists": socket_exists,
+            "unix_client_active": self.unix_client is not None,
+            "http_client_active": self.http_client is not None,
+            "consecutive_failures": self.consecutive_socket_failures,
+            "details": "Socket unavailable" if not socket_exists else None
         }
     
     async def not_found_handler(self, request: Request, exc):
@@ -72,6 +116,12 @@ class AttestationProxyServer(WebServer):
             media_type="text/plain"
         )
 
+    @backoff.on_exception(
+        backoff.expo,
+        httpx.ConnectError,
+        max_tries=2,
+        max_time=5
+    )
     async def proxy_request(
         self,
         target_url: str,
@@ -83,12 +133,11 @@ class AttestationProxyServer(WebServer):
         use_unix_socket: bool = False
     ) -> Response:
         """
-        Proxy a request to the target service
+        Proxy a request to the target service with automatic retry on connection errors.
+        For Unix socket requests, automatically recreates the client on connection failure.
         """
-        client = unix_client if use_unix_socket else http_client
-        
-        if not client:
-            raise HTTPException(status_code=503, detail="HTTP client not initialized")
+        # Determine which client to use
+        client = self.unix_client if use_unix_socket else self.http_client
         
         # Build full URL
         full_url = urljoin(target_url, path)
@@ -103,7 +152,6 @@ class AttestationProxyServer(WebServer):
         }
         
         try:
-            # Make the proxied request
             logger.info(f"Proxying {method} {full_url}")
             
             response = await client.request(
@@ -114,6 +162,10 @@ class AttestationProxyServer(WebServer):
                 params=params,
                 follow_redirects=False
             )
+            
+            # Reset failure counter on success
+            if use_unix_socket:
+                self.consecutive_socket_failures = 0
             
             # Filter response headers
             response_headers = {
@@ -132,11 +184,22 @@ class AttestationProxyServer(WebServer):
                 media_type=response.headers.get("content-type")
             )
             
+        except httpx.ConnectError as e:
+            logger.error(f"Connection failed: {e}")
+            if use_unix_socket:
+                self.consecutive_socket_failures += 1
+                # Recreate client before backoff retries
+                await self._recreate_unix_client_on_error()
+            raise  # Let backoff handle the retry
         except httpx.RequestError as e:
             logger.error(f"Request failed: {e}")
+            if use_unix_socket:
+                self.consecutive_socket_failures += 1
             raise HTTPException(status_code=502, detail=f"Proxy request failed: {str(e)}")
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
+            if use_unix_socket:
+                self.consecutive_socket_failures += 1
             raise HTTPException(status_code=500, detail=f"Internal proxy error: {str(e)}")
 
     async def proxy_to_host_service(
