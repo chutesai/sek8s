@@ -1,5 +1,6 @@
 from asyncio import subprocess
 import asyncio
+import os
 
 from loguru import logger
 
@@ -9,12 +10,18 @@ from sek8s.exceptions import NvTrustException
 class NvEvidenceProvider:
     """Async web server for admission webhook."""
 
-    async def get_evidence(self, name: str, nonce: str) -> str:
+    async def get_evidence(self, name: str, nonce: str, gpu_ids: str = None) -> str:
         try:
+            # Prepare environment variables
+            env = os.environ.copy()
+            if gpu_ids is not None:
+                env['NVIDIA_VISIBLE_DEVICES'] = gpu_ids
+            
             result = await asyncio.create_subprocess_exec(
                 *["chutes-nvevidence", "--name", name, "--nonce", nonce],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
 
             await result.wait()

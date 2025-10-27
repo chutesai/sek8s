@@ -97,11 +97,20 @@ class AttestationServer(WebServer):
         ),
         nonce: str = Query(
             None, description="Nonce to include in the evidence"
+        ),
+        gpu_ids: list[str] = Query(
+            None, description="List of GPU IDs to use.  If not provided gets evidence for all devices."
         )
     ):
         try:
             provider = NvEvidenceProvider()
-            evidence = await provider.get_evidence(name, nonce)
+            
+            # Convert list of GPU IDs to comma-separated string if provided
+            gpu_ids_str = None
+            if gpu_ids:
+                gpu_ids_str = ",".join(gpu_ids)
+            
+            evidence = await provider.get_evidence(name, nonce, gpu_ids_str)
 
             return evidence
         except HTTPException:
