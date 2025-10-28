@@ -17,7 +17,7 @@ fi
 # Public IP detection configuration
 INCLUDE_PUBLIC_IP="${INCLUDE_PUBLIC_IP:-true}"
 PUBLIC_IP_TIMEOUT="${PUBLIC_IP_TIMEOUT:-5}"
-USE_PUBLIC_IP_FOR_ADVERTISE="${USE_PUBLIC_IP_FOR_ADVERTISE:-true}"
+USE_PUBLIC_IP_FOR_ADVERTISE="${USE_PUBLIC_IP_FOR_ADVERTISE:-false}"
 
 # Function to get public IP address
 get_public_ip() {
