@@ -25,18 +25,23 @@ class AttestationServer(WebServer):
         self.app.add_api_route("/attest", self.attest, methods=["GET"])
         self.app.add_api_route("/devices", self.get_device_info, methods=["GET"])
         self.app.add_api_route("/tdx/quote", self.get_quote, methods=["GET"])
-        self.app.add_api_route("/nvtrust/evidence", self.get_evidence, methods=["GET"])
+        self.app.add_api_route("/nvtrust/evidence", self.get_nvtrust_evidence, methods=["GET"])
 
     async def ping(self):
         return "pong"
 
-    async def attest(self, nonce: str = Query(..., description="Nonce to include in the quote")):
+    async def attest(
+        self, 
+        nonce: str = Query(..., description="Nonce to include in the quote"),
+        gpu_ids: list[str] = Query(
+            None, description="List of GPU IDs to use.  If not provided gets evidence for all devices."
+        )
+    ):
         try:
             tdx_provider = TdxQuoteProvider()
-            nvtrust_provider = NvEvidenceProvider()
-
-            quote_content = await tdx_provider.get_quote(nonce)
-            nvtrust_evidence = await nvtrust_provider.get_evidence(self.config.hostname, nonce)
+            with NvEvidenceProvider() as nvtrust_provider:
+                quote_content = await tdx_provider.get_quote(nonce)
+                nvtrust_evidence = await nvtrust_provider.get_evidence(self.config.hostname, nonce, gpu_ids)
 
             return AttestationResponse(
                 tdx_quote=base64.b64encode(quote_content).decode('utf-8'),
@@ -91,7 +96,8 @@ class AttestationServer(WebServer):
                 detail=f"Unexpected error generating TDX quote.",
             )
 
-    async def get_evidence(
+    async def get_nvtrust_evidence(
+        self,
         name: str = Query(
             None, description="Name of the node to include in the evidence"
         ),
@@ -103,14 +109,8 @@ class AttestationServer(WebServer):
         )
     ):
         try:
-            provider = NvEvidenceProvider()
-            
-            # Convert list of GPU IDs to comma-separated string if provided
-            gpu_ids_str = None
-            if gpu_ids:
-                gpu_ids_str = ",".join(gpu_ids)
-            
-            evidence = await provider.get_evidence(name, nonce, gpu_ids_str)
+            with NvEvidenceProvider() as provider:
+                evidence = await provider.get_evidence(name, nonce, gpu_ids)
 
             return evidence
         except HTTPException:
