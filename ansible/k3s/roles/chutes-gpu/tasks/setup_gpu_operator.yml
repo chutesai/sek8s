@@ -8,7 +8,7 @@
   ansible.builtin.command: >
     helm upgrade --install gpu-operator nvidia/gpu-operator
     --namespace gpu-operator
-    --version 24.9.2
+    --version v24.9.2
     --set driver.enabled=false
     --set toolkit.enabled=false
     --set operator.upgradeCRD=false
