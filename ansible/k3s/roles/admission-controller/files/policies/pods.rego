@@ -104,6 +104,7 @@ deny contains msg if {
 # Deny pods with privileged containers
 deny contains msg if {
     # Check containers in pod spec
+    not helpers.is_system_namespace
     container := input.request.object.spec.containers[_]
     container.securityContext.privileged == true
     
@@ -112,6 +113,7 @@ deny contains msg if {
 
 deny contains msg if {
     # Check init containers in pod spec
+    not helpers.is_system_namespace
     container := input.request.object.spec.initContainers[_]
     container.securityContext.privileged == true
     
@@ -128,6 +130,7 @@ deny contains msg if {
 
 deny contains msg if {
     # Check containers in deployment/replicaset/etc template
+    not helpers.is_system_namespace
     container := input.request.object.spec.template.spec.containers[_]
     container.securityContext.privileged == true
     
@@ -136,6 +139,7 @@ deny contains msg if {
 
 deny contains msg if {
     # Check init containers in deployment/replicaset/etc template
+    not helpers.is_system_namespace
     container := input.request.object.spec.template.spec.initContainers[_]
     container.securityContext.privileged == true
     
