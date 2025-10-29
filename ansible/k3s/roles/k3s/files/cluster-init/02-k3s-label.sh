@@ -70,5 +70,6 @@ timeout 60 bash -c "until kubectl get nodes \"$NODE_NAME\" >/dev/null 2>&1; do s
 
 # Apply label with overwrite to mimic strategic-merge
 kubectl label node "$NODE_NAME" chutes/external-ip="$NODE_IP" --overwrite && log "Labeled node $NODE_NAME with chutes/external-ip=$NODE_IP"
+kubectl label node "$NODE_NAME" chutes/tee="true" --overwrite && log "Labeled node $NODE_NAME with chutes/tee=\"true\""
 
 log "k3s node labeling completed."
