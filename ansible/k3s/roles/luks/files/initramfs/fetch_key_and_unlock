@@ -154,11 +154,10 @@ generate_quote() {
     log_begin_msg "Generating TDX quote with nonce and cert hash"
     
     # Compute combined hash for REPORTDATA (nonce + cert pubkey)
-    NONCE_HASH=$(echo -n "$NONCE" | sha256sum | cut -d' ' -f1)
-    REPORTDATA=$(echo -n "${NONCE_HASH}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
+    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
     
     # Generate quote with REPORTDATA
-    if ! /usr/bin/tdx-quote-generator --user-data "$REPORTDATA" -o "$quote_file" 2>/dev/null; then
+    if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
         log_failure_msg "Failed to generate TDX quote"
         return 1
     fi

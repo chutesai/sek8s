@@ -7,7 +7,7 @@
 void print_usage(const char *prog_name) {
     printf("Usage: %s [OPTIONS]\n", prog_name);
     printf("Options:\n");
-    printf("  -d, --user-data DATA    Include user data in quote (max %d bytes)\n", TDX_REPORT_DATA_SIZE);
+    printf("  -d, --report-data DATA  Include user data in quote (max %d bytes)\n", TDX_REPORT_DATA_SIZE);
     printf("  -x, --hex               Treat user data as hex string\n");
     printf("  -o, --output FILE       Output quote to file (default: quote.bin)\n");
     printf("  -h, --help              Show this help message\n");
@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
     int is_hex = 0;
 
     static struct option long_options[] = {
-        {"user-data", required_argument, 0, 'd'},
+        {"report-data", required_argument, 0, 'd'},
         {"hex", no_argument, 0, 'x'},
         {"output", required_argument, 0, 'o'},
         {"help", no_argument, 0, 'h'},

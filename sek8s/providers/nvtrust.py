@@ -7,6 +7,8 @@ from loguru import logger
 from sek8s.exceptions import NvTrustException
 import pynvml
 
+from sek8s.providers.gpu import sanitize_gpu_id
+
 class NvEvidenceProvider:
     """Async web server for admission webhook."""
 
@@ -73,7 +75,7 @@ class NvEvidenceProvider:
         gpu_uids = []
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            gpu_uids.append(pynvml.nvmlDeviceGetUUID(handle))
+            gpu_uids.append(sanitize_gpu_id(pynvml.nvmlDeviceGetUUID(handle)))
 
         return gpu_uids
     

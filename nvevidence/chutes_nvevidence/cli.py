@@ -5,7 +5,7 @@ import typer
 from loguru import logger
 from chutes_nvevidence.attestation import NvClient
 from chutes_nvevidence.exceptions import NonceError
-from chutes_nvevidence.util import validate_and_format_nonce
+from chutes_nvevidence.util import validate_nonce
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -16,8 +16,8 @@ def gather_nv_evidence(
 ):
     try:
         client = NvClient()
-        formatted_nonce = validate_and_format_nonce(nonce)
-        evidence = client.gather_evidence(name, formatted_nonce)
+        validate_nonce(nonce)
+        evidence = client.gather_evidence(name, nonce)
 
         # Check if evidence is empty or invalid
         if not evidence or (isinstance(evidence, list) and len(evidence) == 0):

@@ -5,6 +5,21 @@ from sek8s.exceptions import NvmlException
 from sek8s.models import GPU, DeviceInfo
 import pynvml
 
+def sanitize_gpu_id(gpu_id):
+    """
+    Remove 'GPU-' prefix and all hyphens from a GPU ID.
+    
+    Args:
+        gpu_id: String containing the GPU ID
+        
+    Returns:
+        Sanitized GPU ID string
+    """
+    # Remove 'GPU-' prefix (case-insensitive)
+    sanitized = gpu_id.replace('GPU-', '').replace('gpu-', '')
+    # Remove all hyphens
+    sanitized = sanitized.replace('-', '')
+    return sanitized
 
 class GpuDeviceProvider:
 
@@ -22,7 +37,7 @@ class GpuDeviceProvider:
                 
                 gpu = GPU(
                     device_info=DeviceInfo(
-                        uuid=pynvml.nvmlDeviceGetUUID(handle),
+                        uuid=sanitize_gpu_id(pynvml.nvmlDeviceGetUUID(handle)),
                         name=name,
                         memory=pynvml.nvmlDeviceGetMemoryInfo(handle).total,
                         major=compute_capability[0],
