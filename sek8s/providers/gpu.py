@@ -27,7 +27,8 @@ class GpuDeviceProvider:
                         memory=pynvml.nvmlDeviceGetMemoryInfo(handle).total,
                         major=compute_capability[0],
                         minor=compute_capability[1],
-                        clock_rate=pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS),
+                        # pynvml returns in GHz but API expects it in MHz
+                        clock_rate=pynvml.nvmlDeviceGetMaxClockInfo(handle, pynvml.NVML_CLOCK_GRAPHICS) * 1000,
                         ecc=bool(pynvml.nvmlDeviceGetEccMode(handle)[0])
                     ),
                     model_short_ref=name.lower().split()[-1]  # e.g., 'a6000'
