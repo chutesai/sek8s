@@ -1,5 +1,4 @@
 #!/bin/sh
-# Needs to be placed in init-premount
 # /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock
 PREREQ="network"
 prereqs() { echo "$PREREQ"; }
@@ -7,23 +6,340 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
-ip link set dev enp1s0 up
-dhcpcd enp1s0
+# Configuration
+API_ENDPOINT="${TDX_API_ENDPOINT:-https://api.chutes.ai/servers/boot/attestation}"
+NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
+DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
+LUKS_NAME="${LUKS_NAME:-encrypted_root}"
+TIMEOUT="${TDX_TIMEOUT:-30}"
+RETRY_COUNT="${TDX_RETRY_COUNT:-3}"
+# Paths for self-signed client cert in initramfs (generated at boot)
+CLIENT_CERT="/tmp/client_cert.pem"
+CLIENT_KEY="/tmp/client_key.pem"
+API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"  # Existing CA bundle for server verification
 
-# Generate TDX quote
-QUOTE=$(trustauthority-cli evidence)  # Fetch MRTD and RTMR measurements
+log_begin_msg "Starting TDX-based disk unlock"
 
-KEY=$(curl -s -f --cacert /etc/ssl/certs/ca-certificates.crt \
-      -H "Authorization: Bearer YOUR_API_TOKEN" \
-      -d "quote=$QUOTE&vm_id=$(cat /sys/class/net/enp0s3/address)" \
-      https://your-api.example.com/get-luks-key)
+# Function to generate self-signed client certificate
+generate_client_cert() {
+    log_begin_msg "Generating self-signed client certificate"
+    
+    # Use openssl to create a self-signed cert (in TDX trust domain)
+    # Minimal size for initramfs; store in /tmp (tmpfs, not persisted)
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+        -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" -days 1 \
+        -subj "/CN=tdx-vm-$(date +%s)" 2>/dev/null; then
+        log_failure_msg "Failed to generate client certificate"
+        return 1
+    fi
+    
+    # Compute SHA-256 hash of cert's public key for REPORTDATA
+    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout | \
+                openssl pkey -pubin -outform der | \
+                sha256sum | cut -d' ' -f1)
+    if [ -z "$CERT_HASH" ]; then
+        log_failure_msg "Failed to compute cert hash"
+        return 1
+    fi
+    
+    log_success_msg "Client certificate generated"
+    return 0
+}
 
-if [ -z "$KEY" ]; then
-    echo "Failed to fetch LUKS key. Falling back to manual unlock."
-    /lib/cryptsetup/askpass "Enter LUKS passphrase manually: "
-    exit 0
-fi
+# Function to get network interface
+get_network_interface() {
+    # Try common interface names
+    for iface in enp1s0 enp0s3 eth0 ens3; do
+        if [ -e "/sys/class/net/$iface" ]; then
+            echo "$iface"
+            return 0
+        fi
+    done
+    return 1
+}
 
-echo "$KEY" | cryptsetup luksOpen /dev/vda1 encrypted_root --
+# Function to setup network
+setup_network() {
+    local iface
+    iface=$(get_network_interface)
+    if [ -z "$iface" ]; then
+        log_failure_msg "No network interface found"
+        return 1
+    fi
+    
+    log_begin_msg "Setting up network on $iface"
+    
+    # Bring up interface
+    ip link set dev "$iface" up
+    if [ $? -ne 0 ]; then
+        log_failure_msg "Failed to bring up $iface"
+        return 1
+    fi
+    
+    # Try DHCP
+    dhcpcd "$iface" -w "$TIMEOUT" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        log_failure_msg "DHCP failed on $iface"
+        return 1
+    fi
+    
+    # Verify we have an IP
+    if ! ip addr show "$iface" | grep -q "inet "; then
+        log_failure_msg "No IP address assigned to $iface"
+        return 1
+    fi
+    
+    log_success_msg "Network setup complete"
+    return 0
+}
 
-exit 0
+# Function to fetch nonce from API
+fetch_nonce() {
+    local response_file="/tmp/nonce_response"
+    
+    log_begin_msg "Fetching nonce from $NONCE_ENDPOINT"
+    
+    # Make API request, use mTLS with client cert and key
+    http_code=$(curl -s -w "%{http_code}" \
+        -X GET \
+        --max-time $TIMEOUT \
+        --retry 0 \
+        --cacert "$API_CA_CERT" \
+        --cert "$CLIENT_CERT" \
+        --key "$CLIENT_KEY" \
+        -o "$response_file" \
+        "$NONCE_ENDPOINT")
+    
+    # Check HTTP response code
+    case "$http_code" in
+        200)
+            # Extract nonce from JSON
+            NONCE=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
+            if [ -n "$NONCE" ]; then
+                rm -f "$response_file"
+                log_success_msg "Nonce retrieved successfully: $NONCE"
+                return 0
+            else
+                log_failure_msg "API response missing nonce field"
+            fi
+            ;;
+        401|403)
+            log_failure_msg "Authentication failed (HTTP $http_code)"
+            ;;
+        404)
+            log_failure_msg "Nonce endpoint not found (HTTP $http_code)"
+            ;;
+        429)
+            log_failure_msg "Rate limited (HTTP $http_code)"
+            ;;
+        5*)
+            log_failure_msg "Server error (HTTP $http_code)"
+            ;;
+        000)
+            log_failure_msg "Connection failed"
+            ;;
+        *)
+            log_failure_msg "Unexpected HTTP response: $http_code"
+            ;;
+    esac
+    
+    rm -f "$response_file"
+    return 1
+}
+
+# Function to generate quote with nonce and cert hash
+generate_quote() {
+    local quote_file="/tmp/tdx_quote.bin"
+    
+    log_begin_msg "Generating TDX quote with nonce and cert hash"
+    
+    # Compute combined hash for REPORTDATA (nonce + cert pubkey)
+    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
+    
+    # Generate quote with REPORTDATA
+    if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
+        log_failure_msg "Failed to generate TDX quote"
+        return 1
+    fi
+    
+    if [ ! -f "$quote_file" ]; then
+        log_failure_msg "Quote file not created"
+        return 1
+    fi
+    
+    # Base64 encode the quote for HTTP transmission
+    QUOTE_B64=$(base64 -w 0 < "$quote_file")
+    
+    rm -f "$quote_file"
+    log_success_msg "TDX quote generated"
+    return 0
+}
+
+# Function to fetch LUKS key from API with fresh nonce for each attempt
+fetch_luks_key() {
+    local attempt=1
+    local response_file="/tmp/api_response"
+    
+    while [ $attempt -le $RETRY_COUNT ]; do
+        log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
+        
+        # Fetch fresh nonce for this attempt
+        if ! fetch_nonce; then
+            log_failure_msg "Failed to fetch nonce for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
+        # Generate quote with the fresh nonce
+        if ! generate_quote; then
+            log_failure_msg "Failed to generate quote for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
+        # Make API request, use mTLS for API request
+        http_code=$(curl -s -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: TDX-LUKS-Client/1.0" \
+            -H "X-Chutes-Nonce: $NONCE" \
+            --max-time $TIMEOUT \
+            --retry 0 \
+            --cacert "$API_CA_CERT" \
+            --cert "$CLIENT_CERT" \
+            --key "$CLIENT_KEY" \
+            -d "{\"quote\":\"$QUOTE_B64\"}" \
+            -o "$response_file" \
+            "$API_ENDPOINT")
+        
+        case "$http_code" in
+            200)
+                key=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                if [ -n "$key" ]; then
+                    echo "$key"
+                    rm -f "$response_file"
+                    log_success_msg "LUKS key retrieved successfully"
+                    return 0
+                else
+                    log_failure_msg "API response missing key field"
+                fi
+                ;;
+            401|403)
+                log_failure_msg "Authentication failed (HTTP $http_code)"
+                # Don't break - might be a transient issue, try with fresh nonce
+                ;;
+            404)
+                log_failure_msg "API endpoint not found (HTTP $http_code)"
+                break
+                ;;
+            429)
+                log_begin_msg "Rate limited, waiting before retry..."
+                sleep $((attempt * 2))
+                ;;
+            5*)
+                log_failure_msg "Server error (HTTP $http_code), retrying..."
+                ;;
+            000)
+                log_failure_msg "Connection failed, retrying..."
+                ;;
+            *)
+                log_failure_msg "Unexpected HTTP response: $http_code"
+                ;;
+        esac
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -le $RETRY_COUNT ]; then
+            sleep 2
+        fi
+    done
+    
+    rm -f "$response_file"
+    return 1
+}
+
+# Function to unlock LUKS device
+unlock_device() {
+    local key="$1"
+    
+    log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
+    
+    # Attempt to unlock with retrieved key
+    if echo "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+        log_success_msg "LUKS device unlocked successfully"
+        return 0
+    else
+        log_failure_msg "Failed to unlock LUKS device"
+        return 1
+    fi
+}
+
+# Function to handle failure and shutdown
+handle_failure() {
+    local reason="$1"
+    
+    log_failure_msg "TDX unlock failed: $reason"
+    log_failure_msg "VM will shut down in 10 seconds..."
+    
+    # Log to kernel ring buffer for debugging
+    echo "TDX-LUKS-UNLOCK-FAILED: $reason" > /dev/kmsg
+    
+    # Give time to see the message
+    sleep 10
+    
+    # Power off the system
+    poweroff -f
+}
+
+# Main execution
+main() {
+    # Check if we're in a TDX environment
+    if [ ! -c "/dev/tdx_guest" ]; then
+        handle_failure "TDX device not found - not running in TDX environment"
+        return 1
+    fi
+    
+    # Generate self-signed client cert
+    if ! generate_client_cert; then
+        handle_failure "Client certificate generation failed"
+        return 1
+    fi
+    
+    if ! setup_network; then
+        handle_failure "Network setup failed"
+        return 1
+    fi
+    
+    # Fetch LUKS key from API (nonce and quote generated per attempt)
+    key=$(fetch_luks_key)
+    if [ -z "$key" ]; then
+        handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
+        return 1
+    fi
+    
+    # Unlock the device
+    if unlock_device "$key"; then
+        # Clear key from memory
+        key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
+        unset key
+        # Clean up cert and key
+        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+        log_success_msg "TDX-based unlock completed successfully"
+        return 0
+    else
+        handle_failure "Device unlock failed with retrieved key"
+        return 1
+    fi
+}
+
+# Run main function
+main
+exit_code=$?
+
+log_end_msg $exit_code
+exit $exit_code

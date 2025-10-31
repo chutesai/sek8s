@@ -1,14 +1,32 @@
 ---
-- name: Copy Chutes Miner charts
-  ansible.builtin.copy:
-    src: "{{ chutes_charts }}"
-    dest: ~/charts
+- name: Add Chutes Helm repository
+  kubernetes.core.helm_repository:
+    name: chutes
+    repo_url: https://chutesai.github.io/chutes-miner
 
-- name: Install Chutes Miner charts
+- name: Update Helm repositories
+  shell: helm repo update
+
+- name: Install or upgrade Chutes GPU charts
   ansible.builtin.command: >
-    helm upgrade --install chutes ~/charts/chutes-miner-gpu
+    helm upgrade --install chutes chutes/chutes-miner-gpu
     --namespace chutes
     --create-namespace
+    --set-string minerCredentials.ss58Address="REPLACE_ME"
+    --set-string minerCredentials.secretSeed="REPLACE_ME"
     --kubeconfig=/etc/rancher/k3s/k3s.yaml
-  register: helm_result
-  changed_when: helm_result.rc == 0
+  register: miner_deployment
+  changed_when: miner_deployment.rc == 0
+  no_log: true
+
+- name: Display deployment result
+  ansible.builtin.debug:
+    msg: "Miner GPU deployment on {{ inventory_hostname }}: {{ 'SUCCESS' if miner_deployment.rc == 0 else 'FAILED' }}"
+
+- name: Delete dummy miner credentials
+  kubernetes.core.k8s:
+    name: miner-credentials
+    api_version: v1
+    kind: Secret
+    namespace: chutes
+    state: absent

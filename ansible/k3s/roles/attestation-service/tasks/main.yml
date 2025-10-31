@@ -1,0 +1,20 @@
+---
+- name: Attestation service common setup
+  ansible.builtin.include_tasks: common-setup.yml
+  tags: attestation-service-common
+
+- name: Install TDX quote generator
+  ansible.builtin.include_tasks: install-tdx-quote-generator.yml
+  tags: tdx-quote-generator
+
+- name: Install attestation-init service
+  ansible.builtin.include_tasks: install-attestation-init-service.yml
+  tags: attestation-service
+
+- name: Install attestation service
+  ansible.builtin.include_tasks: install-attestation-service.yml
+  tags: attestation-service
+
+- name: Deploy attestation service proxy
+  ansible.builtin.include_tasks: deploy-attestation-proxy.yml
+  tags: attestation-proxy

@@ -1,0 +1,5 @@
+# ansible/k3s/roles/admission-controller/defaults/main.yml
+
+# Attestation Service settings
+admission_bind_address: "0.0.0.0"
+admission_port: 8080

@@ -1,16 +1,7 @@
----
-- name: Create boot directory
-  ansible.builtin.file:
-    path: "/root/scripts/boot"
-    state: directory
-    owner: root
-    group: root
-    mode: '0700'
+- name: Setup boot scripts
+  include_tasks: setup-boot-scripts.yml
+  tags: setup-boot-scripts
 
-- name: Copy boot scripts to VM
-  ansible.builtin.copy:
-    src: "files/boot/"
-    dest: "/root/scripts/boot/"
-    owner: root
-    group: root
-    mode: '0755'
+- name: Setup network
+  include_tasks: setup-network.yml
+  tags: setup-network

@@ -1,0 +1,9 @@
+- name: Install sek8s
+  ansible.builtin.include_tasks: install-sek8s.yml
+  tags:
+    - sek8s
+
+- name: Install chutes-nvevidence CLI
+  ansible.builtin.include_tasks: install-nvevidence-cli.yml
+  tags:
+    - chutes-nvevidence-cli

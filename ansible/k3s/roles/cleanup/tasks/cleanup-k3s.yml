@@ -1,4 +1,89 @@
 ---
+# Drain and clean up k3s cluster before stopping
+- name: Check if k3s service is running
+  ansible.builtin.systemd:
+    name: k3s
+  register: k3s_service_status
+
+- name: Wait for k3s API to be ready
+  ansible.builtin.command:
+    cmd: kubectl get --raw='/readyz'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  retries: 30
+  delay: 2
+  register: api_ready
+  until: api_ready.rc == 0
+  when: k3s_service_status.status.ActiveState == "active"
+  ignore_errors: yes
+
+- name: Get current hostname for k3s node
+  ansible.builtin.command: hostname
+  register: k3s_hostname
+  changed_when: false
+
+- name: Cordon the build node
+  ansible.builtin.command:
+    cmd: "kubectl cordon {{ k3s_hostname.stdout }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  ignore_errors: yes
+  register: cordon_result
+
+- name: Drain the build node
+  ansible.builtin.command:
+    cmd: >
+      kubectl drain {{ k3s_hostname.stdout }}
+      --ignore-daemonsets
+      --delete-emptydir-data
+      --force
+      --grace-period=30
+      --timeout=120s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  ignore_errors: yes
+  register: drain_result
+
+- name: Check for remaining non-daemonset pods
+  ansible.builtin.shell: |
+    kubectl get pods --all-namespaces --field-selector spec.nodeName="{{ k3s_hostname.stdout }}" -o json | \
+    jq -r '.items[] | select(.metadata.ownerReferences[]?.kind != "DaemonSet") | "\(.metadata.namespace)/\(.metadata.name)"'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  register: remaining_pods
+  changed_when: false
+  ignore_errors: yes
+
+- name: Force delete remaining pods
+  ansible.builtin.shell: |
+    kubectl delete pod {{ item.split('/')[1] }} -n {{ item.split('/')[0] }} --grace-period=0 --force
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  loop: "{{ remaining_pods.stdout_lines }}"
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+    - remaining_pods.stdout_lines is defined
+    - remaining_pods.stdout_lines | length > 0
+  ignore_errors: yes
+
+- name: Display cluster cleanup summary
+  ansible.builtin.debug:
+    msg:
+      - "Cluster cleanup completed:"
+      - "  Cordon: {{ 'Success' if cordon_result is succeeded else 'Failed/Skipped' }}"
+      - "  Drain: {{ 'Success' if drain_result is succeeded else 'Failed/Skipped' }}"
+      - "  Remaining pods: {{ remaining_pods.stdout_lines | default([]) | length }}"
+
 - name: Stop k3s service
   ansible.builtin.systemd:
     name: k3s
@@ -75,9 +160,15 @@
     group: root
     mode: '0644'
 
-- name: Enable k3s-init service for first boot
+- name: Enable k3s-config-init service for first boot
   ansible.builtin.systemd:
-    name: k3s-init
+    name: k3s-config-init
+    enabled: yes
+    daemon_reload: yes
+
+- name: Enable k3s-cluster-init service for first boot
+  ansible.builtin.systemd:
+    name: k3s-cluster-init
     enabled: yes
     daemon_reload: yes
 

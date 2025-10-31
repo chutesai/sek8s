@@ -1,28 +1,49 @@
 ---
 - name: Install cosign
   block:
-    - name: Update apt package index
-      ansible.builtin.apt:
-        update_cache: yes
-      register: apt_update
+    - name: Get latest cosign version from GitHub API
+      ansible.builtin.uri:
+        url: https://api.github.com/repos/sigstore/cosign/releases/latest
+        method: GET
+        return_content: yes
+      register: cosign_release_info
       retries: 3
       delay: 5
-      until: apt_update is success
+      until: cosign_release_info.status == 200
 
-    - name: Install cosign package
+    - name: Extract version number
+      ansible.builtin.set_fact:
+        cosign_version: "{{ cosign_release_info.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Download cosign .deb package
+      ansible.builtin.get_url:
+        url: "https://github.com/sigstore/cosign/releases/latest/download/cosign_{{ cosign_version }}_amd64.deb"
+        dest: "/tmp/cosign_{{ cosign_version }}_amd64.deb"
+        mode: '0644'
+      register: cosign_download
+      retries: 3
+      delay: 5
+      until: cosign_download is success
+
+    - name: Install cosign .deb package
       ansible.builtin.apt:
-        name: cosign
+        deb: "/tmp/cosign_{{ cosign_version }}_amd64.deb"
         state: present
       register: cosign_install
       retries: 3
       delay: 5
       until: cosign_install is success
 
+    - name: Clean up downloaded .deb file
+      ansible.builtin.file:
+        path: "/tmp/cosign_{{ cosign_version }}_amd64.deb"
+        state: absent
+
     - name: Verify cosign installation
       ansible.builtin.command: cosign version
-      register: cosign_version
+      register: cosign_version_output
       changed_when: false
 
     - name: Display cosign version
       ansible.builtin.debug:
-        msg: "{{ cosign_version.stdout }}"
+        msg: "{{ cosign_version_output.stdout }}"

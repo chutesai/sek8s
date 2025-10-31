@@ -8,15 +8,15 @@ Before=k3s.service
 Type=simple
 User=admission
 Group=admission
-WorkingDirectory=/opt/admission-controller
+WorkingDirectory=/opt/sek8s
 
 # Use virtual environment
-Environment="PATH=/opt/admission-controller/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="VIRTUAL_ENV=/opt/admission-controller/venv"
+Environment="PATH=/opt/sek8s/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/opt/sek8s/venv"
 EnvironmentFile=/etc/admission-controller/admission.env
 
 # Run the admission controller
-ExecStart=/opt/admission-controller/venv/bin/python -m sek8s.admission_controller
+ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.admission_controller
 
 Restart=always
 RestartSec=5
@@ -27,6 +27,9 @@ StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=admission-controller
+
+# Resources
+LimitNPROC=65536
 
 [Install]
 WantedBy=multi-user.target

@@ -25,20 +25,20 @@
     path: /etc/default/grub.d/50-cloudimg-settings.cfg
   register: cloud_grub
 
-- name: Enable module signature enforcement in cloud GRUB
+- name: Configure cloud GRUB kernel parameters
   lineinfile:
     path: /etc/default/grub.d/50-cloudimg-settings.cfg
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
-    line: 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 console=ttyS0 module.sig_enforce=1"'
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="console=tty1 console=ttyS0"'
     backup: yes
   when: cloud_grub.stat.exists
   notify: update grub
 
-- name: Enable module signature enforcement in standard GRUB
+- name: Configure standard GRUB kernel parameters
   lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
-    line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash module.sig_enforce=1"'
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"'
     backup: yes
   when: not cloud_grub.stat.exists
   notify: update grub

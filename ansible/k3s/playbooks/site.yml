@@ -4,7 +4,7 @@
   become: true
   tags:
     - run-vm
-    # - always
+    - always
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -92,6 +92,36 @@
         name: chutes-gpu
         apply:
           tags: chutes-gpu
+
+- name: Install sek8s
+  hosts: vm
+  become: true
+  tags:
+    - sek8s
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: sek8s
+      ansible.builtin.include_role:
+        name: sek8s
+        apply:
+          tags: sek8s
+
+- name: Setup attestation-service
+  hosts: vm
+  become: true
+  tags:
+    - attestation-service
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Attestation service
+      ansible.builtin.include_role:
+        name: attestation-service
+        apply:
+          tags: attestation-service
 
 - name: Setup admission controller
   hosts: vm

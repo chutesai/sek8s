@@ -1,0 +1,43 @@
+- name: Ensure NVIDIA drivers are present (basic check)
+  command: which nvidia-smi
+  register: nvidia_smi_check
+  changed_when: false
+  failed_when: nvidia_smi_check.rc != 0
+  tags: check
+
+- name: Create PPCIe enable script directory
+  file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+  tags: script
+
+- name: Create PPCIe enable script
+  copy:
+    src: enable-ppcie.sh
+    dest: "{{ ppcie_script_path }}"
+    mode: '0755'
+  register: script_created
+  tags: script
+
+- name: Create systemd service unit file
+  ansible.builtin.template:
+    src: nvidia-ppcie.service.j2
+    dest: /etc/systemd/system/{{ ppcie_service_name }}
+    mode: '0644'
+  register: service_created
+  tags: service
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  when: service_created.changed
+  tags: service
+
+# Enable but don't start, no GPUs to enable at build time
+- name: Enable PPCIe service
+  systemd:
+    name: "{{ ppcie_service_name }}"
+    enabled: yes
+    state: stopped
+  tags: service

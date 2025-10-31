@@ -55,7 +55,7 @@ is_bootstrap_operation if {
 
 # Helper to check if request is for system namespace
 is_system_namespace if {
-    input.request.namespace in ["kube-system", "kube-public", "kube-node-lease", "gpu-operator"]
+    input.request.namespace in ["kube-system", "kube-public", "kube-node-lease", "gpu-operator", "attestation-system"]
 }
 
 # Helper to check if this is a pod-creating resource

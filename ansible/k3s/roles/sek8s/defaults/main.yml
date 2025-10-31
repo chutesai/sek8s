@@ -1,0 +1,7 @@
+# ansible/k3s/roles/admission-controller/defaults/main.yml
+
+# Git repository settings
+sek8s_repo: "https://github.com/chutesai/sek8s"
+sek8s_version: "attest"
+update_repository: true
+update_dependencies: false

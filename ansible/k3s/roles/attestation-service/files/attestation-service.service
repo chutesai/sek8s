@@ -1,0 +1,32 @@
+[Unit]
+Description=Attestation Service
+Wants=network-online.target attestation-service-init.service
+After=network-online.target attestation-service-init.service
+Requires=attestation-service-init.service
+
+[Service]
+Type=simple
+User=tdx-attest
+Group=tdx-attest
+WorkingDirectory=/opt/sek8s
+
+# Use virtual environment
+Environment="PATH=/opt/sek8s/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/opt/sek8s/venv"
+EnvironmentFile=/etc/attestation-service/attestation-service.env
+
+# Run the admission controller
+ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.attestation
+
+Restart=always
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=attestation-service
+
+[Install]
+WantedBy=multi-user.target

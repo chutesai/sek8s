@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, AsyncMock
 from pathlib import Path
 
-from sek8s.admission_controller import AdmissionController, AdmissionWebhookServer
+from sek8s.services.admission_controller import AdmissionController, AdmissionWebhookServer
 from sek8s.config import AdmissionConfig, NamespacePolicy
 from sek8s.validators.base import ValidationResult
 
@@ -32,7 +32,7 @@ def test_config():
             "test-exempt": NamespacePolicy(mode="monitor", exempt=True),
         },
         debug=True,
-        metrics_enabled=True
+        metrics_enabled=True,
     )
     return config
 
@@ -60,34 +60,22 @@ def valid_admission_review():
             "operation": "CREATE",
             "namespace": "default",
             "name": "test-pod",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1",
-                "group": ""
-            },
+            "kind": {"kind": "Pod", "version": "v1", "group": ""},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "test-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "test-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi",
-                                    "cpu": "500m"
-                                }
-                            }
+                            "resources": {"limits": {"memory": "256Mi", "cpu": "500m"}},
                         }
                     ]
-                }
-            }
-        }
+                },
+            },
+        },
     }
 
 
@@ -101,35 +89,23 @@ def privileged_pod_review():
             "uid": "test-uid-456",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "privileged-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "privileged-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
-                            "securityContext": {
-                                "privileged": True
-                            },
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi"
-                                }
-                            }
+                            "securityContext": {"privileged": True},
+                            "resources": {"limits": {"memory": "256Mi"}},
                         }
                     ]
-                }
-            }
-        }
+                },
+            },
+        },
     }
 
 
@@ -143,33 +119,23 @@ def host_network_pod_review():
             "uid": "test-uid-host-net",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "host-network-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "host-network-pod", "namespace": "default"},
                 "spec": {
                     "hostNetwork": True,
                     "containers": [
                         {
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi"
-                                }
-                            }
+                            "resources": {"limits": {"memory": "256Mi"}},
                         }
-                    ]
-                }
-            }
-        }
+                    ],
+                },
+            },
+        },
     }
 
 
@@ -183,32 +149,22 @@ def untrusted_registry_review():
             "uid": "test-uid-789",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "untrusted-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "untrusted-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
                             "image": "untrusted-registry.com/malicious:latest",
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi"
-                                }
-                            }
+                            "resources": {"limits": {"memory": "256Mi"}},
                         }
                     ]
-                }
-            }
-        }
+                },
+            },
+        },
     }
 
 
@@ -222,28 +178,22 @@ def no_limits_pod_review():
             "uid": "test-uid-no-limits",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "no-limits-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "no-limits-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
-                            "image": "docker.io/library/nginx:latest"
+                            "image": "docker.io/library/nginx:latest",
                             # Missing resources.limits
                         }
                     ]
-                }
-            }
-        }
+                },
+            },
+        },
     }
 
 
@@ -257,33 +207,18 @@ def invalid_hostpath_review():
             "uid": "test-uid-hostpath",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "hostpath-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "hostpath-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi"
-                                }
-                            },
-                            "volumeMounts": [
-                                {
-                                    "name": "host-etc",
-                                    "mountPath": "/host-etc"
-                                }
-                            ]
+                            "resources": {"limits": {"memory": "256Mi"}},
+                            "volumeMounts": [{"name": "host-etc", "mountPath": "/host-etc"}],
                         }
                     ],
                     "volumes": [
@@ -291,13 +226,13 @@ def invalid_hostpath_review():
                             "name": "host-etc",
                             "hostPath": {
                                 "path": "/etc",  # Not allowed (should be /cache/*)
-                                "type": "Directory"
-                            }
+                                "type": "Directory",
+                            },
                         }
-                    ]
-                }
-            }
-        }
+                    ],
+                },
+            },
+        },
     }
 
 
@@ -311,48 +246,29 @@ def valid_cache_mount_review():
             "uid": "test-uid-cache",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "cache-pod",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "cache-pod", "namespace": "default"},
                 "spec": {
                     "containers": [
                         {
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
-                            "resources": {
-                                "limits": {
-                                    "memory": "256Mi",
-                                    "cpu": "500m"
-                                }
-                            },
-                            "volumeMounts": [
-                                {
-                                    "name": "cache",
-                                    "mountPath": "/data"
-                                }
-                            ]
+                            "resources": {"limits": {"memory": "256Mi", "cpu": "500m"}},
+                            "volumeMounts": [{"name": "cache", "mountPath": "/data"}],
                         }
                     ],
                     "volumes": [
                         {
                             "name": "cache",
-                            "hostPath": {
-                                "path": "/cache/app-data",
-                                "type": "DirectoryOrCreate"
-                            }
+                            "hostPath": {"path": "/cache/app-data", "type": "DirectoryOrCreate"},
                         }
-                    ]
-                }
-            }
-        }
+                    ],
+                },
+            },
+        },
     }
 
 
@@ -366,44 +282,28 @@ def deployment_review():
             "uid": "test-uid-deployment",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Deployment",
-                "version": "v1",
-                "group": "apps"
-            },
+            "kind": {"kind": "Deployment", "version": "v1", "group": "apps"},
             "object": {
                 "apiVersion": "apps/v1",
                 "kind": "Deployment",
-                "metadata": {
-                    "name": "test-deployment",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "test-deployment", "namespace": "default"},
                 "spec": {
                     "replicas": 3,
                     "template": {
-                        "metadata": {
-                            "labels": {
-                                "app": "test"
-                            }
-                        },
+                        "metadata": {"labels": {"app": "test"}},
                         "spec": {
                             "containers": [
                                 {
                                     "name": "app",
                                     "image": "docker.io/library/nginx:latest",
-                                    "resources": {
-                                        "limits": {
-                                            "memory": "256Mi",
-                                            "cpu": "500m"
-                                        }
-                                    }
+                                    "resources": {"limits": {"memory": "256Mi", "cpu": "500m"}},
                                 }
                             ]
-                        }
-                    }
-                }
-            }
-        }
+                        },
+                    },
+                },
+            },
+        },
     }
 
 
@@ -417,18 +317,11 @@ def cronjob_review():
             "uid": "test-uid-cronjob",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "CronJob",
-                "version": "v1",
-                "group": "batch"
-            },
+            "kind": {"kind": "CronJob", "version": "v1", "group": "batch"},
             "object": {
                 "apiVersion": "batch/v1",
                 "kind": "CronJob",
-                "metadata": {
-                    "name": "test-cronjob",
-                    "namespace": "default"
-                },
+                "metadata": {"name": "test-cronjob", "namespace": "default"},
                 "spec": {
                     "schedule": "*/5 * * * *",
                     "jobTemplate": {
@@ -441,21 +334,18 @@ def cronjob_review():
                                             "image": "docker.io/library/busybox:latest",
                                             "command": ["echo", "hello"],
                                             "resources": {
-                                                "limits": {
-                                                    "memory": "128Mi",
-                                                    "cpu": "100m"
-                                                }
-                                            }
+                                                "limits": {"memory": "128Mi", "cpu": "100m"}
+                                            },
                                         }
                                     ],
-                                    "restartPolicy": "OnFailure"
+                                    "restartPolicy": "OnFailure",
                                 }
                             }
                         }
-                    }
-                }
-            }
-        }
+                    },
+                },
+            },
+        },
     }
 
 
@@ -468,19 +358,13 @@ def namespace_creation_review():
         "request": {
             "uid": "test-uid-namespace",
             "operation": "CREATE",
-            "kind": {
-                "kind": "Namespace",
-                "version": "v1",
-                "group": ""
-            },
+            "kind": {"kind": "Namespace", "version": "v1", "group": ""},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Namespace",
-                "metadata": {
-                    "name": "unauthorized-namespace"
-                }
-            }
-        }
+                "metadata": {"name": "unauthorized-namespace"},
+            },
+        },
     }
 
 
@@ -494,31 +378,14 @@ def service_review():
             "uid": "test-uid-service",
             "operation": "CREATE",
             "namespace": "default",
-            "kind": {
-                "kind": "Service",
-                "version": "v1",
-                "group": ""
-            },
+            "kind": {"kind": "Service", "version": "v1", "group": ""},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Service",
-                "metadata": {
-                    "name": "test-service",
-                    "namespace": "default"
-                },
-                "spec": {
-                    "selector": {
-                        "app": "test"
-                    },
-                    "ports": [
-                        {
-                            "port": 80,
-                            "targetPort": 8080
-                        }
-                    ]
-                }
-            }
-        }
+                "metadata": {"name": "test-service", "namespace": "default"},
+                "spec": {"selector": {"app": "test"}, "ports": [{"port": 80, "targetPort": 8080}]},
+            },
+        },
     }
 
 
@@ -532,17 +399,11 @@ def exempt_namespace_review():
             "uid": "test-uid-exempt",
             "operation": "CREATE",
             "namespace": "test-exempt",
-            "kind": {
-                "kind": "Pod",
-                "version": "v1"
-            },
+            "kind": {"kind": "Pod", "version": "v1"},
             "object": {
                 "apiVersion": "v1",
                 "kind": "Pod",
-                "metadata": {
-                    "name": "exempt-pod",
-                    "namespace": "test-exempt"
-                },
+                "metadata": {"name": "exempt-pod", "namespace": "test-exempt"},
                 "spec": {
                     "containers": [
                         {
@@ -550,12 +411,12 @@ def exempt_namespace_review():
                             "image": "untrusted-registry.com/app:latest",  # Should be allowed in exempt namespace
                             "securityContext": {
                                 "privileged": True  # Should be allowed in exempt namespace
-                            }
+                            },
                         }
                     ]
-                }
-            }
-        }
+                },
+            },
+        },
     }
 
 

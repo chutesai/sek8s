@@ -1,0 +1,54 @@
+---
+- name: Create k3s initialization directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /usr/local/bin/k3s-init-scripts
+    - /var/lib/rancher/k3s/init-markers
+    - /var/lib/rancher/k3s/credentials
+    - /var/log
+
+- name: Install k3s cluster initialization script
+  copy:
+    src: k3s-cluster-init.sh
+    dest: /usr/local/bin/k3s-cluster-init.sh
+    owner: root
+    group: root
+    mode: '0755'
+    backup: yes
+
+- name: Install k3s cluster initialization service
+  copy:
+    src: k3s-cluster-init.service
+    dest: /etc/systemd/system/k3s-cluster-init.service
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify:
+    - reload systemd
+
+- name: Copy k3s initialization scripts
+  copy:
+    src: "{{ item }}"
+    dest: "/usr/local/bin/k3s-init-scripts/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: '0755'
+    backup: yes
+  with_fileglob:
+    - "files/cluster-init/*.sh"
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+# Keep service disabled for build, cleanup will enable for first boot
+- name: Disable k3s-cluster-init service
+  ansible.builtin.systemd:
+    name: k3s-cluster-init
+    enabled: no

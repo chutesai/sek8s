@@ -1,0 +1,24 @@
+[Unit]
+Description=Attestation Service Initialization
+Wants=network-online.target
+After=network-online.target
+Before=attestation-service.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/etc/attestation-service
+
+# Set up environment
+ExecStart=/etc/attestation-service/scripts/setup-environment.sh
+ExecStart=/etc/attestation-service/scripts/setup-tls-certs.sh
+
+# Only run if not already completed successfully
+RemainAfterExit=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=attestation-service-init
+
+[Install]
+WantedBy=multi-user.target

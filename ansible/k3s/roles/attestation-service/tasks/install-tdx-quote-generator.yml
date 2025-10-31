@@ -1,0 +1,85 @@
+# Add Intel SGX repository
+- name: Add Intel SGX repository GPG key
+  ansible.builtin.get_url:
+    url: https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
+    dest: /etc/apt/keyrings/intel-sgx-keyring.asc
+    mode: '0644'
+
+- name: Add Intel SGX repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/intel-sgx-keyring.asc arch=amd64] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main"
+    filename: intel-sgx
+    state: present
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+
+# Install TDX attestation libraries
+- name: Install TDX attestation libraries and build tools
+  ansible.builtin.apt:
+    name:
+      - libtdx-attest
+      - libtdx-attest-dev
+      - build-essential
+    state: present
+
+# Configure TDX attestation
+- name: Configure TDX attestation port
+  ansible.builtin.lineinfile:
+    path: /etc/tdx-attest.conf
+    line: "port=4050"
+    create: yes
+    mode: '0644'
+
+# Copy and compile TDX quote generator
+- name: Create TDX quote generator source file
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('file', 'files/tdx-quote-generator.c') }}
+    dest: "/tmp/tdx-quote-generator.c"
+    mode: '0644'
+
+- name: Compile TDX quote generator with TDX libraries
+  ansible.builtin.shell: |
+    gcc -o tdx-quote-generator tdx-quote-generator.c \
+      -I/usr/include \
+      -ltdx_attest \
+      -L/usr/lib/x86_64-linux-gnu
+  args:
+    chdir: /tmp
+    creates: /tmp/tdx-quote-generator
+
+- name: Install TDX quote generator binary
+  ansible.builtin.copy:
+    src: /tmp/tdx-quote-generator
+    dest: /usr/bin/tdx-quote-generator
+    mode: '0755'
+    group: tdx-attest
+    remote_src: yes
+
+- name: Remove temporary source and binary files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tdx-quote-generator.c
+    - /tmp/tdx-quote-generator
+
+# Configure udev rules for TDX device
+- name: Add udev rule for tdx_guest device
+  ansible.builtin.lineinfile:
+    path: /etc/udev/rules.d/99-tdx-guest.rules
+    line: 'KERNEL=="tdx_guest", GROUP="tdx-attest", MODE="0660"'
+    create: yes
+    mode: '0644'
+
+- name: Reload udev rules (will only apply at runtime when device exists)
+  ansible.builtin.command: udevadm control --reload-rules
+  changed_when: false
+  failed_when: false  # Don't fail if udev service isn't available
+
+- name: Trigger udev to apply rules (will only apply at runtime when device exists)
+  ansible.builtin.command: udevadm trigger
+  changed_when: false
+  failed_when: false  # Don't fail if device doesn't exist yet

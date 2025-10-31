@@ -7,10 +7,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Configuration
 TDX_REPO="$REPO_ROOT/tdx"
-UBUNTU_VERSION="25.04"
+UBUNTU_VERSION="24.04"
 LOGFILE="$REPO_ROOT/tdx-base-image-build.log"
 CREATE_TD_SCRIPT="$TDX_REPO/guest-tools/image/create-td-image.sh"
 GUEST_IMG_PATH="$TDX_REPO/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION-generic.qcow2"
+BUILD_IMG_PATH="$REPO_ROOT/guest-tools/image/tdx-guest-ubuntu-$UBUNTU_VERSION.qcow2"
 
 # Clear existing logfile
 echo "" > "$LOGFILE"
@@ -45,5 +46,9 @@ if [ ! -f "$GUEST_IMG_PATH" ]; then
     exit 1
 fi
 
+echo "Copying guest image to use for build process" | tee -a "$LOGFILE"
+cp $GUEST_IMG_PATH $BUILD_IMG_PATH
+
 # Output result
 echo "Base TDX guest image created: $GUEST_IMG_PATH" | tee -a "$LOGFILE"
+echo "Build TDX image created: $BUILD_IMG_PATH" | tee -a "$LOGFILE"
