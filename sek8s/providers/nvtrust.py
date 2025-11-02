@@ -1,13 +1,12 @@
 import asyncio
 import json
 import os
+import uuid
 
 from loguru import logger
 
 from sek8s.exceptions import NvTrustException
 import pynvml
-
-from sek8s.providers.gpu import sanitize_gpu_id
 
 class NvEvidenceProvider:
     """Async web server for admission webhook."""
@@ -58,6 +57,7 @@ class NvEvidenceProvider:
             raise NvTrustException(f"Unexpected error gathering GPU evidence.")
 
     def _filter_evidence(self, evidence: str, target_gpu_ids: list[str]):
+        target_gpu_ids = [gpu_id if gpu_id.startswith("GPU") else f"GPU-{str(uuid.UUID(gpu_id))}" for gpu_id in target_gpu_ids]
         filtered_evidence = evidence
         if target_gpu_ids:
             evidence_list = json.loads(evidence)
@@ -75,7 +75,7 @@ class NvEvidenceProvider:
         gpu_uids = []
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-            gpu_uids.append(sanitize_gpu_id(pynvml.nvmlDeviceGetUUID(handle)))
+            gpu_uids.append(pynvml.nvmlDeviceGetUUID(handle))
 
         return gpu_uids
     
