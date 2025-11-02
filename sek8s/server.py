@@ -38,11 +38,11 @@ class WebServer:
         uvicorn_kwargs = {}
 
         if self.config.uds_path:
-            logger.info(f"Starting admission webhook server on Unix socket {self.config.uds_path}")
+            logger.info(f"Starting server on Unix socket {self.config.uds_path}")
             uvicorn_kwargs["uds"] = self.config.uds_path
         else:
             logger.info(
-                f"Starting admission webhook server on {self.config.bind_address}:{self.config.port}"
+                f"Starting server on {self.config.bind_address}:{self.config.port}"
             )
             uvicorn_kwargs["host"] = self.config.bind_address
             uvicorn_kwargs["port"] = self.config.port
