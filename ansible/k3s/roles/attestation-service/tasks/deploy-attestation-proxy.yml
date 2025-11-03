@@ -1,7 +1,7 @@
 ---
 - name: Deploy Attesattion Proxy to K3s
   block:
-    - name: Copy policy files
+    - name: Copy manfiest files
       ansible.builtin.copy:
         src: "files/manifests/proxy-manifests.yaml"
         dest: /var/lib/rancher/k3s/server/manifests
@@ -17,3 +17,11 @@
         group: root
         mode: '0400'  # Read-only
         attributes: '+i'  # Immutable flag (requires root to remove)
+
+    # Ensure namespace exists
+    - name: Create Kubernetes namespace
+      kubernetes.core.k8s:
+        name: attestation-system
+        api_version: v1
+        kind: Namespace
+        state: present
