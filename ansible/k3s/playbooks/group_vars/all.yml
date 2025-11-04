@@ -43,7 +43,7 @@ skip_cuda: false
 ipv6_enabled: true
 
 # Chutes config
-validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
+validator: 5FgapRUrM21n1HrHPa1uaGjywA3ayiZvG4RH2dvi3yHnt53M
 
 # Module Security Configuration
 enable_module_security: true

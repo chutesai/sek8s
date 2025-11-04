@@ -42,6 +42,7 @@ class ServerConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra='ignore'
     )
 
     @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="after")
@@ -68,6 +69,7 @@ class AttestationServiceConfig(ServerConfig):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="ATTEST_",
+        extra='ignore'
     )
 
 class AttestationProxyConfig(ServerConfig):
@@ -87,6 +89,7 @@ class AttestationProxyConfig(ServerConfig):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="PROXY_",
+        extra='ignore'
     )
 
 class AdmissionConfig(ServerConfig):
@@ -97,6 +100,7 @@ class AdmissionConfig(ServerConfig):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="ADMISSION_",
+        extra='ignore'
     )
 
     # OPA configuration
