@@ -26,9 +26,9 @@ class NamespacePolicy(BaseSettings):
 
 class ServerConfig(BaseSettings):
     # Server configuration
-    bind_address: str = Field(default="127.0.0.1", alias="BIND_ADDRESS")
-    port: int = Field(default=8443, alias="PORT", ge=1, le=65535)
-    uds_path: Optional[Path] = Field(default=None, alias="UDS_PATH")
+    bind_address: str = Field(default="127.0.0.1")
+    port: int = Field(default=8443, ge=1, le=65535)
+    uds_path: Optional[Path] = Field(default=None)
 
     # TLS configuration
     tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
@@ -42,10 +42,6 @@ class ServerConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="",  # No prefix in base class; subclasses set their own
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
     )
 
     @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="after")
@@ -72,20 +68,25 @@ class AttestationServiceConfig(ServerConfig):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="ATTEST_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
     )
 
 class AttestationProxyConfig(ServerConfig):
+
+    _allowed_validators: Optional[list[str]] = None
+
+    allowed_validators_str: str = Field(..., alias="ALLOWED_VALIDATORS")
+    miner_ss58: str = Field(..., alias="MINER_SS58")
+
+    @property
+    def allowed_validators(self) -> list[str]:
+        if self._allowed_validators is None:
+            self._allowed_validators = [item.strip() for item in self.allowed_validators_str.split(',') if item.strip()]
+        return self._allowed_validators
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="PROXY_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
     )
 
 class AdmissionConfig(ServerConfig):
@@ -96,9 +97,6 @@ class AdmissionConfig(ServerConfig):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="ADMISSION_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
     )
 
     # OPA configuration
@@ -143,17 +141,6 @@ class AdmissionConfig(ServerConfig):
 
     # Config file support
     config_file: Optional[Path] = Field(default=None, alias="CONFIG_FILE")
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        env_prefix="",  # No prefix since we use aliases
-        populate_by_name=True,  # Allow both field name and alias
-        use_enum_values=True,
-        validate_assignment=True,  # Validate on assignment
-        extra="ignore",  # Ignore extra fields
-    )
 
     @field_validator("namespace_policies", mode="before")
     @classmethod
@@ -235,7 +222,6 @@ class OPAConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="",
-        populate_by_name=True,
     )
 
 
@@ -295,7 +281,6 @@ class CosignConfig(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="COSIGN_",
-        populate_by_name=True,
     )
 
     @field_validator("registry_configs", mode="before")

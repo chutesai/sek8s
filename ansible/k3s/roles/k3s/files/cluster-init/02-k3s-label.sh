@@ -40,7 +40,32 @@ get_public_ip() {
     return 1
 }
 
-# Configure k3s node label
+# Function to apply and verify a label with retry logic
+apply_and_verify_label() {
+    local node_name=$1
+    local label_key=$2
+    local label_value=$3
+    
+    for attempt in {1..3}; do
+        kubectl label node "$node_name" "$label_key=$label_value" --overwrite
+        
+        # Verify the label was applied correctly
+        local actual_value=$(kubectl get node "$node_name" -o jsonpath="{.metadata.labels['$label_key']}" 2>/dev/null || echo "")
+        
+        if [[ "$actual_value" == "$label_value" ]]; then
+            log "Labeled node $node_name with $label_key=$label_value"
+            return 0
+        fi
+        
+        log "Label verification failed for $label_key (attempt $attempt/3)"
+        sleep 2
+    done
+    
+    log "ERROR: Failed to apply and verify label $label_key=$label_value after 3 attempts"
+    return 1
+}
+
+# Main execution
 log "Adding chutes labels to Kubernetes node..."
 
 # Set KUBECONFIG for k3s
@@ -68,8 +93,8 @@ timeout 60 bash -c "until kubectl get nodes \"$NODE_NAME\" >/dev/null 2>&1; do s
     exit 1
 }
 
-# Apply label with overwrite to mimic strategic-merge
-kubectl label node "$NODE_NAME" chutes/external-ip="$NODE_IP" --overwrite && log "Labeled node $NODE_NAME with chutes/external-ip=$NODE_IP"
-kubectl label node "$NODE_NAME" chutes/tee="true" --overwrite && log "Labeled node $NODE_NAME with chutes/tee=\"true\""
+# Apply labels with verification and retry
+apply_and_verify_label "$NODE_NAME" "chutes/external-ip" "$NODE_IP" || exit 1
+apply_and_verify_label "$NODE_NAME" "chutes/tee" "true" || exit 1
 
 log "k3s node labeling completed."

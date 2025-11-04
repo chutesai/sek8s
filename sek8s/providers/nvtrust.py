@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from typing import Optional
 import uuid
 
 from loguru import logger
@@ -56,16 +57,17 @@ class NvEvidenceProvider:
             logger.error(f"Unexpected error gathering GPU evidence:{e}")
             raise NvTrustException(f"Unexpected error gathering GPU evidence.")
 
-    def _filter_evidence(self, evidence: str, target_gpu_ids: list[str]):
-        target_gpu_ids = [gpu_id if gpu_id.startswith("GPU") else f"GPU-{str(uuid.UUID(gpu_id))}" for gpu_id in target_gpu_ids]
+    def _filter_evidence(self, evidence: str, target_gpu_ids: Optional[list[str]]):
         filtered_evidence = evidence
         if target_gpu_ids:
-            evidence_list = json.loads(evidence)
-            all_gpu_uids = self._get_gpu_ids()
-            if len(target_gpu_ids) < len(all_gpu_uids):
-                target_indices = [idx for idx, gpu_id in enumerate(all_gpu_uids) if gpu_id in target_gpu_ids]
-                target_evidence = [evidence_list[idx] for idx in target_indices]
-                filtered_evidence = json.dumps(target_evidence)
+            formatted_targets = [gpu_id if gpu_id.startswith("GPU") else f"GPU-{str(uuid.UUID(gpu_id))}" for gpu_id in target_gpu_ids]
+            if formatted_targets:
+                evidence_list = json.loads(evidence)
+                all_gpu_uids = self._get_gpu_ids()
+                if len(formatted_targets) < len(all_gpu_uids):
+                    target_indices = [idx for idx, gpu_id in enumerate(all_gpu_uids) if gpu_id in formatted_targets]
+                    target_evidence = [evidence_list[idx] for idx in target_indices]
+                    filtered_evidence = json.dumps(target_evidence)
         
         return filtered_evidence
 

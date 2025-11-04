@@ -79,6 +79,8 @@ spec:
         - name: host-certs
           mountPath: /etc/ssl/host-certs
           readOnly: true
+        - mountPath: /home/chutes/.bittensor
+          name: bittensor-data
         - name: tmp
           mountPath: /tmp
         env:
@@ -98,11 +100,18 @@ spec:
           value: "8443"
         - name: INTERNAL_PORT
           value: "8444"
-        - name: ALLOWED_VALIDATOR_HOTKEYS
+        - name: MINER_SS58
+          valueFrom:
+            secretKeyRef:
+              name: miner-credentials
+              key: ss58
+        - name: ALLOWED_VALIDATORS
           valueFrom:
             secretKeyRef:
               name: validator-auth
               key: allowed-validators
+        - name: OPENBLAS_NUM_THREADS
+          value: '1'
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
@@ -124,28 +133,34 @@ spec:
             cpu: "100m"
             ephemeral-storage: "50Mi"
         livenessProbe:
-          httpGet:
-            path: /health
-            port: 8443
-            scheme: HTTPS
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
           initialDelaySeconds: 15
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 2
         readinessProbe:
-          httpGet:
-            path: /health
-            port: 8443
-            scheme: HTTPS
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
           initialDelaySeconds: 15
           periodSeconds: 30
           timeoutSeconds: 3
           failureThreshold: 3
         startupProbe:
-          httpGet:
-            path: /health
-            port: 8443
-            scheme: HTTPS
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3
@@ -160,6 +175,9 @@ spec:
         hostPath:
           path: /etc/attestation-service/certs
           type: Directory
+      - emptyDir:
+          sizeLimit: 50Mi
+        name: bittensor-data
       - name: tmp
         emptyDir:
           sizeLimit: 10Mi
@@ -236,8 +254,7 @@ spec:
       port: 8444
   
   # Port 8443 (external): Allow from anywhere (validators via NodePort)
-  - from: []  # Empty selector = allow from any source
-    ports:
+  - ports:
     - protocol: TCP
       port: 8443
 
