@@ -28,8 +28,6 @@ wait_for_api_server() {
             return 0
         fi
         
-        systemd-notify WATCHDOG=1 || true
-        
         if [ $((attempt % 15)) -eq 0 ]; then
             log "Still waiting for API server readiness... ($attempt/$max_attempts)"
         fi
@@ -68,8 +66,7 @@ force_delete_old_node() {
                 return 0
             fi
         fi
-        
-        systemd-notify WATCHDOG=1 || true
+
         sleep 2
         attempt=$((attempt + 1))
     done
@@ -131,8 +128,6 @@ for i in {1..60}; do
         break
     fi
     
-    systemd-notify WATCHDOG=1 || true
-    
     if [ $((i % 10)) -eq 0 ]; then
         log "Still waiting for node to be ready... ($i/60)"
     fi
@@ -161,12 +156,9 @@ if [ -n "$OLD_NODES" ]; then
             log "WARNING: Failed to remove node: $OLD_NODE (may need manual cleanup)"
         fi
         
-        systemd-notify WATCHDOG=1 || true
-        
         # Clean up any orphaned pods (shouldn't be many)
         cleanup_orphaned_pods "$OLD_NODE"
         
-        systemd-notify WATCHDOG=1 || true
     done
     
     log "Old build node cleanup completed"

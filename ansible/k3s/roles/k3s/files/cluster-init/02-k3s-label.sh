@@ -30,13 +30,13 @@ get_public_ip() {
     for service in "${services[@]}"; do
         public_ip=$(curl -s --max-time "$PUBLIC_IP_TIMEOUT" "$service" 2>/dev/null | grep -oE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$' || true)
         if [[ -n "$public_ip" ]]; then
-            log "Detected public IP from $service: $public_ip"
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Detected public IP from $service: $public_ip" >&2
             echo "$public_ip"
             return 0
         fi
     done
     
-    log "Warning: Could not detect public IP address from any service"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Warning: Could not detect public IP address" >&2
     return 1
 }
 
