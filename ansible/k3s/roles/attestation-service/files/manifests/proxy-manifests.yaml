@@ -94,7 +94,7 @@ spec:
           value: "/etc/ssl/host-certs/server.key"
         - name: CLIENT_CA_PATH
           value: "/etc/ssl/certs/ca-certificates.crt"
-        - name: PROXY_BIND_ADDRESS
+        - name: BIND_ADDRESS
           value: "0.0.0.0"
         - name: EXTERNAL_PORT
           value: "8443"
