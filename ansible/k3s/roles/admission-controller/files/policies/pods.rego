@@ -158,54 +158,54 @@ deny contains msg if {
 # REGISTRY RESTRICTIONS (redundant with Python validator but good for defense in depth)
 # =============================================================================
 
-deny contains msg if {
-    helpers.is_pod_resource
-    not helpers.is_system_namespace
+# deny contains msg if {
+#     helpers.is_pod_resource
+#     not helpers.is_system_namespace
     
-    # Check images in Pod containers
-    input.request.kind.kind == "Pod"
-    container := input.request.object.spec.containers[_]
-    not is_allowed_registry(container.image)
-    msg := sprintf("Container image '%s' from disallowed registry", [container.image])
-}
+#     # Check images in Pod containers
+#     input.request.kind.kind == "Pod"
+#     container := input.request.object.spec.containers[_]
+#     not is_allowed_registry(container.image)
+#     msg := sprintf("Container image '%s' from disallowed registry", [container.image])
+# }
 
-# Check if image is from allowed registry
-is_allowed_registry(image) if {
-    registry := extract_registry(image)
-    registry in input.allowed_registries
-}
+# # Check if image is from allowed registry
+# is_allowed_registry(image) if {
+#     registry := extract_registry(image)
+#     registry in input.allowed_registries
+# }
 
-# Default allow for images without registry (docker.io)
-is_allowed_registry(image) if {
-    not contains(image, "/")
-    "docker.io" in input.allowed_registries
-}
+# # Default allow for images without registry (docker.io)
+# is_allowed_registry(image) if {
+#     not contains(image, "/")
+#     "docker.io" in input.allowed_registries
+# }
 
-# Extract registry from image
-extract_registry(image) := registry if {
-    contains(image, "/")
-    parts := split(image, "/")
-    contains(parts[0], ".")
-    registry := parts[0]
-}
+# # Extract registry from image
+# extract_registry(image) := registry if {
+#     contains(image, "/")
+#     parts := split(image, "/")
+#     contains(parts[0], ".")
+#     registry := parts[0]
+# }
 
-extract_registry(image) := registry if {
-    contains(image, "/")
-    parts := split(image, "/")
-    contains(parts[0], ":")
-    registry := parts[0]
-}
+# extract_registry(image) := registry if {
+#     contains(image, "/")
+#     parts := split(image, "/")
+#     contains(parts[0], ":")
+#     registry := parts[0]
+# }
 
-extract_registry(image) := "docker.io" if {
-    not contains(image, "/")
-}
+# extract_registry(image) := "docker.io" if {
+#     not contains(image, "/")
+# }
 
-extract_registry(image) := "docker.io" if {
-    contains(image, "/")
-    parts := split(image, "/")
-    not contains(parts[0], ".")
-    not contains(parts[0], ":")
-}
+# extract_registry(image) := "docker.io" if {
+#     contains(image, "/")
+#     parts := split(image, "/")
+#     not contains(parts[0], ".")
+#     not contains(parts[0], ":")
+# }
 
 # =============================================================================
 # RESOURCE LIMITS
@@ -302,7 +302,22 @@ allowed_env_vars := {
     "MINER_SS58",
     "VALIDATORS",
     "CLUSTER_NAME",
-    "CONTROL_PLANE_URL_FILE"
+    "CONTROL_PLANE_URL_FILE",
+    "CHUTES_EXECUTION_CONTEXT",
+    "CHUTES_EXTERNAL_HOST",
+    "CHUTES_LAUNCH_JWT",
+    "CHUTES_PORT_LOGGING",
+    "CHUTES_PORT_PRIMARY",
+    "HF_HOME",
+    "CIVITAI_HOME",
+    "NCCL_DEBUG",
+    "NCCL_IB_DISABLE",
+    "NCCL_NET_GDR_LEVEL",
+    "NCCL_P2P_DISABLE",
+    "NCCL_SHM_DISABLE",
+    "NCCL_SOCKET_FAMILY",
+    "NCCL_SOCKET_IFNAME",
+    "VLLM_DISABLE_TELEMETRY"
 }
 
 # =============================================================================
