@@ -5,7 +5,7 @@ import logging
 from loguru import logger
 from sek8s.config import AttestationServiceConfig
 from sek8s.exceptions import AttestationException, NvmlException
-from sek8s.models import GPU
+from sek8s.models import DeviceInfo
 from sek8s.providers.gpu import GpuDeviceProvider
 from sek8s.providers.nvtrust import NvEvidenceProvider
 from sek8s.providers.tdx import TdxQuoteProvider
@@ -61,10 +61,15 @@ class AttestationServer(WebServer):
                 detail=f"Unexpected exception encountered generating attestaion data."
             )
         
-    async def get_device_info(self) -> list[GPU]:
+    async def get_device_info(
+        self, 
+        gpu_ids: list[str] = Query(
+            None, description="List of GPU IDs to use.  If not provided gets all devices."
+        )
+    ) -> list[DeviceInfo]:
         try:
             gpu_provider = GpuDeviceProvider()
-            device_info = gpu_provider.get_device_info()
+            device_info = gpu_provider.get_device_info(gpu_ids)
 
             return device_info
         except NvmlException as e:
