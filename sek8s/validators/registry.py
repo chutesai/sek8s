@@ -94,7 +94,8 @@ class RegistryValidator(ValidatorBase):
                 prefix = allowed[:-1]
                 if registry.startswith(prefix):
                     return True
-            elif allowed == registry:
+            elif allowed.lower() == registry.lower():
                 return True
 
+        logger.warning(f"Registry {registry} not in {self.config.allowed_registries}")
         return False
