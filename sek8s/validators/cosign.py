@@ -44,6 +44,8 @@ class CosignValidator(ValidatorBase):
         obj = request.get("object", {})
         images = self.extract_images(obj)
 
+        logger.debug(f"Found {len(images)} images for pod {obj.get("metadata", {}).get("name", "Unknown")}")
+
         if not images:
             return ValidationResult.allow()
 
@@ -53,6 +55,8 @@ class CosignValidator(ValidatorBase):
             try:
                 # Extract registry from image
                 registry = self._extract_registry(image)
+
+                logger.debug(f"Extracted registry {registry}")
 
                 # Get registry-specific cosign configuration
                 registry_config = self.cosign_config.get_registry_config(registry)
@@ -129,6 +133,7 @@ class CosignValidator(ValidatorBase):
     ) -> bool:
         """Verify image signature using cosign based on registry configuration."""
         try:
+            logger.debug(f"Verifying image signature for {image=}")
             # Resolve tag to digest if needed for consistent signature verification
             resolved_image = await self._resolve_image_reference(image)
 
@@ -146,42 +151,43 @@ class CosignValidator(ValidatorBase):
 
     async def _verify_with_key(self, image: str, registry_config: CosignRegistryConfig) -> bool:
         """Verify image signature using a public key."""
+        valid = False
         if not registry_config.public_key or not registry_config.public_key.exists():
             logger.error(f"Public key not found: {registry_config.public_key}")
-            return False
+        else:
+            try:
+                # Build cosign verify command
+                cmd = ["cosign", "verify", "--key", str(registry_config.public_key), image]
 
-        try:
-            # Build cosign verify command
-            cmd = ["cosign", "verify", "--key", str(registry_config.public_key), image]
+                # Add Rekor URL if specified
+                if registry_config.rekor_url:
+                    cmd.extend(["--rekor-url", registry_config.rekor_url])
 
-            # Add Rekor URL if specified
-            if registry_config.rekor_url:
-                cmd.extend(["--rekor-url", registry_config.rekor_url])
+                logger.info(f"Running: {' '.join(cmd)}")
 
-            logger.debug(f"Running: {' '.join(cmd)}")
+                process = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                
+                await process.wait()
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
+                if process.returncode == 0:
+                    result_output = await process.stdout.read()
+                    # Additional validation: ensure output is valid JSON
+                    try:
+                        verification_result = json.loads(result_output.decode())
+                        # Cosign verify returns a list of verification results
+                        logger.info(f"Verification result: {verification_result}")
+                        valid = isinstance(verification_result, list) and len(verification_result) > 0
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON output from cosign verify: {result_output.decode()}")
+                else:
+                    result_output = await process.stderr.read()
+                    logger.debug(f"Cosign key verification failed for {image}: {result_output.decode()}")
+            except Exception as e:
+                logger.error(f"Exception during key-based verification: {e}")
 
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0:
-                # Additional validation: ensure output is valid JSON
-                try:
-                    verification_result = json.loads(stdout.decode())
-                    # Cosign verify returns a list of verification results
-                    return isinstance(verification_result, list) and len(verification_result) > 0
-                except json.JSONDecodeError:
-                    logger.error(f"Invalid JSON output from cosign verify: {stdout.decode()}")
-                    return False
-            else:
-                logger.debug(f"Cosign key verification failed for {image}: {stderr.decode()}")
-                return False
-
-        except Exception as e:
-            logger.error(f"Exception during key-based verification: {e}")
-            return False
+        return valid
 
     async def _verify_keyless(self, image: str, registry_config: CosignRegistryConfig) -> bool:
         """Verify image signature using keyless verification (OIDC)."""
