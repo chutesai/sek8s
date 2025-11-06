@@ -42,6 +42,7 @@ class ServerConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
+        env_prefix="",
         extra='ignore'
     )
 
@@ -68,7 +69,6 @@ class AttestationServiceConfig(ServerConfig):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="ATTEST_",
         extra='ignore'
     )
 
@@ -88,7 +88,6 @@ class AttestationProxyConfig(ServerConfig):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="PROXY_",
         extra='ignore'
     )
 
@@ -99,7 +98,6 @@ class AdmissionConfig(ServerConfig):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="ADMISSION_",
         extra='ignore'
     )
 
@@ -225,7 +223,6 @@ class OPAConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="",
     )
 
 
@@ -276,7 +273,7 @@ class CosignConfig(BaseSettings):
     )
 
     # Cosign config file path
-    config_file: Optional[Path] = Field(
+    cosign_registries_file: Optional[Path] = Field(
         default=None, description="Path to cosign registry configuration JSON file"
     )
 
@@ -284,7 +281,6 @@ class CosignConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="COSIGN_",
     )
 
     @field_validator("registry_configs", mode="before")
@@ -316,7 +312,7 @@ class CosignConfig(BaseSettings):
             return
 
         # Try to load from config file
-        config_file_path = self.config_file
+        config_file_path = self.cosign_registries_file
         if not config_file_path:
             config_file_path = Path("/etc/admission-controller/cosign-registries.json")
 
@@ -384,16 +380,18 @@ class CosignConfig(BaseSettings):
         if pattern == "*":
             return True
 
+        _registry = registry.lower()
+
         if "*" in pattern:
             # Simple wildcard matching
             if pattern.endswith("/*"):
                 prefix = pattern[:-2]
-                return registry.startswith(prefix)
+                return _registry.startswith(prefix.lower())
             elif pattern.startswith("*/"):
                 suffix = pattern[2:]
-                return registry.endswith(suffix)
+                return _registry.endswith(suffix.lower())
 
-        return registry == pattern
+        return _registry == pattern
 
 
 # For backward compatibility and convenience
