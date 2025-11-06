@@ -118,7 +118,7 @@ def default_cosign_config():
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    return CosignConfig(config_file=config_file)
+    return CosignConfig(cosign_registries_file=config_file)
 
 
 @pytest.fixture
@@ -140,7 +140,7 @@ def disabled_cosign_config():
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    return CosignConfig(config_file=config_file)
+    return CosignConfig(cosign_registries_file=config_file)
 
 
 @pytest.fixture
@@ -175,7 +175,7 @@ def mixed_registry_cosign_config():
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    return CosignConfig(config_file=config_file)
+    return CosignConfig(cosign_registries_file=config_file)
 
 
 def create_cosign_validator_with_config(
@@ -339,7 +339,7 @@ async def test_invalid_public_key_path(config):
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    cosign_config = CosignConfig(config_file=config_file)
+    cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     validator = create_cosign_validator_with_config(config, cosign_config)
     image_name = f"{REGISTRY_URL}/test-app:signed"
@@ -362,7 +362,7 @@ async def test_no_registry_configuration_match(config):
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    cosign_config = CosignConfig(config_file=config_file)
+    cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     validator = create_cosign_validator_with_config(config, cosign_config)
 
@@ -392,7 +392,7 @@ async def test_keyless_verification_configuration():
         ]
     }
     config_file = create_cosign_config_file(config_data)
-    cosign_config = CosignConfig(config_file=config_file)
+    cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     # Verify the configuration is loaded correctly
     registry_config = cosign_config.get_registry_config("gcr.io")
@@ -478,7 +478,7 @@ def test_cosign_config_loading():
     }
 
     config_file = create_cosign_config_file(config_data)
-    cosign_config = CosignConfig(config_file=config_file)
+    cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     # Verify configurations were loaded
     assert len(cosign_config.registry_configs) == 2
@@ -522,7 +522,7 @@ def test_registry_pattern_matching():
     }
 
     config_file = create_cosign_config_file(config_data)
-    cosign_config = CosignConfig(config_file=config_file)
+    cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     # Test exact match
     config = cosign_config.get_registry_config("gcr.io")

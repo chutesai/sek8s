@@ -370,13 +370,13 @@ class TestCosignConfig:
             ]
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(config_data, f)
-            config_file = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as fh:
+            json.dump(config_data, fh)
+            fh.flush()
+            config_file = fh.name
 
-        try:
             with patch("pathlib.Path.exists", return_value=True):
-                config = CosignConfig(config_file=Path(config_file))
+                config = CosignConfig(cosign_registries_file=Path(config_file))
 
                 assert len(config.registry_configs) == 2
 
@@ -391,8 +391,6 @@ class TestCosignConfig:
                 assert gcr_config.verification_method == "keyless"
                 assert gcr_config.keyless_identity_regex == "^https://github.com/.*"
                 assert gcr_config.keyless_issuer == "https://token.actions.githubusercontent.com"
-        finally:
-            os.unlink(config_file)
 
     def test_get_registry_config_exact_match(self):
         """Test getting registry config with exact match."""
