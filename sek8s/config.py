@@ -245,6 +245,9 @@ class CosignRegistryConfig(BaseSettings):
     keyless_identity_regex: Optional[str] = None
     keyless_issuer: Optional[str] = None
 
+    allow_http: bool = False
+    allow_insecure: bool = False
+
     # Rekor transparency log URL
     rekor_url: str = "https://rekor.sigstore.dev"
 

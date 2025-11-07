@@ -157,13 +157,26 @@ class CosignValidator(ValidatorBase):
         else:
             try:
                 # Build cosign verify command
-                cmd = ["cosign", "verify", "--key", str(registry_config.public_key), image]
+                cmd = [
+                    "cosign", 
+                    "verify",
+                    "--key", 
+                    str(registry_config.public_key)
+                ]
+
+                if registry_config.allow_http:
+                    cmd.append("--allow-http-registry")
+
+                if registry_config.allow_insecure:
+                    cmd.append("--allow-insecure-registry")
 
                 # Add Rekor URL if specified
                 if registry_config.rekor_url:
                     cmd.extend(["--rekor-url", registry_config.rekor_url])
 
-                logger.info(f"Running: {' '.join(cmd)}")
+                cmd.append(image)
+
+                logger.debug(f"Running: {' '.join(cmd)}")
 
                 process = await asyncio.create_subprocess_exec(
                     *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE

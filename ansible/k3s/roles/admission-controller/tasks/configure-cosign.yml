@@ -1,8 +1,8 @@
 - name: Configure cosign
   block:
     - name: Apply registry configuration
-      ansible.builtin.copy:
-        src: cosign-registries.json
+      ansible.builtin.template:
+        src: cosign-registries.json.j2
         dest: /etc/admission-controller/cosign-registries.json
         owner: root
         group: root
