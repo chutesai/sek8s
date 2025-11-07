@@ -177,13 +177,13 @@ class CosignValidator(ValidatorBase):
                     try:
                         verification_result = json.loads(result_output.decode())
                         # Cosign verify returns a list of verification results
-                        logger.info(f"Verification result: {verification_result}")
-                        valid = isinstance(verification_result, list) and len(verification_result) > 0
+                        logger.debug(f"Verification result: {verification_result}")
+                        valid = True
                     except json.JSONDecodeError:
-                        logger.error(f"Invalid JSON output from cosign verify: {result_output.decode()}")
+                        logger.warning(f"Invalid JSON output from cosign verify: {result_output.decode()}")
                 else:
                     result_output = await process.stderr.read()
-                    logger.debug(f"Cosign key verification failed for {image}: {result_output.decode()}")
+                    logger.error(f"Cosign key verification failed for {image}: {result_output.decode()}")
             except Exception as e:
                 logger.error(f"Exception during key-based verification: {e}")
 
