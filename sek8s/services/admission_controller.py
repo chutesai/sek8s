@@ -92,7 +92,7 @@ class AdmissionController:
         request = admission_review.get("request", {})
         uid = request.get("uid", "unknown")
 
-        logger.info(
+        logger.debug(
             "Processing admission request: uid=%s, kind=%s, operation=%s",
             uid,
             request.get("kind", {}).get("kind", "unknown"),
@@ -162,7 +162,7 @@ class AdmissionController:
                 duration=elapsed,
             )
 
-            logger.info(
+            logger.debug(
                 "Admission decision for %s: allowed=%s, duration=%.3fs", uid, allowed, elapsed
             )
 

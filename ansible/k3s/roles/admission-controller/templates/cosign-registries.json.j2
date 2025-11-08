@@ -4,7 +4,7 @@
       "registry": "parachutes/*",
       "require_signature": true,
       "verification_method": "key",
-      "public_key": "/root/.cosign/parachutes.pub",
+      "public_key": "/etc/admission-controller/cosign/cosign.pub",
       "rekor_url": "https://rekor.sigstore.dev"
     },
     {
@@ -43,10 +43,19 @@
       "keyless_issuer": "https://token.actions.githubusercontent.com"
     },
     {
+      "registry": "{{ validator }}.localregistry.chutes.ai",
+      "require_signature": true,
+      "verification_method": "key",
+      "allow_http": true,
+      "allow_insecure": true,
+      "public_key": "/etc/admission-controller/cosign/cosign.pub",
+      "rekor_url": "https://rekor.sigstore.dev"
+    },
+    {
       "registry": "*",
       "require_signature": true,
       "verification_method": "key",
-      "public_key": "/etc/admission-controller/.cosign/cosign.pub",
+      "public_key": "/etc/admission-controller/cosign/cosign.pub",
       "rekor_url": "https://rekor.sigstore.dev"
     }
   ]

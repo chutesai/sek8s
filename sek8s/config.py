@@ -26,9 +26,9 @@ class NamespacePolicy(BaseSettings):
 
 class ServerConfig(BaseSettings):
     # Server configuration
-    bind_address: str = Field(default="127.0.0.1", alias="BIND_ADDRESS")
-    port: int = Field(default=8443, alias="PORT", ge=1, le=65535)
-    uds_path: Optional[Path] = Field(default=None, alias="UDS_PATH")
+    bind_address: str = Field(default="127.0.0.1")
+    port: int = Field(default=8443, ge=1, le=65535)
+    uds_path: Optional[Path] = Field(default=None)
 
     # TLS configuration
     tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
@@ -42,10 +42,8 @@ class ServerConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="",  # No prefix in base class; subclasses set their own
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
+        env_prefix="",
+        extra='ignore'
     )
 
     @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="after")
@@ -71,21 +69,26 @@ class AttestationServiceConfig(ServerConfig):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="ATTEST_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
+        extra='ignore'
     )
 
 class AttestationProxyConfig(ServerConfig):
 
+    _allowed_validators: Optional[list[str]] = None
+
+    allowed_validators_str: str = Field(..., alias="ALLOWED_VALIDATORS")
+    miner_ss58: str = Field(..., alias="MINER_SS58")
+
+    @property
+    def allowed_validators(self) -> list[str]:
+        if self._allowed_validators is None:
+            self._allowed_validators = [item.strip() for item in self.allowed_validators_str.split(',') if item.strip()]
+        return self._allowed_validators
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="PROXY_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
+        extra='ignore'
     )
 
 class AdmissionConfig(ServerConfig):
@@ -95,10 +98,7 @@ class AdmissionConfig(ServerConfig):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="ADMISSION_",
-        populate_by_name=True,
-        validate_assignment=True,
-        extra="ignore",
+        extra='ignore'
     )
 
     # OPA configuration
@@ -143,17 +143,6 @@ class AdmissionConfig(ServerConfig):
 
     # Config file support
     config_file: Optional[Path] = Field(default=None, alias="CONFIG_FILE")
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        env_prefix="",  # No prefix since we use aliases
-        populate_by_name=True,  # Allow both field name and alias
-        use_enum_values=True,
-        validate_assignment=True,  # Validate on assignment
-        extra="ignore",  # Ignore extra fields
-    )
 
     @field_validator("namespace_policies", mode="before")
     @classmethod
@@ -234,8 +223,6 @@ class OPAConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="",
-        populate_by_name=True,
     )
 
 
@@ -257,6 +244,9 @@ class CosignRegistryConfig(BaseSettings):
     # Keyless verification settings
     keyless_identity_regex: Optional[str] = None
     keyless_issuer: Optional[str] = None
+
+    allow_http: bool = False
+    allow_insecure: bool = False
 
     # Rekor transparency log URL
     rekor_url: str = "https://rekor.sigstore.dev"
@@ -286,7 +276,7 @@ class CosignConfig(BaseSettings):
     )
 
     # Cosign config file path
-    config_file: Optional[Path] = Field(
+    cosign_registries_file: Optional[Path] = Field(
         default=None, description="Path to cosign registry configuration JSON file"
     )
 
@@ -294,8 +284,6 @@ class CosignConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        env_prefix="COSIGN_",
-        populate_by_name=True,
     )
 
     @field_validator("registry_configs", mode="before")
@@ -327,7 +315,7 @@ class CosignConfig(BaseSettings):
             return
 
         # Try to load from config file
-        config_file_path = self.config_file
+        config_file_path = self.cosign_registries_file
         if not config_file_path:
             config_file_path = Path("/etc/admission-controller/cosign-registries.json")
 
@@ -395,16 +383,18 @@ class CosignConfig(BaseSettings):
         if pattern == "*":
             return True
 
+        _registry = registry.lower()
+
         if "*" in pattern:
             # Simple wildcard matching
             if pattern.endswith("/*"):
                 prefix = pattern[:-2]
-                return registry.startswith(prefix)
+                return _registry.startswith(prefix.lower())
             elif pattern.startswith("*/"):
                 suffix = pattern[2:]
-                return registry.endswith(suffix)
+                return _registry.endswith(suffix.lower())
 
-        return registry == pattern
+        return _registry == pattern
 
 
 # For backward compatibility and convenience

@@ -6,7 +6,7 @@ authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.10,<3.15"
 autoflake = "^2.3.1"
 flask = "^3.1.1"
 cryptography = "^45.0.4"
@@ -17,12 +17,14 @@ pydantic = "^2.11.7"
 pydantic-settings = "^2.10.1"
 loguru = "^0.7.3"
 pytest-asyncio = "^1.2.0"
-fastapi = "^0.118.0"
+fastapi = ">=0.110.1,<0.111.0"
 uvicorn = "^0.37.0"
 nvidia-ml-py = "^13.580.82"
 httpx = "^0.28.1"
 orjson = "^3.11.3"
 backoff = "^2.2.1"
+bittensor = "^9.12.2"
+substrate-interface = "^1.7.11"
 
 
 [tool.poetry.group.dev.dependencies]

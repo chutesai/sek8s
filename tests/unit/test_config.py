@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open
 
-from sek8s.config import AdmissionConfig, NamespacePolicy, OPAConfig, CosignConfig, load_config
+from sek8s.config import AdmissionConfig, AttestationProxyConfig, NamespacePolicy, OPAConfig, CosignConfig, load_config
 
 
 class TestAdmissionConfig:
@@ -295,7 +295,7 @@ class TestCosignConfig:
         assert default_registry.registry == "*"
         assert default_registry.require_signature is True
         assert default_registry.verification_method == "key"
-        assert default_registry.public_key == Path("/root/.cosign/cosign.pub")
+        assert default_registry.public_key == Path("/etc/admission-controller/.cosign/cosign.pub")
 
     def test_cosign_config_from_env(self):
         """Test Cosign config with environment variables."""
@@ -370,13 +370,13 @@ class TestCosignConfig:
             ]
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(config_data, f)
-            config_file = f.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as fh:
+            json.dump(config_data, fh)
+            fh.flush()
+            config_file = fh.name
 
-        try:
             with patch("pathlib.Path.exists", return_value=True):
-                config = CosignConfig(config_file=Path(config_file))
+                config = CosignConfig(cosign_registries_file=Path(config_file))
 
                 assert len(config.registry_configs) == 2
 
@@ -391,8 +391,6 @@ class TestCosignConfig:
                 assert gcr_config.verification_method == "keyless"
                 assert gcr_config.keyless_identity_regex == "^https://github.com/.*"
                 assert gcr_config.keyless_issuer == "https://token.actions.githubusercontent.com"
-        finally:
-            os.unlink(config_file)
 
     def test_get_registry_config_exact_match(self):
         """Test getting registry config with exact match."""
@@ -527,3 +525,27 @@ class TestLoadConfig:
         assert config.bind_address == "0.0.0.0"
         assert config.port == 9000
         assert config.debug is True
+
+class TestProxyConfig:
+
+    def test_allowed_validator(self):
+        os.environ["ALLOWED_VALIDATORS"] = "abcd1234"
+        config = AttestationProxyConfig()
+
+        assert len(config.allowed_validators) == 1
+        assert config.allowed_validators[0] == "abcd1234"
+
+    def test_allowed_validators(self):
+        os.environ["ALLOWED_VALIDATORS"] = "abcd1234,efgh6789"
+        config = AttestationProxyConfig()
+
+        assert len(config.allowed_validators) == 2
+        assert config.allowed_validators[0] == "abcd1234"
+        assert config.allowed_validators[1] == "efgh6789"
+
+    def test_miner_ss58(self):
+        os.environ["ALLOWED_VALIDATORS"] = "abcd1234,efgh6789"
+        os.environ["MINER_SS58"] = "abcd1234"
+        config = AttestationProxyConfig()
+
+        assert config.miner_ss58 == "abcd1234"

@@ -20,4 +20,8 @@ kubectl create secret generic miner-credentials \
   --from-literal=seed=$MINER_SEED \
   -n chutes
 
+kubectl create secret generic miner-credentials \
+  --from-literal=ss58=$MINER_SS58 \
+  -n attestation-system
+
 log "Successfully created miner credentials."

@@ -43,7 +43,7 @@ deny contains msg if {
     input.request.kind.kind == "Job"
     volume := input.request.object.spec.template.spec.volumes[_]
     volume.hostPath
-    not startswith(volume.hostPath.path, "/cache")
+    not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     msg := sprintf("Job hostPath volume '%s' not allowed. Use emptyDir for temporary storage.", [volume.hostPath.path])
 }
 
@@ -55,7 +55,7 @@ deny contains msg if {
     input.request.kind.kind == "CronJob"
     volume := input.request.object.spec.jobTemplate.spec.template.spec.volumes[_]
     volume.hostPath
-    not startswith(volume.hostPath.path, "/cache")
+    not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     msg := sprintf("CronJob hostPath volume '%s' not allowed.", [volume.hostPath.path])
 }
 
@@ -66,7 +66,7 @@ is_tmp_mount_for_job(pod) if {
 
 # Helper function to check if a hostPath is allowed for this pod
 is_allowed_hostpath(path, pod) if {
-    startswith(path, "/cache")
+    startswith(path, "/var/snap/cache")
 }
 
 is_allowed_hostpath(path, pod) if {

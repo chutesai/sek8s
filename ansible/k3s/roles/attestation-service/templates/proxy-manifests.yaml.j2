@@ -1,0 +1,304 @@
+# Dual-Port Attestation Proxy - Kubernetes Manifests
+# 
+# Architecture:
+#   - External port 8443: NodePort service, requires validator signature
+#   - Internal port 8444: ClusterIP service, NetworkPolicy restricted to chutes namespace
+#
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: attestation-system
+  labels:
+    name: attestation-system
+
+---
+# Service Account for attestation proxy
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attestation-proxy
+  namespace: attestation-system
+automountServiceAccountToken: false
+
+---
+# Secret containing allowed validator hotkeys
+apiVersion: v1
+kind: Secret
+metadata:
+  name: validator-auth
+  namespace: attestation-system
+type: Opaque
+stringData:
+  # Comma-separated list of allowed validator SS58 addresses
+  allowed-validators: "{{ validator }}"
+
+---
+# DaemonSet - runs on all control plane nodes
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: attestation-proxy
+  namespace: attestation-system
+  labels:
+    app: attestation-proxy
+spec:
+  selector:
+    matchLabels:
+      app: attestation-proxy
+  template:
+    metadata:
+      labels:
+        app: attestation-proxy
+    spec:
+      serviceAccountName: attestation-proxy
+      tolerations:
+      - operator: Exists  # Run on all nodes
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"  # Only control plane nodes
+      securityContext:
+        supplementalGroups:
+        - 987  # tdx-attest group GID
+      containers:
+      - name: attestation-proxy
+        image: parachutes/sek8s:latest
+        imagePullPolicy: Always
+        command:
+        - attestation-proxy
+        ports:
+        - name: https-external
+          containerPort: 8443
+          protocol: TCP
+        - name: https-internal
+          containerPort: 8444
+          protocol: TCP
+        volumeMounts:
+        - name: attestation-socket
+          mountPath: /var/run/attestation
+          readOnly: true
+        - name: host-certs
+          mountPath: /etc/ssl/host-certs
+          readOnly: true
+        - mountPath: /home/chutes/.bittensor
+          name: bittensor-data
+        - name: tmp
+          mountPath: /tmp
+        env:
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: WORKLOAD_NAMESPACE
+          value: "chutes"
+        - name: TLS_CERT_PATH
+          value: "/etc/ssl/host-certs/server.crt"
+        - name: TLS_KEY_PATH
+          value: "/etc/ssl/host-certs/server.key"
+        - name: CLIENT_CA_PATH
+          value: "/etc/ssl/certs/ca-certificates.crt"
+        - name: BIND_ADDRESS
+          value: "0.0.0.0"
+        - name: EXTERNAL_PORT
+          value: "8443"
+        - name: INTERNAL_PORT
+          value: "8444"
+        - name: MINER_SS58
+          valueFrom:
+            secretKeyRef:
+              name: miner-credentials
+              key: ss58
+        - name: ALLOWED_VALIDATORS
+          valueFrom:
+            secretKeyRef:
+              name: validator-auth
+              key: allowed-validators
+        - name: OPENBLAS_NUM_THREADS
+          value: '1'
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 999  # attestation socket group
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+            ephemeral-storage: "100Mi"
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+            ephemeral-storage: "50Mi"
+        livenessProbe:
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 2
+        readinessProbe:
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
+          initialDelaySeconds: 15
+          periodSeconds: 30
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          exec:
+            command:
+              - curl
+              - -k
+              - -f
+              - https://localhost:8443/health
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 10
+
+      volumes:
+      - name: attestation-socket
+        hostPath:
+          path: /run/attestation-service
+          type: Directory
+      - name: host-certs
+        hostPath:
+          path: /etc/attestation-service/certs
+          type: Directory
+      - emptyDir:
+          sizeLimit: 50Mi
+        name: bittensor-data
+      - name: tmp
+        emptyDir:
+          sizeLimit: 10Mi
+      
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+
+---
+# NodePort Service - External access for validators
+apiVersion: v1
+kind: Service
+metadata:
+  name: attestation-service-external
+  namespace: attestation-system
+  labels:
+    app: attestation-service
+    access: external
+spec:
+  type: NodePort
+  selector:
+    app: attestation-proxy
+  ports:
+  - name: https-external
+    port: 8443
+    targetPort: 8443
+    nodePort: 30443
+    protocol: TCP
+
+---
+# ClusterIP Service - Internal access for chute pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: attestation-service-internal
+  namespace: attestation-system
+  labels:
+    app: attestation-service
+    access: internal
+spec:
+  type: ClusterIP
+  selector:
+    app: attestation-proxy
+  ports:
+  - name: https-internal
+    port: 8443  # External facing port for chutes
+    targetPort: 8444  # Maps to internal port on pods
+    protocol: TCP
+
+---
+# NetworkPolicy: Restrict access to internal port (8444)
+# Only pods with label chutes/chute=true can access
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: attestation-proxy-ingress
+  namespace: attestation-system
+spec:
+  podSelector:
+    matchLabels:
+      app: attestation-proxy
+  policyTypes:
+  - Ingress
+  ingress:
+  # Port 8444 (internal): ONLY from chutes namespace with specific label
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: chutes
+      podSelector:
+        matchLabels:
+          chutes/chute: "true"
+    ports:
+    - protocol: TCP
+      port: 8444
+  
+  # Port 8443 (external): Allow from anywhere (validators via NodePort)
+  - ports:
+    - protocol: TCP
+      port: 8443
+
+---
+# NetworkPolicy: Chute pods egress to attestation service
+# Only pods with chutes/chute=true label can egress to attestation
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chute-attestation-access
+  namespace: chutes
+spec:
+  podSelector:
+    matchLabels:
+      chutes/chute: "true"
+  policyTypes:
+  - Egress
+  egress:
+  # Allow access to attestation service internal port ONLY
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: attestation-system
+      podSelector:
+        matchLabels:
+          app: attestation-proxy
+    ports:
+    - protocol: TCP
+      port: 8444
+  
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # Allow other necessary egress (adjust as needed for your workloads)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP

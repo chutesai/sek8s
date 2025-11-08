@@ -42,9 +42,6 @@ skip_cuda: false
 # Flag to enable/disable IPv6. Some hosts may require IPv6 to be on.
 ipv6_enabled: true
 
-# Chutes config
-validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
-
 # Module Security Configuration
 enable_module_security: true
 enable_module_signing: true

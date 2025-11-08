@@ -4,3 +4,9 @@
     state: restarted
     daemon_reload: yes
   listen: restart admission-controller
+
+- name: restart docker
+  systemd:
+    name: docker
+    state: restarted
+    daemon_reload: yes

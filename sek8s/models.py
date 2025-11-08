@@ -19,6 +19,7 @@ class DeviceInfo(BaseModel):
     minor: Optional[int] = Field(..., description="")
     clock_rate: float = Field(..., description="")
     ecc: Optional[bool] = Field(..., description="")
+    model_short_ref: str = Field(..., description="Short name for the GPU model")
 
     class Config:
         json_encoders = {
