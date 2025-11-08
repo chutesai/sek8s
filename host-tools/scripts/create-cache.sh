@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-LABEL="tdx-cache-storage"
+# Max 16 chars
+LABEL="tdx-cache"
 
 # Color output
 RED='\033[0;31m'
