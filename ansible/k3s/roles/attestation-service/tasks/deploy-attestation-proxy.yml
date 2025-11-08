@@ -2,8 +2,8 @@
 - name: Deploy Attesattion Proxy to K3s
   block:
     - name: Copy manfiest files
-      ansible.builtin.copy:
-        src: "files/manifests/proxy-manifests.yaml"
+      ansible.builtin.template:
+        src: "proxy-manifests.yaml.j2
         dest: /var/lib/rancher/k3s/server/manifests
         owner: root
         group: root

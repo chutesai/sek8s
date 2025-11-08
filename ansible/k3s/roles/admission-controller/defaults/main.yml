@@ -19,6 +19,8 @@ cache_enabled: true
 cache_ttl: 300
 debug_mode: false
 metrics_enabled: true
+# Chutes config
+validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
 
 # Registry allowlist
 allowed_registries:
@@ -30,4 +32,4 @@ allowed_registries:
   - nvcr.io
   - parachutes
   - bitnami
-  - 5FgapRUrM21n1HrHPa1uaGjywA3ayiZvG4RH2dvi3yHnt53M.localregistry.chutes.ai:30500
+  - "{{ validator }}.localregistry.chutes.ai:30500"

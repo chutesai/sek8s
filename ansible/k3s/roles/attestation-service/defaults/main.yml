@@ -3,3 +3,6 @@
 # Attestation Service settings
 admission_bind_address: "0.0.0.0"
 admission_port: 8080
+
+# Chutes config
+validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
