@@ -1,0 +1,99 @@
+---
+# ansible-deploy-cache-volume.yml
+# Ansible playbook to deploy cache volume verification and mount services
+# to a TDX guest VM during the build process.
+#
+# Usage:
+#   ansible-playbook -i inventory.yml ansible-deploy-cache-volume.yml
+#
+# This playbook:
+#   1. Copies the verification script to /usr/local/bin/
+#   2. Installs the systemd service units
+#   3. Enables (but does not start) the services
+#   4. Creates the /var/snap mount point directory
+#
+# The services will automatically start on next boot when the cache volume
+# is attached to the VM.
+
+- name: Deploy cache volume verification and mount services
+  vars:
+    # Path to the files on the Ansible control node
+    files_dir: "files"
+  block:
+    - name: Ensure /usr/local/bin exists
+      file:
+        path: /usr/local/bin
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Copy cache volume verification script
+      copy:
+        src: "{{ files_dir }}/verify-cache-volume.sh"
+        dest: /usr/local/bin/verify-cache-volume.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: verify_script
+
+    - name: Copy verification service unit
+      copy:
+        src: "{{ files_dir }}/verify-cache-volume.service"
+        dest: /etc/systemd/system/verify-cache-volume.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: verify_service
+
+    - name: Copy mount unit
+      copy:
+        src: "{{ files_dir }}/var-snap.mount"
+        dest: /etc/systemd/system/var-snap.mount
+        mode: '0644'
+        owner: root
+        group: root
+      register: mount_unit
+
+    - name: Reload systemd daemon if units changed
+      systemd:
+        daemon_reload: yes
+      when: verify_service.changed or mount_unit.changed
+
+    - name: Create /var/snap mount point directory
+      file:
+        path: /var/snap
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Enable verify-cache-volume.service (but do not start)
+      systemd:
+        name: verify-cache-volume.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      # Use failed_when to handle the case where service can't start in build VM
+      # (because /dev/vdb doesn't exist yet)
+      failed_when: false
+
+    - name: Enable var-snap.mount (but do not start)
+      systemd:
+        name: var-snap.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Verify installation
+      command: systemctl is-enabled verify-cache-volume.service
+      register: service_status
+      changed_when: false
+      failed_when: service_status.stdout != "enabled"
+
+    - name: Verify mount unit installation
+      command: systemctl is-enabled var-snap.mount
+      register: mount_status
+      changed_when: false
+      failed_when: mount_status.stdout != "enabled"

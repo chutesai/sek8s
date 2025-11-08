@@ -1,0 +1,24 @@
+[Unit]
+Description=Cache storage for /var/snap
+Documentation=man:systemd.mount(5)
+# This mount unit runs after verification
+After=verify-cache-volume.service
+Requires=verify-cache-volume.service
+# Must be mounted before cloud-init final and k3s
+Before=cloud-final.service
+Before=k3s.service
+Before=k3s-agent.service
+Before=snapd.service
+# If verification fails, this won't run due to Requires= dependency
+
+[Mount]
+# Use the label to identify the correct device
+What=/dev/disk/by-label/tdx-cache
+Where=/var/snap
+Type=ext4
+Options=defaults,noatime
+# Don't allow boot to continue if mount fails
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target
