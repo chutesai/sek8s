@@ -3,8 +3,8 @@
   block:
     - name: Copy manfiest files
       ansible.builtin.template:
-        src: "proxy-manifests.yaml.j2
-        dest: /var/lib/rancher/k3s/server/manifests
+        src: "proxy-manifests.yaml.j2"
+        dest: /var/lib/rancher/k3s/server/manifests/proxy-manifests.yaml
         owner: root
         group: root
         mode: '0600'
@@ -15,8 +15,8 @@
         path: /var/lib/rancher/k3s/server/manifests/proxy-manifests.yaml
         owner: root
         group: root
-        mode: '0400'  # Read-only
-        attributes: '+i'  # Immutable flag (requires root to remove)
+        mode: '0400'
+        attributes: '+i'
 
     # Ensure namespace exists
     - name: Create Kubernetes namespace

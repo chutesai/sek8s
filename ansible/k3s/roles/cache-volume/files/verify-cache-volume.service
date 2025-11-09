@@ -1,0 +1,33 @@
+[Unit]
+Description=Verify cache volume before mounting
+Documentation=man:systemd.mount(5)
+# Run early in boot, after devices are available but before mounting filesystems
+DefaultDependencies=no
+After=systemd-udev-settle.service
+After=local-fs-pre.target
+# Must complete before the mount unit
+Before=var-snap.mount
+# Must complete before cloud-init stages
+Before=cloud-config.service
+Before=cloud-final.service
+# Must complete before k3s
+Before=k3s.service
+Before=k3s-agent.service
+# Ensure /dev is available
+RequiresMountsFor=/dev
+# If this service fails, don't continue boot
+OnFailure=poweroff.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/verify-cache-volume.sh
+RemainAfterExit=yes
+# Output to both journal and console for debugging
+StandardOutput=journal+console
+StandardError=journal+console
+# Don't timeout - verification is critical
+TimeoutStartSec=infinity
+
+[Install]
+# Start during early boot in the local-fs target
+WantedBy=local-fs.target

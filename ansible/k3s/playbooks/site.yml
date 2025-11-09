@@ -138,6 +138,21 @@
         apply:
           tags: admission-controller
 
+- name: Setup cache volume service
+  hosts: vm
+  become: true
+  tags:
+    - cache-volume
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cache volume setup
+      ansible.builtin.include_role:
+        name: cache-volume
+        apply:
+          tags: cache-volume
+
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all
   become: true

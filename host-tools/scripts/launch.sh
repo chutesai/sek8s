@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
 #              use preconfigured network interface for flexible networking.
-# Enhanced for TDX + H200 compatibility with configurable memory settings and cloud-init support
-# FIXED: Properly separate user-data and network-config for cloud-init
+# Enhanced for TDX compatibility with configurable memory settings and cloud-init support
 
 # Default values
 IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
@@ -18,6 +17,7 @@ VM_GATEWAY=""  # VM gateway from setup script
 VM_DNS="8.8.8.8"  # Default DNS server
 SSH_PORT=2222  # Host port for SSH (maps to VM:22)
 NETWORK_TYPE=""  # Network backend: tap, macvtap, user
+CACHE_VOLUME=""  # Path to cache volume qcow2 (optional)
 
 # Cloud-init variables
 USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
@@ -118,6 +118,10 @@ while [[ $# -gt 0 ]]; do
       MINER_SEED="$2"
       shift 2
       ;;
+    --cache-volume)
+      CACHE_VOLUME="$2"
+      shift 2
+      ;;
     --cloud-init-user-data)
       USER_DATA="$2"
       shift 2
@@ -196,6 +200,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --hostname NAME           VM hostname for generated user-data"
       echo "  --miner-ss58 VALUE        Content for /root/miner-ss58 file"
       echo "  --miner-seed VALUE        Content for /root/miner-seed file"
+      echo "  --cache-volume PATH       Path to cache volume qcow2 (optional, mounted at /var/snap)"
       echo "  --cloud-init-user-data FILE     Custom user-data YAML (overrides generated)"
       echo "  --cloud-init-meta-data FILE     Custom meta-data YAML (optional)"
       echo "  --cloud-init-network-config FILE Custom network-config YAML (overrides generated)"
@@ -208,6 +213,9 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Example with macvtap networking:"
       echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type macvtap --ssh-port 2222"
+      echo ""
+      echo "Example with cache volume:"
+      echo "  $0 --cache-volume /path/to/cache-volume.qcow2 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type macvtap"
       exit 0
       ;;
     *)
@@ -234,6 +242,32 @@ fi
 if [ -z "$USER_DATA" ] && { [ -z "$HOSTNAME" ] || [ -z "$MINER_SS58" ] || [ -z "$MINER_SEED" ]; }; then
   echo "Error: --hostname, --miner-ss58, and --miner-seed are required unless --cloud-init-user-data is provided."
   exit 1
+fi
+
+# Validate cache volume if provided
+if [ -n "$CACHE_VOLUME" ]; then
+  if [ ! -f "$CACHE_VOLUME" ]; then
+    echo "Error: Cache volume file not found: $CACHE_VOLUME"
+    exit 1
+  fi
+  
+  if [ ! -r "$CACHE_VOLUME" ]; then
+    echo "Error: Cache volume file not readable: $CACHE_VOLUME"
+    exit 1
+  fi
+  
+  # Verify it's a qcow2 file
+  if command -v qemu-img >/dev/null 2>&1; then
+    FILE_FORMAT=$(qemu-img info "$CACHE_VOLUME" 2>/dev/null | grep '^file format:' | awk '{print $3}')
+    if [ "$FILE_FORMAT" != "qcow2" ]; then
+      echo "Error: Cache volume is not in qcow2 format: $CACHE_VOLUME (detected: $FILE_FORMAT)"
+      echo "Expected a qcow2 image created with create-cache-volume.sh"
+      exit 1
+    fi
+    echo "Cache volume validated: $CACHE_VOLUME (format: qcow2)"
+  else
+    echo "Warning: qemu-img not found, skipping cache volume format verification"
+  fi
 fi
 
 # Generate user-data if params provided and no custom user-data
@@ -485,6 +519,17 @@ if [ -n "$USER_DATA" ]; then
   DEV_OPTS+=( -drive file="$CIDATA_FILE",if=virtio,format=raw,readonly=on )
 fi
 
+# Add cache volume if provided
+if [ -n "$CACHE_VOLUME" ]; then
+  echo "Cache volume: $CACHE_VOLUME"
+  echo "  Will be auto mounted at /var/snap by guest verification service"
+  echo "  Label must be 'tdx-cache' or VM will shut down"
+  
+  # Attach cache volume as second virtio drive (vdb)
+  # Use cache=none for best performance and data integrity in virtualized environment
+  DEV_OPTS+=( -drive file="$CACHE_VOLUME",if=virtio,cache=none,format=qcow2 )
+fi
+
 if [ "$FOREGROUND" = true ]; then
   SERIAL_OPTS=( -serial mon:stdio )
 else
@@ -499,6 +544,11 @@ echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
 echo "Network: $NETWORK_TYPE interface $NET_IFACE"
 echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
+if [ -n "$CACHE_VOLUME" ]; then
+  echo "Cache volume: Enabled ($CACHE_VOLUME -> /dev/vdb -> /var/snap)"
+else
+  echo "Cache volume: Not provided (optional)"
+fi
 if [ -n "$USER_DATA" ]; then
   echo "Cloud-init: Enabled with user-data from $USER_DATA"
   [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
@@ -539,6 +589,13 @@ if [ "$FOREGROUND" = false ]; then
   echo "  k3s API: <host_public_ip>:6443"
   echo "  k3s NodePorts: <host_public_ip>:30000-32767"
   echo ""
+  if [ -n "$CACHE_VOLUME" ]; then
+    echo "=== Cache Volume Notes ==="
+    echo "The cache volume will be verified and mounted at boot."
+    echo "If verification fails (wrong label, not ext4, etc), the VM will shut down immediately."
+    echo "Check serial log if VM shuts down: cat $LOGFILE | grep -i cache"
+    echo ""
+  fi
   echo "=== TDX H200 nvidia-smi Troubleshooting Notes ==="
   echo "Current memory settings:"
   echo "  - PCI hole: ${CALCULATED_PCI_HOLE_GB}GB"
