@@ -4,7 +4,7 @@
     - name: Copy manfiest files
       ansible.builtin.template:
         src: "proxy-manifests.yaml.j2"
-        dest: /var/lib/rancher/k3s/server/manifests
+        dest: /var/lib/rancher/k3s/server/manifests/proxy-manifests.yaml
         owner: root
         group: root
         mode: '0600'
