@@ -7,7 +7,6 @@
 set -euo pipefail
 
 EXPECTED_LABEL="tdx-cache"
-DEVICE="/dev/vdb"
 LOG_TAG="verify-cache-volume"
 
 # Function to log messages to both console and journal
@@ -22,20 +21,35 @@ log_error() {
 }
 
 log_info "=== Cache Volume Verification Started ==="
-log_info "Expected device: $DEVICE"
 log_info "Expected label: $EXPECTED_LABEL"
 
-# Check if device exists
-if [ ! -b "$DEVICE" ]; then
-    log_error "Cache device $DEVICE not found"
-    log_error "The cache volume was not attached to this VM"
+# Find device by label instead of hardcoding /dev/vdb
+# This handles cases where cloud-init or other drives shift the device name
+DEVICE=$(blkid -l -o device -t LABEL="$EXPECTED_LABEL" 2>/dev/null)
+
+if [ -z "$DEVICE" ]; then
+    log_error "Cache device with label '$EXPECTED_LABEL' not found"
+    log_error "Available block devices:"
+    blkid | while read line; do
+        log_error "  $line"
+    done
+    log_error "The cache volume was not attached to this VM or has wrong label"
     log_error "Shutting down immediately to prevent boot with missing cache"
     sync
-    systemctl poweroff --force --force
+    shutdown -h now
     exit 1
 fi
 
-log_info "Device $DEVICE found"
+log_info "Cache device found: $DEVICE"
+
+# Verify it's actually a block device
+if [ ! -b "$DEVICE" ]; then
+    log_error "Device $DEVICE is not a block device"
+    log_error "Shutting down immediately"
+    sync
+    shutdown -h now
+    exit 1
+fi
 
 # Give the device a moment to settle (sometimes needed after virtio attachment)
 sleep 1
@@ -47,7 +61,7 @@ if ! FS_INFO=$(blkid -o export "$DEVICE" 2>&1); then
     log_error "The device may not be formatted or is corrupt"
     log_error "Shutting down immediately"
     sync
-    systemctl poweroff --force --force
+    shutdown -h now
     exit 1
 fi
 
@@ -66,7 +80,7 @@ if [ "$FS_TYPE" != "ext4" ]; then
     log_error "The cache volume must be formatted with ext4"
     log_error "Shutting down immediately"
     sync
-    systemctl poweroff --force --force
+    shutdown -h now
     exit 1
 fi
 
@@ -78,7 +92,7 @@ if [ "$FS_LABEL" != "$EXPECTED_LABEL" ]; then
     log_error "The cache volume must have the label '$EXPECTED_LABEL'"
     log_error "Shutting down immediately"
     sync
-    systemctl poweroff --force --force
+    shutdown -h now
     exit 1
 fi
 
@@ -93,7 +107,7 @@ if tune2fs -l "$DEVICE" 2>/dev/null | grep -q "needs checking"; then
         log_error "The cache volume may be corrupt"
         log_error "Shutting down immediately"
         sync
-        systemctl poweroff --force --force
+        shutdown -h now
         exit 1
     fi
     log_info "Filesystem check completed successfully"
