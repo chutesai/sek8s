@@ -145,7 +145,7 @@ while [[ $# -gt 0 ]]; do
           else
             echo "Serial log ($LOGFILE) is empty or missing."
           fi
-          echo "For SSH, use: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+          echo "For SSH, use: ssh -p $SSH_PORT root@<host_public_ip>"
           echo "For k3s, use: <host_public_ip>:6443 (API), <host_public_ip>:30000-32767 (NodePorts)"
         else
           echo "QEMU process ($PID) is not running."
@@ -557,7 +557,7 @@ else
   echo "Cloud-init: Disabled (no user-data provided)"
 fi
 echo "Access VM via:"
-echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
 echo "  k3s API: <host_public_ip>:6443"
 echo "  k3s NodePorts: <host_public_ip>:30000-32767"
 echo ""
@@ -585,7 +585,7 @@ if [ "$FOREGROUND" = false ]; then
   echo "VM daemonized with PID: $(cat $PIDFILE)"
   echo "Serial log: $LOGFILE"
   echo "Access VM via:"
-  echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip> (e.g., 35.130.230.1)"
+  echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
   echo "  k3s API: <host_public_ip>:6443"
   echo "  k3s NodePorts: <host_public_ip>:30000-32767"
   echo ""
