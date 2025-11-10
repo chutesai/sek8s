@@ -153,6 +153,37 @@
         apply:
           tags: cache-volume
 
+- name: Harden clout init
+  hosts: vm
+  become: true
+  tags:
+    - harden-cloud-init
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Harden cloud-init
+      ansible.builtin.include_role:
+        name: harden-cloud-init
+        apply:
+          tags: harden-cloud-init
+
+- name: Remove remote access
+  hosts: vm
+  become: true
+  tags:
+    - harden-access
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Remove remote access
+      ansible.builtin.include_role:
+        name: harden-access
+        apply:
+          tags: harden-access
+
+
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all
   become: true

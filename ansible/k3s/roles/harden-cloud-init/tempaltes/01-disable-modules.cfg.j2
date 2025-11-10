@@ -1,0 +1,185 @@
+# Cloud-init module configuration for TEE TDX VM
+# This file configures cloud-init modules based on deployment mode
+# Place this file in /etc/cloud/cloud.cfg.d/ with a low number prefix (01-)
+
+# Restrict to NoCloud datasource only for security
+datasource_list: ['NoCloud']
+
+# Cloud-init modules (early boot, before networking)
+cloud_init_modules:
+{% if enable_dev_mode | default(false) %}
+  - migrator
+  - seed_random
+  - bootcmd
+  - write-files
+  - growpart
+  - resizefs
+  - disk_setup
+  - mounts
+  - set_hostname
+  - update_hostname
+  - ca-certs
+  - rsyslog
+  - users-groups
+{% else %}
+  # Production: minimal modules only
+  - write-files
+  - set_hostname
+{% endif %}
+
+# Cloud-config modules (after networking is up)
+cloud_config_modules:
+{% if enable_dev_mode | default(false) %}
+  # Development: Allow SSH and package management for debugging
+  - emit_upstart
+  - disk_setup
+  - mounts
+  - ssh-import-id
+  - locale
+  - set-passwords
+  - grub-dpkg
+  - apt-pipelining
+  - apt-configure
+  - ubuntu-advantage
+  - ntp
+  - timezone
+  - disable-ec2-metadata
+  - runcmd
+  - byobu
+  - ssh
+  - ssh-authkey-fingerprints
+  - keys-to-console
+  - phone-home
+  - final-message
+  - power-state-change
+{% else %}
+  # Production: Only allow hostname and file writing
+  - set_hostname
+  - write-files
+{% endif %}
+
+# Cloud-final modules (late boot)
+cloud_final_modules:
+{% if enable_dev_mode | default(false) %}
+  - package-update-upgrade-install
+  - fan
+  - landscape
+  - lxd
+  - ubuntu-drivers
+  - puppet
+  - chef
+  - mcollective
+  - salt-minion
+  - rightscale_userdata
+  - scripts-vendor
+  - scripts-per-once
+  - scripts-per-boot
+  - scripts-per-instance
+  - scripts-user
+  - ssh-authkey-fingerprints
+  - keys-to-console
+  - phone-home
+  - final-message
+  - power-state-change
+{% else %}
+  # Production: No final modules for security
+  []
+{% endif %}
+
+# Network configuration - handled by separate network-config file in datasource
+# Don't override network config here to allow NoCloud network-config to work
+
+# System configuration based on mode
+system_info:
+{% if enable_dev_mode | default(false) %}
+  # Development: Allow default user for SSH access
+  default_user:
+    name: ubuntu
+    lock_passwd: false
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+    ssh_authorized_keys: []
+{% else %}
+  # Production: No default user
+  default_user: null
+{% endif %}
+
+# SSH configuration based on mode
+{% if enable_dev_mode | default(false) %}
+# Development: Enable SSH
+ssh_deletekeys: false
+ssh_genkeytypes: ['rsa', 'ecdsa', 'ed25519']
+disable_root: false
+ssh_pwauth: true
+{% else %}
+# Production: Disable SSH completely
+ssh_deletekeys: true
+ssh_genkeytypes: []
+disable_root: true
+ssh_pwauth: false
+{% endif %}
+
+# Package management based on mode
+{% if enable_dev_mode | default(false) %}
+# Development: Allow package operations for debugging tools
+package_update: true
+package_upgrade: false
+package_reboot_if_required: false
+{% else %}
+# Production: No package management
+package_update: false
+package_upgrade: false
+package_reboot_if_required: false
+{% endif %}
+
+# User management based on mode
+{% if enable_dev_mode | default(false) %}
+# Development: Allow user creation
+users:
+  - default
+{% else %}
+# Production: No users
+users: []
+{% endif %}
+
+# Always disabled for security regardless of mode
+mounts: []
+disk_setup: {}
+fs_setup: []
+phone_home: {}
+reporting: {}
+puppet: {}
+chef: {}
+ansible: {}
+mcollective: {}
+apt: {}
+yum_repos: {}
+zypper: {}
+power_state: {}
+random_seed: {}
+ca_certs: {}
+rsyslog: {}
+locale: null
+timezone: null
+keyboard: {}
+
+# Security logging
+output:
+{% if enable_dev_mode | default(false) %}
+  all: '| tee -a /var/log/cloud-init-dev.log'
+{% else %}
+  all: '| tee -a /var/log/cloud-init-security.log'
+{% endif %}
+
+# Final message based on mode
+final_message: |
+{% if enable_dev_mode | default(false) %}
+  TEE TDX VM cloud-init completed in DEVELOPMENT mode.
+  SSH access enabled for debugging.
+  Network configuration applied.
+{% else %}
+  TEE TDX VM cloud-init completed in PRODUCTION mode.
+  Only hostname and file writing operations allowed.
+  SSH access disabled for security.
+  Network configuration applied.
+{% endif %}

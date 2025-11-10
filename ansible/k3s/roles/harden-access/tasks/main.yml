@@ -1,0 +1,123 @@
+---
+# Ansible tasks for TEE TDX VM access prevention hardening
+# Prevents any interactive access to the VM
+
+- name: Disable and mask SSH service
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+    masked: yes
+  loop:
+    - ssh
+    - sshd
+    - ssh.socket
+    - sshd.socket
+  failed_when: false  # Don't fail if service doesn't exist
+
+- name: Remove SSH packages completely
+  package:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - openssh-server
+    - ssh
+    - dropbear
+    - dropbear-bin
+  failed_when: false
+
+- name: Disable and mask console access services
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+    masked: yes
+  loop:
+    - getty@tty1
+    - getty@tty2
+    - getty@tty3
+    - getty@tty4
+    - getty@tty5
+    - getty@tty6
+    - serial-getty@ttyS0
+    - console-getty
+  failed_when: false
+
+- name: Disable and mask remote access services
+  systemd:
+    name: "{{ item }}"
+    enabled: no
+    state: stopped
+    masked: yes
+  loop:
+    - telnet
+    - rsh
+    - rlogin
+    - vsftpd
+    - ftpd
+    - xinetd
+    - inetd
+  failed_when: false
+
+- name: Remove remote access packages
+  package:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - telnet-server
+    - rsh-server
+    - vsftpd
+    - proftpd
+    - xinetd
+    - inetd
+    - nis
+    - rpcbind
+  failed_when: false
+
+- name: Disable kernel console access
+  lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service"'
+    backup: yes
+  notify: update grub
+
+- name: Remove user accounts except root
+  user:
+    name: "{{ item }}"
+    state: absent
+    remove: yes
+  loop:
+    - ubuntu
+    - debian
+    - centos
+    - ec2-user
+    - cloud-user
+  failed_when: false
+
+- name: Lock root account password
+  user:
+    name: root
+    password_lock: yes
+
+- name: Remove sudo package to prevent privilege escalation
+  package:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - sudo
+    - sudo-ldap
+  failed_when: false
+
+- name: Create secure miner directory structure
+  file:
+    path: "/opt/miner/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - bin
+    - config
+    - logs
+    - data
