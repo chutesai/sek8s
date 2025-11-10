@@ -195,6 +195,7 @@
     - "{{ root_mount }}/boot/efi"
     - "{{ root_mount }}/boot"
     - "{{ root_mount }}"
+  when: not backup_stat.stat.exists
 
 - name: Create LUKS keyfile
   ansible.builtin.copy:
