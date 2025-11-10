@@ -90,7 +90,7 @@
     path: "{{ root_mount }}"
     src: "{{ root_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral  # Mounts without modifying fstab
   when: not backup_stat.stat.exists
 
 - name: Mount boot partition
@@ -98,7 +98,7 @@
     path: "{{ root_mount }}/boot"
     src: "{{ boot_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
   when: not backup_stat.stat.exists
 
 - name: Mount EFI partition
@@ -106,7 +106,7 @@
     path: "{{ root_mount }}/boot/efi"
     src: "{{ efi_partition }}"
     fstype: vfat
-    state: mounted
+    state: ephemeral
   when: not backup_stat.stat.exists
 
 - name: Backup root filesystem
@@ -121,11 +121,11 @@
   ansible.builtin.mount:
     path: "{{ item }}"
     state: unmounted
+  ignore_errors: true
   loop:
     - "{{ root_mount }}/boot/efi"
     - "{{ root_mount }}/boot"
     - "{{ root_mount }}"
-  when: not backup_stat.stat.exists
 
 - name: Create LUKS keyfile
   ansible.builtin.copy:
@@ -166,7 +166,7 @@
     path: "{{ newroot_mount }}"
     src: "/dev/mapper/{{ encrypted_root_name }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
 
 - name: Restore data to encrypted root
   ansible.builtin.command: rsync -aAXv {{ backup_dir }}/ {{ newroot_mount }}/
@@ -249,14 +249,14 @@
     path: "{{ newroot_mount }}/boot"
     src: "{{ boot_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
 
 - name: Mount EFI partition to new root
   ansible.builtin.mount:
     path: "{{ newroot_mount }}/boot/efi"
     src: "{{ efi_partition }}"
     fstype: vfat
-    state: mounted
+    state: ephemeral
 
 - name: Bind mount system directories
   ansible.builtin.mount:
@@ -264,7 +264,7 @@
     src: "/{{ item }}"
     fstype: none
     opts: bind
-    state: mounted
+    state: ephemeral
   loop:
     - proc
     - sys
