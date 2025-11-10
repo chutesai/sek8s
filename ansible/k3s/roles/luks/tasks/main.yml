@@ -188,10 +188,10 @@
     owner: root
     group: root
 
-- name: Copy TDX test script (init-premount)
+- name: Copy TDX unlock script (init-premount) - Modified to skip LUKS
   ansible.builtin.copy:
-    src: files/initramfs/test_tdx_cert
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/test_tdx_cert"
+    src: files/initramfs/fetch_key_and_unlock
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
     mode: '0755'
     owner: root
     group: root
@@ -202,7 +202,10 @@
       # TDX LUKS Configuration (for testing)
       TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://api.chutes.ai/servers/boot/attestation') }}"
       TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://api.chutes.ai/servers/nonce') }}"
+      LUKS_DEVICE="{{ root_partition }}"
+      LUKS_NAME="encrypted_root"
       TDX_TIMEOUT="30"
+      TDX_RETRY_COUNT="3"
     dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
     mode: '0644'
     owner: root
@@ -240,7 +243,7 @@
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       echo '=== Checking for required files in initramfs ===' &&
-      lsinitramfs /boot/initrd.img-\$(uname -r) | grep -E '(openssl|test_tdx_cert|load-tdx|bin/vi|bin/nano)' | sort ||
+      lsinitramfs /boot/initrd.img-\$(uname -r) | grep -E '(openssl|fetch_key_and_unlock|load-tdx|bin/vi|bin/nano)' | sort ||
       echo 'WARNING: Some files not found in initramfs'
     "
   register: initramfs_check
