@@ -3,9 +3,6 @@ root_mount: /mnt/root
 newroot_mount: /mnt/newroot
 nbd_device: /dev/nbd0
 encrypted_root_name: encrypted_root
-root_partition: "{{ nbd_device }}p1"
-boot_partition: "{{ nbd_device }}p13"
-efi_partition: "{{ nbd_device }}p15"
 
 # TDX-specific configuration
 tdx_api_endpoint: "{{ lookup('env', 'TDX_API_ENDPOINT') | default('https://api.chutes.ai/servers/boot/attestation', true) }}"
