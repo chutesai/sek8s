@@ -1,0 +1,111 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-premount/test_tdx_cert
+PREREQ="load-tdx network"
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+# Configuration
+[ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
+
+API_ENDPOINT="${TDX_API_ENDPOINT:-https://api.chutes.ai/servers/boot/attestation}"
+NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
+TIMEOUT="${TDX_TIMEOUT:-30}"
+CLIENT_CERT="/tmp/client_cert.pem"
+CLIENT_KEY="/tmp/client_key.pem"
+API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
+
+log_begin_msg "=== TDX DEBUG SESSION ==="
+
+# Function to generate self-signed client certificate
+generate_client_cert() {
+    log_begin_msg "Generating self-signed client certificate"
+    
+    # Debug output to serial console
+    echo "=== DEBUG: Starting cert generation ===" > /dev/ttyS0 2>&1
+    echo "OpenSSL version:" > /dev/ttyS0 2>&1
+    openssl version > /dev/ttyS0 2>&1
+    echo "OpenSSL location:" > /dev/ttyS0 2>&1
+    which openssl > /dev/ttyS0 2>&1
+    echo "OpenSSL libraries:" > /dev/ttyS0 2>&1
+    ldd /usr/bin/openssl > /dev/ttyS0 2>&1
+    
+    # Set up environment for OpenSSL in initramfs
+    export RANDFILE=/tmp/.rnd
+    export OPENSSL_CONF=/dev/null
+    
+    mkdir -p /tmp
+    
+    echo "Attempting cert generation..." > /dev/ttyS0 2>&1
+    if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
+        -keyout "$CLIENT_KEY" \
+        -out "$CLIENT_CERT" \
+        -days 1 \
+        -subj "/CN=tdx-vm-$(date +%s)" \
+        -batch > /dev/ttyS0 2>&1; then
+        log_failure_msg "Failed to generate client certificate"
+        echo "=== CERT GENERATION FAILED ===" > /dev/ttyS0 2>&1
+        return 1
+    fi
+    
+    echo "Cert generation succeeded!" > /dev/ttyS0 2>&1
+    ls -la /tmp/client* > /dev/ttyS0 2>&1
+    
+    # Compute SHA-256 hash of cert's public key
+    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout 2>/dev/null | \
+                openssl pkey -pubin -outform der 2>/dev/null | \
+                sha256sum | cut -d' ' -f1)
+    if [ -z "$CERT_HASH" ]; then
+        log_failure_msg "Failed to compute cert hash"
+        return 1
+    fi
+    
+    log_success_msg "Client certificate generated (hash: ${CERT_HASH:0:16}...)"
+    return 0
+}
+
+# Main execution
+main() {
+    # Check if we're in a TDX environment
+    if [ ! -c "/dev/tdx_guest" ]; then
+        log_failure_msg "TDX device not found - not running in TDX environment"
+        echo "=== TDX DEVICE NOT FOUND ===" > /dev/ttyS0 2>&1
+        ls -la /dev/tdx* > /dev/ttyS0 2>&1 || echo "No tdx devices" > /dev/ttyS0 2>&1
+        lsmod | grep tdx > /dev/ttyS0 2>&1 || echo "TDX module not loaded" > /dev/ttyS0 2>&1
+    else
+        log_success_msg "TDX device found at /dev/tdx_guest"
+        echo "=== TDX DEVICE FOUND ===" > /dev/ttyS0 2>&1
+    fi
+    
+    # Generate self-signed client cert
+    if generate_client_cert; then
+        log_success_msg "Certificate generation successful"
+    else
+        log_failure_msg "Certificate generation failed"
+    fi
+    
+    # Drop to interactive shell for debugging
+    log_begin_msg "=== DROPPING TO DEBUG SHELL ==="
+    log_begin_msg "Editors available: vi, nano"
+    log_begin_msg "Scripts location: /scripts/init-premount/"
+    log_begin_msg "This script: /scripts/init-premount/test_tdx_cert"
+    log_begin_msg "Commands to try:"
+    log_begin_msg "  openssl version"
+    log_begin_msg "  ls -la /tmp/client*"
+    log_begin_msg "  cat /tmp/client_cert.pem"
+    log_begin_msg "  lsmod | grep tdx"
+    log_begin_msg "  ls -la /dev/tdx*"
+    log_begin_msg "  ip addr"
+    log_begin_msg "  vi /scripts/init-premount/test_tdx_cert"
+    log_begin_msg "Type 'exit' to continue boot"
+    
+    PS1="initramfs-debug# " /bin/sh
+    
+    log_success_msg "=== Continuing boot ==="
+    return 0
+}
+
+# Run main function
+main
+exit 0

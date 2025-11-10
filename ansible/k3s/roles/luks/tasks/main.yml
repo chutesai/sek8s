@@ -1,16 +1,4 @@
 ---
-- name: Check if LUKS container is open
-  ansible.builtin.stat:
-    path: "/dev/mapper/{{ encrypted_root_name }}"
-  register: luks_stat
-
-- name: Close LUKS container if open
-  community.crypto.luks_device:
-    name: "{{ encrypted_root_name }}"
-    state: closed
-  when: luks_stat.stat.exists
-  ignore_errors: true
-
 - name: Check if nbd device is connected
   ansible.builtin.command: qemu-nbd --check {{ nbd_device }}
   register: nbd_check_result
@@ -38,9 +26,6 @@
     - "{{ newroot_mount }}/boot/efi"
     - "{{ newroot_mount }}/boot"
     - "{{ newroot_mount }}"
-    - "{{ root_mount }}/boot/efi"
-    - "{{ root_mount }}/boot"
-    - "{{ root_mount }}"
 
 - name: Clean up temporary directories if leftover
   ansible.builtin.file:
@@ -48,9 +33,7 @@
     state: absent
   ignore_errors: true
   loop:
-    - "{{ root_mount }}"
     - "{{ newroot_mount }}"
-    - "{{ backup_dir }}"
 
 - name: Load nbd kernel module
   ansible.builtin.command: modprobe nbd max_part=8
@@ -70,20 +53,11 @@
   ansible.builtin.command: partprobe {{ nbd_device }}
   changed_when: false
 
-- name: Check if backup already exists
-  ansible.builtin.stat:
-    path: "{{ backup_dir }}/etc"
-  register: backup_stat
-
-- name: Create mount points
+- name: Create mount point
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: "{{ newroot_mount }}"
     state: directory
     mode: '0755'
-  loop:
-    - "{{ root_mount }}"
-    - "{{ backup_dir }}"
-    - "{{ newroot_mount }}"
 
 - name: Detect partition layout dynamically
   ansible.builtin.shell: |
@@ -156,103 +130,19 @@
 
 - name: Mount root partition
   ansible.builtin.mount:
-    path: "{{ root_mount }}"
+    path: "{{ newroot_mount }}"
     src: "{{ root_partition }}"
     fstype: ext4
-    state: ephemeral  # Mounts without modifying fstab
-  when: not backup_stat.stat.exists
+    state: ephemeral
 
 - name: Mount boot partition
-  ansible.builtin.mount:
-    path: "{{ root_mount }}/boot"
-    src: "{{ boot_partition }}"
-    fstype: ext4
-    state: ephemeral
-  when: not backup_stat.stat.exists
-
-- name: Mount EFI partition
-  ansible.builtin.mount:
-    path: "{{ root_mount }}/boot/efi"
-    src: "{{ efi_partition }}"
-    fstype: vfat
-    state: ephemeral
-  when: not backup_stat.stat.exists
-
-- name: Backup root filesystem
-  ansible.builtin.command: rsync -aAXv {{ root_mount }}/ {{ backup_dir }}/
-  args:
-    creates: "{{ backup_dir }}/etc"
-  register: rsync_backup_result
-  changed_when: rsync_backup_result.rc == 0
-  when: not backup_stat.stat.exists
-
-- name: Unmount partitions
-  ansible.builtin.mount:
-    path: "{{ item }}"
-    state: unmounted
-  ignore_errors: true
-  loop:
-    - "{{ root_mount }}/boot/efi"
-    - "{{ root_mount }}/boot"
-    - "{{ root_mount }}"
-  when: not backup_stat.stat.exists
-
-- name: Create LUKS keyfile
-  ansible.builtin.copy:
-    content: "{{ luks_passphrase | mandatory }}"
-    dest: /tmp/luks_keyfile
-    mode: '0600'
-    owner: root
-    group: root
-
-- name: Wipe existing superblock
-  ansible.builtin.command: wipefs -a {{ root_partition }}
-  register: wipefs_result
-  changed_when: wipefs_result.rc == 0
-  failed_when: wipefs_result.rc != 0
-
-- name: Create LUKS container
-  community.crypto.luks_device:
-    device: "{{ root_partition }}"
-    state: present
-    passphrase: "{{ luks_passphrase }}"
-  no_log: true
-
-- name: Open LUKS container
-  community.crypto.luks_device:
-    device: "{{ root_partition }}"
-    state: opened
-    name: "{{ encrypted_root_name }}"
-    passphrase: "{{ luks_passphrase }}"
-  no_log: true
-
-- name: Create ext4 filesystem on LUKS partition
-  ansible.builtin.filesystem:
-    dev: /dev/mapper/{{ encrypted_root_name }}
-    fstype: ext4
-
-- name: Mount encrypted root
-  ansible.builtin.mount:
-    path: "{{ newroot_mount }}"
-    src: "/dev/mapper/{{ encrypted_root_name }}"
-    fstype: ext4
-    state: ephemeral
-
-- name: Restore data to encrypted root
-  ansible.builtin.command: rsync -aAXv {{ backup_dir }}/ {{ newroot_mount }}/
-  args:
-    creates: "{{ newroot_mount }}/etc"
-  register: rsync_restore_result
-  changed_when: rsync_restore_result.rc == 0
-      
-- name: Mount boot partition to new root
   ansible.builtin.mount:
     path: "{{ newroot_mount }}/boot"
     src: "{{ boot_partition }}"
     fstype: ext4
     state: ephemeral
 
-- name: Mount EFI partition to new root
+- name: Mount EFI partition
   ansible.builtin.mount:
     path: "{{ newroot_mount }}/boot/efi"
     src: "{{ efi_partition }}"
@@ -277,29 +167,10 @@
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       apt-get update &&
-      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl
+      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl vim-tiny nano
     "
   register: chroot_deps_result
   changed_when: chroot_deps_result.rc == 0
-
-- name: Get UUID of LUKS partition
-  ansible.builtin.command: blkid -o value -s UUID {{ root_partition }}
-  register: blkid_result
-  changed_when: false
-
-- name: Update /etc/crypttab
-  ansible.builtin.lineinfile:
-    path: "{{ newroot_mount }}/etc/crypttab"
-    line: "{{ encrypted_root_name }} UUID={{ blkid_result.stdout }} none luks,discard"
-    create: yes
-    mode: '0644'
-
-- name: Update /etc/fstab
-  ansible.builtin.replace:
-    path: "{{ newroot_mount }}/etc/fstab"
-    regexp: '^LABEL=cloudimg-rootfs\s+/\s+ext4\s+discard,commit=30,errors=remount-ro\s+0\s+1$'
-    replace: '/dev/mapper/{{ encrypted_root_name }}\t/\text4\tdiscard,errors=remount-ro\t0 1'
-    backup: yes
 
 - name: Copy TDX initramfs hooks
   ansible.builtin.copy:
@@ -317,10 +188,10 @@
     owner: root
     group: root
 
-- name: Copy TDX unlock script (init-premount)
+- name: Copy TDX test script (init-premount)
   ansible.builtin.copy:
-    src: files/initramfs/fetch_key_and_unlock
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
+    src: files/initramfs/test_tdx_cert
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/test_tdx_cert"
     mode: '0755'
     owner: root
     group: root
@@ -328,25 +199,33 @@
 - name: Create TDX environment configuration
   ansible.builtin.copy:
     content: |
-      # TDX LUKS Configuration
-      TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://your-api.example.com/luks-key') }}"
-      TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://your-api.example.com/luks-nonce') }}"
-      LUKS_DEVICE="{{ root_partition }}"
-      LUKS_NAME="{{ encrypted_root_name }}"
+      # TDX LUKS Configuration (for testing)
+      TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://api.chutes.ai/servers/boot/attestation') }}"
+      TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://api.chutes.ai/servers/nonce') }}"
       TDX_TIMEOUT="30"
-      TDX_RETRY_COUNT="3"
     dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
     mode: '0644'
     owner: root
     group: root
 
-- name: Source TDX config in initramfs script
-  ansible.builtin.replace:
-    path: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
-    regexp: '# Configuration'
-    replace: |
-      # Configuration
-      [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
+- name: Enable serial console and debug in GRUB
+  ansible.builtin.lineinfile:
+    path: "{{ newroot_mount }}/etc/default/grub"
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT="console=ttyS0,115200n8"'
+    backup: yes
+
+- name: Enable serial console in GRUB terminal
+  ansible.builtin.lineinfile:
+    path: "{{ newroot_mount }}/etc/default/grub"
+    regexp: '^#?GRUB_TERMINAL='
+    line: 'GRUB_TERMINAL="serial console"'
+
+- name: Configure GRUB serial command
+  ansible.builtin.lineinfile:
+    path: "{{ newroot_mount }}/etc/default/grub"
+    regexp: '^#?GRUB_SERIAL_COMMAND='
+    line: 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"'
 
 - name: Update initramfs and grub in chroot
   ansible.builtin.shell: |
@@ -356,6 +235,20 @@
     "
   register: chroot_update_result
   changed_when: chroot_update_result.rc == 0
+
+- name: Verify initramfs contents
+  ansible.builtin.shell: |
+    chroot {{ newroot_mount }} /bin/bash -c "
+      echo '=== Checking for required files in initramfs ===' &&
+      lsinitramfs /boot/initrd.img-\$(uname -r) | grep -E '(openssl|test_tdx_cert|load-tdx|bin/vi|bin/nano)' | sort ||
+      echo 'WARNING: Some files not found in initramfs'
+    "
+  register: initramfs_check
+  changed_when: false
+
+- name: Display initramfs verification
+  ansible.builtin.debug:
+    var: initramfs_check.stdout_lines
 
 - name: Unmount system directories
   ansible.builtin.mount:
@@ -371,11 +264,6 @@
     - boot
     - ""
 
-- name: Close LUKS container
-  community.crypto.luks_device:
-    name: "{{ encrypted_root_name }}"
-    state: closed
-
 - name: Disconnect nbd device
   ansible.builtin.command: qemu-nbd --disconnect {{ nbd_device }}
   args:
@@ -385,14 +273,5 @@
 
 - name: Clean up temporary directories
   ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - "{{ root_mount }}"
-    - "{{ newroot_mount }}"
-    - "{{ backup_dir }}"
-
-- name: Clean up temporary files
-  ansible.builtin.file:
-    path: "/tmp/luks_keyfile"
+    path: "{{ newroot_mount }}"
     state: absent

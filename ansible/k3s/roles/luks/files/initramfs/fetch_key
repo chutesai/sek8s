@@ -6,7 +6,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-# Copy essential binaries
+# Copy essential binaries - copy_exec handles library dependencies automatically
 copy_exec /bin/ip
 copy_exec /usr/bin/curl
 copy_exec /sbin/dhcpcd
@@ -14,11 +14,11 @@ copy_exec /usr/sbin/cryptsetup
 copy_exec /usr/bin/tdx-quote-generator
 copy_exec /usr/bin/base64
 copy_exec /usr/bin/openssl
+copy_exec /usr/bin/sha256sum
 
-# Copy critical libraries for our tools
-copy_exec /lib/x86_64-linux-gnu/libc.so.6
-copy_exec /lib/x86_64-linux-gnu/libcrypto.so.3
-copy_exec /lib/x86_64-linux-gnu/libssl.so.3
+# Copy text editors for debugging
+copy_exec /usr/bin/vi.tiny /bin/vi
+copy_exec /bin/nano
 
 # Network configuration
 mkdir -p $DESTDIR/etc/network
@@ -34,6 +34,15 @@ cp /etc/ssl/certs/ca-certificates.crt $DESTDIR/etc/ssl/certs/
 if [ -f /etc/tdx-luks.conf ]; then
     cp /etc/tdx-luks.conf $DESTDIR/etc/
 fi
+
+# Copy OpenSSL engines/modules if they exist
+for dir in /usr/lib/x86_64-linux-gnu/engines-* /usr/lib/x86_64-linux-gnu/ossl-modules; do
+    if [ -d "$dir" ]; then
+        target_dir="$DESTDIR/$dir"
+        mkdir -p "$(dirname "$target_dir")"
+        cp -r "$dir" "$(dirname "$target_dir")/" 2>/dev/null || true
+    fi
+done
 
 # Add TDX kernel module
 manual_add_modules tdx_guest
