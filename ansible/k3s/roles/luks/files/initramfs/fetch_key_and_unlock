@@ -80,16 +80,16 @@ generate_client_cert() {
 
 # Function to get network interface
 get_network_interface() {
-    # Try common interface names
-    for iface in enp1s0 enp0s3 eth0 ens3; do
-        if [ -e "/sys/class/net/$iface" ]; then
-            echo "$iface"
+    # Find first non-loopback interface
+    for iface in /sys/class/net/*; do
+        iface_name=$(basename "$iface")
+        if [ "$iface_name" != "lo" ]; then
+            echo "$iface_name"
             return 0
         fi
     done
     return 1
 }
-
 # Function to setup network
 setup_network() {
     local iface
