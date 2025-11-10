@@ -277,7 +277,7 @@
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       apt-get update &&
-      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates
+      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl
     "
   register: chroot_deps_result
   changed_when: chroot_deps_result.rc == 0
@@ -309,7 +309,15 @@
     owner: root
     group: root
 
-- name: Copy updated TDX unlock script
+- name: Copy TDX module loader script (init-top)
+  ansible.builtin.copy:
+    src: files/initramfs/load-tdx
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tdx"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy TDX unlock script (init-premount)
   ansible.builtin.copy:
     src: files/initramfs/fetch_key_and_unlock
     dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"

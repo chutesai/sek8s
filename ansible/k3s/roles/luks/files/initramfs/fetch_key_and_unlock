@@ -1,6 +1,6 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock
-PREREQ="network"
+PREREQ="load-tdx network"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
@@ -298,6 +298,7 @@ handle_failure() {
 
 # Main execution
 main() {
+
     # Check if we're in a TDX environment
     if [ ! -c "/dev/tdx_guest" ]; then
         handle_failure "TDX device not found - not running in TDX environment"

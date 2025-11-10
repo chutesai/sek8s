@@ -1,0 +1,25 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-top/load-tdx
+PREREQ="udev"
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+log_begin_msg "Loading TDX guest module"
+
+# Load the TDX guest module
+if modprobe tdx_guest 2>/dev/null; then
+    # Give udev a moment to create the device node
+    sleep 1
+    
+    if [ -c "/dev/tdx_guest" ]; then
+        log_success_msg "TDX guest module loaded successfully"
+    else
+        log_failure_msg "TDX module loaded but device not created"
+    fi
+else
+    log_failure_msg "Failed to load TDX guest module"
+fi
+
+exit 0
