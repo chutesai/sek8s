@@ -311,8 +311,7 @@
 
 - name: Copy updated TDX unlock script
   ansible.builtin.copy:
-    content: |
-      {{ lookup('file', playbook_dir + '/files/initramfs/fetch_key_and_unlock') }}
+    src: files/initramfs/fetch_key_and_unlock
     dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
     mode: '0755'
     owner: root
