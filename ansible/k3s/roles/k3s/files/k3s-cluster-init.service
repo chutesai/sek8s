@@ -39,8 +39,8 @@ ProtectHome=true
 ReadWritePaths=/var/lib/rancher/k3s /var/log /etc/rancher/k3s
 
 # Logging
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+console
+StandardError=journal+console
 SyslogIdentifier=k3s-cluster-init
 
 [Install]

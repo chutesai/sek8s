@@ -11,8 +11,8 @@ After=cloud-final.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/k3s-config-init.sh
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+console
+StandardError=journal+console
 TimeoutStartSec=300
 
 [Install]
