@@ -20,7 +20,6 @@
     owner: root
     group: root
     mode: '0755'
-  notify: restart cloud-init-validator
 
 - name: Install cloud-init validator systemd service
   copy:
@@ -31,7 +30,6 @@
     mode: '0644'
   notify:
     - reload systemd
-    - restart cloud-init-validator
 
 - name: Install cloud-init module configuration template
   template:
