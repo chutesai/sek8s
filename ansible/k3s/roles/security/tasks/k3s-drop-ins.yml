@@ -48,10 +48,10 @@
         - reload systemd
         - restart k3s
 
-    - name: Deploy admssion-controller drop-in
+    - name: Deploy dependencies drop-in
       ansible.builtin.copy:
-        src: files/k3s.service.d/admission-dependency.conf
-        dest: /etc/systemd/system/k3s.service.d/admission-dependency.conf
+        src: files/k3s.service.d/dependencies.conf
+        dest: /etc/systemd/system/k3s.service.d/dependencies.conf
         owner: root
         group: root
         mode: "0644"
