@@ -1,10 +1,8 @@
 [Unit]
 Description=k3s Cluster Initialization Scripts
 Documentation=man:k3s(1)
-After=admission-controller.service k3s.service cloud-final.service
-Wants=k3s.service
-Requires=network-online.target
-After=network-online.target
+Requires=k3s.service
+After=k3s.service cloud-final.service
 
 [Service]
 Type=notify
@@ -44,4 +42,4 @@ StandardError=journal+console
 SyslogIdentifier=k3s-cluster-init
 
 [Install]
-WantedBy=k3s.service
+WantedBy=multi-user.target

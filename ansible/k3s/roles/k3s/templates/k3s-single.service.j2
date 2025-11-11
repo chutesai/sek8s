@@ -2,7 +2,8 @@
 Description=Lightweight Kubernetes
 Documentation=https://k3s.io
 Wants=network-online.target
-After=network-online.target
+After=network-online.target admission-controller.service
+Requires=admission-controller.service
 
 [Install]
 WantedBy=multi-user.target
