@@ -20,6 +20,11 @@ copy_exec /usr/bin/sha256sum
 copy_exec /usr/bin/vi.tiny /bin/vi
 copy_exec /bin/nano
 
+# Add block device and filesystem modules for cloud-init ISO
+manual_add_modules virtio_blk
+manual_add_modules iso9660
+manual_add_modules isofs
+
 # Network configuration
 mkdir -p $DESTDIR/etc/network
 if [ -d /etc/netplan ]; then

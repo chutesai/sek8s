@@ -92,36 +92,149 @@ get_network_interface() {
 }
 # Function to setup network
 setup_network() {
-    local iface
-    iface=$(get_network_interface)
-    if [ -z "$iface" ]; then
-        log_failure_msg "No network interface found"
+    local iface cidata_mount="/run/cidata"
+    
+    log_begin_msg "Setting up network from cloud-init config"
+    
+    # Create mount point
+    mkdir -p "$cidata_mount"
+    
+    echo "=== DEBUG: Looking for cloud-init ISO ===" > /dev/ttyS0 2>&1
+    ls -la /dev/vd* > /dev/ttyS0 2>&1
+    blkid > /dev/ttyS0 2>&1
+    
+    # Load virtio block module if not already loaded
+    modprobe virtio_blk 2>&1 | tee /dev/ttyS0
+    sleep 1
+    
+    # Try to find and mount the cidata ISO
+    # cloud-localds creates an ISO9660 filesystem, but it's on a virtio block device
+    # Try /dev/vdb, /dev/vdc (vda is usually root disk)
+    for device in /dev/vdb /dev/vdc /dev/vdd /dev/disk/by-label/CIDATA /dev/disk/by-label/cidata; do
+        if [ -b "$device" ]; then
+            echo "=== DEBUG: Trying to mount $device ===" > /dev/ttyS0 2>&1
+            # Try iso9660 first (cloud-localds creates ISO format)
+            if mount -t iso9660 -o ro "$device" "$cidata_mount" 2>&1 | tee /dev/ttyS0; then
+                log_success_msg "Mounted cloud-init config from $device"
+                break
+            fi
+            # Fallback to auto-detect filesystem
+            if mount -o ro "$device" "$cidata_mount" 2>&1 | tee /dev/ttyS0; then
+                log_success_msg "Mounted cloud-init config from $device"
+                break
+            fi
+        fi
+    done
+    
+    # Verify mount succeeded
+    if ! mountpoint -q "$cidata_mount"; then
+        log_failure_msg "Failed to mount cloud-init ISO"
         return 1
     fi
     
-    log_begin_msg "Setting up network on $iface"
+    echo "=== DEBUG: cidata mounted, contents: ===" > /dev/ttyS0 2>&1
+    ls -la "$cidata_mount" > /dev/ttyS0 2>&1
     
-    # Bring up interface
+    # Verify network-config exists
+    if [ ! -f "$cidata_mount/network-config" ]; then
+        log_failure_msg "Cannot find network-config in cidata"
+        ls -la "$cidata_mount" > /dev/ttyS0 2>&1
+        return 1
+    fi
+    
+    local netconfig="$cidata_mount/network-config"
+    
+    echo "=== DEBUG: Parsing network config ===" > /dev/ttyS0 2>&1
+    cat "$netconfig" > /dev/ttyS0 2>&1
+    
+    # Parse the network-config (netplan format)
+    # Expected format:
+    # version: 2
+    # ethernets:
+    #   enp0s1:
+    #     addresses:
+    #       - 192.168.100.2/24
+    #     routes:
+    #       - to: default
+    #         via: 192.168.100.1
+    #     nameservers:
+    #       addresses:
+    #         - 8.8.8.8
+    
+    # Extract interface name (first non-indented line under ethernets:)
+    iface=$(awk '/ethernets:/{getline; gsub(/[ :]/, ""); print; exit}' "$netconfig")
+    
+    # Extract IP address (first address under addresses:)
+    ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/, ""); print; exit}' "$netconfig")
+    
+    # Extract gateway (via: under routes:)
+    gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/, ""); print; exit}' "$netconfig")
+    
+    # Extract nameserver (first one)
+    nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/, ""); print; exit}}' "$netconfig")
+    
+    echo "=== DEBUG: Parsed config ===" > /dev/ttyS0 2>&1
+    echo "Interface: $iface" > /dev/ttyS0 2>&1
+    echo "IP: $ip_addr" > /dev/ttyS0 2>&1
+    echo "Gateway: $gateway" > /dev/ttyS0 2>&1
+    echo "Nameserver: $nameserver" > /dev/ttyS0 2>&1
+    
+    # Validate we got the required values
+    if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
+        log_failure_msg "Failed to parse network config (iface=$iface ip=$ip_addr gw=$gateway)"
+        return 1
+    fi
+    
+    # Load network modules
+    modprobe virtio_net 2>&1 | tee /dev/ttyS0
+    modprobe virtio_pci 2>&1 | tee /dev/ttyS0
+    sleep 2
+    
+    echo "=== DEBUG: Available network interfaces ===" > /dev/ttyS0 2>&1
+    ls -la /sys/class/net/ > /dev/ttyS0 2>&1
+    
+    # Verify interface exists
+    if [ ! -e "/sys/class/net/$iface" ]; then
+        log_failure_msg "Interface $iface not found"
+        return 1
+    fi
+    
+    # Configure network
+    log_begin_msg "Configuring $iface with $ip_addr"
+    
     ip link set dev "$iface" up
-    if [ $? -ne 0 ]; then
-        log_failure_msg "Failed to bring up $iface"
-        return 1
-    fi
+    sleep 1
     
-    # Try DHCP
-    dhcpcd "$iface" -w "$TIMEOUT" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        log_failure_msg "DHCP failed on $iface"
-        return 1
-    fi
+    ip addr add "$ip_addr" dev "$iface"
+    ip route add default via "$gateway"
     
-    # Verify we have an IP
+    # Configure DNS
+    mkdir -p /etc
+    echo "nameserver ${nameserver:-8.8.8.8}" > /etc/resolv.conf
+    
+    # Verify configuration
     if ! ip addr show "$iface" | grep -q "inet "; then
-        log_failure_msg "No IP address assigned to $iface"
+        log_failure_msg "Failed to configure IP address"
+        ip addr show > /dev/ttyS0 2>&1
         return 1
     fi
+    
+    if ! ip route show | grep -q "default"; then
+        log_failure_msg "Failed to configure default route"
+        ip route show > /dev/ttyS0 2>&1
+        return 1
+    fi
+    
+    echo "=== DEBUG: Network configured successfully ===" > /dev/ttyS0 2>&1
+    ip addr show > /dev/ttyS0 2>&1
+    ip route show > /dev/ttyS0 2>&1
+    cat /etc/resolv.conf > /dev/ttyS0 2>&1
     
     log_success_msg "Network setup complete"
+    
+    # Unmount cidata (optional, but clean)
+    umount "$cidata_mount" 2>/dev/null || true
+    
     return 0
 }
 
