@@ -20,11 +20,6 @@ copy_exec /usr/bin/sha256sum
 copy_exec /usr/bin/vi.tiny /bin/vi
 copy_exec /bin/nano
 
-# Add block device and filesystem modules for cloud-init ISO
-manual_add_modules virtio_blk
-manual_add_modules iso9660
-manual_add_modules isofs
-
 # Network configuration
 mkdir -p $DESTDIR/etc/network
 if [ -d /etc/netplan ]; then
@@ -40,6 +35,11 @@ if [ -f /etc/tdx-luks.conf ]; then
     cp /etc/tdx-luks.conf $DESTDIR/etc/
 fi
 
+# TDX attestation configuration
+if [ -f /etc/tdx-attest.conf ]; then
+    cp /etc/tdx-attest.conf $DESTDIR/etc/
+fi
+
 # Copy OpenSSL engines/modules if they exist
 for dir in /usr/lib/x86_64-linux-gnu/engines-* /usr/lib/x86_64-linux-gnu/ossl-modules; do
     if [ -d "$dir" ]; then
@@ -52,6 +52,11 @@ done
 # Add TDX kernel module
 manual_add_modules tdx_guest
 force_load tdx_guest
+
+# Add block device and filesystem modules for cloud-init ISO
+manual_add_modules virtio_blk
+manual_add_modules iso9660
+manual_add_modules isofs
 
 # Add other kernel modules
 manual_add_modules vsock
