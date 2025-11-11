@@ -52,19 +52,6 @@
       ansible.builtin.include_role:
         name: k3s
 
-- name: Security Hardening
-  hosts: vm
-  become: true
-  tags:
-    - security
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Include security role
-      ansible.builtin.include_role:
-        name: security
-
 - name: GPU Setup
   hosts: vm
   become: true
@@ -152,6 +139,19 @@
         name: cache-volume
         apply:
           tags: cache-volume
+
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
 
 - name: Harden clout init
   hosts: vm
