@@ -37,6 +37,28 @@
         - reload systemd
         - restart k3s
 
+    - name: Deploy chroot restriction drop-in
+      ansible.builtin.copy:
+        src: files/k3s.service.d/chroot-restrictions.conf
+        dest: /etc/systemd/system/k3s.service.d/chroot-restrictions.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart k3s
+
+    - name: Deploy admssion-controller drop-in
+      ansible.builtin.copy:
+        src: files/k3s.service.d/admission-dependency.conf
+        dest: /etc/systemd/system/k3s.service.d/admission-dependency.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart k3s
+
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
         name: "{{ item.name }}"

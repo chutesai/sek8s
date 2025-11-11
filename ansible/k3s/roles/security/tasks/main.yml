@@ -7,9 +7,9 @@
     attestation_interval: 900  # 15 minutes
     module_monitoring: true
   block:
-    - name: Include mount restrictions
-      ansible.builtin.include_tasks: mount-restrictions.yml
-      tags: mount-restrictions
+    - name: Include k3s drop-ins
+      ansible.builtin.include_tasks: k3s-drop-ins.yml
+      tags: k3s-drop-ins
 
     - name: Module signing
       ansible.builtin.include_tasks: module-signing.yml
