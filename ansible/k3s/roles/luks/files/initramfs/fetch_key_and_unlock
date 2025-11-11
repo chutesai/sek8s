@@ -126,9 +126,11 @@ setup_network() {
         fi
     done
     
-    # Verify mount succeeded
-    if ! mountpoint -q "$cidata_mount"; then
-        log_failure_msg "Failed to mount cloud-init ISO"
+    # Verify mount succeeded (check if directory is not empty)
+    if [ ! -f "$cidata_mount/network-config" ] && [ ! -f "$cidata_mount/meta-data" ]; then
+        log_failure_msg "Failed to mount cloud-init ISO (no files found)"
+        echo "=== DEBUG: Mount check failed ===" > /dev/ttyS0 2>&1
+        ls -la "$cidata_mount" > /dev/ttyS0 2>&1
         return 1
     fi
     
