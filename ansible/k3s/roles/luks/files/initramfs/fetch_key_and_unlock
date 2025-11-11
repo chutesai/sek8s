@@ -19,173 +19,93 @@ CLIENT_CERT="/tmp/client_cert.pem"
 CLIENT_KEY="/tmp/client_key.pem"
 API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 
-log_begin_msg "Starting TDX-based disk unlock (TESTING MODE)"
+log_begin_msg "Starting TDX-based disk unlock"
 
 # Function to generate self-signed client certificate
 generate_client_cert() {
     log_begin_msg "Generating self-signed client certificate"
     
-    # DEBUG: Add extensive logging
-    echo "=== DEBUG generate_client_cert: START ===" > /dev/ttyS0 2>&1
-    echo "OpenSSL binary check:" > /dev/ttyS0 2>&1
-    which openssl > /dev/ttyS0 2>&1
-    echo "OpenSSL version:" > /dev/ttyS0 2>&1
-    openssl version > /dev/ttyS0 2>&1
-    
     # Set up environment for OpenSSL in initramfs
     export RANDFILE=/tmp/.rnd
     export OPENSSL_CONF=/dev/null
     
-    # Ensure /tmp exists and is writable
     mkdir -p /tmp
-    
-    echo "Attempting cert generation..." > /dev/ttyS0 2>&1
     
     # Use openssl to create a self-signed cert (in TDX trust domain)
     if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
         -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" -days 1 \
-        -subj "/CN=tdx-vm-$(date +%s)" -batch 2>&1 | tee /dev/ttyS0; then
+        -subj "/CN=tdx-vm-$(date +%s)" -batch 2>/dev/null; then
         log_failure_msg "Failed to generate client certificate"
-        echo "=== DEBUG: OpenSSL command failed ===" > /dev/ttyS0 2>&1
         return 1
     fi
     
-    echo "Checking if cert files were created..." > /dev/ttyS0 2>&1
-    ls -la /tmp/client* > /dev/ttyS0 2>&1
-    
-    # Verify cert was actually created
+    # Verify cert was created
     if [ ! -f "$CLIENT_CERT" ] || [ ! -f "$CLIENT_KEY" ]; then
         log_failure_msg "Certificate files not created"
-        echo "=== DEBUG: Cert files missing ===" > /dev/ttyS0 2>&1
         return 1
     fi
     
-    echo "Computing cert hash..." > /dev/ttyS0 2>&1
-    
     # Compute SHA-256 hash of cert's public key for REPORTDATA
-    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout 2>&1 | tee /dev/ttyS0 | \
-                openssl pkey -pubin -outform der 2>&1 | \
+    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout 2>/dev/null | \
+                openssl pkey -pubin -outform der 2>/dev/null | \
                 sha256sum | cut -d' ' -f1)
     if [ -z "$CERT_HASH" ]; then
         log_failure_msg "Failed to compute cert hash"
-        echo "=== DEBUG: Cert hash computation failed ===" > /dev/ttyS0 2>&1
         return 1
     fi
     
-    echo "Cert hash: $CERT_HASH" > /dev/ttyS0 2>&1
     log_success_msg "Client certificate generated"
-    echo "=== DEBUG generate_client_cert: SUCCESS ===" > /dev/ttyS0 2>&1
     return 0
 }
 
-# Function to get network interface
-get_network_interface() {
-    # Find first non-loopback interface
-    for iface in /sys/class/net/*; do
-        iface_name=$(basename "$iface")
-        if [ "$iface_name" != "lo" ]; then
-            echo "$iface_name"
-            return 0
-        fi
-    done
-    return 1
-}
-# Function to setup network
+# Function to setup network from cloud-init config
 setup_network() {
     local iface cidata_mount="/run/cidata"
     
     log_begin_msg "Setting up network from cloud-init config"
     
-    # Create mount point
     mkdir -p "$cidata_mount"
     
-    echo "=== DEBUG: Looking for cloud-init ISO ===" > /dev/ttyS0 2>&1
-    ls -la /dev/vd* > /dev/ttyS0 2>&1
-    blkid > /dev/ttyS0 2>&1
-    
-    # Load virtio block module if not already loaded
-    modprobe virtio_blk 2>&1 | tee /dev/ttyS0
+    # Load virtio block module
+    modprobe virtio_blk 2>/dev/null
     sleep 1
     
-    # Try to find and mount the cidata ISO
-    # cloud-localds creates an ISO9660 filesystem, but it's on a virtio block device
-    # Try /dev/vdb, /dev/vdc (vda is usually root disk)
+    # Mount the cidata ISO (cloud-init configuration)
     for device in /dev/vdb /dev/vdc /dev/vdd /dev/disk/by-label/CIDATA /dev/disk/by-label/cidata; do
         if [ -b "$device" ]; then
-            echo "=== DEBUG: Trying to mount $device ===" > /dev/ttyS0 2>&1
-            # Try iso9660 first (cloud-localds creates ISO format)
-            if mount -t iso9660 -o ro "$device" "$cidata_mount" 2>&1 | tee /dev/ttyS0; then
-                log_success_msg "Mounted cloud-init config from $device"
+            if mount -t iso9660 -o ro "$device" "$cidata_mount" 2>/dev/null; then
                 break
             fi
-            # Fallback to auto-detect filesystem
-            if mount -o ro "$device" "$cidata_mount" 2>&1 | tee /dev/ttyS0; then
-                log_success_msg "Mounted cloud-init config from $device"
+            if mount -o ro "$device" "$cidata_mount" 2>/dev/null; then
                 break
             fi
         fi
     done
     
-    echo "=== DEBUG: cidata mounted, contents: ===" > /dev/ttyS0 2>&1
-    ls -la "$cidata_mount" > /dev/ttyS0 2>&1
-    
     # Verify network-config exists
     if [ ! -f "$cidata_mount/network-config" ]; then
         log_failure_msg "Cannot find network-config in cidata"
-        ls -la "$cidata_mount" > /dev/ttyS0 2>&1
         return 1
     fi
     
     local netconfig="$cidata_mount/network-config"
     
-    echo "=== DEBUG: Parsing network config ===" > /dev/ttyS0 2>&1
-    cat "$netconfig" > /dev/ttyS0 2>&1
-    
     # Parse the network-config (netplan format)
-    # Expected format:
-    # version: 2
-    # ethernets:
-    #   enp0s1:
-    #     addresses:
-    #       - 192.168.100.2/24
-    #     routes:
-    #       - to: default
-    #         via: 192.168.100.1
-    #     nameservers:
-    #       addresses:
-    #         - 8.8.8.8
-    
-    # Extract interface name (first non-indented line under ethernets:)
     iface=$(awk '/ethernets:/{getline; gsub(/[ :]/, ""); print; exit}' "$netconfig")
-    
-    # Extract IP address (first address under addresses:)
     ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/, ""); print; exit}' "$netconfig")
-    
-    # Extract gateway (via: under routes:)
     gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/, ""); print; exit}' "$netconfig")
-    
-    # Extract nameserver (first one)
     nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/, ""); print; exit}}' "$netconfig")
     
-    echo "=== DEBUG: Parsed config ===" > /dev/ttyS0 2>&1
-    echo "Interface: $iface" > /dev/ttyS0 2>&1
-    echo "IP: $ip_addr" > /dev/ttyS0 2>&1
-    echo "Gateway: $gateway" > /dev/ttyS0 2>&1
-    echo "Nameserver: $nameserver" > /dev/ttyS0 2>&1
-    
-    # Validate we got the required values
+    # Validate parsed values
     if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
-        log_failure_msg "Failed to parse network config (iface=$iface ip=$ip_addr gw=$gateway)"
+        log_failure_msg "Failed to parse network config"
         return 1
     fi
     
     # Load network modules
-    modprobe virtio_net 2>&1 | tee /dev/ttyS0
-    modprobe virtio_pci 2>&1 | tee /dev/ttyS0
+    modprobe virtio_net 2>/dev/null
+    modprobe virtio_pci 2>/dev/null
     sleep 2
-    
-    echo "=== DEBUG: Available network interfaces ===" > /dev/ttyS0 2>&1
-    ls -la /sys/class/net/ > /dev/ttyS0 2>&1
     
     # Verify interface exists
     if [ ! -e "/sys/class/net/$iface" ]; then
@@ -209,24 +129,17 @@ setup_network() {
     # Verify configuration
     if ! ip addr show "$iface" | grep -q "inet "; then
         log_failure_msg "Failed to configure IP address"
-        ip addr show > /dev/ttyS0 2>&1
         return 1
     fi
     
     if ! ip route show | grep -q "default"; then
         log_failure_msg "Failed to configure default route"
-        ip route show > /dev/ttyS0 2>&1
         return 1
     fi
     
-    echo "=== DEBUG: Network configured successfully ===" > /dev/ttyS0 2>&1
-    ip addr show > /dev/ttyS0 2>&1
-    ip route show > /dev/ttyS0 2>&1
-    cat /etc/resolv.conf > /dev/ttyS0 2>&1
-    
     log_success_msg "Network setup complete"
     
-    # Unmount cidata (optional, but clean)
+    # Unmount cidata
     umount "$cidata_mount" 2>/dev/null || true
     
     return 0
@@ -237,9 +150,8 @@ fetch_nonce() {
     local response_file="/tmp/nonce_response"
     
     log_begin_msg "Fetching nonce from $NONCE_ENDPOINT"
-    echo "=== DEBUG: Fetching nonce ===" > /dev/ttyS0 2>&1
     
-    # Make API request, use mTLS with client cert and key
+    # Make API request with mTLS
     http_code=$(curl -s -w "%{http_code}" \
         -X GET \
         --max-time $TIMEOUT \
@@ -248,25 +160,18 @@ fetch_nonce() {
         --cert "$CLIENT_CERT" \
         --key "$CLIENT_KEY" \
         -o "$response_file" \
-        "$NONCE_ENDPOINT" 2>&1 | tee -a /dev/ttyS0)
-    
-    echo "HTTP response code: $http_code" > /dev/ttyS0 2>&1
+        "$NONCE_ENDPOINT")
     
     # Check HTTP response code
     case "$http_code" in
         200)
-            # Extract nonce from JSON
             NONCE=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
             if [ -n "$NONCE" ]; then
-                echo "Nonce received: $NONCE" > /dev/ttyS0 2>&1
-                cat "$response_file" > /dev/ttyS0 2>&1
                 rm -f "$response_file"
-                log_success_msg "Nonce retrieved successfully: $NONCE"
+                log_success_msg "Nonce retrieved successfully"
                 return 0
             else
                 log_failure_msg "API response missing nonce field"
-                echo "Response content:" > /dev/ttyS0 2>&1
-                cat "$response_file" > /dev/ttyS0 2>&1
             fi
             ;;
         401|403)
@@ -298,40 +203,131 @@ generate_quote() {
     local quote_file="/tmp/tdx_quote.bin"
     
     log_begin_msg "Generating TDX quote with nonce and cert hash"
-    echo "=== DEBUG: Generating quote ===" > /dev/ttyS0 2>&1
     
     # Compute combined hash for REPORTDATA (nonce + cert pubkey)
-    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
-    
-    echo "REPORTDATA: $REPORTDATA" > /dev/ttyS0 2>&1
-    echo "REPORTDATA length: $(echo -n "$REPORTDATA" | wc -c)" > /dev/ttyS0 2>&1
+    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)
     
     # Generate quote with REPORTDATA
-    if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>&1 | tee /dev/ttyS0; then
+    if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
         log_failure_msg "Failed to generate TDX quote"
-        echo "=== DEBUG: Quote generation failed ===" > /dev/ttyS0 2>&1
         return 1
     fi
     
     if [ ! -f "$quote_file" ]; then
         log_failure_msg "Quote file not created"
-        echo "=== DEBUG: Quote file missing ===" > /dev/ttyS0 2>&1
         return 1
     fi
-    
-    echo "Quote file created:" > /dev/ttyS0 2>&1
-    ls -la "$quote_file" > /dev/ttyS0 2>&1
     
     # Base64 encode the quote for HTTP transmission
     QUOTE_B64=$(base64 -w 0 < "$quote_file")
     
-    echo "Quote (base64, first 100 chars): $(echo "$QUOTE_B64" | cut -c1-100)..." > /dev/ttyS0 2>&1
-    echo "Quote length: $(echo -n "$QUOTE_B64" | wc -c)" > /dev/ttyS0 2>&1
-    
     rm -f "$quote_file"
     log_success_msg "TDX quote generated"
-    echo "=== DEBUG: Quote generation SUCCESS ===" > /dev/ttyS0 2>&1
     return 0
+}
+
+# Function to fetch LUKS key from API with fresh nonce for each attempt
+fetch_luks_key() {
+    local attempt=1
+    local response_file="/tmp/api_response"
+    
+    while [ $attempt -le $RETRY_COUNT ]; do
+        log_begin_msg "Fetching LUKS key (attempt $attempt/$RETRY_COUNT)"
+        
+        # Fetch fresh nonce for this attempt
+        if ! fetch_nonce; then
+            log_failure_msg "Failed to fetch nonce for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
+        # Generate quote with the fresh nonce
+        if ! generate_quote; then
+            log_failure_msg "Failed to generate quote for attempt $attempt"
+            attempt=$((attempt + 1))
+            if [ $attempt -le $RETRY_COUNT ]; then
+                sleep 2
+            fi
+            continue
+        fi
+        
+        # Make API request, use mTLS for API request
+        http_code=$(curl -s -w "%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: TDX-LUKS-Client/1.0" \
+            -H "X-Chutes-Nonce: $NONCE" \
+            --max-time $TIMEOUT \
+            --retry 0 \
+            --cacert "$API_CA_CERT" \
+            --cert "$CLIENT_CERT" \
+            --key "$CLIENT_KEY" \
+            -d "{\"quote\":\"$QUOTE_B64\"}" \
+            -o "$response_file" \
+            "$API_ENDPOINT")
+        
+        case "$http_code" in
+            200)
+                key=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                if [ -n "$key" ]; then
+                    echo "$key"
+                    rm -f "$response_file"
+                    log_success_msg "LUKS key retrieved successfully"
+                    return 0
+                else
+                    log_failure_msg "API response missing key field"
+                fi
+                ;;
+            401|403)
+                log_failure_msg "Authentication failed (HTTP $http_code)"
+                # Don't break - might be a transient issue, try with fresh nonce
+                ;;
+            404)
+                log_failure_msg "API endpoint not found (HTTP $http_code)"
+                break
+                ;;
+            429)
+                log_begin_msg "Rate limited, waiting before retry..."
+                sleep $((attempt * 2))
+                ;;
+            5*)
+                log_failure_msg "Server error (HTTP $http_code), retrying..."
+                ;;
+            000)
+                log_failure_msg "Connection failed, retrying..."
+                ;;
+            *)
+                log_failure_msg "Unexpected HTTP response: $http_code"
+                ;;
+        esac
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -le $RETRY_COUNT ]; then
+            sleep 2
+        fi
+    done
+    
+    rm -f "$response_file"
+    return 1
+}
+
+# Function to unlock LUKS device
+unlock_device() {
+    local key="$1"
+    
+    log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
+    
+    # Attempt to unlock with retrieved key
+    if echo "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+        log_success_msg "LUKS device unlocked successfully"
+        return 0
+    else
+        log_failure_msg "Failed to unlock LUKS device"
+        return 1
+    fi
 }
 
 # Function to handle failure and shutdown
@@ -339,17 +335,10 @@ handle_failure() {
     local reason="$1"
     
     log_failure_msg "TDX unlock failed: $reason"
-    log_failure_msg "Entering debug mode..."
+    log_failure_msg "VM will shut down in 10 seconds..."
     
     # Log to kernel ring buffer for debugging
     echo "TDX-LUKS-UNLOCK-FAILED: $reason" > /dev/kmsg
-    
-    # DEBUG: Drop to shell instead of shutting down
-    log_begin_msg "=== DROPPING TO DEBUG SHELL ==="
-    log_begin_msg "Editors: vi, nano"
-    log_begin_msg "This script: /scripts/init-premount/fetch_key_and_unlock"
-    log_begin_msg "Type 'exit' to shutdown"
-    PS1="initramfs-failure# " /bin/sh
     
     # Give time to see the message
     sleep 10
@@ -360,85 +349,43 @@ handle_failure() {
 
 # Main execution
 main() {
-    echo "=== DEBUG main: Starting ===" > /dev/ttyS0 2>&1
-    
     # Check if we're in a TDX environment
     if [ ! -c "/dev/tdx_guest" ]; then
-        echo "=== DEBUG: TDX device check failed ===" > /dev/ttyS0 2>&1
         handle_failure "TDX device not found - not running in TDX environment"
         return 1
     fi
     
-    echo "=== DEBUG: TDX device found ===" > /dev/ttyS0 2>&1
-    
     # Generate self-signed client cert
     if ! generate_client_cert; then
-        echo "=== DEBUG: generate_client_cert returned failure ===" > /dev/ttyS0 2>&1
         handle_failure "Client certificate generation failed"
         return 1
     fi
-    
-    echo "=== DEBUG: Cert generation complete ===" > /dev/ttyS0 2>&1
     
     if ! setup_network; then
         handle_failure "Network setup failed"
         return 1
     fi
     
-    echo "=== DEBUG: Network setup complete ===" > /dev/ttyS0 2>&1
-    
-    # Fetch nonce from API
-    if ! fetch_nonce; then
-        handle_failure "Failed to fetch nonce from API"
+    # Fetch LUKS key from API (nonce and quote generated per attempt)
+    key=$(fetch_luks_key)
+    if [ -z "$key" ]; then
+        handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
         return 1
     fi
     
-    echo "=== DEBUG: Nonce fetch complete ===" > /dev/ttyS0 2>&1
-    
-    # Generate quote
-    if ! generate_quote; then
-        handle_failure "Failed to generate TDX quote"
+    # Unlock the device
+    if unlock_device "$key"; then
+        # Clear key from memory
+        key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
+        unset key
+        # Clean up cert and key
+        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+        log_success_msg "TDX-based unlock completed successfully"
+        return 0
+    else
+        handle_failure "Device unlock failed with retrieved key"
         return 1
     fi
-    
-    echo "=== DEBUG: Quote generation complete ===" > /dev/ttyS0 2>&1
-    
-    # TESTING MODE: All steps complete, drop to shell before API call
-    log_success_msg "=== TESTING MODE: All steps successful ==="
-    log_success_msg "  - TDX device: OK"
-    log_success_msg "  - Client cert: OK (hash: $CERT_HASH)"
-    log_success_msg "  - Network: OK"
-    log_success_msg "  - Nonce: OK ($NONCE)"
-    log_success_msg "  - TDX Quote: OK ($(echo -n "$QUOTE_B64" | wc -c) bytes base64)"
-    
-    echo "=== TESTING MODE: Ready for final API call ===" > /dev/ttyS0 2>&1
-    
-    log_begin_msg "=== DROPPING TO DEBUG SHELL ==="
-    log_begin_msg "All data ready for API call:"
-    log_begin_msg "  Nonce: $NONCE"
-    log_begin_msg "  Quote (base64): /tmp/quote_b64.txt"
-    log_begin_msg "  Cert: $CLIENT_CERT"
-    log_begin_msg "  Key: $CLIENT_KEY"
-    log_begin_msg ""
-    log_begin_msg "Test API call manually:"
-    log_begin_msg "  curl -v -X POST \\"
-    log_begin_msg "    -H 'Content-Type: application/json' \\"
-    log_begin_msg "    -H 'X-Chutes-Nonce: $NONCE' \\"
-    log_begin_msg "    --cacert $API_CA_CERT \\"
-    log_begin_msg "    --cert $CLIENT_CERT \\"
-    log_begin_msg "    --key $CLIENT_KEY \\"
-    log_begin_msg "    -d '{\"quote\":\"'\"$(cat /tmp/quote_b64.txt)\"'\"}' \\"
-    log_begin_msg "    $API_ENDPOINT"
-    log_begin_msg ""
-    log_begin_msg "Type 'exit' to continue boot (no LUKS unlock)"
-    
-    # Save quote to file for easy testing
-    echo -n "$QUOTE_B64" > /tmp/quote_b64.txt
-    
-    PS1="initramfs-testing# " /bin/sh
-    
-    log_success_msg "=== Continuing boot (LUKS unlock skipped) ==="
-    return 0
 }
 
 # Run main function
