@@ -2,9 +2,6 @@
 - name: reload sysctl
   command: sysctl --system
 
-- name: update grub
-  command: update-grub
-
 - name: reload apparmor
   systemd:
     name: apparmor
