@@ -13,4 +13,3 @@ StandardError=journal+console
 TimeoutStartSec=300
 
 [Install]
-WantedBy=k3s.service

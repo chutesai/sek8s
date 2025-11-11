@@ -2,7 +2,7 @@
 Description=k3s Cluster Initialization Scripts
 Documentation=man:k3s(1)
 Requires=k3s.service
-After=k3s.service cloud-final.service
+After=k3s.service
 
 [Service]
 Type=notify
@@ -42,4 +42,4 @@ StandardError=journal+console
 SyslogIdentifier=k3s-cluster-init
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=k3s.service

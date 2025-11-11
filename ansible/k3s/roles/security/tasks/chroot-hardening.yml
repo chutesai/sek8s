@@ -1,23 +1,4 @@
 ---
-- name: Create systemd drop-in directory for k3s
-  ansible.builtin.file:
-    path: /etc/systemd/system/k3s.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Deploy chroot restriction drop-in
-  ansible.builtin.copy:
-    src: files/k3s.service.d/chroot-restrictions.conf
-    dest: /etc/systemd/system/k3s.service.d/chroot-restrictions.conf
-    owner: root
-    group: root
-    mode: "0644"
-  notify:
-    - reload systemd
-    - restart k3s
-
 - name: Create integrity checking directories
   ansible.builtin.file:
     path: "{{ item }}"
