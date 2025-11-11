@@ -16,10 +16,6 @@ copy_exec /usr/bin/base64
 copy_exec /usr/bin/openssl
 copy_exec /usr/bin/sha256sum
 
-# Copy text editors for debugging
-copy_exec /usr/bin/vi.tiny /bin/vi
-copy_exec /bin/nano
-
 # Network configuration
 mkdir -p $DESTDIR/etc/network
 if [ -d /etc/netplan ]; then
