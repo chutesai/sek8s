@@ -39,7 +39,7 @@
     group: root
     mode: '0644'
   vars:
-    enable_dev_mode: "{{ cloud_init_dev_mode | default(false) }}"
+    enable_dev_mode: "{{ enable_dev_mode | default(false) }}"
 
 - name: Ensure PyYAML is installed for validation script
   package:
