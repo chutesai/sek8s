@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-tdx.sh — launch Intel-TDX guest, auto-passthrough NVIDIA H200 GPUs and NVSwitches,
-#              use preconfigured network interface for flexible networking.
-# Enhanced for TDX compatibility with configurable memory settings and cloud-init support
+#              use preconfigured network interface for manual initialization (no cloud-init)
+# Enhanced for TDX compatibility with configurable memory settings and manual config
 
 # Default values
 IMG="guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
@@ -11,24 +11,19 @@ VCPUS="24"
 FOREGROUND=false
 PIDFILE="/tmp/tdx-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
-NET_IFACE=""  # Network interface from setup script (e.g., macvtap, tap)
+NET_IFACE=""  # Network interface from setup script (e.g., tap)
 VM_IP=""  # VM static IP from setup script
 VM_GATEWAY=""  # VM gateway from setup script
 VM_DNS="8.8.8.8"  # Default DNS server
 SSH_PORT=2222  # Host port for SSH (maps to VM:22)
-NETWORK_TYPE=""  # Network backend: tap, macvtap, user
+NETWORK_TYPE=""  # Network backend: tap, user (macvtap removed)
 CACHE_VOLUME=""  # Path to cache volume qcow2 (optional)
 
-# Cloud-init variables
-USER_DATA=""  # Path to user-data YAML file (optional, overrides generated)
-META_DATA=""  # Path to meta-data YAML file (optional)
-NETWORK_CONFIG=""  # Path to network-config YAML file (optional)
-CIDATA_FILE="/tmp/tdx-cidata.iso"  # Temporary file for cloud-init datasource
-HOSTNAME=""  # Generated user-data param
-MINER_SS58=""  # Generated user-data param
-MINER_SEED=""  # Generated user-data param
-GENERATED_USER_DATA="/tmp/generated-user-data.yaml"  # Temp file if generating user-data
-GENERATED_NETWORK_CONFIG="/tmp/generated-network-config.yaml"  # Temp file for network config
+# Manual initialization variables (replaces cloud-init)
+CONFIG_FILE="/tmp/tee-config.iso"  # Generated config ISO
+HOSTNAME=""  # VM hostname
+MINER_SS58=""  # Content for miner-ss58 file
+MINER_SEED=""  # Content for miner-seed file
 
 # ======================================================================
 # MEMORY CONFIGURATION VARIABLES - Adjust these for testing
@@ -122,18 +117,6 @@ while [[ $# -gt 0 ]]; do
       CACHE_VOLUME="$2"
       shift 2
       ;;
-    --cloud-init-user-data)
-      USER_DATA="$2"
-      shift 2
-      ;;
-    --cloud-init-meta-data)
-      META_DATA="$2"
-      shift 2
-      ;;
-    --cloud-init-network-config)
-      NETWORK_CONFIG="$2"
-      shift 2
-      ;;
     --status)
       if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -178,7 +161,7 @@ while [[ $# -gt 0 ]]; do
       else
         echo "No PID file found. No VM to clean."
       fi
-      rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"
+      rm -f "$CONFIG_FILE"
       exit 0
       ;;
     --help)
@@ -191,31 +174,24 @@ while [[ $# -gt 0 ]]; do
       echo "  --nvswitch-mmio-mb SIZE   MMIO allocation per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
       echo "  --pci-hole-base-gb SIZE   Base PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo "  --foreground              Run in foreground"
-      echo "  --network-type TYPE       Network backend: tap, macvtap, user (required)"
-      echo "  --net-iface IFACE         Network interface from setup script"
-      echo "  --vm-ip IP                VM static IP from setup script"
-      echo "  --vm-gateway IP           VM gateway from setup script"
+      echo "  --network-type TYPE       Network backend: tap, user (required)"
+      echo "  --net-iface IFACE         Network interface from bridge setup script"
+      echo "  --vm-ip IP                VM static IP"
+      echo "  --vm-gateway IP           VM gateway IP"
       echo "  --vm-dns IP               VM DNS server (default: $VM_DNS)"
       echo "  --ssh-port PORT           Host port for SSH forwarding (default: $SSH_PORT)"
-      echo "  --hostname NAME           VM hostname for generated user-data"
+      echo "  --hostname NAME           VM hostname"
       echo "  --miner-ss58 VALUE        Content for /root/miner-ss58 file"
       echo "  --miner-seed VALUE        Content for /root/miner-seed file"
-      echo "  --cache-volume PATH       Path to cache volume qcow2 (optional, mounted at /var/snap)"
-      echo "  --cloud-init-user-data FILE     Custom user-data YAML (overrides generated)"
-      echo "  --cloud-init-meta-data FILE     Custom meta-data YAML (optional)"
-      echo "  --cloud-init-network-config FILE Custom network-config YAML (overrides generated)"
+      echo "  --cache-volume PATH       Path to cache volume qcow2 (optional)"
       echo "  --status                  Show VM status"
       echo "  --clean                   Stop and clean VM"
       echo "  --help                    Show this help"
       echo ""
-      echo "Example for conservative testing:"
-      echo "  $0 --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
+      echo "Example workflow:"
+      echo "  1. Setup bridge:   ./setup-bridge-simple.sh"
+      echo "  2. Launch VM:      $0 --hostname chutes-miner --miner-ss58 'ss58' --miner-seed 'seed' --net-iface vmtap-XXXXX --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type tap"
       echo ""
-      echo "Example with macvtap networking:"
-      echo "  $0 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type macvtap --ssh-port 2222"
-      echo ""
-      echo "Example with cache volume:"
-      echo "  $0 --cache-volume /path/to/cache-volume.qcow2 --hostname chutes-miner --miner-ss58 'actual_ss58' --miner-seed 'actual_seed' --net-iface vmnet-12345678 --vm-ip 192.168.100.2 --vm-gateway 192.168.100.1 --network-type macvtap"
       exit 0
       ;;
     *)
@@ -228,19 +204,19 @@ done
 
 # Validate required params
 if [ -z "$NETWORK_TYPE" ]; then
-  echo "Error: --network-type is required (tap, macvtap, user)."
+  echo "Error: --network-type is required (tap, user)."
   exit 1
 fi
 if [ -z "$NET_IFACE" ] && [ "$NETWORK_TYPE" != "user" ]; then
   echo "Error: --net-iface is required for $NETWORK_TYPE."
   exit 1
 fi
-if [ -z "$NETWORK_CONFIG" ] && { [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; }; then
-  echo "Error: --vm-ip and --vm-gateway are required."
+if [ "$NETWORK_TYPE" = "tap" ] && { [ -z "$VM_IP" ] || [ -z "$VM_GATEWAY" ]; }; then
+  echo "Error: --vm-ip and --vm-gateway are required for tap networking."
   exit 1
 fi
-if [ -z "$USER_DATA" ] && { [ -z "$HOSTNAME" ] || [ -z "$MINER_SS58" ] || [ -z "$MINER_SEED" ]; }; then
-  echo "Error: --hostname, --miner-ss58, and --miner-seed are required unless --cloud-init-user-data is provided."
+if [ -z "$HOSTNAME" ] || [ -z "$MINER_SS58" ] || [ -z "$MINER_SEED" ]; then
+  echo "Error: --hostname, --miner-ss58, and --miner-seed are required for manual initialization."
   exit 1
 fi
 
@@ -261,59 +237,69 @@ if [ -n "$CACHE_VOLUME" ]; then
     FILE_FORMAT=$(qemu-img info "$CACHE_VOLUME" 2>/dev/null | grep '^file format:' | awk '{print $3}')
     if [ "$FILE_FORMAT" != "qcow2" ]; then
       echo "Error: Cache volume is not in qcow2 format: $CACHE_VOLUME (detected: $FILE_FORMAT)"
-      echo "Expected a qcow2 image created with create-cache-volume.sh"
       exit 1
     fi
     echo "Cache volume validated: $CACHE_VOLUME (format: qcow2)"
-  else
-    echo "Warning: qemu-img not found, skipping cache volume format verification"
   fi
 fi
 
-# Generate user-data if params provided and no custom user-data
-if [ -z "$USER_DATA" ]; then
-  cat > "$GENERATED_USER_DATA" <<EOF
-#cloud-config
-hostname: $HOSTNAME
+# Generate config ISO for manual initialization
+echo "=== Generating Configuration ISO ==="
+CONFIG_DIR="/tmp/tee-config-$$"
+mkdir -p "$CONFIG_DIR"
 
-write_files:
-  - path: /var/lib/rancher/k3s/credentials/miner-ss58
-    content: |
-      $MINER_SS58
-    permissions: '0600'
-    owner: root:root
+# Create hostname file
+echo "$HOSTNAME" > "$CONFIG_DIR/hostname"
+echo "Generated hostname config: $HOSTNAME"
 
-  - path: /var/lib/rancher/k3s/credentials/miner-seed  
-    content: |
-      $MINER_SEED
-    permissions: '0600'
-    owner: root:root
-EOF
-  USER_DATA="$GENERATED_USER_DATA"
-elif [ -n "$USER_DATA" ] && { [ -n "$HOSTNAME" ] || [ -n "$MINER_SS58" ] || [ -n "$MINER_SEED" ]; }; then
-  echo "Warning: --hostname, --miner-ss58, --miner-seed ignored since custom --cloud-init-user-data provided."
-fi
+# Create miner credential files
+echo "$MINER_SS58" > "$CONFIG_DIR/miner-ss58"
+echo "$MINER_SEED" > "$CONFIG_DIR/miner-seed"
+echo "Generated miner credential files"
 
-# Generate network-config if not provided
-if [ -z "$NETWORK_CONFIG" ]; then
-  cat > "$GENERATED_NETWORK_CONFIG" <<EOF
+# Generate network configuration for tap networking
+if [ "$NETWORK_TYPE" = "tap" ]; then
+  cat > "$CONFIG_DIR/network-config.yaml" <<EOF
 version: 2
 ethernets:
   enp0s1:
     addresses:
-      - $VM_IP/24
+      - ${VM_IP}/24
     routes:
       - to: default
-        via: $VM_GATEWAY
+        via: ${VM_GATEWAY}
     nameservers:
       addresses:
-        - $VM_DNS
+        - ${VM_DNS}
 EOF
-  NETWORK_CONFIG="$GENERATED_NETWORK_CONFIG"
-  echo "Generated network-config: $NETWORK_CONFIG"
-elif [ -n "$NETWORK_CONFIG" ] && { [ -n "$VM_IP" ] || [ -n "$VM_GATEWAY" ] || [ -n "$VM_DNS" ]; }; then
-  echo "Warning: --vm-ip, --vm-gateway, --vm-dns ignored since custom --cloud-init-network-config provided."
+  echo "Generated network config: ${VM_IP} via ${VM_GATEWAY}"
+elif [ "$NETWORK_TYPE" = "user" ]; then
+  # User mode networking uses DHCP
+  cat > "$CONFIG_DIR/network-config.yaml" <<EOF
+version: 2
+ethernets:
+  enp0s1:
+    dhcp4: true
+EOF
+  echo "Generated network config: DHCP (user mode)"
 fi
+
+# Create ISO using genisoimage
+if command -v genisoimage >/dev/null 2>&1; then
+  genisoimage -o "$CONFIG_FILE" -r -J "$CONFIG_DIR/" >/dev/null 2>&1 || {
+    echo "Error: Failed to create configuration ISO"
+    rm -rf "$CONFIG_DIR"
+    exit 1
+  }
+  echo "Configuration ISO created: $CONFIG_FILE"
+else
+  echo "Error: genisoimage not found. Install with: sudo apt install genisoimage"
+  rm -rf "$CONFIG_DIR"
+  exit 1
+fi
+
+# Cleanup temp directory
+rm -rf "$CONFIG_DIR"
 
 CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
 
@@ -330,11 +316,12 @@ mapfile -t NVSW < <(
 TOTAL_GPUS=${#GPUS[@]}
 TOTAL_NVSW=${#NVSW[@]}
 
+echo
 echo "=== Device Detection ==="
 echo "Found NVIDIA devices:"
 echo "  GPUs: ${GPUS[*]:-none} (count: $TOTAL_GPUS)"
 echo "  NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
-echo ""
+echo
 
 ##############################################################################
 # 1. Calculate memory allocations
@@ -352,49 +339,24 @@ echo "NVSwitch MMIO allocation: ${NVSWITCH_MMIO_MB}MB per switch (${TOTAL_NVSW} 
 echo "GPU overhead: ${TOTAL_GPU_OVERHEAD_GB}GB (${PCI_HOLE_OVERHEAD_PER_GPU_GB}GB × ${TOTAL_GPUS})"
 echo "NVSwitch overhead: ${TOTAL_NVSWITCH_OVERHEAD_GB}GB (${PCI_HOLE_OVERHEAD_PER_NVSWITCH_GB}GB × ${TOTAL_NVSW})"
 echo "Calculated PCI hole size: ${CALCULATED_PCI_HOLE_GB}GB"
-echo ""
+echo
 
 ##############################################################################
 # 2. build dynamic -device list
 ##############################################################################
 # Validate network type
 case "$NETWORK_TYPE" in
-  tap|macvtap|user)
+  tap|user)
     ;;
   *)
-    echo "Error: Invalid --network-type '$NETWORK_TYPE'. Use tap, macvtap, or user."
+    echo "Error: Invalid --network-type '$NETWORK_TYPE'. Use tap or user."
     exit 1
     ;;
 esac
 
 # Build network device options
 DEV_OPTS=()
-if [ "$NETWORK_TYPE" = "macvtap" ]; then
-  if [ -z "$NET_IFACE" ]; then
-    echo "Error: --net-iface must be specified for macvtap."
-    exit 1
-  fi
-  # Find the macvtap subdirectory (e.g., tap26)
-  MACVTAP_SUBDIR=$(ls /sys/class/net/"$NET_IFACE"/macvtap/ 2>/dev/null | grep '^tap[0-9]\+$' | head -n 1)
-  if [ -z "$MACVTAP_SUBDIR" ]; then
-    echo "Error: No macvtap subdirectory found for $NET_IFACE. Ensure it is a macvtap interface."
-    exit 1
-  fi
-  # Derive device name from subdirectory (e.g., tap26 -> /dev/tap26)
-  MACVTAP_DEVICE="/dev/$MACVTAP_SUBDIR"
-  if [ ! -c "$MACVTAP_DEVICE" ]; then
-    echo "Error: Device $MACVTAP_DEVICE does not exist."
-    exit 1
-  fi
-  exec 3>"$MACVTAP_DEVICE" || {
-    echo "Error: Failed to open $MACVTAP_DEVICE for $NET_IFACE."
-    exit 1
-  }
-  DEV_OPTS+=(
-    -netdev tap,id=n0,fd=3
-    -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
-  )
-elif [ "$NETWORK_TYPE" = "tap" ]; then
+if [ "$NETWORK_TYPE" = "tap" ]; then
   if [ -z "$NET_IFACE" ]; then
     echo "Error: --net-iface must be specified for tap."
     exit 1
@@ -463,70 +425,15 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func") )
   if ((func==8)); then func=0; ((slot++)); fi
 done
 
-# Cloud-init: Generate cidata ISO with proper user-data and network-config separation
-if [ -n "$USER_DATA" ]; then
-  if [ ! -f "$USER_DATA" ]; then
-    echo "Error: User-data file $USER_DATA not found."
-    exit 1
-  fi
-
-  if [ -n "$NETWORK_CONFIG" ] && [ ! -f "$NETWORK_CONFIG" ]; then
-    echo "Error: Network-config file $NETWORK_CONFIG not found."
-    exit 1
-  fi
-
-  # If meta-data file provided, use it; otherwise, generate minimal meta-data with dynamic instance-id
-  if [ -n "$META_DATA" ]; then
-    if [ ! -f "$META_DATA" ]; then
-      echo "Error: Meta-data file $META_DATA not found."
-      exit 1
-    fi
-    META_DATA_FILE="$META_DATA"
-  else
-    # Generate dynamic instance-id (requires uuidgen or fallback to timestamp)
-    if command -v uuidgen >/dev/null 2>&1; then
-      INSTANCE_ID=$(uuidgen)
-    else
-      INSTANCE_ID="tdx-guest-$(date +%s)"
-    fi
-    META_DATA_FILE="/tmp/tdx-meta-data.$$"
-    echo "instance-id: $INSTANCE_ID" > "$META_DATA_FILE" || {
-      echo "Error: Failed to write meta-data to $META_DATA_FILE."
-      exit 1
-    }
-  fi
-
-  # Generate NoCloud datasource ISO using cloud-localds with network-config
-  if command -v cloud-localds >/dev/null 2>&1; then
-      cloud-localds --network-config "$NETWORK_CONFIG" "$CIDATA_FILE" "$USER_DATA" "$META_DATA_FILE" || {
-        echo "Error: Failed to generate cloud-init ISO. Ensure cloud-utils is installed and up-to-date."
-        [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
-        exit 1
-      }
-  else
-    echo "Error: cloud-localds not found. Ensure cloud-utils is installed."
-    [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
-    exit 1
-  fi
-
-  # Clean up temporary meta-data file if generated
-  [ -z "$META_DATA" ] && rm -f "$META_DATA_FILE"
-
-  echo "Cloud-init datasource generated: $CIDATA_FILE"
-  echo "Attaching to QEMU as secondary drive."
-
-  # Add to DEV_OPTS (attach as read-only VirtIO drive)
-  DEV_OPTS+=( -drive file="$CIDATA_FILE",if=virtio,format=raw,readonly=on )
-fi
+# Attach configuration ISO as virtio drive
+DEV_OPTS+=( -drive file="$CONFIG_FILE",if=virtio,format=raw,readonly=on )
 
 # Add cache volume if provided
 if [ -n "$CACHE_VOLUME" ]; then
   echo "Cache volume: $CACHE_VOLUME"
   echo "  Will be auto mounted at /var/snap by guest verification service"
-  echo "  Label must be 'tdx-cache' or VM will shut down"
   
   # Attach cache volume as second virtio drive (vdb)
-  # Use cache=none for best performance and data integrity in virtualized environment
   DEV_OPTS+=( -drive file="$CACHE_VOLUME",if=virtio,cache=none,format=qcow2 )
 fi
 
@@ -543,21 +450,23 @@ echo "PCI hole: ${CALCULATED_PCI_HOLE_GB}G"
 echo "Memory: $MEM"
 echo "vCPUs: $VCPUS"
 echo "Network: $NETWORK_TYPE interface $NET_IFACE"
-echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
+if [ "$NETWORK_TYPE" = "tap" ]; then
+  echo "VM IP: $VM_IP, Gateway: $VM_GATEWAY, DNS: $VM_DNS"
+else
+  echo "VM IP: DHCP (user mode)"
+fi
 if [ -n "$CACHE_VOLUME" ]; then
   echo "Cache volume: Enabled ($CACHE_VOLUME -> /dev/vdb -> /var/snap)"
 else
   echo "Cache volume: Not provided (optional)"
 fi
-if [ -n "$USER_DATA" ]; then
-  echo "Cloud-init: Enabled with user-data from $USER_DATA"
-  [ -n "$META_DATA" ] && echo "Cloud-init meta-data: $META_DATA" || echo "Cloud-init meta-data: Generated with dynamic instance-id"
-  [ -n "$NETWORK_CONFIG" ] && echo "Cloud-init network-config: $NETWORK_CONFIG" || echo "Cloud-init network-config: Not provided"
-else
-  echo "Cloud-init: Disabled (no user-data provided)"
-fi
+echo "Manual initialization: Enabled ($CONFIG_FILE -> /dev/vdc)"
 echo "Access VM via:"
-echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
+if [ "$NETWORK_TYPE" = "tap" ]; then
+  echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
+else
+  echo "  SSH: ssh -p $SSH_PORT root@localhost"
+fi
 echo "  k3s API: <host_public_ip>:6443"
 echo "  k3s NodePorts: <host_public_ip>:30000-32767"
 echo ""
@@ -585,14 +494,22 @@ if [ "$FOREGROUND" = false ]; then
   echo "VM daemonized with PID: $(cat $PIDFILE)"
   echo "Serial log: $LOGFILE"
   echo "Access VM via:"
-  echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
+  if [ "$NETWORK_TYPE" = "tap" ]; then
+    echo "  SSH: ssh -p $SSH_PORT root@<host_public_ip>"
+  else
+    echo "  SSH: ssh -p $SSH_PORT root@localhost"
+  fi
   echo "  k3s API: <host_public_ip>:6443"
   echo "  k3s NodePorts: <host_public_ip>:30000-32767"
+  echo ""
+  echo "=== Manual Initialization Notes ==="
+  echo "VM will automatically configure itself from $CONFIG_FILE"
+  echo "No cloud-init - secure manual initialization only"
+  echo "Check VM console logs if initialization fails"
   echo ""
   if [ -n "$CACHE_VOLUME" ]; then
     echo "=== Cache Volume Notes ==="
     echo "The cache volume will be verified and mounted at boot."
-    echo "If verification fails (wrong label, not ext4, etc), the VM will shut down immediately."
     echo "Check serial log if VM shuts down: cat $LOGFILE | grep -i cache"
     echo ""
   fi
@@ -602,23 +519,14 @@ if [ "$FOREGROUND" = false ]; then
   echo "  - GPU MMIO: ${GPU_MMIO_MB}MB per GPU"
   echo "  - NVSwitch MMIO: ${NVSWITCH_MMIO_MB}MB per switch"
   echo ""
-  echo "If nvidia-smi shows 'No devices were found':"
-  echo "1. Check lspci shows devices: lspci | grep NVIDIA"
-  echo "2. Check dmesg for NVIDIA errors: dmesg | grep -i nvidia"
-  echo "3. Try disabling GSP firmware: echo 'options nvidia NVreg_EnableGpuFirmware=0' >> /etc/modprobe.d/nvidia.conf"
-  echo "4. Check driver version compatibility with TDX"
-  echo "5. Try different memory settings:"
-  echo "   - Lower if soft lockups: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
-  echo "   - Higher if BAR allocation fails: --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
-  echo ""
   echo "Memory testing progression:"
   echo "  Conservative: --gpu-mmio-mb 16384 --pci-hole-base-gb 1024"
   echo "  Moderate:     --gpu-mmio-mb 32768 --pci-hole-base-gb 2048 (current)"
   echo "  Aggressive:   --gpu-mmio-mb 65536 --pci-hole-base-gb 4096"
   echo "  Maximum:      --gpu-mmio-mb 147456 --pci-hole-base-gb 8192"
-  rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"
+  rm -f "$CONFIG_FILE"
   exit 0
 fi
 
-# Clean up cidata file on exit (foreground mode)
-trap 'rm -f "$CIDATA_FILE" "$GENERATED_USER_DATA" "$GENERATED_NETWORK_CONFIG"' EXIT
+# Clean up config file on exit (foreground mode)
+trap 'rm -f "$CONFIG_FILE"' EXIT

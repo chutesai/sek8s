@@ -1,0 +1,49 @@
+# tee-vm.yaml - TEE VM Configuration Template
+# Copy this file and customize for your deployment
+
+# VM Identity
+vm:
+  hostname: chutes-miner-tee-0
+  
+# Miner Credentials (required)
+miner:
+  ss58: "your_ss58_credential_here"
+  seed: "your_seed_credential_here"
+
+# Network Configuration
+network:
+  vm_ip: "192.168.100.2"
+  bridge_ip: "192.168.100.1/24"
+  dns: "8.8.8.8"
+  public_interface: "ens9f0np0"
+
+# Volume Configuration
+volumes:
+  # Cache volume settings
+  cache:
+    enabled: true
+    size: "500G"
+    path: ""  # Leave empty to auto-generate, or specify existing volume path
+  
+  # Config volume settings  
+  config:
+    path: ""  # Leave empty to auto-generate, or specify existing volume path
+
+# Device Configuration
+devices:
+  bind_devices: true  # Set to false to skip GPU/NVSwitch binding
+
+# Runtime Configuration
+runtime:
+  foreground: false  # Set to true for foreground mode
+  
+# Host Configuration
+host:
+  public_interface: "ens9f0np0"
+
+# Advanced Options (optional)
+advanced:
+  memory: "1536G"
+  vcpus: 24
+  gpu_mmio_mb: 262144
+  pci_hole_base_gb: 2048
