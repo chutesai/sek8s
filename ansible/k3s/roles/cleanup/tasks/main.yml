@@ -1,11 +1,7 @@
 ---
 - name: Cleanup k3s
-  block:
-    ansible.builtin.include_tasks: cleanup-k3s.yml
-    when: inventory_hostname in groups['vm']
-  rescue:
-    - debug:
-        msg: "K3s cleanup failed. Continuing..."
+  ansible.builtin.include_tasks: cleanup-k3s.yml
+  when: inventory_hostname in groups['vm']
 
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
