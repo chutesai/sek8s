@@ -182,4 +182,4 @@
         daemon_reload: yes
   rescue:
     - debug:
-      msg: "Cleanup k3s failed, continuing..."
+        msg: "Cleanup k3s failed, continuing..."
