@@ -48,17 +48,6 @@
         - reload systemd
         - restart k3s
 
-    - name: Deploy dependencies drop-in
-      ansible.builtin.copy:
-        src: files/k3s.service.d/dependencies.conf
-        dest: /etc/systemd/system/k3s.service.d/dependencies.conf
-        owner: root
-        group: root
-        mode: "0644"
-      notify:
-        - reload systemd
-        - restart k3s
-
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
         name: "{{ item.name }}"
