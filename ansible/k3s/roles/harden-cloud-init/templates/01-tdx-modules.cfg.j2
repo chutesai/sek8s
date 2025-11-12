@@ -10,29 +10,18 @@ cloud_init_modules:
   - migrator
   - seed_random
   - set_hostname
-  - write-files
+  - update_hostname
+  - write_files
   - growpart
   - resizefs
+  - ssh
+  - set_passwords
 {% else %}
   - migrator
   - seed_random
   - set_hostname
-  - write-files
-{% endif %}
-
-# ===== Post-network config stage =====
-cloud_config_modules:
-{% if enable_dev_mode | default(false) %}
-  # Allow SSH (password auth only) and simple debugging tools
-  - set-passwords
-  - ssh
-  - set_hostname
-  - write-files
-  - write-network-config
-{% else %}
-  - set_hostname
-  - write-files
-  - write-network-config
+  - update_hostname
+  - write_files
 {% endif %}
 
 # ===== Final stage =====
@@ -45,13 +34,7 @@ cloud_final_modules:
 
 # ===== User & SSH Settings =====
 system_info:
-{% if enable_dev_mode | default(false) %}
-  default_user:
-    name: ubuntu
-    lock_passwd: false
-    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
-    shell: /bin/bash
-{% else %}
+{% if not enable_dev_mode | default(false) %}
   default_user: null
 {% endif %}
 
@@ -60,7 +43,7 @@ system_info:
 # Dev mode: enable SSH password login only (no key injection)
 ssh_deletekeys: false
 ssh_genkeytypes: ['rsa']         # generate a local host key for SSHD
-disable_root: true
+disable_root: false
 ssh_pwauth: true
 ssh_import_id: []                # disable key import
 ssh_authorized_keys: []          # no external keys
@@ -78,9 +61,7 @@ package_upgrade: false
 package_reboot_if_required: false
 
 # ===== Disabled features =====
-{% if enable_dev_mode %}
-users: [default]
-{% else %}
+{% if not enable_dev_mode %}
 users: []
 {% endif %}
 
