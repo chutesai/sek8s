@@ -1,185 +1,180 @@
 ---
 # Drain and clean up k3s cluster before stopping
-- name: Cleanup k3s
-  block:
-    - name: Check if k3s service is running
-      ansible.builtin.systemd:
-        name: k3s
-      register: k3s_service_status
+- name: Check if k3s service is running
+  ansible.builtin.systemd:
+    name: k3s
+  register: k3s_service_status
 
-    - name: Wait for k3s API to be ready
-      ansible.builtin.command:
-        cmd: kubectl get --raw='/readyz'
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      retries: 30
-      delay: 2
-      register: api_ready
-      until: api_ready.rc == 0
-      when: k3s_service_status.status.ActiveState == "active"
-      ignore_errors: yes
+- name: Wait for k3s API to be ready
+  ansible.builtin.command:
+    cmd: kubectl get --raw='/readyz'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  retries: 30
+  delay: 2
+  register: api_ready
+  until: api_ready.rc == 0
+  when: k3s_service_status.status.ActiveState == "active"
+  ignore_errors: yes
 
-    - name: Get current hostname for k3s node
-      ansible.builtin.command: hostname
-      register: k3s_hostname
-      changed_when: false
+- name: Get current hostname for k3s node
+  ansible.builtin.command: hostname
+  register: k3s_hostname
+  changed_when: false
 
-    - name: Cordon the build node
-      ansible.builtin.command:
-        cmd: "kubectl cordon {{ k3s_hostname.stdout }}"
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      when: 
-        - k3s_service_status.status.ActiveState == "active"
-        - api_ready is succeeded
-      ignore_errors: yes
-      register: cordon_result
+- name: Cordon the build node
+  ansible.builtin.command:
+    cmd: "kubectl cordon {{ k3s_hostname.stdout }}"
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  ignore_errors: yes
+  register: cordon_result
 
-    - name: Drain the build node
-      ansible.builtin.command:
-        cmd: >
-          kubectl drain {{ k3s_hostname.stdout }}
-          --ignore-daemonsets
-          --delete-emptydir-data
-          --force
-          --grace-period=30
-          --timeout=120s
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      when: 
-        - k3s_service_status.status.ActiveState == "active"
-        - api_ready is succeeded
-      ignore_errors: yes
-      register: drain_result
+- name: Drain the build node
+  ansible.builtin.command:
+    cmd: >
+      kubectl drain {{ k3s_hostname.stdout }}
+      --ignore-daemonsets
+      --delete-emptydir-data
+      --force
+      --grace-period=30
+      --timeout=120s
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  ignore_errors: yes
+  register: drain_result
 
-    - name: Check for remaining non-daemonset pods
-      ansible.builtin.shell: |
-        kubectl get pods --all-namespaces --field-selector spec.nodeName="{{ k3s_hostname.stdout }}" -o json | \
-        jq -r '.items[] | select(.metadata.ownerReferences[]?.kind != "DaemonSet") | "\(.metadata.namespace)/\(.metadata.name)"'
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      when: 
-        - k3s_service_status.status.ActiveState == "active"
-        - api_ready is succeeded
-      register: remaining_pods
-      changed_when: false
-      ignore_errors: yes
+- name: Check for remaining non-daemonset pods
+  ansible.builtin.shell: |
+    kubectl get pods --all-namespaces --field-selector spec.nodeName="{{ k3s_hostname.stdout }}" -o json | \
+    jq -r '.items[] | select(.metadata.ownerReferences[]?.kind != "DaemonSet") | "\(.metadata.namespace)/\(.metadata.name)"'
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+  register: remaining_pods
+  changed_when: false
+  ignore_errors: yes
 
-    - name: Force delete remaining pods
-      ansible.builtin.shell: |
-        kubectl delete pod {{ item.split('/')[1] }} -n {{ item.split('/')[0] }} --grace-period=0 --force
-      environment:
-        KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      loop: "{{ remaining_pods.stdout_lines }}"
-      when: 
-        - k3s_service_status.status.ActiveState == "active"
-        - api_ready is succeeded
-        - remaining_pods.stdout_lines is defined
-        - remaining_pods.stdout_lines | length > 0
-      ignore_errors: yes
+- name: Force delete remaining pods
+  ansible.builtin.shell: |
+    kubectl delete pod {{ item.split('/')[1] }} -n {{ item.split('/')[0] }} --grace-period=0 --force
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+  loop: "{{ remaining_pods.stdout_lines }}"
+  when: 
+    - k3s_service_status.status.ActiveState == "active"
+    - api_ready is succeeded
+    - remaining_pods.stdout_lines is defined
+    - remaining_pods.stdout_lines | length > 0
+  ignore_errors: yes
 
-    - name: Display cluster cleanup summary
-      ansible.builtin.debug:
-        msg:
-          - "Cluster cleanup completed:"
-          - "  Cordon: {{ 'Success' if cordon_result is succeeded else 'Failed/Skipped' }}"
-          - "  Drain: {{ 'Success' if drain_result is succeeded else 'Failed/Skipped' }}"
-          - "  Remaining pods: {{ remaining_pods.stdout_lines | default([]) | length }}"
+- name: Display cluster cleanup summary
+  ansible.builtin.debug:
+    msg:
+      - "Cluster cleanup completed:"
+      - "  Cordon: {{ 'Success' if cordon_result is succeeded else 'Failed/Skipped' }}"
+      - "  Drain: {{ 'Success' if drain_result is succeeded else 'Failed/Skipped' }}"
+      - "  Remaining pods: {{ remaining_pods.stdout_lines | default([]) | length }}"
 
-    - name: Stop k3s service
-      ansible.builtin.systemd:
-        name: k3s
-        state: stopped
-      ignore_errors: yes
+- name: Stop k3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: stopped
+  ignore_errors: yes
 
-    - name: Clean k3s certificates and tokens
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /var/lib/rancher/k3s/server/tls
-        - /var/lib/rancher/k3s/server/node-token
-        - /var/lib/rancher/k3s/server/cred/node-passwd
-        - /etc/rancher/k3s/k3s.yaml
-        - /root/.kube/config
+- name: Clean k3s certificates and tokens
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/rancher/k3s/server/tls
+    - /var/lib/rancher/k3s/server/node-token
+    - /var/lib/rancher/k3s/server/cred/node-passwd
+    - /etc/rancher/k3s/k3s.yaml
+    - /root/.kube/config
 
-    - name: Clean k3s agent certificates
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /var/lib/rancher/k3s/agent/client-ca.crt
-        - /var/lib/rancher/k3s/agent/client-k3s-controller.crt
-        - /var/lib/rancher/k3s/agent/client-k3s-controller.key
-        - /var/lib/rancher/k3s/agent/client-kubelet.crt
-        - /var/lib/rancher/k3s/agent/client-kubelet.key
-        - /var/lib/rancher/k3s/agent/client-kube-proxy.crt
-        - /var/lib/rancher/k3s/agent/client-kube-proxy.key
-        - /var/lib/rancher/k3s/agent/server-ca.crt
-        - /var/lib/rancher/k3s/agent/serving-kubelet.crt
-        - /var/lib/rancher/k3s/agent/serving-kubelet.key
+- name: Clean k3s agent certificates
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/rancher/k3s/agent/client-ca.crt
+    - /var/lib/rancher/k3s/agent/client-k3s-controller.crt
+    - /var/lib/rancher/k3s/agent/client-k3s-controller.key
+    - /var/lib/rancher/k3s/agent/client-kubelet.crt
+    - /var/lib/rancher/k3s/agent/client-kubelet.key
+    - /var/lib/rancher/k3s/agent/client-kube-proxy.crt
+    - /var/lib/rancher/k3s/agent/client-kube-proxy.key
+    - /var/lib/rancher/k3s/agent/server-ca.crt
+    - /var/lib/rancher/k3s/agent/serving-kubelet.crt
+    - /var/lib/rancher/k3s/agent/serving-kubelet.key
 
-    - name: Clean containerd and network configs
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /var/lib/rancher/k3s/agent/etc/containerd/config.toml
-        - /var/lib/rancher/k3s/agent/etc/flannel/net-conf.json
-        - /var/lib/rancher/k3s/agent/flannel.env
+- name: Clean containerd and network configs
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+    - /var/lib/rancher/k3s/agent/etc/flannel/net-conf.json
+    - /var/lib/rancher/k3s/agent/flannel.env
 
-    - name: Clean CNI configs
-      ansible.builtin.shell: |
-        rm -f /var/lib/rancher/k3s/agent/etc/cni/net.d/*
+- name: Clean CNI configs
+  ansible.builtin.shell: |
+    rm -f /var/lib/rancher/k3s/agent/etc/cni/net.d/*
 
-    - name: Clean etcd member identity (but keep data)
-      ansible.builtin.file:
-        path: /var/lib/rancher/k3s/server/db/etcd/member
-        state: absent
+- name: Clean etcd member identity (but keep data)
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/db/etcd/member
+    state: absent
 
-    - name: Find and remove all kubeconfig files
-      ansible.builtin.shell: |
-        find /var/lib/rancher/k3s -name "*.kubeconfig" -delete
+- name: Find and remove all kubeconfig files
+  ansible.builtin.shell: |
+    find /var/lib/rancher/k3s -name "*.kubeconfig" -delete
 
-    - name: Delete k3s config.yaml (will be recreated on first boot)
-      ansible.builtin.file:
-        path: /etc/rancher/k3s/config.yaml
-        state: absent
+- name: Delete k3s config.yaml (will be recreated on first boot)
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/config.yaml
+    state: absent
 
-    - name: Create k3s service dependency override directory
-      ansible.builtin.file:
-        path: /etc/systemd/system/k3s.service.d
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
+- name: Create k3s service dependency override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/k3s.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
 
-    - name: Create k3s dependencies
-      ansible.builtin.copy:
-        src: files/k3s.service.d/k3s-dependencies.conf
-        dest: /etc/systemd/system/k3s.service.d/10-dependencies.conf
-        owner: root
-        group: root
-        mode: '0644'
+- name: Create k3s dependencies
+  ansible.builtin.copy:
+    src: files/k3s.service.d/k3s-dependencies.conf
+    dest: /etc/systemd/system/k3s.service.d/10-dependencies.conf
+    owner: root
+    group: root
+    mode: '0644'
 
-    - name: Enable k3s-config-init service for first boot
-      ansible.builtin.systemd:
-        name: k3s-config-init
-        enabled: yes
-        daemon_reload: yes
+- name: Enable k3s-config-init service for first boot
+  ansible.builtin.systemd:
+    name: k3s-config-init
+    enabled: yes
+    daemon_reload: yes
 
-    - name: Enable k3s-cluster-init service for first boot
-      ansible.builtin.systemd:
-        name: k3s-cluster-init
-        enabled: yes
-        daemon_reload: yes
+- name: Enable k3s-cluster-init service for first boot
+  ansible.builtin.systemd:
+    name: k3s-cluster-init
+    enabled: yes
+    daemon_reload: yes
 
-    - name: Keep k3s enabled but not started
-      ansible.builtin.systemd:
-        name: k3s
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
-  rescue:
-    - debug:
-        msg: "Cleanup k3s failed, continuing..."
+- name: Keep k3s enabled but not started
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
