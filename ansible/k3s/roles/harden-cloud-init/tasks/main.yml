@@ -1,73 +1,8 @@
 ---
-# Ansible tasks to setup cloud-init validation service
-# This validates cloud-init data at boot time before processing
+- name: Setup cloud-init validator
+  ansible.builtin.include_tasks: setup-validator-service.yml
+  tags: setup-cloud-init-validator
 
-- name: Create cloud-init security directories
-  file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-  loop:
-    - /var/lib/cloud/security-backups
-    - /var/log
-
-- name: Install cloud-init validation script
-  copy:
-    src: validate-cloud-init.py
-    dest: /usr/local/bin/validate-cloud-init.py
-    owner: root
-    group: root
-    mode: '0755'
-
-- name: Install cloud-init validator systemd service
-  copy:
-    src: cloud-init-validator.service
-    dest: /etc/systemd/system/cloud-init-validator.service
-    owner: root
-    group: root
-    mode: '0644'
-  notify:
-    - reload systemd
-
-- name: Install cloud-init module configuration template
-  template:
-    src: 01-tdx-modules.cfg.j2
-    dest: /etc/cloud/cloud.cfg.d/01-tdx-modules.cfg
-    owner: root
-    group: root
-    mode: '0644'
-  vars:
-    enable_dev_mode: "{{ enable_dev_mode | default(false) }}"
-
-- name: Ensure PyYAML is installed for validation script
-  package:
-    name: "{{ python_yaml_package }}"
-    state: present
-  vars:
-    python_yaml_package: >-
-      {%- if ansible_os_family == 'Debian' -%}
-      python3-yaml
-      {%- elif ansible_os_family == 'RedHat' -%}
-      python3-pyyaml
-      {%- else -%}
-      python3-yaml
-      {%- endif -%}
-
-- name: Enable and start cloud-init validator service
-  systemd:
-    name: cloud-init-validator.service
-    enabled: yes
-    daemon_reload: yes
-    state: stopped
-
-- name: Create cloud-init validator log file with proper permissions
-  file:
-    path: /var/log/cloud-init-validator.log
-    state: touch
-    owner: root
-    group: adm
-    mode: '0640'
-    modification_time: preserve
-    access_time: preserve
+- name: Harden cloud init modules
+  ansible.builtin.include_tasks: harden-cloud-init-modules.yml
+  tags: harden-cloud-init-modules

@@ -1,0 +1,62 @@
+- name: Display security mode
+  debug:
+    msg: "Configuring cloud-init in {{ 'DEVELOPMENT' if enable_dev_mode else 'PRODUCTION' }} mode"
+
+- name: Check if cloud-init config directory exists
+  stat:
+    path: "{{ cloudinit_config_dir }}"
+  register: cloudinit_dir
+
+- name: Fail if cloud-init not installed
+  fail:
+    msg: "Cloud-init not found at {{ cloudinit_config_dir }}"
+  when: not cloudinit_dir.stat.exists
+
+- name: Remove high-risk modules (always removed)
+  file:
+    path: "{{ cloudinit_config_dir }}/{{ item }}"
+    state: absent
+  loop: "{{ risky_modules }}"
+  register: risky_removed
+
+- name: Remove dev modules in production mode
+  file:
+    path: "{{ cloudinit_config_dir }}/{{ item }}"
+    state: absent
+  loop: "{{ dev_modules }}"
+  when: not enable_dev_mode
+  register: dev_removed
+
+- name: Verify essential modules are present
+  stat:
+    path: "{{ cloudinit_config_dir }}/{{ item }}"
+  loop: "{{ essential_modules }}"
+  register: essential_check
+
+- name: Warn about missing essential modules
+  debug:
+    msg: "WARNING: Essential module {{ item.item }} not found!"
+  loop: "{{ essential_check.results }}"
+  when: not item.stat.exists
+
+- name: List remaining cloud-init modules
+  find:
+    paths: "{{ cloudinit_config_dir }}"
+    patterns: "cc_*.py"
+  register: remaining_modules
+
+- name: Display remaining modules
+  debug:
+    msg: "Remaining cloud-init modules: {{ remaining_modules.files | map(attribute='path') | map('basename') | list }}"
+
+- name: Create security summary
+  debug:
+    msg: |
+      === Cloud-Init Security Summary ===
+      Mode: {{ 'DEVELOPMENT' if enable_dev_mode else 'PRODUCTION' }}
+      Risky modules removed: {{ risky_modules | length }}
+      Dev modules removed: {{ dev_modules | length if not enable_dev_mode else 0 }}
+      Remaining modules: {{ remaining_modules.files | length }}
+      
+      {{ 'SSH and user management ENABLED for debugging' if enable_dev_mode else 'SSH and user management DISABLED' }}
+      Essential functions: Network config, hostname, file writing, disk growth
