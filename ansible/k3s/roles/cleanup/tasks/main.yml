@@ -2,24 +2,20 @@
 - name: Cleanup k3s
   ansible.builtin.include_tasks: cleanup-k3s.yml
   when: inventory_hostname in groups['vm']
-  ignore_errors: yes
 
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
   when: inventory_hostname in groups['vm']
-  ignore_errors: yes
 
 - name: Cleanup cloud-init
   ansible.builtin.include_tasks: cleanup-cloud-init.yml
   when: inventory_hostname in groups['vm']
-  ignore_errors: yes
 
 - name: Cleanup system
   ansible.builtin.include_tasks: cleanup-build.yml
   when: inventory_hostname in groups['vm']
-  ignore_errors: yes
 
 - name: Cleanup VM
   ansible.builtin.include_tasks: cleanup-vm.yml
   when: inventory_hostname in groups['host']
-  ignore_errors: yes
+  
