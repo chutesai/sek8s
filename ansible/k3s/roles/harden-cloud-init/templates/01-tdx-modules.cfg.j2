@@ -1,0 +1,107 @@
+# Cloud-init configuration for TEE TDX VM
+# Secure-by-default; allows hostname + write_files + networking in production
+# Dev mode optionally enables SSH with username/password for debugging
+
+datasource_list: ['NoCloud']
+
+# ===== Early boot (init-local/init) =====
+cloud_init_modules:
+{% if enable_dev_mode | default(false) %}
+  - migrator
+  - seed_random
+  - set_hostname
+  - write-files
+  - growpart
+  - resizefs
+{% else %}
+  - migrator
+  - seed_random
+  - set_hostname
+  - write-files
+{% endif %}
+
+# ===== Post-network config stage =====
+cloud_config_modules:
+{% if enable_dev_mode | default(false) %}
+  # Allow SSH (password auth only) and simple debugging tools
+  - set-passwords
+  - ssh
+  - set_hostname
+  - write-files
+{% else %}
+  # Production: minimal and non-executable
+  - set_hostname
+  - write-files
+{% endif %}
+
+# ===== Final stage =====
+cloud_final_modules:
+  - final-message
+
+# ===== Networking =====
+# Allow NoCloud datasource to apply its own network-config (required for any DC)
+# No explicit override here.
+
+# ===== User & SSH Settings =====
+system_info:
+{% if enable_dev_mode | default(false) %}
+  default_user:
+    name: ubuntu
+    lock_passwd: false
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+{% else %}
+  default_user: null
+{% endif %}
+
+# SSH config
+{% if enable_dev_mode | default(false) %}
+# Dev mode: enable SSH password login only (no key injection)
+ssh_deletekeys: false
+ssh_genkeytypes: ['rsa']         # generate a local host key for SSHD
+disable_root: true
+ssh_pwauth: true
+ssh_import_id: []                # disable key import
+ssh_authorized_keys: []          # no external keys
+{% else %}
+# Production: disable all SSH access
+ssh_deletekeys: true
+ssh_genkeytypes: []
+disable_root: true
+ssh_pwauth: false
+{% endif %}
+
+# ===== Package Management =====
+package_update: {{ 'true' if enable_dev_mode else 'false' }}
+package_upgrade: false
+package_reboot_if_required: false
+
+# ===== Disabled features =====
+users: {% if enable_dev_mode %} [default] {% else %} [] {% endif %}
+mounts: []
+disk_setup: {}
+fs_setup: []
+phone_home: {}
+reporting: {}
+puppet: {}
+chef: {}
+ansible: {}
+mcollective: {}
+apt: {}
+yum_repos: {}
+zypper: {}
+power_state: {}
+random_seed: {}
+ca_certs: {}
+rsyslog: {}
+locale: null
+timezone: null
+keyboard: {}
+
+# ===== Logging =====
+output:
+  all: '| tee -a /var/log/cloud-init-{{ "dev" if enable_dev_mode else "security" }}.log'
+
+final_message: |
+  Cloud-init completed in {{ "DEVELOPMENT" if enable_dev_mode else "PRODUCTION" }} mode.
+  Hostname + write_files + networking {{ "with SSH password access" if enable_dev_mode else "only" }} allowed.

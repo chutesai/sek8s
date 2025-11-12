@@ -33,21 +33,13 @@
 
 - name: Install cloud-init module configuration template
   template:
-    src: 01-disable-modules.cfg.j2
-    dest: /etc/cloud/cloud.cfg.d/01-disable-modules.cfg
+    src: 01-tdx-modules.cfg.j2
+    dest: /etc/cloud/cloud.cfg.d/01-tdx-modules.cfg
     owner: root
     group: root
     mode: '0644'
   vars:
     enable_dev_mode: "{{ cloud_init_dev_mode | default(false) }}"
-
-- name: Install cloud-init security restrictions configuration
-  copy:
-    src: 99-security-restrictions.cfg
-    dest: /etc/cloud/cloud.cfg.d/99-security-restrictions.cfg
-    owner: root
-    group: root
-    mode: '0644'
 
 - name: Ensure PyYAML is installed for validation script
   package:
