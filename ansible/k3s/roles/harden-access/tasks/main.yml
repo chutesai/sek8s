@@ -2,7 +2,7 @@
 # Ansible tasks for TEE TDX VM access prevention hardening
 # Prevents any interactive access to the VM
 - name: Disable remote access
-  when: not enable_dev_mode
+  when: not (enable_dev_mode | default(false) | bool)
   block:
     - name: Disable and mask SSH service
       systemd:
