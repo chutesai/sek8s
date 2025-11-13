@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # create-config-volume.sh - Create and populate a config volume for TDX VMs
-# Usage: ./create-config-volume.sh <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns]
-# Example: ./create-config-volume.sh config.qcow2 chutes-miner "ss58_value" "seed_value" 192.168.100.2 192.168.100.1
+# Usage: ./create-config.sh <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns]
+# Example: ./create-config.sh config.qcow2 chutes-miner "ss58_value" "seed_value" 192.168.100.2 192.168.100.1
 
 set -euo pipefail
 

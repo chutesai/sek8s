@@ -60,88 +60,89 @@ generate_client_cert() {
 
 # Function to setup network from cloud-init config
 setup_network() {
-    local iface cidata_mount="/run/cidata"
-    
-    log_begin_msg "Setting up network from cloud-init config"
-    
-    mkdir -p "$cidata_mount"
-    
-    # Load virtio block module
+    local cfg_mount="/run/tdx-config"
+
+    log_begin_msg "Setting up network from config volume"
+
+    mkdir -p "$cfg_mount"
+
+    # Load virtio drivers (for vdb/vdc attachment)
     modprobe virtio_blk 2>/dev/null
+    modprobe virtio_pci 2>/dev/null
     sleep 1
-    
-    # Mount the cidata ISO (cloud-init configuration)
-    for device in /dev/vdb /dev/vdc /dev/vdd /dev/disk/by-label/CIDATA /dev/disk/by-label/cidata; do
+
+    #
+    # Mount ext4 config volume labeled "tdx-config"
+    #
+    for device in /dev/disk/by-label/tdx-config; do
         if [ -b "$device" ]; then
-            if mount -t iso9660 -o ro "$device" "$cidata_mount" 2>/dev/null; then
-                break
-            fi
-            if mount -o ro "$device" "$cidata_mount" 2>/dev/null; then
+            if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
                 break
             fi
         fi
     done
-    
-    # Verify network-config exists
-    if [ ! -f "$cidata_mount/network-config" ]; then
-        log_failure_msg "Cannot find network-config in cidata"
+
+    if [ ! -f "$cfg_mount/network-config.yaml" ]; then
+        log_failure_msg "network-config.yaml not found on config volume"
         return 1
     fi
-    
-    local netconfig="$cidata_mount/network-config"
-    
-    # Parse the network-config (netplan format)
-    iface=$(awk '/ethernets:/{getline; gsub(/[ :]/, ""); print; exit}' "$netconfig")
-    ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/, ""); print; exit}' "$netconfig")
-    gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/, ""); print; exit}' "$netconfig")
-    nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/, ""); print; exit}}' "$netconfig")
-    
-    # Validate parsed values
+
+    local netconfig="$cfg_mount/network-config.yaml"
+
+    #
+    # Parse very small subset of netplan YAML
+    #
+    iface=$(awk '/ethernets:/{getline; gsub(/[ :]/,""); print; exit}' "$netconfig")
+    ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/,""); print; exit}' "$netconfig")
+    gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/,""); print; exit}' "$netconfig")
+    nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/,""); print; exit}}' "$netconfig")
+
     if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
-        log_failure_msg "Failed to parse network config"
+        log_failure_msg "Failed to parse network-config.yaml"
+        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
-    
-    # Load network modules
+
+    #
+    # Bring up interface
+    #
     modprobe virtio_net 2>/dev/null
-    modprobe virtio_pci 2>/dev/null
-    sleep 2
-    
-    # Verify interface exists
+    sleep 1
+
     if [ ! -e "/sys/class/net/$iface" ]; then
         log_failure_msg "Interface $iface not found"
+        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
-    
+
     # Configure network
     log_begin_msg "Configuring $iface with $ip_addr"
-    
+
     ip link set dev "$iface" up
     sleep 1
     
     ip addr add "$ip_addr" dev "$iface"
     ip route add default via "$gateway"
-    
-    # Configure DNS
+
     mkdir -p /etc
     echo "nameserver ${nameserver:-8.8.8.8}" > /etc/resolv.conf
-    
-    # Verify configuration
+
+    # Verify
     if ! ip addr show "$iface" | grep -q "inet "; then
-        log_failure_msg "Failed to configure IP address"
+        log_failure_msg "Failed to configure IP"
+        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
-    
+
     if ! ip route show | grep -q "default"; then
         log_failure_msg "Failed to configure default route"
+        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
-    
+
     log_success_msg "Network setup complete"
-    
-    # Unmount cidata
-    umount "$cidata_mount" 2>/dev/null || true
-    
+
+    umount "$cfg_mount" 2>/dev/null || true
     return 0
 }
 

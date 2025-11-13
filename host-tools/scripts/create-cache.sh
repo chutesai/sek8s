@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # create-cache-volume.sh - Create and format a cache volume for TDX VMs
-# Usage: ./create-cache-volume.sh <output-path> <size>
-# Example: ./create-cache-volume.sh cache-volume.qcow2 500G
+# Usage: ./create-cache.sh <output-path> <size>
+# Example: ./create-cache.sh cache-volume.qcow2 500G
 
 set -euo pipefail
 
