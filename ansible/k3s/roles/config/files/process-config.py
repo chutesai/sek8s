@@ -174,12 +174,12 @@ def write_target_file(content, target_path, mode=0o644, owner_uid=0, owner_gid=0
         target_dir = os.path.dirname(target_path)
         os.makedirs(target_dir, exist_ok=True)
         
-        # Create backup if target exists
-        if os.path.exists(target_path):
-            timestamp = int(datetime.now().timestamp())
-            backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(target_path)}.backup.{timestamp}")
-            shutil.copy2(target_path, backup_path)
-            log(f"Backup created: {backup_path}")
+        # # Create backup if target exists
+        # if os.path.exists(target_path):
+        #     timestamp = int(datetime.now().timestamp())
+        #     backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(target_path)}.backup.{timestamp}")
+        #     shutil.copy2(target_path, backup_path)
+        #     log(f"Backup created: {backup_path}")
         
         # Write new content
         with open(target_path, 'w', encoding='utf-8') as f:
@@ -205,8 +205,8 @@ def validate_and_apply_config():
         return False
     
     # Create backup directory
-    if not create_backup_dir():
-        return False
+    # if not create_backup_dir():
+    #     return False
     
     # Check all expected files exist
     missing_files = []
