@@ -11,4 +11,5 @@ bin/
 tests/integration/keys
 tests/integration/test-data
 host-tools/scripts/config.yaml
+measure
 **/*.qcow2
