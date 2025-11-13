@@ -1,0 +1,122 @@
+---
+- name: Deploy config volume verification and mount services
+  vars:
+    # Path to the files on the Ansible control node
+    files_dir: "files"
+  block:
+    - name: Ensure /usr/local/bin exists
+      file:
+        path: /usr/local/bin
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Copy config volume verification script
+      copy:
+        src: "{{ files_dir }}/verify-config-volume.sh"
+        dest: /usr/local/bin/verify-config-volume.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: verify_script
+
+    - name: Copy config content validator script
+      copy:
+        src: "{{ files_dir }}/process-config.py"
+        dest: /usr/local/bin/process-config.py
+        mode: '0755'
+        owner: root
+        group: root
+      register: config_script
+
+    - name: Copy volume validator service unit
+      copy:
+        src: "{{ files_dir }}/config-volume-validator.service"
+        dest: /etc/systemd/system/config-volume-validator.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: volume_verify_service
+
+    - name: Copy config content validator service unit
+      copy:
+        src: "{{ files_dir }}/config-manager.service"
+        dest: /etc/systemd/system/config-manager.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: config_verify_service
+
+    - name: Copy mount unit
+      copy:
+        src: "{{ files_dir }}/var-config.mount"
+        dest: /etc/systemd/system/var-config.mount
+        mode: '0644'
+        owner: root
+        group: root
+      register: mount_unit
+
+    - name: Reload systemd daemon if units changed
+      systemd:
+        daemon_reload: yes
+      when: volume_verify_service.changed or config_verify_service.changed or mount_unit.changed
+
+    - name: Create /var/config mount point directory
+      file:
+        path: /var/config
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create miner credentials directory
+      file:
+        path: /var/lib/rancher/k3s/credentials
+        state: directory
+        mode: '0700'
+        owner: root
+        group: root
+        
+    - name: Enable config-volume-validator.service (but do not start)
+      systemd:
+        name: config-volume-validator.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      # Use failed_when to handle the case where service can't start in build VM
+      failed_when: false
+
+    - name: Enable var-config.mount (but do not start)
+      systemd:
+        name: var-config.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Enable config-manager.service (but do not start)
+      systemd:
+        name: config-manager.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Verify volume validator service installation
+      command: systemctl is-enabled config-volume-validator.service
+      register: volume_service_status
+      changed_when: false
+      failed_when: volume_service_status.stdout != "enabled"
+
+    - name: Verify mount unit installation
+      command: systemctl is-enabled var-config.mount
+      register: mount_status
+      changed_when: false
+      failed_when: mount_status.stdout != "enabled"
+
+    - name: Verify config validator service installation
+      command: systemctl is-enabled config-manager.service
+      register: config_service_status
+      changed_when: false
+      failed_when: config_service_status.stdout != "enabled"

@@ -128,11 +128,6 @@
         - /var/lib/rancher/k3s/agent/etc/flannel/net-conf.json
         - /var/lib/rancher/k3s/agent/flannel.env
 
-    - name: Delete k3s config marker (will be recreated on first boot)
-      ansible.builtin.file:
-        path: /var/lib/rancher/k3s/.initialized
-        state: absent
-
     - name: Clean CNI configs
       ansible.builtin.shell: |
         rm -f /var/lib/rancher/k3s/agent/etc/cni/net.d/*
@@ -146,38 +141,29 @@
       ansible.builtin.shell: |
         find /var/lib/rancher/k3s -name "*.kubeconfig" -delete
 
+    - name: Delete k3s config marker (will be recreated on first boot)
+      ansible.builtin.file:
+        path: /var/lib/rancher/k3s/.initialized
+        state: absent
+
     - name: Delete k3s config.yaml (will be recreated on first boot)
       ansible.builtin.file:
         path: /etc/rancher/k3s/config.yaml
         state: absent
-
-    - name: Create k3s service dependency override directory
-      ansible.builtin.file:
-        path: /etc/systemd/system/k3s.service.d
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-
-    - name: Create k3s dependencies
-      ansible.builtin.copy:
-        src: files/k3s.service.d/dependencies.conf
-        dest: /etc/systemd/system/k3s.service.d/dependencies.conf
-        owner: root
-        group: root
-        mode: '0644'
 
     - name: Enable k3s-config-init service for first boot
       ansible.builtin.systemd:
         name: k3s-config-init
         enabled: yes
         daemon_reload: yes
+        state: stopped
 
     - name: Enable k3s-cluster-init service for first boot
       ansible.builtin.systemd:
         name: k3s-cluster-init
         enabled: yes
         daemon_reload: yes
+        state: stopped
 
     - name: Keep k3s enabled but not started
       ansible.builtin.systemd:

@@ -140,33 +140,21 @@
         apply:
           tags: cache-volume
 
-- name: Security Hardening
-  hosts: vm
+- name: Add dyanmic config services
+  hosts: all
   become: true
+  any_errors_fatal: false
   tags:
-    - security
+    - config
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Include security role
+    - name: Config
       ansible.builtin.include_role:
-        name: security
-
-- name: Harden clout init
-  hosts: vm
-  become: true
-  tags:
-    - harden-cloud-init
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Harden cloud-init
-      ansible.builtin.include_role:
-        name: harden-cloud-init
+        name: config
         apply:
-          tags: harden-cloud-init
+          tags: config
 
 - name: Remove remote access
   hosts: vm
@@ -183,6 +171,18 @@
         apply:
           tags: harden-access
 
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
 
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all

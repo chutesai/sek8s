@@ -1,48 +1,48 @@
 ---
-- name: Create integrity checking directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  loop:
-    - /etc/security/integrity
-    - /var/lib/attestation
-    - /var/log
+# - name: Create integrity checking directories
+#   ansible.builtin.file:
+#     path: "{{ item }}"
+#     state: directory
+#     owner: root
+#     group: root
+#     mode: "0755"
+#   loop:
+#     - /etc/security/integrity
+#     - /var/lib/attestation
+#     - /var/log
 
-- name: Deploy integrity checking script
-  ansible.builtin.copy:
-    src: files/binary-attestation/binary-check.sh
-    dest: /usr/local/bin/binary-check.sh
-    owner: root
-    group: root
-    mode: "0755"
+# - name: Deploy integrity checking script
+#   ansible.builtin.copy:
+#     src: files/binary-attestation/binary-check.sh
+#     dest: /usr/local/bin/binary-check.sh
+#     owner: root
+#     group: root
+#     mode: "0755"
 
-- name: Deploy integrity service files
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item | basename }}"
-    owner: root
-    group: root
-    mode: "0644"
-  loop:
-    - files/binary-attestation/binary-attestation.service
-    - files/binary-attestation/binary-attestation.timer
-  notify: reload systemd
+# - name: Deploy integrity service files
+#   ansible.builtin.copy:
+#     src: "{{ item }}"
+#     dest: "/etc/systemd/system/{{ item | basename }}"
+#     owner: root
+#     group: root
+#     mode: "0644"
+#   loop:
+#     - files/binary-attestation/binary-attestation.service
+#     - files/binary-attestation/binary-attestation.timer
+#   notify: reload systemd
 
-- name: Create initial integrity baseline
-  ansible.builtin.command:
-    cmd: /usr/local/bin/binary-check.sh --create-baseline
-    creates: /etc/security/integrity/binary-checksums.sha256
-  register: baseline_created
+# - name: Create initial integrity baseline
+#   ansible.builtin.command:
+#     cmd: /usr/local/bin/binary-check.sh --create-baseline
+#     creates: /etc/security/integrity/binary-checksums.sha256
+#   register: baseline_created
 
-- name: Enable and start integrity check timer
-  ansible.builtin.systemd:
-    name: binary-attestation.timer
-    enabled: yes
-    state: started
-    daemon_reload: yes
+# - name: Enable and start integrity check timer
+#   ansible.builtin.systemd:
+#     name: binary-attestation.timer
+#     enabled: yes
+#     state: started
+#     daemon_reload: yes
 
 - name: Check for setuid/setgid binaries
   ansible.builtin.shell: |
@@ -92,11 +92,11 @@
     - { key: "DefaultLimitNPROC", value: "1024" }
   notify: reload systemd
 
-- name: Generate initial integrity report
-  ansible.builtin.command:
-    cmd: /usr/local/bin/binary-check.sh --report
-  register: initial_report
-  changed_when: false
+# - name: Generate initial integrity report
+#   ansible.builtin.command:
+#     cmd: /usr/local/bin/binary-check.sh --report
+#   register: initial_report
+#   changed_when: false
 
 - name: Remove chroot binary
   ansible.builtin.file:

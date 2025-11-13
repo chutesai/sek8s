@@ -1,8 +1,0 @@
----
-- name: Setup cloud-init validator
-  ansible.builtin.include_tasks: setup-validator-service.yml
-  tags: setup-cloud-init-validator
-
-- name: Harden cloud init modules
-  ansible.builtin.include_tasks: harden-cloud-init-modules.yml
-  tags: harden-cloud-init-modules
