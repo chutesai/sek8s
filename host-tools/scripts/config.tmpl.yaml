@@ -15,7 +15,7 @@ network:
   vm_ip: "192.168.100.2"
   bridge_ip: "192.168.100.1/24"
   dns: "8.8.8.8"
-  public_interface: "ens9f0np0"
+  public_interface: "enp0s1"
 
 # Volume Configuration
 volumes:
@@ -39,7 +39,7 @@ runtime:
   
 # Host Configuration
 host:
-  public_interface: "ens9f0np0"
+  public_interface: "enp0s1"
 
 # Advanced Options (optional)
 advanced:
