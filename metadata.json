@@ -1,11 +1,13 @@
 {
   "boot_config": {
+    "cpus": 32,
+    "memory": "10G"
     "bios": "firmware/TDVF.fd",
     "acpi_dtb": "acpi/acpi-tables.dtb"
   },
   "kernel": {
-    "image": "boot/vmlinuz",
-    "initrd": "boot/initrd.img",
-    "cmdline": "boot/cmdline.txt"
+    "image": "measure/boot/vmlinuz",
+    "initrd": "measure/boot/initrd.img",
+    "cmdline": "root=UUID=95531318-0e23-4648-9cc6-ea2a4454decc ro console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service console=tty1 console=ttyS0"
   }
 }

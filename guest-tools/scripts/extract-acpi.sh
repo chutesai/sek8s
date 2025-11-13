@@ -1,51 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ----------------------------------------------------------
-# Paths produced by extract-vm-measurements.sh
-# ----------------------------------------------------------
-
-TDVF="firmware/TDVF.fd"              # You committed this manually
-KERNEL="measure/boot/vmlinuz"        # Extracted kernel
-INITRD="measure/boot/initrd.img"     # Extracted initramfs
-CMDLINE_FILE="measure/boot/cmdline.txt"  # Extracted cmdline
+TDVF="firmware/TDVF.fd"
 OUT_DIR="measure/acpi"
-
-MEM="4G"    # Enough for ACPI init; does not affect measurements
+MEM="2G"
 
 mkdir -p "$OUT_DIR"
 
-echo "=== Extracting ACPI tables for TDX measurement ==="
-echo "Using:"
-echo "  TDVF:    $TDVF"
-echo "  Kernel:  $KERNEL"
-echo "  Initrd:  $INITRD"
-echo "  Cmdline: $(cat $CMDLINE_FILE)"
+echo "=== Extracting ACPI tables (TDVF only) ==="
+echo "TDVF: $TDVF"
 echo
 
-# Load kernel command line
-CMDLINE=$(cat "$CMDLINE_FILE")
+# Optional: sanity check
+if [[ ! -s "$TDVF" ]]; then
+  echo "ERROR: TDVF not found or empty at $TDVF"
+  exit 1
+fi
 
-# ----------------------------------------------------------
-# Launch QEMU long enough to emit ACPI tables, then exit
-# ----------------------------------------------------------
-
-/usr/bin/qemu-system-x86_64 \
-  -accel kvm \
-  -object memory-backend-memfd,id=ram0,size=$MEM \
-  -machine q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=ram0,dumpdtb=$OUT_DIR/acpi-tables.dtb \
+timeout 20 qemu-system-x86_64 \
+  -machine "q35,dumpdtb=$OUT_DIR/acpi-tables.dtb" \
+  -accel tcg \
+  -m "$MEM" \
   -bios "$TDVF" \
-  -kernel "$KERNEL" \
-  -initrd "$INITRD" \
-  -append "$CMDLINE" \
-  -S \
-  -no-reboot \
   -display none \
+  -nographic \
   -serial none \
   -monitor none \
-  -nographic
+  -no-reboot
+
+if [[ ! -s "$OUT_DIR/acpi-tables.dtb" ]]; then
+  echo "ERROR: ACPI dump failed or produced empty file: $OUT_DIR/acpi-tables.dtb"
+  exit 1
+fi
 
 echo "✓ ACPI dump complete: $OUT_DIR/acpi-tables.dtb"
-echo
-echo "You can now reference this file in metadata.json via:"
-echo '  "acpi_dtb": "acpi/acpi-tables.dtb"'

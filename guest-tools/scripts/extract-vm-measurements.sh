@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#
-# extract-vm-measurements.sh
-#
-# Extracts:
-#   - kernel (vmlinuz)
-#   - initramfs (initrd.img)
-#   - kernel cmdline
-#
-# from a qcow2 image whose root filesystem is encrypted with LUKS.
-#
-
 IMG="${1:-}"
 OUT_DIR="measure/boot"
 
@@ -31,55 +20,51 @@ echo "=== TDX Boot Artifact Extraction ==="
 echo "Image: $IMG"
 echo
 
-echo "==> Detecting LUKS partition..."
-LUKS_PART=$(guestfish --ro -a "$IMG" <<EOF
+echo "==> Detecting ext4 root filesystem..."
+ROOT_PART=$(
+  guestfish --ro -a "$IMG" <<'EOF' | awk '/ext4/ {sub(/:$/, "", $1); print $1}'
 run
 list-filesystems
 EOF
- | awk '/crypto_LUKS/ {print $1}')
+)
 
-if [[ -z "$LUKS_PART" ]]; then
-  echo "ERROR: No LUKS partition found in qcow2."
+if [[ -z "$ROOT_PART" ]]; then
+  echo "ERROR: Could not find ext4 root partition."
   exit 1
 fi
 
-echo "Found LUKS partition: $LUKS_PART"
+echo "Found root partition: $ROOT_PART"
 echo
 
-echo "==> Unlocking LUKS container"
-echo "NOTE: You will be prompted for the LUKS passphrase."
-echo
+#
+# 1. Extract vmlinuz and initrd.img
+#
+
+echo "==> Extracting kernel and initrd..."
 
 guestfish --ro -a "$IMG" <<EOF
 run
+mount $ROOT_PART /
 
-luks-open $LUKS_PART cryptroot
-
-# Now detect the decrypted filesystem
-fs=\$(list-filesystems | awk '/cryptroot/ {print \$1}')
-
-if [ -z "\$fs" ]; then
-  echo "ERROR: Decrypted filesystem not found."
-  exit 1
+# Extract vmlinuz symlink if present
+if exists /vmlinuz ; then
+    download /vmlinuz $OUT_DIR/vmlinuz
+else
+    # Pick newest vmlinuz-* by version
+    newest_vmlinuz=\$(glob ls /vmlinuz-* | sort | tail -n1)
+    download \$newest_vmlinuz $OUT_DIR/vmlinuz
 fi
 
-mount \$fs /
+# Extract initrd symlink if present
+if exists /initrd.img ; then
+    download /initrd.img $OUT_DIR/initrd.img
+else
+    newest_initrd=\$(glob ls /initrd.img-* | sort | tail -n1)
+    download \$newest_initrd $OUT_DIR/initrd.img
+fi
 
-# List detected boot files
-echo "Boot contents:"
-ls /boot
-
-# Extract kernel (matches vmlinuz or vmlinuz-*)
-download /boot/vmlinuz \$OUT_DIR/vmlinuz || \
-download /boot/vmlinuz-* \$OUT_DIR/vmlinuz
-
-# Extract initrd (matches initrd.img or initrd.img-*)
-download /boot/initrd.img \$OUT_DIR/initrd.img || \
-download /boot/initrd.img-* \$OUT_DIR/initrd.img
-
-# Extract GRUB config so we can parse cmdline outside guestfish
-download /boot/grub/grub.cfg \$OUT_DIR/grub.cfg
-
+# Extract grub config for cmdline parsing
+download /grub/grub.cfg $OUT_DIR/grub.cfg
 EOF
 
 echo "✓ Extracted kernel → $OUT_DIR/vmlinuz"
@@ -87,26 +72,23 @@ echo "✓ Extracted initrd → $OUT_DIR/initrd.img"
 echo "✓ Extracted grub.cfg → $OUT_DIR/grub.cfg"
 echo
 
-echo "==> Parsing kernel command line..."
+#
+# 2. Parse kernel cmdline
+#
+
+echo "==> Parsing kernel cmdline..."
 CMDLINE=$(grep -E "^[[:space:]]*linux" "$OUT_DIR/grub.cfg" \
   | head -n 1 \
-  | sed -E 's/^[[:space:]]*linux[[:space:]]+[^[:space:]]+[[:space:]]+//' \
-  || true)
+  | sed -E 's/^[[:space:]]*linux[[:space:]]+[^[:space:]]+[[:space:]]+//'
+)
 
 if [[ -z "$CMDLINE" ]]; then
-  echo "ERROR: Could not parse cmdline from grub.cfg"
+  echo "ERROR: Could not parse kernel cmdline"
   exit 1
 fi
 
 echo "$CMDLINE" > "$OUT_DIR/cmdline.txt"
 echo "✓ Extracted cmdline → $OUT_DIR/cmdline.txt"
-echo
 
+echo
 echo "=== Extraction Complete ==="
-echo "Artifacts written to: $OUT_DIR"
-echo
-echo "  - $OUT_DIR/vmlinuz"
-echo "  - $OUT_DIR/initrd.img"
-echo "  - $OUT_DIR/cmdline.txt"
-echo
-echo "These are now ready for ACPI extraction + tdx-measure."
