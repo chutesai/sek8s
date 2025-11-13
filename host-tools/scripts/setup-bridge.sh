@@ -134,5 +134,12 @@ echo "   ✓ NAT and forwarding rules configured"
 echo
 echo "=== Bridge Setup Complete ==="
 echo
+echo "✓ Bridge-based networking configured"
+echo
+echo "Network interface: $TAP_IFACE"
+echo "VM IP: ${VM_IP%/*}"
+echo "VM Gateway: $VM_GATEWAY"
+echo "Bridge IP: ${BRIDGE_IP%/*}"
+echo
 
 exit 0
