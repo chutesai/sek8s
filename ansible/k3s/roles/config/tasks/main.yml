@@ -112,6 +112,14 @@
         daemon_reload: yes
       failed_when: false
 
+    - name: Enable netplan-apply.service (but do not start)
+      systemd:
+        name: netplan-apply.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
     - name: Verify volume validator service installation
       command: systemctl is-enabled config-volume-validator.service
       register: volume_service_status
@@ -129,3 +137,9 @@
       register: config_service_status
       changed_when: false
       failed_when: config_service_status.stdout != "enabled"
+
+    - name: Verify netplan-apply service installation
+      command: systemctl is-enabled netplan-apply.service
+      register: netplan_apply_service
+      changed_when: false
+      failed_when: netplan_apply_service.stdout != "enabled"

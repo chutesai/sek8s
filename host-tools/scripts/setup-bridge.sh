@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup-bridge-simple.sh - Simple, reliable bridge networking for VM
-# Updated for true idempotency - reuses same TAP interface
+# Updated for true idempotency - reuses the same TAP interface
 
 set -e
 
@@ -14,7 +14,8 @@ PUBLIC_IFACE="ens9f0np0"
 SSH_PORT=2222
 K3S_API_PORT=6443
 NODE_PORTS="30000:32767"
-TAP_IFACE="vmtap0"  # Fixed name for single VM per server
+TAP_IFACE="vmtap0"
+BRIDGE_NET="$(echo $BRIDGE_IP | awk -F'[./]' '{printf "%s.%s.%s.0/%s\n",$1,$2,$3,$5}')"
 
 echo "=== Bridge Network Setup ==="
 echo "Architecture: VM ← TAP ← Bridge ← NAT ← Internet"
@@ -34,7 +35,7 @@ while [[ $# -gt 0 ]]; do
       sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}" 2>/dev/null || true
       sudo iptables -D FORWARD -i "$BRIDGE_NAME" -o "$PUBLIC_IFACE" -j ACCEPT 2>/dev/null || true
       sudo iptables -D FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-      sudo iptables -t nat -D POSTROUTING -s "${BRIDGE_IP%/*}/24" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || true
+      sudo iptables -t nat -D POSTROUTING -s "$BRIDGE_NET" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || true
       
       # Remove TAP interface
       sudo ip link delete "$TAP_IFACE" 2>/dev/null || true
@@ -108,7 +109,7 @@ fi
 echo "3. Setting up routing and NAT..."
 sudo sysctl -w net.ipv4.ip_forward=1
 
-# Port forwarding rules (idempotent - only add if not already present)
+# Port forwarding rules (idempotent)
 sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$SSH_PORT" -j DNAT --to-destination "${VM_IP%/*}:22" 2>/dev/null || \
   sudo iptables -t nat -A PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$SSH_PORT" -j DNAT --to-destination "${VM_IP%/*}:22"
 
@@ -118,50 +119,20 @@ sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$K3S_API_P
 sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}" 2>/dev/null || \
   sudo iptables -t nat -A PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}"
 
-# Traffic forwarding rules (idempotent)
+# Traffic forwarding rules
 sudo iptables -C FORWARD -i "$BRIDGE_NAME" -o "$PUBLIC_IFACE" -j ACCEPT 2>/dev/null || \
   sudo iptables -A FORWARD -i "$BRIDGE_NAME" -o "$PUBLIC_IFACE" -j ACCEPT
 
 sudo iptables -C FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
   sudo iptables -A FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# NAT for outbound traffic (idempotent)
+# NAT for outbound traffic
 sudo iptables -t nat -C POSTROUTING -s "${BRIDGE_IP%/*}/24" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || \
   sudo iptables -t nat -A POSTROUTING -s "${BRIDGE_IP%/*}/24" -o "$PUBLIC_IFACE" -j MASQUERADE
 
 echo "   ✓ NAT and forwarding rules configured"
-
-echo "4. Verifying configuration..."
-echo "   Bridge status:"
-ip link show "$BRIDGE_NAME" | sed 's/^/     /'
-
-echo "   TAP interface status:"
-ip link show "$TAP_IFACE" | sed 's/^/     /'
-
-echo "   Bridge should have CARRIER and be UP:"
-if ip link show "$BRIDGE_NAME" | grep -q "state UP"; then
-    echo "   ✓ Bridge is operational"
-else
-    echo "   ⚠ Bridge may have issues"
-fi
-
 echo
 echo "=== Bridge Setup Complete ==="
 echo
-echo "✓ Bridge-based networking configured"
-echo
-echo "For QEMU launch, use:"
-echo "  --network-type tap"
-echo "  --net-iface $TAP_IFACE"
-echo "  --vm-ip ${VM_IP%/*}"
-echo "  --vm-gateway $VM_GATEWAY"
-echo
-echo "Network interface: $TAP_IFACE"
-echo "VM IP: ${VM_IP%/*}"
-echo "VM Gateway: $VM_GATEWAY"
-echo "Bridge IP: ${BRIDGE_IP%/*}"
-echo
-echo "SSH to VM: ssh -p $SSH_PORT root@<host_public_ip>"
-echo "k3s API: <host_public_ip>:$K3S_API_PORT"
 
 exit 0

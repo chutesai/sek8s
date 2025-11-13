@@ -1,8 +1,6 @@
 [Unit]
 Description=Initialize k3s Configuration
-Requires=cloud-final.service
-After=cloud-final.service network-online.target
-Before=k3s.service
+After=network-online.target
 
 [Service]
 Type=oneshot

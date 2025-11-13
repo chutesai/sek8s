@@ -38,7 +38,6 @@ ReadOnlyPaths=/usr/local/bin
 
 # Failure handling - if validation fails, shut down the system
 FailureAction=poweroff-force
-SuccessAction=none
 
 # Standard output/error to journal
 StandardOutput=journal+console
