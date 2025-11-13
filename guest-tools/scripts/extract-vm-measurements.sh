@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ----------------------------------------------------------
-# Configuration
-# ----------------------------------------------------------
+#
+# extract-vm-measurements.sh
+#
+# Extracts:
+#   - kernel (vmlinuz)
+#   - initramfs (initrd.img)
+#   - kernel cmdline
+#
+# from a qcow2 image whose root filesystem is encrypted with LUKS.
+#
 
 IMG="${1:-}"
-OUT_DIR="measure"
-BOOT_DIR="$OUT_DIR/boot"
+OUT_DIR="measure/boot"
 
 if [[ -z "$IMG" ]]; then
   echo "Usage: $0 <path-to-qcow2>"
@@ -15,91 +21,92 @@ if [[ -z "$IMG" ]]; then
 fi
 
 if [[ ! -f "$IMG" ]]; then
-  echo "Error: qcow2 image not found: $IMG"
+  echo "ERROR: Image not found: $IMG"
   exit 1
 fi
 
 mkdir -p "$OUT_DIR"
-mkdir -p "$BOOT_DIR"
 
-echo "=== Extracting VM boot artifacts for TDX measurement ==="
+echo "=== TDX Boot Artifact Extraction ==="
 echo "Image: $IMG"
 echo
 
-# ----------------------------------------------------------
-# Use guestfish to identify kernel + initrd automatically
-# ----------------------------------------------------------
+echo "==> Detecting LUKS partition..."
+LUKS_PART=$(guestfish --ro -a "$IMG" <<EOF
+run
+list-filesystems
+EOF
+ | awk '/crypto_LUKS/ {print $1}')
 
-echo "• Detecting kernel and initrd inside qcow2..."
-
-KERNEL_PATH=$(guestfish --ro -a "$IMG" -i ls /boot | grep '^vmlinuz' | head -n 1 || true)
-INITRD_PATH=$(guestfish --ro -a "$IMG" -i ls /boot | grep -E '^initrd.*img' | head -n 1 || true)
-
-if [[ -z "$KERNEL_PATH" ]]; then
-  echo "Error: Could not find vmlinuz inside /boot of qcow2 image."
+if [[ -z "$LUKS_PART" ]]; then
+  echo "ERROR: No LUKS partition found in qcow2."
   exit 1
 fi
 
-if [[ -z "$INITRD_PATH" ]]; then
-  echo "Error: Could not find initrd.img inside /boot of qcow2 image."
+echo "Found LUKS partition: $LUKS_PART"
+echo
+
+echo "==> Unlocking LUKS container"
+echo "NOTE: You will be prompted for the LUKS passphrase."
+echo
+
+guestfish --ro -a "$IMG" <<EOF
+run
+
+luks-open $LUKS_PART cryptroot
+
+# Now detect the decrypted filesystem
+fs=\$(list-filesystems | awk '/cryptroot/ {print \$1}')
+
+if [ -z "\$fs" ]; then
+  echo "ERROR: Decrypted filesystem not found."
   exit 1
 fi
 
-echo "  Found kernel: /boot/$KERNEL_PATH"
-echo "  Found initrd: /boot/$INITRD_PATH"
+mount \$fs /
+
+# List detected boot files
+echo "Boot contents:"
+ls /boot
+
+# Extract kernel (matches vmlinuz or vmlinuz-*)
+download /boot/vmlinuz \$OUT_DIR/vmlinuz || \
+download /boot/vmlinuz-* \$OUT_DIR/vmlinuz
+
+# Extract initrd (matches initrd.img or initrd.img-*)
+download /boot/initrd.img \$OUT_DIR/initrd.img || \
+download /boot/initrd.img-* \$OUT_DIR/initrd.img
+
+# Extract GRUB config so we can parse cmdline outside guestfish
+download /boot/grub/grub.cfg \$OUT_DIR/grub.cfg
+
+EOF
+
+echo "✓ Extracted kernel → $OUT_DIR/vmlinuz"
+echo "✓ Extracted initrd → $OUT_DIR/initrd.img"
+echo "✓ Extracted grub.cfg → $OUT_DIR/grub.cfg"
 echo
 
-# ----------------------------------------------------------
-# Extract kernel
-# ----------------------------------------------------------
-
-echo "• Extracting kernel..."
-guestfish --ro -a "$IMG" -i cat "/boot/$KERNEL_PATH" > "$BOOT_DIR/vmlinuz"
-echo "  → $BOOT_DIR/vmlinuz"
-echo
-
-# ----------------------------------------------------------
-# Extract initrd
-# ----------------------------------------------------------
-
-echo "• Extracting initramfs..."
-guestfish --ro -a "$IMG" -i cat "/boot/$INITRD_PATH" > "$BOOT_DIR/initrd.img"
-echo "  → $BOOT_DIR/initrd.img"
-echo
-
-# ----------------------------------------------------------
-# Extract kernel command line from GRUB config
-# ----------------------------------------------------------
-
-echo "• Extracting kernel command line from grub.cfg..."
-
-GRUB_CFG=$(guestfish --ro -a "$IMG" -i cat /boot/grub/grub.cfg)
-
-CMDLINE=$(echo "$GRUB_CFG" | \
-  grep -E "^[[:space:]]*linux" | \
-  head -n 1 | \
-  sed -E 's/^[[:space:]]*linux[[:space:]]+[^[:space:]]+[[:space:]]+//' || true)
+echo "==> Parsing kernel command line..."
+CMDLINE=$(grep -E "^[[:space:]]*linux" "$OUT_DIR/grub.cfg" \
+  | head -n 1 \
+  | sed -E 's/^[[:space:]]*linux[[:space:]]+[^[:space:]]+[[:space:]]+//' \
+  || true)
 
 if [[ -z "$CMDLINE" ]]; then
-  echo "Error: Unable to extract kernel command line from /boot/grub/grub.cfg"
+  echo "ERROR: Could not parse cmdline from grub.cfg"
   exit 1
 fi
 
-echo "$CMDLINE" > "$BOOT_DIR/cmdline.txt"
-echo "  → $BOOT_DIR/cmdline.txt"
+echo "$CMDLINE" > "$OUT_DIR/cmdline.txt"
+echo "✓ Extracted cmdline → $OUT_DIR/cmdline.txt"
 echo
-
-# ----------------------------------------------------------
-# Summary
-# ----------------------------------------------------------
 
 echo "=== Extraction Complete ==="
-echo "Artifacts written to: $BOOT_DIR"
+echo "Artifacts written to: $OUT_DIR"
 echo
-echo "You now have:"
-echo "  $BOOT_DIR/vmlinuz"
-echo "  $BOOT_DIR/initrd.img"
-echo "  $BOOT_DIR/cmdline.txt"
+echo "  - $OUT_DIR/vmlinuz"
+echo "  - $OUT_DIR/initrd.img"
+echo "  - $OUT_DIR/cmdline.txt"
 echo
-echo "Use these in your metadata.json for tdx-measure."
-echo
+echo "These are now ready for ACPI extraction + tdx-measure."
