@@ -331,8 +331,6 @@
       # TDX LUKS Configuration
       TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://your-api.example.com/luks-key') }}"
       TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://your-api.example.com/luks-nonce') }}"
-      LUKS_DEVICE="{{ root_partition }}"
-      LUKS_NAME="{{ encrypted_root_name }}"
       TDX_TIMEOUT="30"
       TDX_RETRY_COUNT="3"
     dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
