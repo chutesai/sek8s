@@ -57,10 +57,19 @@
         group: root
       register: mount_unit
 
+    - name: Copy netplan service unit
+      copy:
+        src: "{{ files_dir }}/netplan-apply.service"
+        dest: /etc/systemd/system/netplan-apply.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: netplan_apply_service
+
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: volume_verify_service.changed or config_verify_service.changed or mount_unit.changed
+      when: volume_verify_service.changed or config_verify_service.changed or mount_unit.changed or netplan_apply_service.changed
 
     - name: Create /var/config mount point directory
       file:
