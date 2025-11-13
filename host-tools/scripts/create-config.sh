@@ -239,17 +239,18 @@ print_info "  ✓ Created miner credential files"
 
 # Create network configuration
 cat > "$MOUNT_DIR/network-config.yaml" << EOF
-version: 2
-ethernets:
-  enp0s1:
-    addresses:
-      - ${VM_IP}/24
-    routes:
-      - to: default
-        via: ${VM_GATEWAY}
-    nameservers:
+network:
+  version: 2
+  ethernets:
+    enp0s1:
       addresses:
-        - ${VM_DNS}
+        - ${VM_IP}/24
+      routes:
+        - to: default
+          via: ${VM_GATEWAY}
+      nameservers:
+        addresses:
+          - ${VM_DNS}
 EOF
 print_info "  ✓ Created network config: ${VM_IP} via ${VM_GATEWAY}"
 

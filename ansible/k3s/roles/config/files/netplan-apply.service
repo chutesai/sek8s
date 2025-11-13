@@ -10,12 +10,12 @@ ExecStart=/usr/sbin/netplan apply
 TimeoutSec=30
 RemainAfterExit=yes
 
-# Security hardening
+# Minimal security settings that don't break netplan
 NoNewPrivileges=yes
-ProtectHome=yes
-ProtectSystem=strict
-RestrictRealtime=yes
-PrivateDevices=yes
+
+# Don't use PrivateTmp or mount namespacing - netplan needs system access
+PrivateTmp=no
+PrivateDevices=no
 
 # Standard output to journal
 StandardOutput=journal+console

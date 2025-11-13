@@ -42,4 +42,3 @@ StandardError=journal+console
 SyslogIdentifier=k3s-cluster-init
 
 [Install]
-WantedBy=multi-user.target

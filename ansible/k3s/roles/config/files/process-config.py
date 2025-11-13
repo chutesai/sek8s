@@ -112,13 +112,14 @@ def validate_hostname(hostname):
 def validate_network_config(network_config):
     """Validate network configuration YAML"""
     try:
-        config = yaml.safe_load(network_config)
+        content = yaml.safe_load(network_config)
     except yaml.YAMLError as e:
         return False, f"Invalid YAML: {e}"
     
-    if not isinstance(config, dict):
+    if not isinstance(content, dict):
         return False, "Network config must be a dictionary"
     
+    config: dict = content['network']
     # Check for required version
     if config.get('version') != 2:
         return False, "Network config must have version: 2"
@@ -191,6 +192,28 @@ def write_target_file(content, target_path, mode=0o644, owner_uid=0, owner_gid=0
         log(f"Failed to write {target_path}: {e}", "ERROR")
         return False
 
+def clear_netplan_directory():
+    """Clear netplan directory and ensure clean state"""
+    try:
+        netplan_dir = "/etc/netplan"
+        
+        # Remove all files in netplan directory
+        if os.path.exists(netplan_dir):
+            for filename in os.listdir(netplan_dir):
+                file_path = os.path.join(netplan_dir, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    log(f"Removed old netplan file: {filename}")
+        else:
+            # Create directory if it doesn't exist
+            os.makedirs(netplan_dir, exist_ok=True)
+        
+        log("Netplan directory cleared")
+        return True
+    except Exception as e:
+        log(f"Failed to clear netplan directory: {e}", "ERROR")
+        return False
+
 def validate_and_apply_config():
     """Main validation and configuration function"""
     log("Starting config volume validation")
@@ -200,9 +223,9 @@ def validate_and_apply_config():
         log(f"Config volume not mounted at {CONFIG_MOUNT_DIR}", "ERROR")
         return False
     
-    # Create backup directory
-    # if not create_backup_dir():
-    #     return False
+    # Clear netplan directory first
+    if not clear_netplan_directory():
+        return False
     
     # Check all expected files exist
     missing_files = []
@@ -260,7 +283,7 @@ def validate_and_apply_config():
     
     # All validations passed - apply configuration
     log("All validations passed, applying configuration...")
-    
+
     # Apply hostname
     if not write_target_file(hostname_content + "\n", HOSTNAME_TARGET, 0o644):
         return False
@@ -273,7 +296,7 @@ def validate_and_apply_config():
         return False
     
     # Apply network config
-    if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o644):
+    if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o600):
         return False
     
     # Set hostname immediately
