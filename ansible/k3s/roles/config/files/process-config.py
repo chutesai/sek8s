@@ -107,10 +107,6 @@ def validate_hostname(hostname):
     if hostname.startswith('-') or hostname.endswith('-'):
         return False, "Hostname cannot start or end with hyphen"
     
-    # Only allow specific hostname pattern for this application
-    if not re.match(r'^[a-zA-Z0-9]+-miner$', hostname):
-        return False, "Hostname must follow pattern: [name]-miner"
-    
     return True, "Hostname is valid"
 
 def validate_network_config(network_config):
