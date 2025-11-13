@@ -2,4 +2,5 @@
 - name: Disable cloud init
   ansible.builtin.file:
     path: /etc/cloud/cloud-init.disabled
-    state: present
+    state: touch
+    mode: '0644'
