@@ -1,0 +1,11 @@
+{
+  "boot_config": {
+    "bios": "firmware/TDVF.fd",
+    "acpi_dtb": "acpi/acpi-tables.dtb"
+  },
+  "kernel": {
+    "image": "boot/vmlinuz",
+    "initrd": "boot/initrd.img",
+    "cmdline": "boot/cmdline.txt"
+  }
+}
