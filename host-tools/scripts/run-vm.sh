@@ -4,7 +4,7 @@
 
 # Default values
 IMG="../../guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
-BIOS="/usr/share/ovmf/OVMF.fd"
+BIOS="../../firmware/OVMF.fd"
 MEM="1536G"
 VCPUS="24"
 FOREGROUND=false
