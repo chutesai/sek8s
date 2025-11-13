@@ -60,10 +60,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --template)
       if [ -f "config.tmpl.yaml" ]; then
-        cp config.tmpl.yaml "config,yaml"
-        echo "Created: config,yaml"
+        cp config.tmpl.yaml "config.yaml"
+        echo "Created: config.yaml"
         echo "Edit this file with your configuration, then run:"
-        echo "  $0 config,yaml"
+        echo "  $0 config.yaml"
       else
         echo "Error: Template file config.tmpl.yaml not found"
       fi
