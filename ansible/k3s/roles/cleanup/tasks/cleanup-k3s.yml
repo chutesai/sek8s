@@ -151,6 +151,11 @@
         path: /etc/rancher/k3s/config.yaml
         state: absent
 
+    - name: Clear k3s cluster init markers
+      ansible.builtin.shell:
+        cmd: rm -f /var/lib/rancher/k3s/init-markers/*
+        removes: /var/lib/rancher/k3s/init-markers
+
     - name: Enable k3s-config-init service for first boot
       ansible.builtin.systemd:
         name: k3s-config-init
