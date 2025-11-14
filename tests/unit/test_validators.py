@@ -9,9 +9,10 @@ from unittest.mock import Mock, AsyncMock, patch
 import aiohttp
 
 from sek8s.validators.base import ValidationResult
+from sek8s.validators.cosign import CosignValidator
 from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
-from sek8s.config import AdmissionConfig, NamespacePolicy
+from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
 
 
 @pytest.fixture
@@ -319,3 +320,12 @@ class TestValidationResult:
         assert combined.allowed is False
         assert "Denied" in combined.messages
         assert "Warning" in combined.warnings
+
+class TestCosignValidator:
+
+    def test_extract_registry(self, config):
+        validator=CosignValidator(config)
+
+        registry = validator._extract_registry('parachutes/chutes-agent:k3s-latest')
+
+        assert registry == 'parachutes'

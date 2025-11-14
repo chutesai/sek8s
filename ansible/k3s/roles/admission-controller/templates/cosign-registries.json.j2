@@ -1,56 +1,56 @@
 {
   "registries": [
     {
-      "registry": "parachutes/*",
-      "require_signature": true,
-      "verification_method": "key",
-      "public_key": "/etc/admission-controller/cosign/cosign.pub",
-      "rekor_url": "https://rekor.sigstore.dev"
+      "registry": "docker.io",
+      "require_signature": false,
+      "verification_method": "disabled",
+      "organizations": {
+        "parachutes": {
+          "organization": "parachutes",
+          "require_signature": true,
+          "verification_method": "key",
+          "public_key": "/etc/admission-controller/cosign/cosign.pub",
+          "rekor_url": "https://rekor.sigstore.dev"
+        },
+        "bitnami": {
+          "organization": "bitnami",
+          "require_signature": true,
+          "verification_method": "keyless",
+          "keyless_identity_regex": "^https://github.com/bitnami/.*",
+          "keyless_issuer": "https://token.actions.githubusercontent.com",
+          "rekor_url": "https://rekor.sigstore.dev"
+        }
+      }
     },
     {
-      "registry": "docker.io/*",
+      "registry": "gcr.io",
+      "require_signature": false,
+      "verification_method": "disabled",
+      "organizations": {
+        "distroless": {
+          "organization": "distroless",
+          "require_signature": true,
+          "verification_method": "keyless",
+          "keyless_identity_regex": "^https://github.com/GoogleContainerTools/distroless/.*",
+          "keyless_issuer": "https://token.actions.githubusercontent.com",
+          "rekor_url": "https://rekor.sigstore.dev"
+        }
+      }
+    },
+    {
+      "registry": "registry.k8s.io",
       "require_signature": false,
       "verification_method": "disabled"
     },
     {
-      "registry": "docker.io/*",
+      "registry": "nvcr.io",
       "require_signature": false,
       "verification_method": "disabled"
     },
     {
-      "registry": "registry.k8s.io/*",
+      "registry": "quay.io",
       "require_signature": false,
       "verification_method": "disabled"
-    },
-    {
-      "registry": "nvcr.io/*",
-      "require_signature": false,
-      "verification_method": "disabled"
-    },
-    {
-      "registry": "rancher/*",
-      "require_signature": false,
-      "verification_method": "disabled"
-    },
-    {
-      "registry": "quay.io/*",
-      "require_signature": false,
-      "verification_method": "disabled"
-    },
-    {
-      "registry": "bitnami/*",
-      "require_signature": true,
-      "verification_method": "keyless",
-      "keyless_identity_regex": "^https://github.com/bitnami/.*",
-      "keyless_issuer": "https://token.actions.githubusercontent.com",
-      "rekor_url": "https://rekor.sigstore.dev"
-    },
-    {
-      "registry": "gcr.io/distroless/*",
-      "require_signature": true,
-      "verification_method": "keyless",
-      "keyless_identity_regex": "^https://github.com/GoogleContainerTools/distroless/.*",
-      "keyless_issuer": "https://token.actions.githubusercontent.com"
     },
     {
       "registry": "{{ validator }}.localregistry.chutes.ai",
