@@ -1,7 +1,7 @@
 {
   "boot_config": {
     "cpus": 32,
-    "memory": "10G"
+    "memory": "10G",
     "bios": "firmware/TDVF.fd",
     "acpi_dtb": "acpi/acpi-tables.dtb"
   },
