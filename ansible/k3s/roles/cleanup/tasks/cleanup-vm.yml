@@ -13,11 +13,6 @@
   changed_when: false
   failed_when: vm_shutdown.rc == 0
 
-- name: Undefine VM
-  ansible.builtin.command: virsh undefine "{{ vm_name }}"
-  changed_when: false
-  failed_when: false
-
 - name: Copy sek8s image to final image
   ansible.builtin.command: cp "{{ sek8s_img_path }}" "{{ final_img_path }}"
   register: copy_result
