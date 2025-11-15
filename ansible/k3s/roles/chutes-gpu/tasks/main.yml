@@ -5,11 +5,9 @@
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
   retries: 30
-  delay: 2
+  delay: 5
   register: api_ready
   until: api_ready.rc == 0
-  when: k3s_service_status.status.ActiveState == "active"
-  ignore_errors: yes
 
 - name: Setup GPU operator
   ansible.builtin.include_tasks: setup_gpu_operator.yml
