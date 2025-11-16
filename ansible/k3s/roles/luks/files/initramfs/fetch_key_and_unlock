@@ -322,7 +322,7 @@ unlock_device() {
     log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
     
     # Attempt to unlock with retrieved key
-    if printf '%s' "$PASSPHRASE" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+    if printf '%s' "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
         log_success_msg "LUKS device unlocked successfully"
         return 0
     else
