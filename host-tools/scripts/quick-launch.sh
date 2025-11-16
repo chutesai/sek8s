@@ -173,6 +173,38 @@ echo "Cache: ${SKIP_CACHE:+Skipped}${SKIP_CACHE:-$CACHE_SIZE}"
 echo "Binding: ${SKIP_BIND:+Skipped}${SKIP_BIND:-Enabled}"
 echo ""
 
+# Step 0: Verify host configuration
+echo "Step 0: Verifying host configuration..."
+HOST_CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
+
+# Check for intel_iommu=on
+if ! echo "$HOST_CMDLINE" | grep -q "intel_iommu=on"; then
+  echo "✗ Error: Host kernel missing 'intel_iommu=on' parameter"
+  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... intel_iommu=on ...\""
+  echo "  Then run: sudo update-grub && sudo reboot"
+  exit 1
+fi
+
+# Check for iommu=pt
+if ! echo "$HOST_CMDLINE" | grep -q "iommu=pt"; then
+  echo "✗ Error: Host kernel missing 'iommu=pt' parameter"
+  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... iommu=pt ...\""
+  echo "  Then run: sudo update-grub && sudo reboot"
+  exit 1
+fi
+
+# Check for kvm_intel.tdx=on
+if ! echo "$HOST_CMDLINE" | grep -q "kvm_intel.tdx=on"; then
+  echo "✗ Error: Host kernel missing 'kvm_intel.tdx=on' parameter"
+  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... kvm_intel.tdx=on ...\""
+  echo "  Then run: sudo update-grub && sudo reboot"
+  exit 1
+fi
+
+echo "✓ Host IOMMU configuration verified"
+echo "✓ Host TDX enabled"
+echo ""
+
 # Step 1: Bind devices
 if [[ "$SKIP_BIND" != "true" ]]; then
   echo "Step 1: Binding GPU and NVSwitch devices..."
