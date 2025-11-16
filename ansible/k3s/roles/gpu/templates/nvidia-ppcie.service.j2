@@ -1,18 +1,15 @@
 [Unit]
-Description=Enable NVIDIA PPCIe GPUs
-DefaultDependencies=no
-Before=systemd-modules-load.service
-Before=nvidia-persistenced.service
-Before=nvidia.service
-Before=nvidia-uvm.service
-Before=nvidia-drm.service
-
+Description=Enable NVIDIA PPCIe GPUs in TDX VM
+After=network.target nvidia-persistenced.service
+Wants=nvidia-persistenced.service
 ConditionPathExists={{ ppcie_script_path }}
 
 [Service]
 Type=oneshot
 ExecStart={{ ppcie_script_path }}
 RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
-WantedBy=sysinit.target
+WantedBy=multi-user.target
