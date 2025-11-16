@@ -207,6 +207,9 @@ echo ""
 
 # Step 1: Bind devices
 if [[ "$SKIP_BIND" != "true" ]]; then
+  echo "Resetting GPUs for launch..."
+  ./reset-gpus.sh
+
   echo "Step 1: Binding GPU and NVSwitch devices..."
   if [ -f "./bind.sh" ]; then
     ./bind.sh --bind && echo "✓ Devices bound" || echo "⚠ Device binding failed"
