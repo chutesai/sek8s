@@ -33,6 +33,23 @@ uptime > "$OUTPUT_DIR/uptime.txt"
 dmesg | head -100 > "$OUTPUT_DIR/dmesg.txt"
 date > "$OUTPUT_DIR/timestamp.txt"
 
+# Capture UEFI variables
+echo "Capturing UEFI variables..."
+ls -la /sys/firmware/efi/efivars/ > "$OUTPUT_DIR/efivars_list.txt"
+
+# Capture specific UEFI variables that might change
+VARS_TO_CHECK=("BootCurrent" "BootOrder" "MTC" "NvVars" "VarErrorFlag")
+for var in "${VARS_TO_CHECK[@]}"; do
+    VAR_FILE=$(find /sys/firmware/efi/efivars/ -name "$var-*" 2>/dev/null | head -1)
+    if [ -n "$VAR_FILE" ]; then
+        xxd "$VAR_FILE" > "$OUTPUT_DIR/efivar_${var}.txt" 2>/dev/null || true
+    fi
+done
+
+# Capture CCEL event log
+echo "Capturing CCEL..."
+xxd /sys/firmware/acpi/tables/CCEL > "$OUTPUT_DIR/ccel.txt" 2>/dev/null || true
+
 echo ""
 echo "Snapshot saved to $OUTPUT_DIR/"
 echo "Files created:"
@@ -41,10 +58,14 @@ echo ""
 
 # Extract RTMR values
 echo "RTMR values:"
-cd $OUTPUT_DIR
-../extract-tdx-quote --json > rtmrs.json
-cd ..
-grep -i "rtmr" "$OUTPUT_DIR/rtmrs.json"
+cd "$OUTPUT_DIR"
+../extract-tdx-quote --json > rtmrs.json 2>&1
+cd - > /dev/null
+grep -i "rtmr" "$OUTPUT_DIR/rtmrs.json" || echo "Failed to extract RTMRs"
 echo ""
+
+if [ $QUOTE_EXIT -ne 0 ]; then
+    echo "WARNING: Quote generation may have failed (exit code: $QUOTE_EXIT)"
+fi
 
 echo "Capture complete for Boot $BOOT_NUM"

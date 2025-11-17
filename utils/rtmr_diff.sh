@@ -50,12 +50,12 @@ echo ""
         echo "-----------------------------------"
         echo ""
         
-        # Compare quotes
-        echo "### Quote Text Comparison ###"
+        # Compare RTMRs
+        echo "### RTMR Comparison ###"
         if diff -q "$BOOT1/rtmrs.json" "$BOOT2/rtmrs.json" > /dev/null 2>&1; then
-            echo "✓ Quote outputs are IDENTICAL"
+            echo "✓ RTMRs are IDENTICAL"
         else
-            echo "✗ Quote outputs DIFFER:"
+            echo "✗ RTMRs DIFFER:"
             diff "$BOOT1/rtmrs.json" "$BOOT2/rtmrs.json" || true
         fi
         echo ""
@@ -66,7 +66,7 @@ echo ""
             if cmp -s "$BOOT1/quote.bin" "$BOOT2/quote.bin"; then
                 echo "✓ Binary quotes are IDENTICAL"
             else
-                echo "✗ Binary quotes DIFFER"
+                echo "✗ Binary quotes DIFFER (expected due to nonces)"
             fi
             echo ""
         fi
@@ -78,6 +78,33 @@ echo ""
         else
             echo "✗ Kernel cmdline DIFFERS:"
             diff "$BOOT1/cmdline.txt" "$BOOT2/cmdline.txt" || true
+        fi
+        echo ""
+        
+        # Compare UEFI variables
+        echo "### UEFI Variables ###"
+        VARS_TO_CHECK=("BootCurrent" "BootOrder" "MTC" "NvVars" "VarErrorFlag")
+        for var in "${VARS_TO_CHECK[@]}"; do
+            if [ -f "$BOOT1/efivar_${var}.txt" ] && [ -f "$BOOT2/efivar_${var}.txt" ]; then
+                if diff -q "$BOOT1/efivar_${var}.txt" "$BOOT2/efivar_${var}.txt" > /dev/null 2>&1; then
+                    echo "  ✓ $var: IDENTICAL"
+                else
+                    echo "  ✗ $var: DIFFERS"
+                    diff "$BOOT1/efivar_${var}.txt" "$BOOT2/efivar_${var}.txt" | head -10 || true
+                fi
+            fi
+        done
+        echo ""
+        
+        # Compare CCEL
+        echo "### CCEL Event Log ###"
+        if [ -f "$BOOT1/ccel.txt" ] && [ -f "$BOOT2/ccel.txt" ]; then
+            if diff -q "$BOOT1/ccel.txt" "$BOOT2/ccel.txt" > /dev/null 2>&1; then
+                echo "✓ CCEL is IDENTICAL"
+            else
+                echo "✗ CCEL DIFFERS (first 20 lines of diff):"
+                diff "$BOOT1/ccel.txt" "$BOOT2/ccel.txt" | head -20 || true
+            fi
         fi
         echo ""
         
@@ -96,28 +123,54 @@ echo ""
     echo "==================================="
     echo ""
     
+    echo "### RTMR Values Across All Boots ###"
+    for snapshot in "${SNAPSHOTS[@]}"; do
+        echo ""
+        echo "$snapshot:"
+        if [ -f "$snapshot/rtmrs.json" ]; then
+            grep "RTMR" "$snapshot/rtmrs.json" | head -5 || echo "  (cannot parse RTMRs)"
+        else
+            echo "  (no RTMR data found)"
+        fi
+    done
+    echo ""
+    
     if [ ${#SNAPSHOTS[@]} -gt 2 ]; then
-        echo "### Are all quotes identical? ###"
-        FIRST_QUOTE="${SNAPSHOTS[0]}/quote.txt"
+        echo "### Are all RTMRs identical? ###"
+        FIRST_RTMR="${SNAPSHOTS[0]}/rtmrs.json"
         ALL_IDENTICAL=true
         
         for ((i=1; i<${#SNAPSHOTS[@]}; i++)); do
-            if ! diff -q "$FIRST_QUOTE" "${SNAPSHOTS[$i]}/quote.txt" > /dev/null 2>&1; then
+            if ! diff -q "$FIRST_RTMR" "${SNAPSHOTS[$i]}/rtmrs.json" > /dev/null 2>&1; then
                 ALL_IDENTICAL=false
                 break
             fi
         done
         
         if $ALL_IDENTICAL; then
-            echo "✓ ALL quotes are identical across all boots"
+            echo "✓ ALL RTMRs are identical across all boots"
         else
-            echo "✗ Quotes differ between boots"
+            echo "✗ RTMRs differ between boots"
             echo ""
-            echo "Per-boot comparison:"
-            for snapshot in "${SNAPSHOTS[@]}"; do
-                echo "  $snapshot:"
-                grep -i "rtmr" "$snapshot/rtmrs.json" | head -5 || echo "    (no RTMR data found)"
-            done
+            echo "Boot 1 is different: $([ -f "$FIRST_RTMR" ] && echo "Yes" || echo "Unknown")"
+            
+            # Check if Boot 2+ are consistent
+            if [ ${#SNAPSHOTS[@]} -gt 2 ]; then
+                BOOT2_RTMR="${SNAPSHOTS[1]}/rtmrs.json"
+                SUBSEQUENT_IDENTICAL=true
+                for ((i=2; i<${#SNAPSHOTS[@]}; i++)); do
+                    if ! diff -q "$BOOT2_RTMR" "${SNAPSHOTS[$i]}/rtmrs.json" > /dev/null 2>&1; then
+                        SUBSEQUENT_IDENTICAL=false
+                        break
+                    fi
+                done
+                
+                if $SUBSEQUENT_IDENTICAL; then
+                    echo "✓ Boot 2+ are consistent with each other (but different from Boot 1)"
+                else
+                    echo "✗ Even subsequent boots differ from each other"
+                fi
+            fi
         fi
     fi
     
