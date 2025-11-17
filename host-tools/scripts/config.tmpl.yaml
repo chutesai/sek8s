@@ -15,7 +15,7 @@ network:
   vm_ip: "192.168.100.2"
   bridge_ip: "192.168.100.1/24"
   dns: "8.8.8.8"
-  public_interface: "enp0s1"
+  public_interface: "ens9f0np0"
 
 # Volume Configuration
 volumes:
@@ -36,10 +36,6 @@ devices:
 # Runtime Configuration
 runtime:
   foreground: false  # Set to true for foreground mode
-  
-# Host Configuration
-host:
-  public_interface: "enp0s1"
 
 # Advanced Options (optional)
 advanced:
