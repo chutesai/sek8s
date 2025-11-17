@@ -304,7 +304,7 @@ echo ""
   -m "$MEM" \
   "${CPU_OPTS[@]}" \
   -bios "$BIOS" \
-  -drive file="$IMG",if=virtio,bootindex=1 \
+  -drive file="$IMG",if=virtio,format=qcow2,bootindex=1 \
   -vga none \
   -nodefaults \
   -nographic \
