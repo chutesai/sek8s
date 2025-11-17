@@ -213,7 +213,7 @@ fi
 # 2. build dynamic -device list
 ##############################################################################
 DEV_OPTS+=(
-  -device vhost-vsock-pci,guest-cid=3
+  -device vhost-vsock-pci,guest-cid=3,addr=0x6
 )
 
 # GPU passthrough
