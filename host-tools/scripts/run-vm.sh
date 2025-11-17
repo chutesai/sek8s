@@ -222,7 +222,7 @@ fi
 # 2. build dynamic -device list
 ##############################################################################
 DEV_OPTS+=(
-  -device vhost-vsock-pci,guest-cid=3,addr=0x6
+  -device vhost-vsock-pci,guest-cid=3
 )
 
 # GPU passthrough
@@ -315,8 +315,7 @@ echo ""
   -m "$MEM" \
   "${CPU_OPTS[@]}" \
   -bios "$BIOS" \
-  -drive file="$IMG",if=none,id=drive0,format=qcow2 \
-  -device virtio-blk-pci,drive=drive0,bootindex=1 \
+  -drive file="$IMG",if=virtio \
   -vga none \
   -nodefaults \
   -nographic \
