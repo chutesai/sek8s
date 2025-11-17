@@ -19,6 +19,26 @@ CLIENT_CERT="/tmp/client_cert.pem"
 CLIENT_KEY="/tmp/client_key.pem"
 API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 
+# Global variable for the retrieved key
+LUKS_KEY=""
+
+# Function to securely clear the LUKS key and temporary files
+clear_luks_key() {
+    if [ -n "$LUKS_KEY" ]; then
+        # Overwrite with random data multiple times for defense in depth
+        LUKS_KEY="$(head -c 1000 /dev/zero | tr '\0' 'x')"
+        LUKS_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        LUKS_KEY=""
+        unset LUKS_KEY
+    fi
+    
+    # Clear any temporary files that might contain sensitive data
+    rm -f "$CLIENT_CERT" "$CLIENT_KEY" /tmp/api_response /tmp/nonce_response
+}
+
+# Set up trap to ensure cleanup happens on ANY exit
+trap clear_luks_key EXIT INT TERM
+
 log_begin_msg "Starting TDX-based disk unlock"
 
 # Function to generate self-signed client certificate
@@ -71,9 +91,7 @@ setup_network() {
     modprobe virtio_pci 2>/dev/null
     sleep 1
 
-    #
     # Mount ext4 config volume labeled "tdx-config"
-    #
     for device in /dev/disk/by-label/tdx-config; do
         if [ -b "$device" ]; then
             if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
@@ -89,9 +107,7 @@ setup_network() {
 
     local netconfig="$cfg_mount/network-config.yaml"
 
-    #
     # Parse very small subset of netplan YAML
-    #
     iface=$(awk '/ethernets:/{getline; gsub(/[ :]/,""); print; exit}' "$netconfig")
     ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/,""); print; exit}' "$netconfig")
     gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/,""); print; exit}' "$netconfig")
@@ -103,9 +119,7 @@ setup_network() {
         return 1
     fi
 
-    #
     # Bring up interface
-    #
     modprobe virtio_net 2>/dev/null
     sleep 1
 
@@ -272,9 +286,8 @@ fetch_luks_key() {
         
         case "$http_code" in
             200)
-                key=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
-                if [ -n "$key" ]; then
-                    echo "$key"
+                LUKS_KEY=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                if [ -n "$LUKS_KEY" ]; then
                     rm -f "$response_file"
                     log_success_msg "LUKS key retrieved successfully"
                     return 0
@@ -317,12 +330,10 @@ fetch_luks_key() {
 
 # Function to unlock LUKS device
 unlock_device() {
-    local key="$1"
-    
     log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
     
-    # Attempt to unlock with retrieved key
-    if printf '%s' "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+    # Use global LUKS_KEY variable
+    if printf '%s' "$LUKS_KEY" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
         log_success_msg "LUKS device unlocked successfully"
         return 0
     else
@@ -340,6 +351,9 @@ handle_failure() {
     
     # Log to kernel ring buffer for debugging
     echo "TDX-LUKS-UNLOCK-FAILED: $reason" > /dev/kmsg
+    
+    # Clear sensitive data before shutdown
+    clear_luks_key
     
     # Give time to see the message
     sleep 10
@@ -368,19 +382,21 @@ main() {
     fi
     
     # Fetch LUKS key from API (nonce and quote generated per attempt)
-    key=$(fetch_luks_key)
-    if [ -z "$key" ]; then
+    if ! fetch_luks_key; then
         handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
         return 1
     fi
     
+    # Check that we actually got a key
+    if [ -z "$LUKS_KEY" ]; then
+        handle_failure "LUKS key is empty after fetch"
+        return 1
+    fi
+    
     # Unlock the device
-    if unlock_device "$key"; then
-        # Clear key from memory
-        key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
-        unset key
-        # Clean up cert and key
-        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+    if unlock_device; then
+        # Clear key from memory immediately after successful unlock
+        clear_luks_key
         log_success_msg "TDX-based unlock completed successfully"
         return 0
     else
