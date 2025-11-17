@@ -1,6 +1,6 @@
 # TDX VM Host Setup Guide
 
-This guide walks you through setting up a fresh baremetal host to launch a TDX-enabled VM with GPU passthrough, isolated networking, and secure boot configuration.
+This guide walks you through setting up a baremetal host to launch TDX-enabled VMs with GPU passthrough, isolated networking, and secure configuration using a streamlined, automated workflow.
 
 ## Prerequisites
 
@@ -8,6 +8,7 @@ This guide walks you through setting up a fresh baremetal host to launch a TDX-e
 - **OS**: Ubuntu 25.04 (required for TDX host support)
 - **Access**: Root/sudo privileges
 - **Network**: Public network interface (e.g., `ens9f0np0`)
+- **Python**: Python 3 with PyYAML (`pip3 install pyyaml`)
 
 ## Architecture Overview
 
@@ -16,27 +17,57 @@ The setup creates this architecture:
 Internet ←→ Public Interface ←→ Bridge ←→ TAP ←→ TDX VM
                                             ↓
                                       GPU Passthrough (PPCIe Mode)
-                                      Cache Volume
+                                      Config Volume (credentials)
+                                      Cache Volume (container storage)
                                       k3s Cluster
 ```
 
-**Note**: GPUs run in PPCIe (Partial Protected Content Integration and Encryption) mode rather than full Confidential Computing mode, as multi-GPU passthrough is not supported in full CC mode.
+**Note**: GPUs run in PPCIe (Protected PCIe) mode to support multi-GPU passthrough in TDX environments. Full Confidential Computing mode does not support multiple GPU passthrough.
 
 ---
 
-## Step 1: Install TDX Host Prerequisites
+## Quick Start
+
+For those familiar with the setup, here's the complete sequence:
+```bash
+# 1. Setup TDX host (one-time)
+cd tdx/setup-tdx-host && sudo ./setup-tdx-host.sh && sudo reboot
+
+# 2. Clone NVIDIA GPU admin tools (one-time)
+git clone https://github.com/NVIDIA/gpu-admin-tools
+
+# 3. Enable PPCIe mode for all GPUs (after each host reboot)
+cd gpu-admin-tools
+for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
+    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
+done
+
+# 4. Create configuration from template
+cd host-tools/scripts
+./quick-launch.sh --template
+# Edit config.yaml with your settings
+
+# 5. Launch VM
+./quick-launch.sh config.yaml
+```
+
+---
+
+## Detailed Setup
+
+### Step 1: Install TDX Host Prerequisites
 
 The TDX submodule provides host setup scripts that configure the kernel, QEMU, and firmware for TDX support.
 ```bash
 # Clone the repository
-git clone <your-repo-url>
-cd <your-repo>
+git clone https://github.com/chutesai/sek8s.git
+cd sek8s
 
 # Initialize the TDX submodule
 git submodule update --init --recursive
 
 # Run the TDX host setup script
-cd tdx/setup-tdx-host
+cd tdx
 sudo ./setup-tdx-host.sh
 
 # Reboot to load TDX-enabled kernel
@@ -49,15 +80,40 @@ dmesg | grep -i tdx
 # Expected output should include: [    x.xxxxx] tdx: TDX module initialized
 ```
 
+The setup script also configures the following kernel parameters (verify in `/proc/cmdline`):
+- `intel_iommu=on` - Enable Intel IOMMU
+- `iommu=pt` - Use passthrough mode
+- `kvm_intel.tdx=on` - Enable TDX support
+
 ---
 
-## Step 2: Enable PPCIe Mode for NVIDIA GPUs
+### Step 2: Install NVIDIA GPU Admin Tools
 
-Configure GPUs to run in PPCIe mode to support multi-GPU passthrough in TDX environments.
+Clone the NVIDIA GPU administration toolkit (one-time setup):
 ```bash
-# Set all NVIDIA GPUs to PPCIe mode
-for gpu in /dev/nvidia[0-9]*; do
-    sudo nvidia-smi -i ${gpu#/dev/nvidia} -cc PPCIe
+cd ~
+git clone https://github.com/NVIDIA/gpu-admin-tools
+cd gpu-admin-tools
+```
+
+This toolkit provides `nvidia_gpu_tools.py` for managing GPU confidential computing modes.
+
+---
+
+### Step 3: Enable PPCIe Mode for NVIDIA GPUs
+
+Configure all GPUs and NVSwitches to run in PPCIe (Protected PCIe) mode. This step must be performed after each host reboot.
+```bash
+cd ~/gpu-admin-tools
+
+# First, ensure CC mode is disabled on all devices
+for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
+    sudo python3 ./nvidia_gpu_tools.py --set-cc-mode=off --reset-after-cc-mode-switch --gpu=$i
+done
+
+# Then enable PPCIe mode on all devices (GPUs and NVSwitches)
+for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
+    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
 done
 
 # Verify PPCIe mode is enabled
@@ -65,213 +121,104 @@ nvidia-smi -q | grep "CC Mode"
 # Expected: Current: PPCIe, Pending: PPCIe
 ```
 
-**Note**: PPCIe mode persists across reboots but should be verified before each VM launch.
+**Important Notes:**
+- PPCIe mode persists across VM launches but NOT across host reboots
+- You can safely ignore errors about NVSwitch devices not supporting CC mode
+- Individual GPU selection: Replace `--gpu=$i` with `--gpu-bdf=xx:00.0` for specific devices
+
+**Mode Reference:**
+- `on` - Full Confidential Computing mode (single GPU only)
+- `devtools` - Development mode with debugging enabled
+- `off` - Normal operation (no protection)
+- PPCIe mode - Protected PCIe for multi-GPU passthrough (our use case)
 
 ---
 
-## Step 3: Bind NVIDIA GPUs to VFIO-PCI
+### Step 4: Create Configuration File
 
-Bind all NVIDIA GPUs and NVSwitches to the `vfio-pci` driver for passthrough to the VM.
+Navigate to the scripts directory and create your configuration from the template:
 ```bash
 cd host-tools/scripts
-
-# Bind all NVIDIA devices (GPUs and NVSwitches)
-sudo ./bind.sh
-
-# Verify binding
-ls -l /dev/vfio
-lspci -k | grep -A3 NVIDIA
+./quick-launch.sh --template
 ```
 
-Expected: All NVIDIA devices should show `Kernel driver in use: vfio-pci`
-
----
-
-## Step 4: Create Cache Volume
-
-The cache volume provides unencrypted storage at `/var/snap` in the guest VM for container images and k3s data.
-```bash
-cd host-tools/scripts
-
-# Create a 500GB cache volume
-sudo ./create-cache.sh /path/to/cache-volume.qcow2 500G
-```
-
-**Important**: The label `tdx-cache` is automatically set and required. The TDX VM will verify this label at boot.
-
-**Size recommendations:**
-- Minimum: 100GB
-- Recommended: 500GB - 1TB
-
-For detailed information, see [CACHE.md](../docs/CACHE.md).
-
----
-
-## Step 5: Configure Networking
-
-The VM requires isolated networking with NAT and port forwarding. Currently only bridge-based networking is supported.
-```bash
-cd host-tools/scripts
-
-# Create bridge network
-sudo ./setup-bridge.sh \
-  --bridge-ip 192.168.100.1/24 \
-  --vm-ip 192.168.100.2/24 \
-  --vm-dns 8.8.8.8 \
-  --public-iface ens9f0np0
-```
-
-**Parameters:**
-- `--bridge-ip`: Host bridge IP and subnet (default: `192.168.100.1/24`)
-- `--vm-ip`: VM IP address (default: `192.168.100.2/24`)
-- `--vm-dns`: DNS server for VM (default: `8.8.8.8`)
-- `--public-iface`: Host's public network interface (change to match your hardware)
-
-**The script configures:**
-- Linux bridge (`br0`)
-- TAP interface attached to bridge
-- NAT and port forwarding:
-  - k3s API: Port 6443 → VM:6443
-  - k3s NodePorts: 30000-32767 → VM
-
-**Save the TAP interface name** from the output (e.g., `vmtap-abc12345`) – you'll need it for the launch script.
-
----
-
-## Step 6: Prepare Cloud-Init Configuration
-
-Create cloud-init files to configure the VM at first boot.
-
-### User-Data Configuration
-
-Create `local/user-data.yaml`:
+This creates `config.yaml`. Edit it with your deployment settings:
 ```yaml
-#cloud-config
-hostname: chutes-miner-tee-0
+# VM Identity
+vm:
+  hostname: chutes-miner-tee-0
 
-write_files:
-  - path: /var/lib/rancher/k3s/credentials/miner-ss58
-    content: "5EA***VW9"  # Your actual SS58 address
-    permissions: '0600'
-    owner: root:root
-    
-  - path: /var/lib/rancher/k3s/credentials/miner-seed
-    content: "d61***f67"  # Your actual miner seed
-    permissions: '0600'
-    owner: root:root
+# Miner Credentials (required)
+miner:
+  ss58: "<ss58>"  # Your actual SS58 address
+  seed: "<seed>"  # Your actual miner seed
+
+# Network Configuration
+network:
+  vm_ip: "192.168.100.2"
+  bridge_ip: "192.168.100.1/24"
+  dns: "8.8.8.8"
+  public_interface: "ens9f0np0"  # Change to match your hardware
+
+# Volume Configuration
+volumes:
+  cache:
+    enabled: true
+    size: "500G"
+    path: ""  # Leave empty to auto-create
+  config:
+    path: ""  # Leave empty to auto-create
+
+# Device Configuration
+devices:
+  bind_devices: true  # Set to false to skip GPU binding
+
+# Runtime Configuration
+runtime:
+  foreground: false  # Set to true for foreground mode
+
+# Advanced Options (optional)
+advanced:
+  memory: "1536G"
+  vcpus: 24
+  gpu_mmio_mb: 262144
+  pci_hole_base_gb: 2048
 ```
 
-**Replace the placeholder values:**
+**Required Configuration:**
 - `hostname`: Unique identifier for this miner
-- `miner-ss58`: Your substrate SS58 address
-- `miner-seed`: Your miner's seed phrase or private key
+- `miner.ss58`: Your substrate SS58 address
+- `miner.seed`: Your miner's seed phrase or private key
+- `network.public_interface`: Your host's public network interface name
 
-### Network Configuration
-
-Create `local/network-config.yaml`:
-```yaml
-version: 2
-ethernets:
-  enp0s1:
-    addresses:
-      - 192.168.100.2/24  # Must match --vm-ip from bridge setup
-    routes:
-      - to: default
-        via: 192.168.100.1  # Must match bridge gateway
-    nameservers:
-      addresses:
-        - 8.8.8.8
-        - 8.8.4.4
-```
-
-**Important**: The IP addresses must exactly match those used in Step 5.
+**Network Configuration:**
+- The IP addresses should match your network topology
+- Default gateway will be `bridge_ip` without the subnet mask
+- Ensure `vm_ip` and `bridge_ip` are in the same subnet
 
 ---
 
-## Step 7: Launch the TDX VM
+### Step 5: Launch the VM
 
-Launch the VM with all components configured:
+With your configuration file ready, launch the VM:
 ```bash
-cd host-tools/scripts
-
-sudo ./launch.sh \
-  --image /path/to/tdx-guest-ubuntu-24.04-final.qcow2 \
-  --cache-volume /path/to/cache-volume.qcow2 \
-  --network-type tap \
-  --net-iface vmtap-abc12345 \
-  --cloud-init-user-data local/user-data.yaml \
-  --cloud-init-network-config local/network-config.yaml \
-  --vcpus 24 \
-  --mem 1536G
+./quick-launch.sh config.yaml
 ```
 
-**Required Parameters:**
-- `--image`: Path to the TDX guest image
-- `--cache-volume`: Path to cache volume from Step 4
-- `--network-type`: Use `tap` for bridge networking
-- `--net-iface`: TAP interface name from Step 5
-- `--cloud-init-user-data`: Path to user-data.yaml
-- `--cloud-init-network-config`: Path to network-config.yaml
+The script will automatically:
+1. **Validate host configuration** - Check for required kernel parameters
+2. **Reset and bind GPUs** - Prepare GPUs for passthrough using VFIO-PCI
+3. **Create cache volume** - Set up container storage (if not existing)
+4. **Create config volume** - Package credentials and network config
+5. **Setup bridge networking** - Configure isolated network with NAT
+6. **Launch TDX VM** - Start the VM with all components
 
-**Optional Parameters:**
-- `--vcpus`: Number of vCPUs (default: 24)
-- `--mem`: Memory allocation (default: 1536G)
-- `--gpu-mmio-mb`: MMIO per GPU in MB (default: 262144)
-- `--nvswitch-mmio-mb`: MMIO per NVSwitch in MB (default: 32768)
-- `--pci-hole-base-gb`: Base PCI hole size (default: 2048GB)
-
-**Alternative**: If you prefer to specify network parameters directly instead of using a network-config file:
-```bash
-sudo ./launch.sh \
-  --image /path/to/tdx-guest-ubuntu-24.04-final.qcow2 \
-  --cache-volume /path/to/cache-volume.qcow2 \
-  --network-type tap \
-  --net-iface vmtap-abc12345 \
-  --vm-ip 192.168.100.2 \
-  --vm-gateway 192.168.100.1 \
-  --vm-dns 8.8.8.8 \
-  --cloud-init-user-data local/user-data.yaml \
-  --vcpus 24 \
-  --mem 1536G
-```
-
-The VM starts in daemon mode. Check status:
-```bash
-sudo ./launch.sh --status
-```
-
----
-
-## Step 8: Verify VM Operation
-
-### Check VM Status
-```bash
-# View VM status
-sudo ./launch.sh --status
-
-# View serial console output
-cat /tmp/tdx-guest-td.log
-```
-
-### Verify GPU Passthrough (from serial console or logs)
-```bash
-# Expected in logs: GPUs detected with PPCIe mode
-grep -i nvidia /tmp/tdx-guest-td.log
-```
-
-### Verify k3s Cluster
-
-The k3s API is accessible on the host's public IP at port 6443:
-```bash
-# Get kubeconfig from the VM logs or wait for attestation service to report
-# k3s API: https://<host_public_ip>:6443
-```
-
-### Check Cache Volume Mount
-```bash
-# Expected in logs: /dev/vdb mounted at /var/snap
-grep -i "cache\|vdb\|/var/snap" /tmp/tdx-guest-td.log
-```
+**What happens during launch:**
+- Cache volume is created at `cache-<hostname>.qcow2` (if needed)
+- Config volume is created at `config-<hostname>.qcow2` (always fresh)
+- Bridge network `br0` is configured with TAP interface
+- NAT rules are applied for k3s API (6443) and NodePorts (30000-32767)
+- VM starts in daemon mode with PID tracking
 
 ---
 
@@ -279,97 +226,272 @@ grep -i "cache\|vdb\|/var/snap" /tmp/tdx-guest-td.log
 
 ### Check VM Status
 ```bash
-sudo ./launch.sh --status
+./quick-launch.sh config.yaml --status
+# Or directly:
+cd host-tools/scripts
+./run-vm.sh --status
 ```
 
-### View Serial Console
+### View VM Logs
 ```bash
+# Serial console output
 cat /tmp/tdx-guest-td.log
-tail -f /tmp/tdx-guest-td.log  # Follow logs in real-time
+
+# Follow logs in real-time
+tail -f /tmp/tdx-guest-td.log
+
+# QEMU debug logs
+cat /tmp/qemu.log
 ```
 
-### Stop VM
+### Stop and Clean Up Everything
 ```bash
-sudo ./launch.sh --clean
+./quick-launch.sh --clean
 ```
 
-### Clean Up Network
+This removes:
+- Running VM process
+- Bridge network and TAP interfaces
+- iptables NAT rules
+- VFIO-PCI device bindings
+
+**Note**: Volume files (cache and config) are NOT deleted during cleanup.
+
+---
+
+## Advanced Usage
+
+### Command Line Overrides
+
+Override configuration file settings via command line:
 ```bash
-sudo ./setup-bridge.sh --clean
+# Run in foreground mode
+./quick-launch.sh config.yaml --foreground
+
+# Skip device binding (GPUs already bound)
+./quick-launch.sh config.yaml --skip-bind
+
+# Use existing cache volume
+./quick-launch.sh config.yaml --cache-volume /path/to/existing-cache.qcow2
+
+# Skip cache volume entirely
+./quick-launch.sh config.yaml --skip-cache
+
+# Override VM IP
+./quick-launch.sh config.yaml --vm-ip 192.168.100.5
 ```
 
-### Re-enable PPCIe Mode After Reboot
-```bash
-# After host reboot, re-verify and set PPCIe mode
-for gpu in /dev/nvidia[0-9]*; do
-    sudo nvidia-smi -i ${gpu#/dev/nvidia} -cc PPCIe
-done
+### Manual Component Management
 
-# Re-bind GPUs
-cd host-tools/scripts && sudo ./bind.sh
+For advanced users who want to manage components separately:
+```bash
+# Manually bind devices
+./bind.sh
+
+# Manually create cache volume
+sudo ./create-cache.sh cache.qcow2 500G
+
+# Manually create config volume
+sudo ./create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dns
+
+# Manually setup network
+./setup-bridge.sh --bridge-ip 192.168.100.1/24 \
+                  --vm-ip 192.168.100.2/24 \
+                  --public-iface ens9f0np0
+
+# Manually launch VM
+./run-vm.sh --config-volume config.qcow2 \
+            --cache-volume cache.qcow2 \
+            --network-type tap \
+            --net-iface vmtap0
 ```
 
 ---
 
-## Quick Reference
+## Verification and Troubleshooting
 
-### Complete Setup Sequence
+### Verify Host Configuration
 ```bash
-# 1. Setup TDX host
-cd tdx/setup-tdx-host && sudo ./setup-tdx-host.sh && sudo reboot
+# Check kernel parameters
+cat /proc/cmdline | grep -E 'intel_iommu|iommu=pt|kvm_intel.tdx'
 
-# 2. Enable PPCIe mode for GPUs
-for gpu in /dev/nvidia[0-9]*; do
-    sudo nvidia-smi -i ${gpu#/dev/nvidia} -cc PPCIe
-done
+# Verify TDX module
+dmesg | grep -i tdx
 
-# 3. Bind GPUs
-cd host-tools/scripts && sudo ./bind.sh
-
-# 4. Create cache volume
-sudo ./create-cache.sh /data/cache-volume.qcow2 500G
-
-# 5. Setup network
-sudo ./setup-bridge.sh \
-  --bridge-ip 192.168.100.1/24 \
-  --vm-ip 192.168.100.2/24 \
-  --public-iface ens9f0np0
-
-# 6. Create cloud-init files (see Step 6)
-
-# 7. Launch VM
-sudo ./launch.sh \
-  --image /data/tdx-guest-ubuntu-24.04-final.qcow2 \
-  --cache-volume /data/cache-volume.qcow2 \
-  --network-type tap \
-  --net-iface vmtap-<from-step-5> \
-  --cloud-init-user-data local/user-data.yaml \
-  --cloud-init-network-config local/network-config.yaml
+# Check IOMMU groups
+ls -l /sys/kernel/iommu_groups/
 ```
 
-### Access Points
+### Verify GPU Configuration
+```bash
+# Check PPCIe mode status
+nvidia-smi -q | grep "CC Mode"
+
+# List NVIDIA devices
+lspci -nn -d 10de:
+
+# Check VFIO bindings
+./show-passthrough-devices.sh
+
+# Verify device reset capability
+ls -l /sys/bus/pci/drivers/vfio-pci/*/reset
+```
+
+### Verify Network Configuration
+```bash
+# Check bridge status
+ip addr show br0
+ip link show vmtap0
+
+# Verify NAT rules
+sudo iptables -t nat -L -n -v | grep 192.168.100
+
+# Test connectivity from host
+ping -c 3 192.168.100.2
+```
+
+### Verify VM Operation
+```bash
+# Check VM process
+./run-vm.sh --status
+
+# View GPU passthrough in logs
+grep -i nvidia /tmp/tdx-guest-td.log
+
+# Check cache volume mount
+grep -i "cache\|vdb\|/var/snap" /tmp/tdx-guest-td.log
+
+# Verify k3s cluster is accessible
+# (from external machine)
+curl -k https://<host_public_ip>:6443
+```
+
+### Common Issues
+
+**Issue: "intel_iommu=on not found"**
+```bash
+# Add to /etc/default/grub:
+GRUB_CMDLINE_LINUX="intel_iommu=on iommu=pt kvm_intel.tdx=on"
+sudo update-grub && sudo reboot
+```
+
+**Issue: "GPUs not in PPCIe mode after reboot"**
+```bash
+# PPCIe mode must be re-enabled after each host reboot
+cd ~/gpu-admin-tools
+for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
+    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
+done
+```
+
+
+**Issue: "VM fails to start with GPU errors"**
+```bash
+# Manual reset
+./reset-gpus.sh
+./bind.sh
+
+OR
+
+# Launch again, will auto rebind
+./quick-launch.sh config.yaml
+```
+
+**Issue: "Network not accessible"**
+```bash
+# Check if public interface is correct
+ip addr show
+
+# Verify bridge and TAP are up
+ip link show br0
+ip link show vmtap0
+
+# Ensure IP forwarding is enabled
+sudo sysctl -w net.ipv4.ip_forward=1
+```
+
+---
+
+## Access Points
+
+Once the VM is running:
 
 - **k3s API**: `https://<host_public_ip>:6443`
-- **NodePorts**: `<host_public_ip>:30000-32767`
-- **Serial Console**: `/tmp/tdx-guest-td.log`
+- **NodePort Services**: `<host_public_ip>:30000-32767`
+- **SSH** (if enabled): `ssh -p 2222 root@<host_public_ip>`
 
-### Log Locations
+**Note**: Production VMs are typically configured without SSH access. All management is done via k3s API and attestation endpoints.
 
-- **QEMU log**: `/tmp/qemu.log`
-- **Serial console**: `/tmp/tdx-guest-td.log`
+---
+
+## File Locations
+
+- **VM Images**: `guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2`
+- **TDVF Firmware**: `firmware/TDVF.fd`
+- **Cache Volumes**: `host-tools/scripts/cache-*.qcow2`
+- **Config Volumes**: `host-tools/scripts/config-*.qcow2`
+- **VM Logs**: `/tmp/tdx-guest-td.log`
+- **QEMU Logs**: `/tmp/qemu.log`
 - **VM PID**: `/tmp/tdx-td-pid.pid`
+
+---
+
+## Security Considerations
+
+- **Config Volume**: Contains sensitive credentials (miner seed/SS58). Store securely and restrict access.
+- **Cache Volume**: Unencrypted storage for container images. Only use for non-sensitive data.
+- **Root Disk**: Encrypted by TDX. All OS and application data is protected.
+- **Network Isolation**: VMs are isolated via NAT. Only exposed ports are accessible externally.
+- **PPCIe Mode**: Provides memory encryption and attestation for GPUs, but not full CC mode protection.
 
 ---
 
 ## Additional Documentation
 
-- [Cache Volume Setup Details](../docs/CACHE.md)
-- Guest VM Test Suites: `guest-tools/tests/`
+- [Cache Volume Details](../docs/CACHE.md) - In-depth cache volume information
+- [GPU Admin Tools](https://github.com/NVIDIA/gpu-admin-tools) - NVIDIA CC mode management
+- [Intel TDX Documentation](https://www.intel.com/content/www/us/en/developer/tools/trust-domain-extensions/overview.html)
 
 ---
 
-## Important Notes
+## Development and Testing
 
-- **No Interactive Access**: Production VMs are configured without SSH or interactive console access. All management is done via k3s API and attestation endpoints.
-- **PPCIe Mode**: Required for multi-GPU passthrough. Full Confidential Computing mode does not support multiple GPU passthrough.
-- **Network Configuration**: Use either `--cloud-init-network-config` OR the individual `--vm-ip/--vm-gateway/--vm-dns` flags, not both.
+### Create Test Configuration
+```bash
+# Create minimal test config
+./quick-launch.sh --template
+# Edit config.yaml with test values
+./quick-launch.sh config.yaml --foreground --skip-cache
+```
+
+### Debug Mode
+```bash
+# Run in foreground to see all output
+./quick-launch.sh config.yaml --foreground
+
+# Enable QEMU debug logging (already enabled by default)
+# Logs are written to /tmp/qemu.log
+
+# Watch serial console in real-time
+tail -f /tmp/tdx-guest-td.log
+```
+
+### Performance Tuning
+
+Adjust advanced options in `config.yaml`:
+```yaml
+advanced:
+  memory: "1536G"              # Adjust based on workload
+  vcpus: 24                    # Match physical core count
+  gpu_mmio_mb: 262144          # Per-GPU MMIO (256GB default)
+  pci_hole_base_gb: 2048       # Minimum PCI hole size
+```
+
+---
+
+## Support and Contribution
+
+For issues, questions, or contributions:
+- Check existing documentation in `docs/`
+- Review helper scripts in `scripts/`
+- Examine the quick-launch orchestration logic

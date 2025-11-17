@@ -1,121 +1,172 @@
-# Node bootstrapping
+# Secure Kubernetes TDX VM Builder
 
-To ensure the highest probability of success, you should provision your servers with `Ubuntu 22.04`, preferably with NO nvidia driver installations if possible.
+This Ansible automation builds production-ready Intel TDX (Trust Domain Extensions) virtual machine images for trustless, distributed computing networks. The resulting VMs provide hardware-enforced confidential computing with comprehensive attestation capabilities.
 
-### Networking note before starting!!!
+## Overview
 
-#### external_ip
+The build process creates a hardened Ubuntu VM image with:
 
-The chutes API/validator sends traffic directly to each GPU node, and does not route through the main CPU node at all. For the system to work, this means each GPU node must have a publicly routeable IP address on each GPU node that is not behind a shared IP (since it uses kubernetes nodePort services).  This IP is the public IPv4, and must not be something in the private IP range like 192.168.0.0/16, 10.0.0.0/8, etc.
+- **Intel TDX confidential computing** - Hardware-isolated execution environment
+- **Full-disk LUKS encryption** - Root filesystem encrypted, unlocked via TDX attestation API
+- **Kubernetes (k3s)** - Lightweight container orchestration
+- **NVIDIA GPU support** - H200 GPU passthrough with attestation (PPCIe mode)
+- **Admission control** - OPA-based policy enforcement preventing privilege escalation
+- **Attestation services** - TDX quote generation and GPU evidence verification
+- **Dynamic configuration** - Node identity and network config loaded from verified volumes at boot
 
-This public IP *must* be dedicated, and be the same for both egress and ingress. This means, for a node to pass validation, when the validator connects to it, the IP address you advertise as a miner must match the IP address the validator sees when your node fetches a remote token, i.e. you can't use a shared IP with NAT/port-mapping if the underlying nodes route back out to the internet with some other IPs.
+## Architecture
 
-## 1. Install ansible (on your local system, not the miner node(s))
+### Attestation-Based Boot
 
-### Mac
+1. VM boots with encrypted root filesystem
+2. TDX quote generated with nonce from attestation API
+3. Quote verified by remote service, LUKS key returned
+4. Configuration volume validated and applied
+5. Services start with hardware-attested identity
 
-If you haven't yet, setup homebrew:
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
+### Security Layers
 
-Then install ansible:
-```bash
-brew install ansible
-```
+- **Hardware isolation** - Intel TDX enforces memory encryption and isolation
+- **Admission controller** - Validates all Kubernetes workloads before scheduling
+- **Seccomp profiles** - System call filtering to prevent container escapes
+- **Network policies** - Restrict pod-to-pod and pod-to-service communication
+- **Certificate-based authentication** - mTLS for attestation service access
 
-### Ubuntu/Ubuntu (WSL)/aptitude based systems
+## Quick Start
 
-```bash
-sudo apt -y update && sudo apt -y install ansible python3-pip
-```
-
-### CentOS/RHEL/Fedora
-
-Install epel repo if you haven't (and it's not fedora)
-```bash
-sudo dnf install epel-release -y
-```
-
-Install ansible:
-```bash
-sudo dnf install ansible -y
-```
-
-## 2. Install ansible collections
+### Prerequisites
 
 ```bash
-ansible-galaxy collection install community.general
-ansible-galaxy collection install kubernetes.core
-ansible-galaxy collection install ansible.posix
+# Ubuntu 22.04/24.04 host with KVM support
+sudo apt install ansible libvirt-daemon-system qemu-utils
+ansible-galaxy collection install community.general kubernetes.core ansible.posix
 ```
 
-## OPTIONAL: Performance Tweaks for Ansible 
+### Environment Setup
 
 ```bash
-wget https://files.pythonhosted.org/packages/source/m/mitogen/mitogen-0.3.22.tar.gz
-tar -xzf mitogen-0.3.22.tar.gz
+# Required: LUKS encryption passphrase
+export LUKS_PASSPHRASE="your-secure-passphrase"
+
+# Optional: Attestation endpoints
+export ATTESTATION_ENDPOINT="https://api.example.com/attestation"
+export TDX_NONCE_ENDPOINT="https://api.example.com/nonce"
 ```
 
-Then in your ansible.cfg
-
-```
-[defaults]
-strategy_plugins = /path/to/mitogen-0.3.22/ansible_mitogen/plugins/strategy
-strategy = mitogen_linear
-... leave the rest, and add this block below
-[ssh_connection]
-ssh_args = -o ControlMaster=auto -o ControlPersist=2m
-```
-
-## 3. Update inventory configuration
-
-Using your favorite text editor (vim of course), edit inventory.yml to suite your needs.
-
-For example:
-```yaml
-
-all:
-  vars: {}
-  hosts:
-    # This would be the main node, which runs postgres, redis, gepetto, etc.
-    control:
-      hosts:
-        chutes-miner-cpu-0:
-          ansible_host: 1.0.0.0
-    workers:
-      hosts:
-        chutes-miner-gpu-0:
-          ansible_host: 1.0.0.1
-        chutes-miner-gpu-1:
-          ansible_host: 1.0.0.2
-```
-
-## 4. Bootstrap the nodes
-
-### Setup config and inventory
-
-If you want to keep your inventory and ansible config separated from the repo be sure to update the following:
-1. In your ansible config update the roles path to the absolute path to the karmada roles directory
-```
-[defaults]
-roles_path = /path/to/chutes-miner/ansible/karmada/roles
-```
-2. Provide the path to your ansible inventory using `-i /path/to/inventory.yml` from the CLI
-
-### Bootstrap
-
-Execute the playbook from the `ansible/karmada` directory.
+### Build Image
 
 ```bash
+cd ansible/k3s
 ansible-playbook playbooks/site.yml
 ```
 
-## To add a new node, after the fact
+The build process:
+1. Launches temporary VM from base Ubuntu cloud image
+2. Installs and configures k3s, GPU drivers, attestation services
+3. Applies security hardening and admission policies
+4. Encrypts root filesystem with LUKS
+5. Configures initramfs for TDX-based boot unlock
+6. Outputs final encrypted image at `guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2`
 
-First, update your inventory.yml with the new host configuration.
+## Deployment
 
-Then, use the `site.yml` playbook to add the new node:
-```bash
-ansible-playbook playbooks/site.yml --tags add-nodes
+The built image requires TDX-capable host infrastructure. See `host-tools/README.md` for complete deployment instructions including:
+
+- TDX host setup and kernel configuration
+- GPU binding and PPCIe mode configuration
+- Network setup (bridge or macvtap modes - **NAT is supported**)
+- Config and cache volume creation (automated by host tools)
+- VM launch with GPU passthrough
+
+### Network Modes
+
+The VM supports both dedicated public IP and NAT configurations:
+
+- **Bridge mode** - Private bridge network with NAT and port forwarding
+- **Macvtap mode** - Direct attachment to physical interface
+
+Host tools automatically configure iptables rules for k3s API (port 6443) and NodePort services (30000-32767).
+
+### Configuration Volumes
+
+Production VMs require two attached volumes (created by host tools):
+
+#### Config Volume (`tdx-config`)
+- **Created by**: `host-tools/scripts/create-config.sh`
+- **Filesystem**: ext4 with label `tdx-config`
+- **Mount point**: `/var/config`
+- **Contents**:
+  - `hostname` - Node hostname
+  - `miner-ss58` - Bittensor SS58 address
+  - `miner-seed` - Bittensor secret seed
+  - `network-config.yaml` - Netplan configuration
+
+#### Cache Volume (`tdx-cache`)
+- **Created by**: `host-tools/scripts/create-cache.sh`
+- **Filesystem**: ext4 with label `tdx-cache`
+- **Mount point**: `/var/snap`
+- **Purpose**: Persistent storage for model caches, container images
+- **Size**: Configurable (default 500GB)
+
+Both volumes are validated at boot. Missing or invalid volumes trigger immediate shutdown.
+
+## Key Components
+
+### Attestation Service (`/opt/sek8s`)
+- Generates TDX quotes with report data
+- Combines TDX attestation with NVIDIA GPU evidence
+- Exposes internal (authenticated) and external (validator) endpoints
+- Implements nonce-based replay protection
+
+### Admission Controller
+- Validates all pod specifications against OPA policies
+- Enforces registry allowlists with cosign signature verification
+- Prevents privileged containers and dangerous capabilities
+- Blocks namespace manipulation and webhook modifications
+
+### K3s Initialization
+- `k3s-config-init` - Generates node configuration with TLS SANs
+- `k3s-cluster-init` - Runs post-boot setup scripts:
+  - Node cleanup and labeling
+  - Certificate generation for remote access
+  - Miner credential injection
+
+## Customization
+
+Key configuration in `playbooks/group_vars/all.yml`:
+
+- `k3s_version` - Kubernetes version
+- `cuda_version` / `nvidia_version` - GPU driver versions  
+- `validator` - Allowed validator SS58 address
+- `attestation_endpoint` - Remote attestation service URL
+
+See role-specific defaults for component configuration.
+
+## Repository Structure
+
 ```
+├── ansible/k3s/          # VM image build automation (this README)
+├── host-tools/           # TDX host setup and VM deployment
+│   ├── scripts/          # GPU binding, network setup, VM launch
+│   └── docs/             # Cache volume and deployment guides
+├── guest-tools/          # VM testing and validation tools
+└── tdx/                  # TDX host kernel and firmware setup (submodule)
+```
+
+## Components Built by This Automation
+
+This Ansible playbook builds the VM image only. The following are handled by host-tools:
+
+- ❌ TDX-enabled host system setup → See `tdx/setup-tdx-host/`
+- ❌ GPU passthrough configuration → See `host-tools/scripts/bind.sh`
+- ❌ Network infrastructure → See `host-tools/scripts/setup-bridge.sh`
+- ❌ Config/cache volume creation → See `host-tools/scripts/create-*.sh`
+- ❌ VM launch and orchestration → See `host-tools/scripts/launch.sh`
+- ✅ Guest OS and k3s installation
+- ✅ GPU drivers and attestation services
+- ✅ Security hardening and admission control
+- ✅ LUKS encryption and boot configuration
+
+## License
+
+See repository root for licensing information.
