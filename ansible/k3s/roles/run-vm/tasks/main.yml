@@ -22,6 +22,28 @@
   changed_when: false
   failed_when: false
 
+- name: Get MAC address for build VM
+  ansible.builtin.set_fact:
+    build_vm_mac: "52:54:00:60:a6:0a"
+    build_vm_ip: "192.168.122.176"
+
+- name: Remove any existing DHCP reservations for build VM
+  ansible.builtin.shell: |
+    virsh net-dumpxml default | grep -q "{{ build_vm_mac }}" && \
+    virsh net-update default delete ip-dhcp-host \
+      "<host mac='{{ build_vm_mac }}'/>" --live --config || true
+  changed_when: false
+  failed_when: false
+
+- name: Create static DHCP reservation for build VM
+  ansible.builtin.command: |
+    virsh net-update default add-last ip-dhcp-host \
+      "<host mac='{{ build_vm_mac }}' name='build-node' ip='{{ build_vm_ip }}'/>" \
+      --live --config
+  register: reservation_result
+  failed_when: false
+  changed_when: "'Updated' in reservation_result.stdout or reservation_result.rc == 0"
+
 - name: Check if base image exists
   ansible.builtin.stat:
     path: "{{ guest_img_path }}"
@@ -69,18 +91,6 @@
     group: libvirt-qemu
     mode: '0640'
 
-# - name: Set execute permissions on parent directories
-#   ansible.builtin.file:
-#     path: "{{ item }}"
-#     mode: 'o+x'
-#   loop: "{{ lookup('pipe', 'dirname ' + sek8s_img_path + ' | xargs -I {} sh -c \"while [ {} != / ]; do echo {}; dirname {}; done\"') | split('\n') }}"
-#   when: item != ansible_env.HOME
-
-# - name: Set execute permissions on home directory
-#   ansible.builtin.file:
-#     path: "{{ ansible_env.HOME }}"
-#     mode: 'o+x'
-
 - name: Check if KVM is available
   ansible.builtin.command: kvm-ok
   register: kvm_check
@@ -122,7 +132,7 @@
       --disk path="{{ sek8s_img_path }}",format=qcow2 \
       --os-variant ubuntu{{ ubuntu_version }} \
       --virt-type "{{ virt_type }}" \
-      --network network=default \
+      --network network=default,mac={{ build_vm_mac }} \
       --graphics vnc,listen=0.0.0.0,port="{{ vnc_port }}" \
       --import \
       --cloud-init user-data="{{ user_data_file }}" \
@@ -155,29 +165,19 @@
   failed_when: vm_running.rc != 0
   changed_when: false
 
-- name: Extract VM IP from libvirt
-  ansible.builtin.shell: |
-    virsh domifaddr "{{ vm_name }}" | grep -oE '192\.168\.122\.[0-9]+' | head -1
-  retries: 10
-  delay: 5
-  register: vm_ip
-  until: vm_ip.rc == 0 and vm_ip.stdout != ''
-  changed_when: false
-  failed_when: vm_ip.rc != 0 or vm_ip.stdout == ''
-
-- name: Update VM host with dynamic IP
-  ansible.builtin.add_host:
-    name: build-node
-    ansible_host: "{{ vm_ip.stdout }}"
-    ansible_user: root
-    ansible_ssh_private_key_file: "{{ ssh_private_key_path | expanduser }}"
-    test_image_path: "{{ sek8s_img_path }}"
-    groups: vm
-
-- name: Wait for SSH to be available
+- name: Wait for SSH to be available on static IP
   ansible.builtin.wait_for:
-    host: "{{ vm_ip.stdout }}"
+    host: "{{ build_vm_ip }}"
     port: 22
     state: started
     timeout: 600
   delegate_to: localhost
+
+- name: Update VM host with static IP
+  ansible.builtin.add_host:
+    name: build-node
+    ansible_host: "{{ build_vm_ip }}"
+    ansible_user: root
+    ansible_ssh_private_key_file: "{{ ssh_private_key_path | expanduser }}"
+    test_image_path: "{{ sek8s_img_path }}"
+    groups: vm

@@ -18,6 +18,7 @@ deny contains msg if {
     input.request.kind.kind == "Pod"
     volume := input.request.object.spec.volumes[_]
     volume.hostPath
+    not is_exempt_namespace
     not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     not is_tmp_mount_for_job(input.request.object)
     msg := sprintf("hostPath volume '%s' not allowed.", [volume.hostPath.path])
@@ -31,6 +32,7 @@ deny contains msg if {
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
     volume := input.request.object.spec.template.spec.volumes[_]
     volume.hostPath
+    not is_exempt_namespace
     not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     msg := sprintf("hostPath volume '%s' not allowed.", [volume.hostPath.path])
 }
@@ -43,6 +45,7 @@ deny contains msg if {
     input.request.kind.kind == "Job"
     volume := input.request.object.spec.template.spec.volumes[_]
     volume.hostPath
+    not is_exempt_namespace
     not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     msg := sprintf("Job hostPath volume '%s' not allowed. Use emptyDir for temporary storage.", [volume.hostPath.path])
 }
@@ -55,6 +58,7 @@ deny contains msg if {
     input.request.kind.kind == "CronJob"
     volume := input.request.object.spec.jobTemplate.spec.template.spec.volumes[_]
     volume.hostPath
+    not is_exempt_namespace
     not is_allowed_hostpath(volume.hostPath.path, input.request.object)
     msg := sprintf("CronJob hostPath volume '%s' not allowed.", [volume.hostPath.path])
 }
@@ -73,4 +77,9 @@ is_allowed_hostpath(path, pod) if {
     path == "/var/lib/chutes/agent"
     pod.metadata.labels["app.kubernetes.io/name"] == "agent"
     pod.metadata.namespace == "chutes"
+}
+
+is_exempt_namespace() if {
+    # System namespaces are always exempt
+    input.request.namespace in ["kube-system", "kube-public", "kube-node-lease", "monitoring"]
 }

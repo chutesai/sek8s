@@ -1,85 +1,66 @@
 ---
-- name: Create systemd drop-in directory for k3s
-  ansible.builtin.file:
-    path: /etc/systemd/system/k3s.service.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
+# - name: Create integrity checking directories
+#   ansible.builtin.file:
+#     path: "{{ item }}"
+#     state: directory
+#     owner: root
+#     group: root
+#     mode: "0755"
+#   loop:
+#     - /etc/security/integrity
+#     - /var/lib/attestation
+#     - /var/log
 
-- name: Deploy chroot restriction drop-in
-  ansible.builtin.copy:
-    src: files/k3s.service.d/chroot-restrictions.conf
-    dest: /etc/systemd/system/k3s.service.d/chroot-restrictions.conf
-    owner: root
-    group: root
-    mode: "0644"
-  notify:
-    - reload systemd
-    - restart k3s
+# - name: Deploy integrity checking script
+#   ansible.builtin.copy:
+#     src: files/binary-attestation/binary-check.sh
+#     dest: /usr/local/bin/binary-check.sh
+#     owner: root
+#     group: root
+#     mode: "0755"
 
-- name: Create integrity checking directories
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  loop:
-    - /etc/security/integrity
-    - /var/lib/attestation
-    - /var/log
+# - name: Deploy integrity service files
+#   ansible.builtin.copy:
+#     src: "{{ item }}"
+#     dest: "/etc/systemd/system/{{ item | basename }}"
+#     owner: root
+#     group: root
+#     mode: "0644"
+#   loop:
+#     - files/binary-attestation/binary-attestation.service
+#     - files/binary-attestation/binary-attestation.timer
+#   notify: reload systemd
 
-- name: Deploy integrity checking script
-  ansible.builtin.copy:
-    src: files/binary-attestation/binary-check.sh
-    dest: /usr/local/bin/binary-check.sh
-    owner: root
-    group: root
-    mode: "0755"
+# - name: Create initial integrity baseline
+#   ansible.builtin.command:
+#     cmd: /usr/local/bin/binary-check.sh --create-baseline
+#     creates: /etc/security/integrity/binary-checksums.sha256
+#   register: baseline_created
 
-- name: Deploy integrity service files
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item | basename }}"
-    owner: root
-    group: root
-    mode: "0644"
-  loop:
-    - files/binary-attestation/binary-attestation.service
-    - files/binary-attestation/binary-attestation.timer
-  notify: reload systemd
+# - name: Enable and start integrity check timer
+#   ansible.builtin.systemd:
+#     name: binary-attestation.timer
+#     enabled: yes
+#     state: started
+#     daemon_reload: yes
 
-- name: Create initial integrity baseline
-  ansible.builtin.command:
-    cmd: /usr/local/bin/binary-check.sh --create-baseline
-    creates: /etc/security/integrity/binary-checksums.sha256
-  register: baseline_created
+# - name: Check for setuid/setgid binaries
+#   ansible.builtin.shell: |
+#     find /usr/bin /usr/sbin /bin /sbin -type f \( -perm -4000 -o -perm -2000 \) -exec ls -la {} \; 2>/dev/null | head -20
+#   register: suid_binaries
+#   changed_when: false
 
-- name: Enable and start integrity check timer
-  ansible.builtin.systemd:
-    name: binary-attestation.timer
-    enabled: yes
-    state: started
-    daemon_reload: yes
-
-- name: Check for setuid/setgid binaries
-  ansible.builtin.shell: |
-    find /usr/bin /usr/sbin /bin /sbin -type f \( -perm -4000 -o -perm -2000 \) -exec ls -la {} \; 2>/dev/null | head -20
-  register: suid_binaries
-  changed_when: false
-
-- name: Log setuid/setgid binaries for review
-  ansible.builtin.copy:
-    content: |
-      # SUID/SGID Binary Audit - Phase 3
-      # Generated: {{ ansible_date_time.iso8601 }}
-      # 
-      {{ suid_binaries.stdout }}
-    dest: /etc/security/integrity/suid-audit.txt
-    owner: root
-    group: root
-    mode: "0600"
+# - name: Log setuid/setgid binaries for review
+#   ansible.builtin.copy:
+#     content: |
+#       # SUID/SGID Binary Audit - Phase 3
+#       # Generated: {{ ansible_date_time.iso8601 }}
+#       # 
+#       {{ suid_binaries.stdout }}
+#     dest: /etc/security/integrity/suid-audit.txt
+#     owner: root
+#     group: root
+#     mode: "0600"
 
 - name: Apply additional sysctl hardening
   ansible.posix.sysctl:
@@ -111,11 +92,11 @@
     - { key: "DefaultLimitNPROC", value: "1024" }
   notify: reload systemd
 
-- name: Generate initial integrity report
-  ansible.builtin.command:
-    cmd: /usr/local/bin/binary-check.sh --report
-  register: initial_report
-  changed_when: false
+# - name: Generate initial integrity report
+#   ansible.builtin.command:
+#     cmd: /usr/local/bin/binary-check.sh --report
+#   register: initial_report
+#   changed_when: false
 
 - name: Remove chroot binary
   ansible.builtin.file:

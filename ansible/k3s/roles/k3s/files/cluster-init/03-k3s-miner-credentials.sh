@@ -6,7 +6,7 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-miner-credentials.log
 }
 
-CREDENTIALS_DIR="/var/lib/rancher/k3s/credentials"
+CREDENTIALS_DIR="/var/config"
 
 log "Loading miner credentials..."
 MINER_SS58=$(cat "$CREDENTIALS_DIR/miner-ss58")

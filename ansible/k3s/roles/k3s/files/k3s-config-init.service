@@ -1,19 +1,13 @@
 [Unit]
 Description=Initialize k3s Configuration
-Before=k3s.service
-After=network-online.target cloud-init.service admission-controller.service
-Wants=network-online.target
-# Need cloud final to have set hostname
-Requires=cloud-final.service
-After=cloud-final.service
+After=network-online.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/k3s-config-init.sh
-StandardOutput=journal
-StandardError=journal
+StandardOutput=journal+console
+StandardError=journal+console
 TimeoutStartSec=300
 
 [Install]
-RequiredBy=k3s.service

@@ -52,19 +52,6 @@
       ansible.builtin.include_role:
         name: k3s
 
-- name: Security Hardening
-  hosts: vm
-  become: true
-  tags:
-    - security
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Include security role
-      ansible.builtin.include_role:
-        name: security
-
 - name: GPU Setup
   hosts: vm
   become: true
@@ -153,9 +140,54 @@
         apply:
           tags: cache-volume
 
+- name: Add dyanmic config services
+  hosts: all
+  become: true
+  any_errors_fatal: false
+  tags:
+    - config
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Config
+      ansible.builtin.include_role:
+        name: config
+        apply:
+          tags: config
+
+- name: Remove remote access
+  hosts: vm
+  become: true
+  tags:
+    - harden-access
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Remove remote access
+      ansible.builtin.include_role:
+        name: harden-access
+        apply:
+          tags: harden-access
+
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
+
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all
   become: true
+  any_errors_fatal: false
   tags:
     - cleanup
   handlers:

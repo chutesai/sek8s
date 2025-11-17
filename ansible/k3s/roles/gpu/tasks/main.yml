@@ -10,7 +10,3 @@
 - name: Install PPCIe service
   ansible.builtin.include_tasks: install-ppcie-service.yml
   tags: install-ppcie-service
-
-- name: Configure GRUB
-  ansible.builtin.include_tasks: configure-grub.yml
-  tags: configure-grub

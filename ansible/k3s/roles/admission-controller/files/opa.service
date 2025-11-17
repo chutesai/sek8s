@@ -33,7 +33,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 RemoveIPC=true
 SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
+SystemCallFilter=~@privileged
 
 [Install]
 WantedBy=multi-user.target

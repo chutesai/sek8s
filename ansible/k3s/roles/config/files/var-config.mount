@@ -1,0 +1,21 @@
+[Unit]
+Description=Cache storage for /var/config
+Documentation=man:systemd.mount(5)
+# This mount unit runs after verification
+After=config-volume-validator.service
+Requires=config-volume-validator.service
+# Must be mounted before cloud-init final and k3s
+# TODO: What order does this need to run in? Before, After?
+# If verification fails, this won't run due to Requires= dependency
+
+[Mount]
+# Use the label to identify the correct device
+What=/dev/disk/by-label/tdx-config
+Where=/var/config
+Type=ext4
+Options=defaults,noatime
+# Don't allow boot to continue if mount fails
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

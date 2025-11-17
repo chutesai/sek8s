@@ -1,0 +1,48 @@
+[Unit]
+Description=Configuration manager
+DefaultDependencies=false
+Wants=local-fs.target
+After=local-fs.target
+# TODO: What order does this need to run in? Before, After?
+After=var-config.mount
+Requires=var-config.mount
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/process-config.py
+TimeoutSec=30
+RemainAfterExit=yes
+KillMode=process
+TasksMax=infinity
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+PrivateDevices=yes
+
+# Allow access to config directories
+ReadWritePaths=/var/config /var/lib/rancher/k3s/credentials /var/log /etc/hostname /etc/netplan /proc/sys/kernel/hostname
+ReadOnlyPaths=/usr/local/bin
+
+# Failure handling - if validation fails, shut down the system
+FailureAction=poweroff-force
+
+# Standard output/error to journal
+StandardOutput=journal+console
+StandardError=journal+console
+SyslogIdentifier=config-manager
+
+[Install]
+WantedBy=multi-user.target

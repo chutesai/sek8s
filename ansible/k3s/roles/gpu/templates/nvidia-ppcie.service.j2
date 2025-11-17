@@ -8,9 +8,8 @@ ConditionPathExists={{ ppcie_script_path }}
 Type=oneshot
 ExecStart={{ ppcie_script_path }}
 RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-User=root
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target

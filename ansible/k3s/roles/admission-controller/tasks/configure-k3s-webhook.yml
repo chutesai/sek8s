@@ -29,10 +29,3 @@
         group: root
         mode: '0400'  # Read-only
         attributes: '+i'  # Immutable flag (requires root to remove)
-
-    - name: Generate initial webhook manifest hash for attestation
-      ansible.builtin.shell: |
-        sha256sum /var/lib/rancher/k3s/server/manifests/admission-webhook.yaml > \
-          /etc/security/integrity/webhook-manifest.sha256
-      args:
-        creates: /etc/security/integrity/webhook-manifest.sha256

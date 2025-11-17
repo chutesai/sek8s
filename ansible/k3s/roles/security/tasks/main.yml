@@ -7,25 +7,30 @@
     attestation_interval: 900  # 15 minutes
     module_monitoring: true
   block:
-    - name: Include mount restrictions
-      ansible.builtin.include_tasks: mount-restrictions.yml
-      tags: mount-restrictions
+    - name: Include k3s drop-ins
+      ansible.builtin.include_tasks: k3s-drop-ins.yml
+      tags: k3s-drop-ins
 
-    - name: Module signing
-      ansible.builtin.include_tasks: module-signing.yml
-      tags: module-signing
+    # - name: Module signing
+    #   ansible.builtin.include_tasks: module-signing.yml
+    #   tags: module-signing
 
     - name: Seccomp profiles
       ansible.builtin.include_tasks: seccomp-profiles.yml
       tags: seccomp-profiles
     
-    - name: Attestation integration
-      ansible.builtin.include_tasks: attestation-integration.yml
-      tags: attestation
+    # - name: Attestation integration
+    #   ansible.builtin.include_tasks: attestation-integration.yml
+    #   tags: attestation
     
     - name: Chroot and init hardening
       ansible.builtin.include_tasks: chroot-hardening.yml
       tags:
         - chroot-hardening
-        - phase3
+        - init-hardening
+
+    - name: Disable cloud-init
+      ansible.builtin.include_tasks: disable-cloud-init.yml
+      tags:
+        - chroot-hardening
         - init-hardening

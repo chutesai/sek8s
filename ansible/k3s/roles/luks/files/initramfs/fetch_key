@@ -6,18 +6,15 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-# Copy essential binaries
+# Copy essential binaries - copy_exec handles library dependencies automatically
 copy_exec /bin/ip
 copy_exec /usr/bin/curl
 copy_exec /sbin/dhcpcd
 copy_exec /usr/sbin/cryptsetup
 copy_exec /usr/bin/tdx-quote-generator
 copy_exec /usr/bin/base64
-
-# Copy critical libraries for our tools
-copy_exec /lib/x86_64-linux-gnu/libc.so.6
-copy_exec /lib/x86_64-linux-gnu/libcrypto.so.3
-copy_exec /lib/x86_64-linux-gnu/libssl.so.3
+copy_exec /usr/bin/openssl
+copy_exec /usr/bin/sha256sum
 
 # Network configuration
 mkdir -p $DESTDIR/etc/network
@@ -34,11 +31,30 @@ if [ -f /etc/tdx-luks.conf ]; then
     cp /etc/tdx-luks.conf $DESTDIR/etc/
 fi
 
-# Device nodes that might be needed
-mkdir -p $DESTDIR/dev
-mknod $DESTDIR/dev/tdx_guest c 10 125 2>/dev/null || true
+# TDX attestation configuration
+if [ -f /etc/tdx-attest.conf ]; then
+    cp /etc/tdx-attest.conf $DESTDIR/etc/
+fi
 
-# Add kernel modules that might be needed
+# Copy OpenSSL engines/modules if they exist
+for dir in /usr/lib/x86_64-linux-gnu/engines-* /usr/lib/x86_64-linux-gnu/ossl-modules; do
+    if [ -d "$dir" ]; then
+        target_dir="$DESTDIR/$dir"
+        mkdir -p "$(dirname "$target_dir")"
+        cp -r "$dir" "$(dirname "$target_dir")/" 2>/dev/null || true
+    fi
+done
+
+# Add TDX kernel module
+manual_add_modules tdx_guest
+force_load tdx_guest
+
+# Add block device and filesystem modules for cloud-init ISO
+manual_add_modules virtio_blk
+manual_add_modules iso9660
+manual_add_modules isofs
+
+# Add other kernel modules
 manual_add_modules vsock
 manual_add_modules vmw_vsock_virtio_transport
 manual_add_modules vmw_vsock_virtio_transport_common

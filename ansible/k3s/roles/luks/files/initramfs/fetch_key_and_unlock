@@ -1,22 +1,43 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock
-PREREQ="network"
+PREREQ="load-tdx network"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
 # Configuration
+[ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
+
 API_ENDPOINT="${TDX_API_ENDPOINT:-https://api.chutes.ai/servers/boot/attestation}"
 NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
 RETRY_COUNT="${TDX_RETRY_COUNT:-3}"
-# Paths for self-signed client cert in initramfs (generated at boot)
 CLIENT_CERT="/tmp/client_cert.pem"
 CLIENT_KEY="/tmp/client_key.pem"
-API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"  # Existing CA bundle for server verification
+API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
+
+# Global variable for the retrieved key
+LUKS_KEY=""
+
+# Function to securely clear the LUKS key and temporary files
+clear_luks_key() {
+    if [ -n "$LUKS_KEY" ]; then
+        # Overwrite with random data multiple times for defense in depth
+        LUKS_KEY="$(head -c 1000 /dev/zero | tr '\0' 'x')"
+        LUKS_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        LUKS_KEY=""
+        unset LUKS_KEY
+    fi
+    
+    # Clear any temporary files that might contain sensitive data
+    rm -f "$CLIENT_CERT" "$CLIENT_KEY" /tmp/api_response /tmp/nonce_response
+}
+
+# Set up trap to ensure cleanup happens on ANY exit
+trap clear_luks_key EXIT INT TERM
 
 log_begin_msg "Starting TDX-based disk unlock"
 
@@ -24,18 +45,29 @@ log_begin_msg "Starting TDX-based disk unlock"
 generate_client_cert() {
     log_begin_msg "Generating self-signed client certificate"
     
+    # Set up environment for OpenSSL in initramfs
+    export RANDFILE=/tmp/.rnd
+    export OPENSSL_CONF=/dev/null
+    
+    mkdir -p /tmp
+    
     # Use openssl to create a self-signed cert (in TDX trust domain)
-    # Minimal size for initramfs; store in /tmp (tmpfs, not persisted)
     if ! openssl req -x509 -newkey rsa:2048 -nodes -sha256 \
         -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" -days 1 \
-        -subj "/CN=tdx-vm-$(date +%s)" 2>/dev/null; then
+        -subj "/CN=tdx-vm-$(date +%s)" -batch 2>/dev/null; then
         log_failure_msg "Failed to generate client certificate"
         return 1
     fi
     
+    # Verify cert was created
+    if [ ! -f "$CLIENT_CERT" ] || [ ! -f "$CLIENT_KEY" ]; then
+        log_failure_msg "Certificate files not created"
+        return 1
+    fi
+    
     # Compute SHA-256 hash of cert's public key for REPORTDATA
-    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout | \
-                openssl pkey -pubin -outform der | \
+    CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout 2>/dev/null | \
+                openssl pkey -pubin -outform der 2>/dev/null | \
                 sha256sum | cut -d' ' -f1)
     if [ -z "$CERT_HASH" ]; then
         log_failure_msg "Failed to compute cert hash"
@@ -46,50 +78,85 @@ generate_client_cert() {
     return 0
 }
 
-# Function to get network interface
-get_network_interface() {
-    # Try common interface names
-    for iface in enp1s0 enp0s3 eth0 ens3; do
-        if [ -e "/sys/class/net/$iface" ]; then
-            echo "$iface"
-            return 0
+# Function to setup network from cloud-init config
+setup_network() {
+    local cfg_mount="/run/tdx-config"
+
+    log_begin_msg "Setting up network from config volume"
+
+    mkdir -p "$cfg_mount"
+
+    # Load virtio drivers (for vdb/vdc attachment)
+    modprobe virtio_blk 2>/dev/null
+    modprobe virtio_pci 2>/dev/null
+    sleep 1
+
+    # Mount ext4 config volume labeled "tdx-config"
+    for device in /dev/disk/by-label/tdx-config; do
+        if [ -b "$device" ]; then
+            if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
+                break
+            fi
         fi
     done
-    return 1
-}
 
-# Function to setup network
-setup_network() {
-    local iface
-    iface=$(get_network_interface)
-    if [ -z "$iface" ]; then
-        log_failure_msg "No network interface found"
+    if [ ! -f "$cfg_mount/network-config.yaml" ]; then
+        log_failure_msg "network-config.yaml not found on config volume"
         return 1
     fi
-    
-    log_begin_msg "Setting up network on $iface"
-    
+
+    local netconfig="$cfg_mount/network-config.yaml"
+
+    # Parse very small subset of netplan YAML
+    iface=$(awk '/ethernets:/{getline; gsub(/[ :]/,""); print; exit}' "$netconfig")
+    ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/,""); print; exit}' "$netconfig")
+    gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/,""); print; exit}' "$netconfig")
+    nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/,""); print; exit}}' "$netconfig")
+
+    if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
+        log_failure_msg "Failed to parse network-config.yaml"
+        umount "$cfg_mount" 2>/dev/null || true
+        return 1
+    fi
+
     # Bring up interface
+    modprobe virtio_net 2>/dev/null
+    sleep 1
+
+    if [ ! -e "/sys/class/net/$iface" ]; then
+        log_failure_msg "Interface $iface not found"
+        umount "$cfg_mount" 2>/dev/null || true
+        return 1
+    fi
+
+    # Configure network
+    log_begin_msg "Configuring $iface with $ip_addr"
+
     ip link set dev "$iface" up
-    if [ $? -ne 0 ]; then
-        log_failure_msg "Failed to bring up $iface"
-        return 1
-    fi
+    sleep 1
     
-    # Try DHCP
-    dhcpcd "$iface" -w "$TIMEOUT" 2>/dev/null
-    if [ $? -ne 0 ]; then
-        log_failure_msg "DHCP failed on $iface"
-        return 1
-    fi
-    
-    # Verify we have an IP
+    ip addr add "$ip_addr" dev "$iface"
+    ip route add default via "$gateway"
+
+    mkdir -p /etc
+    echo "nameserver ${nameserver:-8.8.8.8}" > /etc/resolv.conf
+
+    # Verify
     if ! ip addr show "$iface" | grep -q "inet "; then
-        log_failure_msg "No IP address assigned to $iface"
+        log_failure_msg "Failed to configure IP"
+        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
-    
+
+    if ! ip route show | grep -q "default"; then
+        log_failure_msg "Failed to configure default route"
+        umount "$cfg_mount" 2>/dev/null || true
+        return 1
+    fi
+
     log_success_msg "Network setup complete"
+
+    umount "$cfg_mount" 2>/dev/null || true
     return 0
 }
 
@@ -99,7 +166,7 @@ fetch_nonce() {
     
     log_begin_msg "Fetching nonce from $NONCE_ENDPOINT"
     
-    # Make API request, use mTLS with client cert and key
+    # Make API request with mTLS
     http_code=$(curl -s -w "%{http_code}" \
         -X GET \
         --max-time $TIMEOUT \
@@ -113,11 +180,10 @@ fetch_nonce() {
     # Check HTTP response code
     case "$http_code" in
         200)
-            # Extract nonce from JSON
             NONCE=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
             if [ -n "$NONCE" ]; then
                 rm -f "$response_file"
-                log_success_msg "Nonce retrieved successfully: $NONCE"
+                log_success_msg "Nonce retrieved successfully"
                 return 0
             else
                 log_failure_msg "API response missing nonce field"
@@ -154,7 +220,7 @@ generate_quote() {
     log_begin_msg "Generating TDX quote with nonce and cert hash"
     
     # Compute combined hash for REPORTDATA (nonce + cert pubkey)
-    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)  # Truncate to 64 bytes (hex-encoded)
+    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)
     
     # Generate quote with REPORTDATA
     if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
@@ -220,9 +286,8 @@ fetch_luks_key() {
         
         case "$http_code" in
             200)
-                key=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
-                if [ -n "$key" ]; then
-                    echo "$key"
+                LUKS_KEY=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                if [ -n "$LUKS_KEY" ]; then
                     rm -f "$response_file"
                     log_success_msg "LUKS key retrieved successfully"
                     return 0
@@ -265,12 +330,10 @@ fetch_luks_key() {
 
 # Function to unlock LUKS device
 unlock_device() {
-    local key="$1"
-    
     log_begin_msg "Unlocking LUKS device $DEVICE_PATH"
     
-    # Attempt to unlock with retrieved key
-    if echo "$key" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
+    # Use global LUKS_KEY variable
+    if printf '%s' "$LUKS_KEY" | cryptsetup luksOpen "$DEVICE_PATH" "$LUKS_NAME" --key-file=-; then
         log_success_msg "LUKS device unlocked successfully"
         return 0
     else
@@ -288,6 +351,9 @@ handle_failure() {
     
     # Log to kernel ring buffer for debugging
     echo "TDX-LUKS-UNLOCK-FAILED: $reason" > /dev/kmsg
+    
+    # Clear sensitive data before shutdown
+    clear_luks_key
     
     # Give time to see the message
     sleep 10
@@ -316,19 +382,21 @@ main() {
     fi
     
     # Fetch LUKS key from API (nonce and quote generated per attempt)
-    key=$(fetch_luks_key)
-    if [ -z "$key" ]; then
+    if ! fetch_luks_key; then
         handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
         return 1
     fi
     
+    # Check that we actually got a key
+    if [ -z "$LUKS_KEY" ]; then
+        handle_failure "LUKS key is empty after fetch"
+        return 1
+    fi
+    
     # Unlock the device
-    if unlock_device "$key"; then
-        # Clear key from memory
-        key="$(head -c 1000 /dev/zero | tr '\0' 'x')"
-        unset key
-        # Clean up cert and key
-        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+    if unlock_device; then
+        # Clear key from memory immediately after successful unlock
+        clear_luks_key
         log_success_msg "TDX-based unlock completed successfully"
         return 0
     else

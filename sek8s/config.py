@@ -226,38 +226,52 @@ class OPAConfig(BaseSettings):
     )
 
 
-class CosignRegistryConfig(BaseSettings):
-    """Configuration for cosign verification per registry."""
-
-    # Registry pattern (can include wildcards)
-    registry: str
-
-    # Whether signature verification is required
+class CosignVerificationConfig(BaseSettings):
+    """Base verification configuration that can be inherited at any level."""
+    
     require_signature: bool = True
-
-    # Verification method
     verification_method: Literal["key", "keyless", "disabled"] = "key"
-
-    # Public key path for key-based verification
+    
+    # Key-based verification
     public_key: Optional[Path] = None
-
-    # Keyless verification settings
+    
+    # Keyless verification
     keyless_identity_regex: Optional[str] = None
     keyless_issuer: Optional[str] = None
-
+    
+    # Connection options
     allow_http: bool = False
     allow_insecure: bool = False
-
-    # Rekor transparency log URL
+    
+    # Transparency log
     rekor_url: str = "https://rekor.sigstore.dev"
-
-    # Fulcio CA URL for keyless verification
     fulcio_url: str = "https://fulcio.sigstore.dev"
+    
+    model_config = SettingsConfigDict(case_sensitive=False)
 
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
-    )
 
+class CosignRepositoryConfig(CosignVerificationConfig):
+    """Repository-specific cosign configuration."""
+    
+    repository: str  # e.g., "chutes-agent" or "myapp"
+
+
+class CosignOrganizationConfig(CosignVerificationConfig):
+    """Organization-specific cosign configuration."""
+    
+    organization: str  # e.g., "parachutes", "bitnami", "library"
+    
+    # Optional repository-level overrides
+    repositories: Dict[str, CosignRepositoryConfig] = Field(default_factory=dict)
+
+
+class CosignRegistryConfig(CosignVerificationConfig):
+    """Registry-level cosign configuration with nested org/repo structure."""
+    
+    registry: str  # e.g., "docker.io", "gcr.io", "registry.k8s.io"
+    
+    # Optional organization-level configs
+    organizations: Dict[str, CosignOrganizationConfig] = Field(default_factory=dict)
 
 class CosignConfig(BaseSettings):
     """Configuration for Cosign integration (Phase 4b)."""
@@ -359,42 +373,169 @@ class CosignConfig(BaseSettings):
                 )
             ]
 
-    def get_registry_config(self, registry: str) -> Optional[CosignRegistryConfig]:
-        """Get cosign configuration for a specific registry."""
-        # First try exact matches
+    def get_verification_config(
+        self, registry: str, organization: str, repository: str
+    ) -> Optional[CosignVerificationConfig]:
+        """
+        Get the most specific verification config for an image.
+        
+        Precedence (most specific wins):
+        1. Repository-level config (if specified)
+        2. Organization-level config (if specified)
+        3. Registry-level config (default for that registry)
+        4. Wildcard registry (*) config
+        
+        Args:
+            registry: Registry hostname (e.g., "docker.io", "gcr.io")
+            organization: Organization/namespace (e.g., "parachutes", "library")
+            repository: Repository name (e.g., "chutes-agent", "nginx")
+        
+        Returns:
+            The most specific CosignVerificationConfig, or None if no config found
+        """
+        # Normalize registry name
+        registry = self._normalize_registry_name(registry)
+        
+        logger.debug(f"Looking up config for {registry}/{organization}/{repository}")
+        
+        # Find matching registry config (exact match or pattern match)
+        registry_config = None
+        wildcard_config = None
+        
         for config in self.registry_configs:
             if config.registry == registry:
-                return config
+                registry_config = config
+                break
+            elif config.registry == "*":
+                wildcard_config = config
+            elif self._matches_registry_pattern(registry, config.registry):
+                registry_config = config
+                break
+        
+        # Fall back to wildcard if no specific registry found
+        if not registry_config:
+            registry_config = wildcard_config
+        
+        if not registry_config:
+            logger.warning(f"No registry config found for {registry}")
+            return None
+        
+        # Start with registry-level defaults
+        verification_config = registry_config
+        
+        # Check for organization-level override
+        org_config = None
+        if registry_config.organizations:
+            # Try exact match first
+            if organization in registry_config.organizations:
+                org_config = registry_config.organizations[organization]
+            else:
+                # Try pattern matching
+                for org_pattern, config in registry_config.organizations.items():
+                    if self._matches_pattern(organization, org_pattern):
+                        org_config = config
+                        break
+            
+            if org_config:
+                logger.debug(f"Found org-level config for {organization}")
+                verification_config = org_config
+                
+                # Check for repository-level override within this org
+                if org_config.repositories:
+                    # Try exact match first
+                    if repository in org_config.repositories:
+                        repo_config = org_config.repositories[repository]
+                        logger.debug(f"Found repo-level config for {repository}")
+                        verification_config = repo_config
+                    else:
+                        # Try pattern matching
+                        for repo_pattern, config in org_config.repositories.items():
+                            if self._matches_pattern(repository, repo_pattern):
+                                logger.debug(f"Found repo-level config for {repository} via pattern {repo_pattern}")
+                                verification_config = config
+                                break
+        
+        logger.debug(
+            f"Using {verification_config.__class__.__name__} for {registry}/{organization}/{repository}: "
+            f"method={verification_config.verification_method}, "
+            f"require_signature={verification_config.require_signature}"
+        )
+        
+        return verification_config
 
-        # Then try pattern matches (simple wildcard support)
-        for config in self.registry_configs:
-            if self._matches_pattern(registry, config.registry):
-                return config
+    def _normalize_registry_name(self, registry: str) -> str:
+        """Normalize registry name for consistent matching."""
+        from urllib.parse import urlparse
+        
+        # Remove protocol if present
+        if registry.startswith(("http://", "https://")):
+            registry = urlparse(registry).netloc
+        
+        # Handle Docker Hub special cases
+        if registry in ["docker.io", "registry-1.docker.io", "index.docker.io"]:
+            return "docker.io"
+        
+        return registry.lower()
 
-        # Finally, look for wildcard default
-        for config in self.registry_configs:
-            if config.registry == "*":
-                return config
-
-        return None
-
-    def _matches_pattern(self, registry: str, pattern: str) -> bool:
-        """Simple pattern matching for registry names."""
+    def _matches_registry_pattern(self, registry: str, pattern: str) -> bool:
+        """Match registry against a pattern."""
         if pattern == "*":
             return True
-
-        _registry = registry.lower()
-
+        
+        registry = registry.lower()
+        pattern = pattern.lower()
+        
+        # Simple wildcard support
         if "*" in pattern:
-            # Simple wildcard matching
-            if pattern.endswith("/*"):
-                prefix = pattern[:-2]
-                return _registry.startswith(prefix.lower())
-            elif pattern.startswith("*/"):
-                suffix = pattern[2:]
-                return _registry.endswith(suffix.lower())
+            if pattern.endswith("*"):
+                # Prefix match: gcr.io* matches gcr.io, gcr.io.local, etc.
+                prefix = pattern[:-1]
+                return registry.startswith(prefix)
+            elif pattern.startswith("*"):
+                # Suffix match: *.gcr.io matches us.gcr.io, eu.gcr.io, etc.
+                suffix = pattern[1:]
+                return registry.endswith(suffix)
+        
+        return registry == pattern
 
-        return _registry == pattern
+    def _matches_pattern(self, value: str, pattern: str) -> bool:
+        """
+        Simple pattern matching for organizations and repositories.
+        
+        Supports:
+        - Exact match: "parachutes" matches "parachutes"
+        - Prefix match: "google/*" matches "google/anything"
+        - Suffix match: "*/base" matches "anything/base"
+        - Wildcard: "*" matches everything
+        """
+        if pattern == "*":
+            return True
+        
+        value = value.lower()
+        pattern = pattern.lower()
+        
+        if "*" not in pattern:
+            # Exact match
+            return value == pattern
+        
+        if pattern.endswith("/*"):
+            # Prefix match: "google/*" matches "google/cloud-sdk", "google/anything"
+            prefix = pattern[:-2]
+            return value.startswith(prefix + "/") or value == prefix
+        
+        if pattern.startswith("*/"):
+            # Suffix match: "*/base" matches "distroless/base", "alpine/base"
+            suffix = pattern[2:]
+            return value.endswith("/" + suffix) or value == suffix
+        
+        if pattern == "*/*":
+            # Match anything with at least one slash
+            return "/" in value
+        
+        # For more complex patterns, you could use fnmatch or regex
+        # For now, just do simple wildcard replacement
+        import fnmatch
+        return fnmatch.fnmatch(value, pattern)
 
 
 # For backward compatibility and convenience

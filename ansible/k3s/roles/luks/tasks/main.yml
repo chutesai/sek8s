@@ -85,12 +85,81 @@
     - "{{ backup_dir }}"
     - "{{ newroot_mount }}"
 
+- name: Detect partition layout dynamically
+  ansible.builtin.shell: |
+    set -e
+    
+    efi=""
+    boot=""
+    root=""
+    
+    # Iterate through all partitions
+    for part in {{ nbd_device }}p*; do
+      fstype=$(blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
+      size=$(blockdev --getsize64 "$part" 2>/dev/null || echo "0")
+      size_mb=$((size / 1024 / 1024))
+      
+      case "$fstype" in
+        vfat)
+          # EFI partition
+          efi="$part"
+          ;;
+        ext4)
+          # Distinguish boot vs root by size
+          if [ $size_mb -lt 2048 ]; then
+            # Small ext4 (< 2GB) is /boot
+            boot="$part"
+          else
+            # Large ext4 is root
+            root="$part"
+          fi
+          ;;
+      esac
+    done
+    
+    # Validation
+    if [ -z "$efi" ]; then
+      echo "ERROR: Could not detect EFI partition" >&2
+      exit 1
+    fi
+    if [ -z "$root" ]; then
+      echo "ERROR: Could not detect root partition" >&2
+      exit 1
+    fi
+    if [ -z "$boot" ]; then
+      echo "ERROR: Could not detect boot partition" >&2
+      exit 1
+    fi
+    
+    echo "efi=$efi"
+    echo "boot=$boot"
+    echo "root=$root"
+  args:
+    executable: /bin/bash
+  register: partition_detection
+  changed_when: false
+  failed_when: partition_detection.rc != 0
+
+- name: Parse detected partitions
+  ansible.builtin.set_fact:
+    efi_partition: "{{ partition_detection.stdout | regex_search('efi=([^\\s]+)', '\\1') | first }}"
+    boot_partition: "{{ partition_detection.stdout | regex_search('boot=([^\\s]+)', '\\1') | first }}"
+    root_partition: "{{ partition_detection.stdout | regex_search('root=([^\\s]+)', '\\1') | first }}"
+
+- name: Display detected partition layout
+  ansible.builtin.debug:
+    msg:
+      - "Detected partition layout:"
+      - "  EFI:  {{ efi_partition }}"
+      - "  Boot: {{ boot_partition }}"
+      - "  Root: {{ root_partition }}"
+
 - name: Mount root partition
   ansible.builtin.mount:
     path: "{{ root_mount }}"
     src: "{{ root_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral  # Mounts without modifying fstab
   when: not backup_stat.stat.exists
 
 - name: Mount boot partition
@@ -98,7 +167,7 @@
     path: "{{ root_mount }}/boot"
     src: "{{ boot_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
   when: not backup_stat.stat.exists
 
 - name: Mount EFI partition
@@ -106,7 +175,7 @@
     path: "{{ root_mount }}/boot/efi"
     src: "{{ efi_partition }}"
     fstype: vfat
-    state: mounted
+    state: ephemeral
   when: not backup_stat.stat.exists
 
 - name: Backup root filesystem
@@ -121,6 +190,7 @@
   ansible.builtin.mount:
     path: "{{ item }}"
     state: unmounted
+  ignore_errors: true
   loop:
     - "{{ root_mount }}/boot/efi"
     - "{{ root_mount }}/boot"
@@ -166,7 +236,7 @@
     path: "{{ newroot_mount }}"
     src: "/dev/mapper/{{ encrypted_root_name }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
 
 - name: Restore data to encrypted root
   ansible.builtin.command: rsync -aAXv {{ backup_dir }}/ {{ newroot_mount }}/
@@ -174,20 +244,20 @@
     creates: "{{ newroot_mount }}/etc"
   register: rsync_restore_result
   changed_when: rsync_restore_result.rc == 0
-
+      
 - name: Mount boot partition to new root
   ansible.builtin.mount:
     path: "{{ newroot_mount }}/boot"
     src: "{{ boot_partition }}"
     fstype: ext4
-    state: mounted
+    state: ephemeral
 
 - name: Mount EFI partition to new root
   ansible.builtin.mount:
     path: "{{ newroot_mount }}/boot/efi"
     src: "{{ efi_partition }}"
     fstype: vfat
-    state: mounted
+    state: ephemeral
 
 - name: Bind mount system directories
   ansible.builtin.mount:
@@ -195,7 +265,7 @@
     src: "/{{ item }}"
     fstype: none
     opts: bind
-    state: mounted
+    state: ephemeral
   loop:
     - proc
     - sys
@@ -207,7 +277,7 @@
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       apt-get update &&
-      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates
+      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl
     "
   register: chroot_deps_result
   changed_when: chroot_deps_result.rc == 0
@@ -239,10 +309,17 @@
     owner: root
     group: root
 
-- name: Copy updated TDX unlock script
+- name: Copy TDX module loader script (init-top)
   ansible.builtin.copy:
-    content: |
-      {{ lookup('file', playbook_dir + '/files/initramfs/fetch_key_and_unlock') }}
+    src: files/initramfs/load-tdx
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tdx"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy TDX unlock script (init-premount)
+  ansible.builtin.copy:
+    src: files/initramfs/fetch_key_and_unlock
     dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock"
     mode: '0755'
     owner: root
@@ -253,8 +330,7 @@
     content: |
       # TDX LUKS Configuration
       TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://your-api.example.com/luks-key') }}"
-      LUKS_DEVICE="{{ root_partition }}"
-      LUKS_NAME="{{ encrypted_root_name }}"
+      TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://your-api.example.com/luks-nonce') }}"
       TDX_TIMEOUT="30"
       TDX_RETRY_COUNT="3"
     dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
