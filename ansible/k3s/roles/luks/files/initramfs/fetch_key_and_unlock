@@ -107,14 +107,16 @@ setup_network() {
 
     local netconfig="$cfg_mount/network-config.yaml"
 
-    # Parse very small subset of netplan YAML
-    iface=$(awk '/ethernets:/{getline; gsub(/[ :]/,""); print; exit}' "$netconfig")
+    # Find the first en* interface (auto-detect instead of parsing from config)
+    iface=$(ls /sys/class/net/ | grep '^en' | head -n1)
+    
+    # Parse network settings from netplan YAML
     ip_addr=$(awk '/addresses:/{getline; gsub(/^[ -]+/,""); print; exit}' "$netconfig")
     gateway=$(awk '/via:/{gsub(/^[ ]+via:[ ]+/,""); print; exit}' "$netconfig")
     nameserver=$(awk '/nameservers:/,/addresses:/{if(/^[ ]+-/){gsub(/^[ -]+/,""); print; exit}}' "$netconfig")
 
     if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
-        log_failure_msg "Failed to parse network-config.yaml"
+        log_failure_msg "Failed to detect interface or parse network-config.yaml"
         umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
