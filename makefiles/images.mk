@@ -215,12 +215,12 @@ sign:
 						continue; \
 					fi; \
 					echo "cosign sign --key $(COSIGN_PRIVATE_KEY) -a \"org=chutes.ai\" $$registry/$$image_name@$$digest"; \
-# 					cosign sign --key $(COSIGN_PRIVATE_KEY) -a "org=chutes.ai" $$registry/$$image_name@$$digest; \
+					cosign sign --key $(COSIGN_PRIVATE_KEY) -a "org=chutes.ai" $$registry/$$image_name@$$digest; \
 					latest_digest=$$(docker inspect --format='{{index .RepoDigests 0}}' $$latest_ref 2>/dev/null | cut -d'@' -f2 || echo ""); \
 					if [ -n "$$latest_digest" ]; then \
 						if [ "$$latest_digest" != "$$digest"  ]; then \
 							echo "cosign sign --key $(COSIGN_PRIVATE_KEY) -a \"org=chutes.ai\" $$registry/$$image_name@$$latest_digest"; \
-# 	 						cosign sign --key $(COSIGN_PRIVATE_KEY) -a "org=chutes.ai" $$registry/$$image_name@$$latest_digest; \
+	 						cosign sign --key $(COSIGN_PRIVATE_KEY) -a "org=chutes.ai" $$registry/$$image_name@$$latest_digest; \
 						fi; \
 					else \
 						echo "Skipping latest tag signing for $$latest_ref: Digest not found"; \
