@@ -242,7 +242,9 @@ cat > "$MOUNT_DIR/network-config.yaml" << EOF
 network:
   version: 2
   ethernets:
-    enp0s2:
+    any-ethernet:
+      match:
+        name: "en*"
       addresses:
         - ${VM_IP}/24
       routes:
