@@ -95,7 +95,8 @@ while [[ $# -gt 0 ]]; do
       echo "  --vcpus NUM               Number of vCPUs (default: $VCPUS)"
       echo "  --foreground              Run in foreground"
       echo "  --gpu-mmio-mb SIZE        MMIO per GPU in MB (default: $GPU_MMIO_MB)"
-      echo "  --pci-hole-base-gb SIZE   Base PCI hole in GB (default: $PCI_HOLE_BASE_GB)"
+      echo "  --nvswitch-mmio-mb SIZE   MMIO per NVSwitch in MB (default: $NVSWITCH_MMIO_MB)"
+      echo "  --pci-hole-base-gb SIZE   Min PCI hole size in GB (default: $PCI_HOLE_BASE_GB)"
       echo ""
       echo "Management:"
       echo "  --status                  Show VM status"
@@ -174,21 +175,29 @@ echo "  NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
 echo
 
 ##############################################################################
-# 1. Calculate memory allocations
+# 1. Calculate memory allocations / PCI hole requirements
 ##############################################################################
 
-# Calculate total PCI hole size needed
-TOTAL_GPU_OVERHEAD_GB=$((TOTAL_GPUS * PCI_HOLE_OVERHEAD_PER_GPU_GB))
-TOTAL_NVSWITCH_OVERHEAD_GB=$((TOTAL_NVSW * PCI_HOLE_OVERHEAD_PER_NVSWITCH_GB))
-CALCULATED_PCI_HOLE_GB=$((PCI_HOLE_BASE_GB + TOTAL_GPU_OVERHEAD_GB + TOTAL_NVSWITCH_OVERHEAD_GB))
+# determine required 64-bit PCI hole from actual MMIO windows
+TOTAL_MMIO_MB=$(( TOTAL_GPUS * GPU_MMIO_MB + TOTAL_NVSW * NVSWITCH_MMIO_MB ))
+# Ceil to GiB
+REQUIRED_PCI_HOLE_GB=$(( (TOTAL_MMIO_MB + 1023) / 1024 ))
 
-echo "=== Memory Configuration ==="
-echo "Base PCI hole size: ${PCI_HOLE_BASE_GB}GB"
-echo "GPU MMIO allocation: ${GPU_MMIO_MB}MB per GPU (${TOTAL_GPUS} GPUs)"
-echo "NVSwitch MMIO allocation: ${NVSWITCH_MMIO_MB}MB per switch (${TOTAL_NVSW} switches)"
-echo "GPU overhead: ${TOTAL_GPU_OVERHEAD_GB}GB (${PCI_HOLE_OVERHEAD_PER_GPU_GB}GB × ${TOTAL_GPUS})"
-echo "NVSwitch overhead: ${TOTAL_NVSWITCH_OVERHEAD_GB}GB (${PCI_HOLE_OVERHEAD_PER_NVSWITCH_GB}GB × ${TOTAL_NVSW})"
-echo "Calculated PCI hole size: ${CALCULATED_PCI_HOLE_GB}GB"
+# Ensure we never go below PCI_HOLE_BASE_GB (user override still honored)
+if [ "$REQUIRED_PCI_HOLE_GB" -lt "$PCI_HOLE_BASE_GB" ]; then
+  CALCULATED_PCI_HOLE_GB="$PCI_HOLE_BASE_GB"
+else
+  CALCULATED_PCI_HOLE_GB="$REQUIRED_PCI_HOLE_GB"
+fi
+
+echo "=== Memory / PCIe Configuration ==="
+echo "Guest RAM: ${MEM}"
+echo "Base PCI hole (min): ${PCI_HOLE_BASE_GB}GB"
+echo "Configured MMIO per GPU: ${GPU_MMIO_MB}MB"
+echo "Configured MMIO per NVSwitch: ${NVSWITCH_MMIO_MB}MB"
+echo "Total devices: GPUs=${TOTAL_GPUS}, NVSwitches=${TOTAL_NVSW}"
+echo "Total requested 64-bit MMIO: ${TOTAL_MMIO_MB}MB (~${REQUIRED_PCI_HOLE_GB}GB)"
+echo "Final PCI hole64 size: ${CALCULATED_PCI_HOLE_GB}GB"
 echo
 
 # Network configuration
@@ -233,13 +242,13 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func")
     )
   fi
   
-  # GPU passthrough - start with basic settings to avoid driver issues
+  # GPU passthrough
   DEV_OPTS+=( -device vfio-pci,host=${GPUS[i]},bus=${id},addr=0x0,iommufd=iommufd0 )
   
-  # Convert MB to bytes for fw_cfg (multiply by 1048576)
+  # Per-GPU 64-bit MMIO window
   DEV_OPTS+=( -fw_cfg name=opt/ovmf/X-PciMmio64Mb$((i+1)),string=${GPU_MMIO_MB} )
   
-  echo "GPU $((i+1)): ${GPUS[i]} -> bus=${id}, MMIO=${GPU_MMIO_MB}MB"
+  echo "GPU $((i+1)): ${GPUS[i]} -> bus=${id}, MMIO64=${GPU_MMIO_MB}MB"
   
   ((port++,func++))
   if ((func==8)); then func=0; ((slot++)); fi
@@ -250,16 +259,19 @@ for j in "${!NVSW[@]}"; do
   id="rp_nvsw$((j+1))" chassis=$(( ${#GPUS[@]} + j + 1 ))
   if ((func==0)); then
     DEV_OPTS+=(
-      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},bus=pcie.0,multifunction=on,addr=$(printf 0x%x.0x%x "$slot" "$func") )
+      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
+bus=pcie.0,multifunction=on,addr=$(printf 0x%x.0x%x "$slot" "$func")
+    )
   else
     DEV_OPTS+=(
       -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
-bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func") )
+bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func")
+    )
   fi
   
   DEV_OPTS+=( -device vfio-pci,host=${NVSW[j]},bus=${id},addr=0x0,iommufd=iommufd0 )
   
-  echo "NVSwitch $((j+1)): ${NVSW[j]} -> bus=${id}, MMIO=${NVSWITCH_MMIO_MB}MB"
+  echo "NVSwitch $((j+1)): ${NVSW[j]} -> bus=${id}, MMIO64=${NVSWITCH_MMIO_MB}MB"
   
   ((port++,func++))
   if ((func==8)); then func=0; ((slot++)); fi
@@ -273,7 +285,6 @@ if [ -n "$CACHE_VOLUME" ]; then
   echo "Cache volume: $CACHE_VOLUME"
   echo "  Will be auto mounted at /var/snap by guest verification service"
   
-  # Attach cache volume as second virtio drive (vdb)
   DEV_OPTS+=( -drive file="$CACHE_VOLUME",if=virtio,cache=none,format=qcow2 )
 fi
 
