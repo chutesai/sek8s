@@ -24,6 +24,7 @@ GPU_MMIO_MB=262144
 NVSWITCH_MMIO_MB=32768
 PCI_HOLE_OVERHEAD_PER_GPU_GB=0
 PCI_HOLE_OVERHEAD_PER_NVSWITCH_GB=0
+PCI_HOLE_BUFFER_GB=128
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -190,6 +191,9 @@ else
   CALCULATED_PCI_HOLE_GB="$REQUIRED_PCI_HOLE_GB"
 fi
 
+# Add extra buffer to avoid BAR alignment and iommufd mapping failures
+CALCULATED_PCI_HOLE_GB=$(( CALCULATED_PCI_HOLE_GB + PCI_HOLE_BUFFER_GB ))
+
 echo "=== Memory / PCIe Configuration ==="
 echo "Guest RAM: ${MEM}"
 echo "Base PCI hole (min): ${PCI_HOLE_BASE_GB}GB"
@@ -197,6 +201,7 @@ echo "Configured MMIO per GPU: ${GPU_MMIO_MB}MB"
 echo "Configured MMIO per NVSwitch: ${NVSWITCH_MMIO_MB}MB"
 echo "Total devices: GPUs=${TOTAL_GPUS}, NVSwitches=${TOTAL_NVSW}"
 echo "Total requested 64-bit MMIO: ${TOTAL_MMIO_MB}MB (~${REQUIRED_PCI_HOLE_GB}GB)"
+echo "PCI hole buffer: ${PCI_HOLE_BUFFER_GB}GB"
 echo "Final PCI hole64 size: ${CALCULATED_PCI_HOLE_GB}GB"
 echo
 
