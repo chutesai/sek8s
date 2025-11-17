@@ -7,7 +7,6 @@ After=systemd-udev-settle.service
 After=local-fs-pre.target
 # Must complete before the mount unit
 Before=var-config.mount
-# TODO: What order does this need to run in? Before, After?
 # Ensure /dev is available
 RequiresMountsFor=/dev
 # If this service fails, don't continue boot

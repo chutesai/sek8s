@@ -3,7 +3,6 @@ Description=Configuration manager
 DefaultDependencies=false
 Wants=local-fs.target
 After=local-fs.target
-# TODO: What order does this need to run in? Before, After?
 After=var-config.mount
 Requires=var-config.mount
 Before=network-pre.target
