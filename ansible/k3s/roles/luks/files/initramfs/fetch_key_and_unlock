@@ -9,7 +9,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
-API_ENDPOINT="${TDX_API_ENDPOINT:-https://api.chutes.ai/servers/boot/attestation}"
+API_ENDPOINT="${TDX_API_ENDPOINT:-https://tdx-attestation.chutes.ai/servers/boot/attestation}"
 NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
