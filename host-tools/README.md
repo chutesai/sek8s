@@ -87,7 +87,11 @@ The setup script also configures the following kernel parameters (verify in `/pr
 
 ---
 
-### Step 2: Install NVIDIA GPU Admin Tools
+### Step 2: Register the Platform
+
+Ensure the platform is registered with Intel according to Intel's [docs](https://cc-enabling.trustedservices.intel.com/intel-tdx-enabling-guide/02/infrastructure_setup/#platform-registration)
+
+### Step 3: Install NVIDIA GPU Admin Tools
 
 Clone the NVIDIA GPU administration toolkit (one-time setup):
 ```bash
@@ -100,7 +104,7 @@ This toolkit provides `nvidia_gpu_tools.py` for managing GPU confidential comput
 
 ---
 
-### Step 3: Enable PPCIe Mode for NVIDIA GPUs
+### Step 4: Enable PPCIe Mode for NVIDIA GPUs
 
 Configure all GPUs and NVSwitches to run in PPCIe (Protected PCIe) mode. This step must be performed after each host reboot.
 ```bash
@@ -134,7 +138,7 @@ nvidia-smi -q | grep "CC Mode"
 
 ---
 
-### Step 4: Create Configuration File
+### Step 5: Create Configuration File
 
 Navigate to the scripts directory and create your configuration from the template:
 ```bash
@@ -198,7 +202,7 @@ advanced:
 
 ---
 
-### Step 5: Launch the VM
+### Step 6: Launch the VM
 
 With your configuration file ready, launch the VM:
 ```bash
