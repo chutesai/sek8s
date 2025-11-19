@@ -37,10 +37,6 @@
   ansible.builtin.shell: |
     rm -rf /var/lib/apt/lists/*
 
-- name: Clean temporary files
-  ansible.builtin.shell: |
-    rm -rf /tmp/* /var/tmp/*
-
 - name: Clear bash history
   ansible.builtin.shell: |
     history -c
