@@ -5,7 +5,7 @@
 vm:
   hostname: chutes-miner-tee-0
   
-# Miner Credentials (required)
+# Miner Credentials
 miner:
   ss58: "your_ss58_credential_here"
   seed: "your_seed_credential_here"

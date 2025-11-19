@@ -4,27 +4,54 @@
 
 set -e
 
-# Default values
+# --------------------------------------------------------------------
+# Hard-coded defaults (lowest precedence)
+# --------------------------------------------------------------------
 CONFIG_FILE=""
+
 HOSTNAME=""
 MINER_SS58=""
 MINER_SEED=""
+
 VM_IP="192.168.100.2"
 BRIDGE_IP="192.168.100.1/24"
 VM_DNS="8.8.8.8"
 PUBLIC_IFACE="ens9f0np0"
-FOREGROUND=false
 CACHE_SIZE="500G"
 CACHE_VOLUME=""
 CONFIG_VOLUME=""
-SKIP_BIND=false
-SKIP_CACHE=false
+SKIP_BIND="false"
+SKIP_CACHE="false"
+FOREGROUND="false"
 MEMORY="1536G"
 VCPUS=24
 GPU_MMIO_MB=262144
 PCI_HOLE_BASE_GB=2048
 
-# Parse arguments
+# --------------------------------------------------------------------
+# Temporary CLI containers (only set when user passes flags)
+# --------------------------------------------------------------------
+CLI_HOSTNAME=""
+CLI_MINER_SS58=""
+CLI_MINER_SEED=""
+CLI_VM_IP=""
+CLI_BRIDGE_IP=""
+CLI_VM_DNS=""
+CLI_PUBLIC_IFACE=""
+CLI_CACHE_SIZE=""
+CLI_CACHE_VOLUME=""
+CLI_CONFIG_VOLUME=""
+CLI_SKIP_BIND=""
+CLI_SKIP_CACHE=""
+CLI_FOREGROUND=""
+CLI_MEMORY=""
+CLI_VCPUS=""
+CLI_GPU_MMIO_MB=""
+CLI_PCI_HOLE_BASE_GB=""
+
+# --------------------------------------------------------------------
+# Parse CLI options (capture only explicit values)
+# --------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case $1 in
     *.yaml|*.yml)
@@ -35,19 +62,24 @@ while [[ $# -gt 0 ]]; do
       CONFIG_FILE="$2"
       shift 2
       ;;
-    --hostname) HOSTNAME="$2"; shift 2 ;;
-    --miner-ss58) MINER_SS58="$2"; shift 2 ;;
-    --miner-seed) MINER_SEED="$2"; shift 2 ;;
-    --vm-ip) VM_IP="$2"; shift 2 ;;
-    --bridge-ip) BRIDGE_IP="$2"; shift 2 ;;
-    --vm-dns) VM_DNS="$2"; shift 2 ;;
-    --public-iface) PUBLIC_IFACE="$2"; shift 2 ;;
-    --cache-size) CACHE_SIZE="$2"; shift 2 ;;
-    --cache-volume) CACHE_VOLUME="$2"; shift 2 ;;
-    --config-volume) CONFIG_VOLUME="$2"; shift 2 ;;
-    --skip-bind) SKIP_BIND=true; shift ;;
-    --skip-cache) SKIP_CACHE=true; shift ;;
-    --foreground) FOREGROUND=true; shift ;;
+    --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
+    --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
+    --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
+    --vm-ip) CLI_VM_IP="$2"; shift 2 ;;
+    --bridge-ip) CLI_BRIDGE_IP="$2"; shift 2 ;;
+    --vm-dns) CLI_VM_DNS="$2"; shift 2 ;;
+    --public-iface) CLI_PUBLIC_IFACE="$2"; shift 2 ;;
+    --cache-size) CLI_CACHE_SIZE="$2"; shift 2 ;;
+    --cache-volume) CLI_CACHE_VOLUME="$2"; shift 2 ;;
+    --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
+    --skip-bind) CLI_SKIP_BIND="true"; shift ;;
+    --skip-cache) CLI_SKIP_CACHE="true"; shift ;;
+    --foreground) CLI_FOREGROUND="true"; shift ;;
+    --mem|--memory) CLI_MEMORY="$2"; shift 2 ;;
+    --vcpus) CLI_VCPUS="$2"; shift 2 ;;
+    --gpu-mmio-mb) CLI_GPU_MMIO_MB="$2"; shift 2 ;;
+    --pci-hole-base-gb) CLI_PCI_HOLE_BASE_GB="$2"; shift 2 ;;
+
     --clean)
       echo "=== Cleaning Up TEE VM Environment ==="
       ./run-vm.sh --clean 2>/dev/null || true
@@ -80,100 +112,148 @@ Config File:
   --config FILE             Specify config file explicitly
   --template                Create template config file from template
 
-Command Line Options (override config):
-  --hostname NAME           VM hostname
-  --miner-ss58 VALUE        Miner SS58 credential
-  --miner-seed VALUE        Miner seed credential
-  --vm-ip IP                VM IP address
-  --cache-volume PATH       Use existing cache volume
-  --skip-bind               Skip device binding
-  --skip-cache              Skip cache volume
-  --foreground              Run in foreground
+Command Line Options (CLI overrides YAML when provided):
+  --hostname NAME           VM hostname (required if not in YAML)
+  --miner-ss58 VALUE        Miner SS58 credential (required)
+  --miner-seed VALUE        Miner seed credential (required)
+
+Network:
+  --vm-ip IP
+  --bridge-ip IP/CIDR
+  --vm-dns DNS
+  --public-iface IFACE
+
+Volumes:
+  --cache-size SIZE
+  --cache-volume PATH
+  --config-volume PATH
+  --skip-bind
+  --skip-cache
+
+Runtime:
+  --foreground
+  --mem SIZE
+  --vcpus N
+  --gpu-mmio-mb N
+  --pci-hole-base-gb N
+
+Management:
   --clean                   Clean up everything
 
 Examples:
   # Create template config
   $0 --template
-  
+
   # Use config file
   $0 config.yaml
-  
+
   # Use config with overrides
   $0 config.yaml --foreground --skip-bind
-  
+
   # Command line only
   $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
-
-Requirements:
-  - Python 3 with PyYAML (pip3 install pyyaml)
-  - All helper scripts (bind.sh, create-*.sh, setup-bridge.sh, run-vm.sh)
 EOF
       exit 0
       ;;
-    *) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
+    *)
+      echo "Unknown option: $1. Use --help for usage."
+      exit 1
+      ;;
   esac
 done
 
-# Load config file if provided
+# --------------------------------------------------------------------
+# Load configuration file (YAML) – overrides defaults
+# --------------------------------------------------------------------
 if [[ -n "$CONFIG_FILE" ]]; then
   echo "Loading configuration from: $CONFIG_FILE"
-  
-  # Check if Python and PyYAML are available
+
   if ! command -v python3 >/dev/null 2>&1; then
     echo "Error: Python 3 not found. Install with: sudo apt install python3"
     exit 1
   fi
-  
+
   if ! python3 -c "import yaml" 2>/dev/null; then
     echo "Error: PyYAML not found. Install with: pip3 install pyyaml"
     exit 1
   fi
-  
-  # Check if our config parser exists
+
   if [[ ! -f "./parse-config.py" ]]; then
     echo "Error: parse-config.py not found in current directory"
     exit 1
   fi
-  
-  # Parse config and load variables
+
   CONFIG_OUTPUT=$(python3 ./parse-config.py "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
-  
+
   if [[ $CONFIG_EXIT_CODE -ne 0 ]]; then
     echo "Error parsing config file:"
     echo "$CONFIG_OUTPUT"
     exit 1
   fi
-  
-  # Load the parsed variables
+
+  # This sets HOSTNAME, MINER_SS58, etc. from YAML
   eval "$CONFIG_OUTPUT"
   echo "✓ Configuration loaded successfully"
 fi
 
-# Validate required parameters
+# --------------------------------------------------------------------
+# Apply CLI overrides (highest precedence)
+# --------------------------------------------------------------------
+[[ -n "$CLI_HOSTNAME" ]] && HOSTNAME="$CLI_HOSTNAME"
+[[ -n "$CLI_MINER_SS58" ]] && MINER_SS58="$CLI_MINER_SS58"
+[[ -n "$CLI_MINER_SEED" ]] && MINER_SEED="$CLI_MINER_SEED"
+
+[[ -n "$CLI_VM_IP" ]] && VM_IP="$CLI_VM_IP"
+[[ -n "$CLI_BRIDGE_IP" ]] && BRIDGE_IP="$CLI_BRIDGE_IP"
+[[ -n "$CLI_VM_DNS" ]] && VM_DNS="$CLI_VM_DNS"
+[[ -n "$CLI_PUBLIC_IFACE" ]] && PUBLIC_IFACE="$CLI_PUBLIC_IFACE"
+
+[[ -n "$CLI_CACHE_SIZE" ]] && CACHE_SIZE="$CLI_CACHE_SIZE"
+[[ -n "$CLI_CACHE_VOLUME" ]] && CACHE_VOLUME="$CLI_CACHE_VOLUME"
+[[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
+
+[[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
+[[ -n "$CLI_SKIP_CACHE" ]] && SKIP_CACHE="$CLI_SKIP_CACHE"
+[[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
+
+[[ -n "$CLI_MEMORY" ]] && MEMORY="$CLI_MEMORY"
+[[ -n "$CLI_VCPUS" ]] && VCPUS="$CLI_VCPUS"
+[[ -n "$CLI_GPU_MMIO_MB" ]] && GPU_MMIO_MB="$CLI_GPU_MMIO_MB"
+[[ -n "$CLI_PCI_HOLE_BASE_GB" ]] && PCI_HOLE_BASE_GB="$CLI_PCI_HOLE_BASE_GB"
+
+# --------------------------------------------------------------------
+# Validate required parameters (must come from YAML or CLI)
+# --------------------------------------------------------------------
 if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" ]]; then
   echo "Error: Missing required configuration:"
-  [[ -z "$HOSTNAME" ]] && echo "  - hostname"
-  [[ -z "$MINER_SS58" ]] && echo "  - miner.ss58"
-  [[ -z "$MINER_SEED" ]] && echo "  - miner.seed"
+  [[ -z "$HOSTNAME" ]] && echo "  - hostname (vm.hostname or --hostname)"
+  [[ -z "$MINER_SS58" ]] && echo "  - miner.ss58 (miner.ss58 or --miner-ss58)"
+  [[ -z "$MINER_SEED" ]] && echo "  - miner.seed (miner.seed or --miner-seed)"
   echo ""
-  echo "Provide via config file or command line:"
-  echo "  $0 --template  # Create template"
-  echo "  $0 config.yaml"
+  echo "Provide via config file or command line, for example:"
+  echo "  $0 --template        # create config.yaml template"
+  echo "  $0 config.yaml       # and edit it"
+  echo "or"
+  echo "  $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'"
   exit 1
 fi
 
 echo ""
 echo "=== TEE VM Orchestration ==="
-echo "Config: ${CONFIG_FILE:-command line}"
+echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Hostname: $HOSTNAME"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 echo "Cache: ${SKIP_CACHE:+Skipped}${SKIP_CACHE:-$CACHE_SIZE}"
 echo "Binding: ${SKIP_BIND:+Skipped}${SKIP_BIND:-Enabled}"
+echo "Memory: $MEMORY"
+echo "vCPUs: $VCPUS"
 echo ""
 
+# --------------------------------------------------------------------
 # Step 0: Verify host configuration
+# --------------------------------------------------------------------
 echo "Step 0: Verifying host configuration..."
 HOST_CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
 
@@ -205,14 +285,20 @@ echo "✓ Host IOMMU configuration verified"
 echo "✓ Host TDX enabled"
 echo ""
 
+# --------------------------------------------------------------------
 # Step 1: Bind devices
+# --------------------------------------------------------------------
 if [[ "$SKIP_BIND" != "true" ]]; then
   echo "Resetting GPUs for launch..."
   ./reset-gpus.sh
 
   echo "Step 1: Binding GPU and NVSwitch devices..."
   if [ -f "./bind.sh" ]; then
-    ./bind.sh --bind && echo "✓ Devices bound" || echo "⚠ Device binding failed"
+    if ./bind.sh --bind; then
+      echo "✓ Devices bound"
+    else
+      echo "⚠ Device binding failed"
+    fi
   else
     echo "⚠ bind.sh not found, skipping"
   fi
@@ -221,7 +307,9 @@ else
 fi
 echo ""
 
+# --------------------------------------------------------------------
 # Step 2: Cache volume
+# --------------------------------------------------------------------
 if [[ "$SKIP_CACHE" != "true" ]]; then
   echo "Step 2: Setting up cache volume..."
   if [[ -n "$CACHE_VOLUME" ]] && [[ -f "$CACHE_VOLUME" ]]; then
@@ -241,21 +329,25 @@ else
 fi
 echo ""
 
+# --------------------------------------------------------------------
 # Step 3: Config volume
+# --------------------------------------------------------------------
 echo "Step 3: Setting up config volume..."
 if [[ -n "$CONFIG_VOLUME" ]] && [[ -f "$CONFIG_VOLUME" ]]; then
   echo "✓ Using existing config volume: $CONFIG_VOLUME"
 else
   CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
   [[ -f "$CONFIG_VOLUME" ]] && sudo rm -f "$CONFIG_VOLUME"
-  
+
   echo "Creating config volume: $CONFIG_VOLUME"
   sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
   echo "✓ Config volume created"
 fi
 echo ""
 
+# --------------------------------------------------------------------
 # Step 4: Bridge networking
+# --------------------------------------------------------------------
 echo "Step 4: Setting up bridge networking..."
 BRIDGE_OUTPUT=$(./setup-bridge.sh \
   --bridge-ip "$BRIDGE_IP" \
@@ -266,12 +358,15 @@ BRIDGE_OUTPUT=$(./setup-bridge.sh \
 TAP_IFACE=$(echo "$BRIDGE_OUTPUT" | grep "Network interface:" | awk '{print $3}')
 if [[ -z "$TAP_IFACE" ]]; then
   echo "Error: Failed to extract TAP interface"
+  echo "$BRIDGE_OUTPUT"
   exit 1
 fi
 echo "✓ Bridge configured (TAP: $TAP_IFACE)"
 echo ""
 
+# --------------------------------------------------------------------
 # Step 5: Launch VM
+# --------------------------------------------------------------------
 echo "Step 5: Launching TEE VM..."
 LAUNCH_ARGS=(
   --config-volume "$CONFIG_VOLUME"
@@ -282,10 +377,10 @@ LAUNCH_ARGS=(
 # Add optional arguments
 [[ -n "$CACHE_VOLUME" ]] && LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
-[[ "$MEMORY" != "1536G" ]] && LAUNCH_ARGS+=(--mem "$MEMORY")
-[[ "$VCPUS" != "24" ]] && LAUNCH_ARGS+=(--vcpus "$VCPUS")
-[[ "$GPU_MMIO_MB" != "262144" ]] && LAUNCH_ARGS+=(--gpu-mmio-mb "$GPU_MMIO_MB")
-[[ "$PCI_HOLE_BASE_GB" != "2048" ]] && LAUNCH_ARGS+=(--pci-hole-base-gb "$PCI_HOLE_BASE_GB")
+[[ -n "$MEMORY" ]] && LAUNCH_ARGS+=(--mem "$MEMORY")
+[[ -n "$VCPUS" ]] && LAUNCH_ARGS+=(--vcpus "$VCPUS")
+[[ -n "$GPU_MMIO_MB" ]] && LAUNCH_ARGS+=(--gpu-mmio-mb "$GPU_MMIO_MB")
+[[ -n "$PCI_HOLE_BASE_GB" ]] && LAUNCH_ARGS+=(--pci-hole-base-gb "$PCI_HOLE_BASE_GB")
 
 ./run-vm.sh "${LAUNCH_ARGS[@]}"
 
