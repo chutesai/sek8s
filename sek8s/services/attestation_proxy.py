@@ -453,9 +453,6 @@ def run():
         # Load configuration
         config = AttestationProxyConfig()
 
-        logger.info(f"{os.environ=}")
-        logger.info(f"{config=}")
-
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)
             logger.debug("Debug mode enabled")
