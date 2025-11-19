@@ -108,15 +108,25 @@
     group: root
     mode: "0755"
 
+- name: Set qemu user and group
+  ansible.builtin.set_fact:
+    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('user = \"(.*)\"', '\\1') }}"
+    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('group = \"(.*)\"', '\\1') }}"
+
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
     src: "{{ base_img_path }}"
     dest: "{{  build_img_path }}"
-    owner: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('user = \"(.*)\"', '\\1') }}"
-    group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('group = \"(.*)\"', '\\1') }}"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
     mode: "0640"
     remote_src: yes
   when: not build_image.stat.exists or no_cache == 'true'
+
+- name: Fix permissions on libvirt cloud-init ISO directory
+  ansible.builtin.file:
+    path: /var/lib/libvirt/boot
+    mode: "0755"
 
 - name: Start temporary VM
   ansible.builtin.command: |
