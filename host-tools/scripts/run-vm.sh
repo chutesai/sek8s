@@ -24,7 +24,7 @@ GPU_MMIO_MB=262144
 NVSWITCH_MMIO_MB=32768
 PCI_HOLE_OVERHEAD_PER_GPU_GB=0
 PCI_HOLE_OVERHEAD_PER_NVSWITCH_GB=0
-PCI_HOLE_BUFFER_GB=128
+PCI_HOLE_BUFFER_GB=256  # Increased from 128 for better alignment
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -175,36 +175,6 @@ echo "  GPUs: ${GPUS[*]:-none} (count: $TOTAL_GPUS)"
 echo "  NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
 echo
 
-##############################################################################
-# 1. Calculate memory allocations / PCI hole requirements
-##############################################################################
-
-# determine required 64-bit PCI hole from actual MMIO windows
-TOTAL_MMIO_MB=$(( TOTAL_GPUS * GPU_MMIO_MB + TOTAL_NVSW * NVSWITCH_MMIO_MB ))
-# Ceil to GiB
-REQUIRED_PCI_HOLE_GB=$(( (TOTAL_MMIO_MB + 1023) / 1024 ))
-
-# Ensure we never go below PCI_HOLE_BASE_GB (user override still honored)
-if [ "$REQUIRED_PCI_HOLE_GB" -lt "$PCI_HOLE_BASE_GB" ]; then
-  CALCULATED_PCI_HOLE_GB="$PCI_HOLE_BASE_GB"
-else
-  CALCULATED_PCI_HOLE_GB="$REQUIRED_PCI_HOLE_GB"
-fi
-
-# Add extra buffer to avoid BAR alignment and iommufd mapping failures
-CALCULATED_PCI_HOLE_GB=$(( CALCULATED_PCI_HOLE_GB + PCI_HOLE_BUFFER_GB ))
-
-echo "=== Memory / PCIe Configuration ==="
-echo "Guest RAM: ${MEM}"
-echo "Base PCI hole (min): ${PCI_HOLE_BASE_GB}GB"
-echo "Configured MMIO per GPU: ${GPU_MMIO_MB}MB"
-echo "Configured MMIO per NVSwitch: ${NVSWITCH_MMIO_MB}MB"
-echo "Total devices: GPUs=${TOTAL_GPUS}, NVSwitches=${TOTAL_NVSW}"
-echo "Total requested 64-bit MMIO: ${TOTAL_MMIO_MB}MB (~${REQUIRED_PCI_HOLE_GB}GB)"
-echo "PCI hole buffer: ${PCI_HOLE_BUFFER_GB}GB"
-echo "Final PCI hole64 size: ${CALCULATED_PCI_HOLE_GB}GB"
-echo
-
 # Network configuration
 DEV_OPTS=()
 if [ "$NETWORK_TYPE" = "tap" ]; then
@@ -316,7 +286,6 @@ echo ""
   -object '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type": "vsock", "cid":"2","port":"4050"}}' \
   -object memory-backend-memfd,id=ram0,size="$MEM" \
   -machine q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=ram0 \
-  -global q35-pcihost.pci-hole64-size="${CALCULATED_PCI_HOLE_GB}G" \
   -m "$MEM" \
   "${CPU_OPTS[@]}" \
   -bios "$BIOS" \
