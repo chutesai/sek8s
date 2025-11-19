@@ -46,30 +46,14 @@
 
 - name: Check if base image exists
   ansible.builtin.stat:
-    path: "{{ guest_img_path }}"
+    path: "{{ base_img_path }}"
   register: base_image
   failed_when: not base_image.stat.exists
 
-- name: Remove existing sek8s image if NO_CACHE is true
-  ansible.builtin.file:
-    path: "{{ sek8s_img_path }}"
-    state: absent
-  when: no_cache == 'true'
-
-- name: Create image directory
-  ansible.builtin.file:
-    path: "{{ img_dir }}"
-    state: directory
-    mode: '0755'
-
-- name: Copy base image to sek8s image
-  ansible.builtin.copy:
-    src: "{{ guest_img_path }}"
-    dest: "{{ sek8s_img_path }}"
-    mode: '0640'
-    owner: root
-    group: libvirt-qemu
-  when: no_cache == 'true'
+- name: Check if build image exists
+  ansible.builtin.stat:
+    path: "{{ build_img_path }}"
+  register: build_image
 
 - name: Create cloud-init user-data with SSH key
   ansible.builtin.copy:
@@ -83,13 +67,6 @@
             - "{{ lookup('file', ssh_public_key_path | expanduser)  }}"
     dest: "{{ user_data_file }}"
     mode: '0644'
-
-- name: Fix permissions for sek8s image
-  ansible.builtin.file:
-    path: "{{ sek8s_img_path }}"
-    owner: root
-    group: libvirt-qemu
-    mode: '0640'
 
 - name: Check if KVM is available
   ansible.builtin.command: kvm-ok
@@ -123,13 +100,31 @@
   changed_when: false
   failed_when: false
 
+- name: Ensure libvirt image directory exists
+  ansible.builtin.file:
+    path: "{{ libvirt_image_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy QCOW2 image into libvirt storage
+  ansible.builtin.copy:
+    src: "{{ base_img_path }}"
+    dest: "{{  build_img_path }}"
+    owner: libvirt-qemu
+    group: kvm
+    mode: "0640"
+    remote_src: yes
+  when: not build_image.stat.exists or no_cache == 'true'
+
 - name: Start temporary VM
   ansible.builtin.command: |
     virt-install \
       --name "{{ vm_name }}" \
       --ram 3072 \
       --vcpus 2 \
-      --disk path="{{ sek8s_img_path }}",format=qcow2 \
+      --disk path="{{ build_img_path }}",format=qcow2 \
       --os-variant ubuntu{{ ubuntu_version }} \
       --virt-type "{{ virt_type }}" \
       --network network=default,mac={{ build_vm_mac }} \
@@ -179,5 +174,5 @@
     ansible_host: "{{ build_vm_ip }}"
     ansible_user: root
     ansible_ssh_private_key_file: "{{ ssh_private_key_path | expanduser }}"
-    test_image_path: "{{ sek8s_img_path }}"
+    test_image_path: "{{ libvirt_vm_image }}"
     groups: vm

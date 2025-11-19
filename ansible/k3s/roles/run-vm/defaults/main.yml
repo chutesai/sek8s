@@ -1,7 +1,6 @@
 tdx_repo: "{{ repo_root }}/tdx"
 charts_dir: "{{ repo_root }}/charts"
 logfile: "{{ repo_root }}/tdx-image-build.log"
-guest_img_path: "{{ tdx_repo }}/guest-tools/image/tdx-guest-ubuntu-{{ ubuntu_version }}-generic.qcow2"
 vnc_port: "5901"
 cloud_init_dir: "{{ repo_root }}/local"
 user_data_file: "{{ cloud_init_dir }}/user-data"
