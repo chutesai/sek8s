@@ -110,8 +110,8 @@
 
 - name: Set qemu user and group
   ansible.builtin.set_fact:
-    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('user = \"(.*)\"', '\\1') }}"
-    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('group = \"(.*)\"', '\\1') }}"
+    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('^user = \"(.*)\"', '\\1') }}"
+    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('^group = \"(.*)\"', '\\1') }}"
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
