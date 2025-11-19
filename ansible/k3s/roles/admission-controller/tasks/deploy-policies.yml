@@ -22,4 +22,4 @@
     - name: Display policy test results
       ansible.builtin.debug:
         msg: "{{ policy_test.stdout }}"
-      when: policy_test.stdout
+      when: policy_test.stdout | length > 0
