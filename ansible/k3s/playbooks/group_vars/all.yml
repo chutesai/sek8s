@@ -48,7 +48,6 @@ enable_module_signing: true
 
 # Attestation settings
 attestation_endpoint: "{{ lookup('env', 'ATTESTATION_ENDPOINT') | default('https://api.example.com/attestation', true) }}"
-attestation_token: "{{ lookup('env', 'ATTESTATION_TOKEN') | default('', true) }}"
 attestation_interval: 300  # 5 minutes
 
 # Module monitoring
