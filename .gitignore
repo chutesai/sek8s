@@ -3,7 +3,7 @@
 **/__pycache__/*
 
 **/local/*
-**/image/*
+**/image/*.qcow2
 **/*.log
 .idea
 bin/
