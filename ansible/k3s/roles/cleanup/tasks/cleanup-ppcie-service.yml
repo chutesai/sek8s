@@ -1,0 +1,7 @@
+---
+- name: Enable PPCIe service
+  systemd:
+    name: "{{ ppcie_service_name }}"
+    enabled: yes
+    state: stopped
+  tags: service

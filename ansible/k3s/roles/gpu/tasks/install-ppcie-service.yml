@@ -34,10 +34,11 @@
   when: service_created.changed
   tags: service
 
-# Enable but don't start, no GPUs to enable at build time
+# Don't enable as this will cause failure during multi phase builds
+# Let the final cleanup role enable this
 - name: Enable PPCIe service
   systemd:
     name: "{{ ppcie_service_name }}"
-    enabled: yes
+    enabled: no
     state: stopped
   tags: service
