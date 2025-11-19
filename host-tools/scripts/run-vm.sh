@@ -3,7 +3,7 @@
 # Enhanced for TDX compatibility with configurable memory settings
 
 # Default values
-IMG="../../guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2"
+IMG="../../guest-tools/image/tdx-guest.qcow2"
 BIOS="../../firmware/TDVF.fd"
 MEM="1536G"
 VCPUS="24"
