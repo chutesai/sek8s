@@ -112,8 +112,8 @@
   ansible.builtin.copy:
     src: "{{ base_img_path }}"
     dest: "{{  build_img_path }}"
-    owner: libvirt-qemu
-    group: kvm
+    owner: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('user = \"(.*)\"', '\\1') }}"
+    group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('group = \"(.*)\"', '\\1') }}"
     mode: "0640"
     remote_src: yes
   when: not build_image.stat.exists or no_cache == 'true'
