@@ -137,3 +137,15 @@
       with_items:
         - /etc/pam.d/common-session
         - /etc/pam.d/common-session-noninteractive
+
+- name: Blacklist nvidia-drm module
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/blacklist-nvidia-drm.conf
+    content: |
+      # Blacklist nvidia-drm for compute-only GPUs
+      blacklist nvidia-drm
+    mode: '0644'
+    owner: root
+    group: root
+  notify: update initramfs
+  register: nvidia_drm_blacklist

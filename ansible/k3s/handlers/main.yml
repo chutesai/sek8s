@@ -28,3 +28,7 @@
 
 - name: update grub
   command: update-grub
+
+- name: update initramfs
+  ansible.builtin.command:
+    cmd: update-initramfs -u -k all
