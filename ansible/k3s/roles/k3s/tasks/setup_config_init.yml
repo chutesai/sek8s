@@ -24,4 +24,15 @@
   ansible.builtin.systemd:
     daemon_reload: yes
 
-# Don't enable k3s-config-init yet - cleanup role will do this
+# Keep service disabled for build, cleanup will enable for first boot
+- name: Disable k3s-config-init service
+  ansible.builtin.systemd:
+    name: k3s-config-init
+    enabled: no
+    state: stopped
+
+# Mask service during build to prevent any activation
+- name: Mask k3s-config-init service during build
+  ansible.builtin.systemd:
+    name: k3s-cofnig-init
+    masked: yes

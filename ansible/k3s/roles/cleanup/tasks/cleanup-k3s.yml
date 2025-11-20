@@ -156,18 +156,18 @@
         cmd: rm -f /var/lib/rancher/k3s/init-markers/*
         removes: /var/lib/rancher/k3s/init-markers
 
-    - name: Enable k3s-config-init service for first boot
+    - name: Unmask k3s-config-init service for first boot
       ansible.builtin.systemd:
         name: k3s-config-init
+        masked: no
         enabled: yes
-        daemon_reload: yes
         state: stopped
 
-    - name: Enable k3s-cluster-init service for first boot
+    - name: Unmask k3s-cluster-init service for first boot
       ansible.builtin.systemd:
         name: k3s-cluster-init
+        masked: no
         enabled: yes
-        daemon_reload: yes
         state: stopped
 
     - name: Keep k3s enabled but not started

@@ -1,6 +1,8 @@
 [Unit]
 Description=Initialize k3s Configuration
 After=network-online.target
+After=config-manager.service
+Wants=config-manager.service
 
 [Service]
 Type=oneshot

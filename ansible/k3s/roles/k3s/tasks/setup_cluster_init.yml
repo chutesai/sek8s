@@ -52,3 +52,10 @@
   ansible.builtin.systemd:
     name: k3s-cluster-init
     enabled: no
+    state: stopped
+
+# Mask service during build to prevent any activation
+- name: Mask k3s-cluster-init service during build
+  ansible.builtin.systemd:
+    name: k3s-cluster-init
+    masked: yes
