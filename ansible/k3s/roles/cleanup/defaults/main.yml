@@ -1,1 +1,2 @@
 ppcie_service_name: nvidia-ppcie.service
+final_img_path: "{{ img_dir }}/tdx-guest.qcow2"
