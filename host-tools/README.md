@@ -138,7 +138,17 @@ nvidia-smi -q | grep "CC Mode"
 
 ---
 
-### Step 5: Create Configuration File
+### Step 5: Download the VM Image
+
+Download the prebuilt VM image from R2
+```bash
+cd guest-tools/image
+curl -O https://pub-26282a7d5a8341b1a29c8153b9a6d256.r2.dev/chutes-tdx/tdx-guest.qcow2
+```
+
+---
+
+### Step 6: Create Configuration File
 
 Navigate to the scripts directory and create your configuration from the template:
 ```bash
@@ -202,7 +212,7 @@ advanced:
 
 ---
 
-### Step 6: Launch the VM
+### Step 7: Launch the VM
 
 With your configuration file ready, launch the VM:
 ```bash
