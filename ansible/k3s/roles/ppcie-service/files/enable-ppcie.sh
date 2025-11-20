@@ -4,6 +4,13 @@ set -euo pipefail
 log() { echo "[enable-ppcie] $*"; }
 fatal() {
     echo "[enable-ppcie] FATAL: $*"
+    
+    # Check if we're in debug mode
+    if [[ "${PPCIE_DEBUG_MODE:-false}" == "true" ]]; then
+        echo "[enable-ppcie] DEBUG MODE: Would shutdown, but continuing..."
+        return 0
+    fi
+    
     # give logs time to flush
     sleep 1
     /usr/sbin/shutdown -h now

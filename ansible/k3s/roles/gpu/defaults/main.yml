@@ -2,5 +2,3 @@
 skip_cuda: false # noqa var-naming[no-role-prefix]
 hugepage_size: "1G"
 hugepage_count: 16  # 16 GB reserved — adjust as needed
-ppcie_script_path: /usr/local/bin/enable-ppcie.sh
-ppcie_service_name: nvidia-ppcie.service

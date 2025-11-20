@@ -65,6 +65,19 @@
       ansible.builtin.include_role:
         name: gpu
 
+- name: PPCIe Service
+  hosts: vm
+  become: true
+  tags:
+    - ppcie-service
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include PPCIe service
+      ansible.builtin.include_role:
+        name: ppcie-service
+
 - name: Setup Chutes GPU Clusters
   hosts: vm
   become: true

@@ -20,6 +20,21 @@
   register: script_created
   tags: script
 
+- name: Create PPCIe environment file directory
+  ansible.builtin.file:
+    path: "{{ ppcie_env_file_path | dirname }}"
+    state: directory
+    mode: '0755'
+
+- name: Deploy PPCIe environment file
+  ansible.builtin.template:
+    src: ppcie.env.j2
+    dest: "{{ ppcie_env_file_path }}"
+    mode: '0644'
+    owner: root
+    group: root
+  notify: restart ppcie service
+
 - name: Create systemd service unit file
   ansible.builtin.template:
     src: nvidia-ppcie.service.j2
@@ -36,7 +51,7 @@
 
 # Don't enable as this will cause failure during multi phase builds
 # Let the final cleanup role enable this
-- name: Enable PPCIe service
+- name: Set PPCIe service state
   systemd:
     name: "{{ ppcie_service_name }}"
     enabled: no

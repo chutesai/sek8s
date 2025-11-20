@@ -10,6 +10,7 @@ ExecStart={{ ppcie_script_path }}
 RemainAfterExit=yes
 StandardOutput=journal+console
 StandardError=journal+console
+EnvironmentFile=-{{ ppcie_env_file_path }}
 
 [Install]
 WantedBy=multi-user.target
