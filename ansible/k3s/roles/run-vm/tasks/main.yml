@@ -121,7 +121,7 @@
     group: "{{ qemu_group }}"
     mode: "0640"
     remote_src: yes
-  when: not build_image.stat.exists or no_cache == 'true'
+  when: (not build_image.stat.exists) or (no_cache == 'true')
 
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:
