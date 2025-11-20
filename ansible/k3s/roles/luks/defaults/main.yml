@@ -5,7 +5,7 @@ nbd_device: /dev/nbd0
 encrypted_root_name: encrypted_root
 
 # TDX-specific configuration
-tdx_api_endpoint: "{{ lookup('env', 'TDX_API_ENDPOINT') | default('https://tdx-attestation.chutes.ai/servers/boot/attestation', true) }}"
+tdx_api_endpoint: "{{ lookup('env', 'TDX_API_ENDPOINT') | default('https://tdx-attestation.chutes.ai:8443/servers/boot/attestation', true) }}"
 tdx_nonce_endpoint: "{{ lookup('env', 'TDX_NONCE_ENDPOINT') | default('https://api.chutes.ai/servers/nonce', true) }}"
 tdx_timeout: 30
 tdx_retry_count: 3
