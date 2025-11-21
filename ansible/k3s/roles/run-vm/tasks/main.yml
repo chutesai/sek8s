@@ -100,10 +100,10 @@
   changed_when: false
   failed_when: false
 
-# - name: Set qemu user and group
-#   ansible.builtin.set_fact:
-#     qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
-#     qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
+- name: Set qemu user and group
+  ansible.builtin.set_fact:
+    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
+    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
 
 - name: Ensure libvirt image directory exists
   ansible.builtin.file:
@@ -115,6 +115,8 @@
   ansible.builtin.copy:
     src: "{{ base_img_path }}"
     dest: "{{  build_img_path }}"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
     mode: "0640"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
