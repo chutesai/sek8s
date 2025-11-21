@@ -257,25 +257,9 @@ echo ""
 echo "Step 0: Verifying host configuration..."
 HOST_CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
 
-# Check for intel_iommu=on
-if ! echo "$HOST_CMDLINE" | grep -q "intel_iommu=on"; then
-  echo "✗ Error: Host kernel missing 'intel_iommu=on' parameter"
-  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... intel_iommu=on ...\""
-  echo "  Then run: sudo update-grub && sudo reboot"
-  exit 1
-fi
-
-# Check for iommu=pt
-if ! echo "$HOST_CMDLINE" | grep -q "iommu=pt"; then
-  echo "✗ Error: Host kernel missing 'iommu=pt' parameter"
-  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... iommu=pt ...\""
-  echo "  Then run: sudo update-grub && sudo reboot"
-  exit 1
-fi
-
 # Check for kvm_intel.tdx=on
-if ! echo "$HOST_CMDLINE" | grep -q "kvm_intel.tdx=on"; then
-  echo "✗ Error: Host kernel missing 'kvm_intel.tdx=on' parameter"
+if ! echo "$HOST_CMDLINE" | grep -q "kvm_intel.tdx=1"; then
+  echo "✗ Error: Host kernel missing 'kvm_intel.tdx=1' parameter"
   echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... kvm_intel.tdx=on ...\""
   echo "  Then run: sudo update-grub && sudo reboot"
   exit 1

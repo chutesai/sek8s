@@ -68,6 +68,10 @@ git submodule update --init --recursive
 
 # Run the TDX host setup script
 cd tdx
+# Edit setup-tdx-config
+nano setup-tdx-config
+TDX_SETUP_ATTESTATION=1
+
 sudo ./setup-tdx-host.sh
 
 # Reboot to load TDX-enabled kernel
@@ -90,6 +94,25 @@ The setup script also configures the following kernel parameters (verify in `/pr
 ### Step 2: Register the Platform
 
 Ensure the platform is registered with Intel according to Intel's [docs](https://cc-enabling.trustedservices.intel.com/intel-tdx-enabling-guide/02/infrastructure_setup/#platform-registration)
+
+Using Indirect Registration as an example
+```bash
+$ pccs-configure
+...
+# Configure PCCS with your API key and a password
+
+$ systemctl restart pccs
+$ sudo PCKIDRetrievalTool \
+    -url https://localhost:8081 \
+    -use_secure_cert false
+
+Intel(R) Software Guard Extensions PCK Cert ID Retrieval Tool Version 1.21.100.3
+
+Warning: platform manifest is not available or current platform is not multi-package platform.
+
+ Please input the pccs password, and use "Enter key" to end
+the data has been sent to cache server successfully
+```
 
 ### Step 3: Install NVIDIA GPU Admin Tools
 
@@ -119,10 +142,6 @@ done
 for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
     sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
 done
-
-# Verify PPCIe mode is enabled
-nvidia-smi -q | grep "CC Mode"
-# Expected: Current: PPCIe, Pending: PPCIe
 ```
 
 **Important Notes:**
@@ -143,7 +162,7 @@ nvidia-smi -q | grep "CC Mode"
 Download the prebuilt VM image from R2
 ```bash
 cd guest-tools/image
-curl -O https://pub-26282a7d5a8341b1a29c8153b9a6d256.r2.dev/chutes-tdx/tdx-guest.qcow2
+curl -O https://vm.chutes.ai/tdx-guest.qcow2
 ```
 
 ---
@@ -162,10 +181,10 @@ This creates `config.yaml`. Edit it with your deployment settings:
 vm:
   hostname: chutes-miner-tee-0
 
-# Miner Credentials (required)
+# Miner Credentials - Can also provide via CLI
 miner:
   ss58: "<ss58>"  # Your actual SS58 address
-  seed: "<seed>"  # Your actual miner seed
+  seed: "<seed>"  # Your actual miner seed, no 0x prefix
 
 # Network Configuration
 network:
@@ -201,9 +220,11 @@ advanced:
 
 **Required Configuration:**
 - `hostname`: Unique identifier for this miner
-- `miner.ss58`: Your substrate SS58 address
-- `miner.seed`: Your miner's seed phrase or private key
 - `network.public_interface`: Your host's public network interface name
+
+**Optional Configuration:**
+- `miner.ss58`: Your substrate SS58 address
+- `miner.seed`: Your miner's seed phrase or private key, no 0x prefix
 
 **Network Configuration:**
 - The IP addresses should match your network topology
@@ -216,7 +237,7 @@ advanced:
 
 With your configuration file ready, launch the VM:
 ```bash
-./quick-launch.sh config.yaml
+./quick-launch.sh config.yaml [--miner-ss58 <ss58>] [--miner-seed <seed>(no 0x prefix)]
 ```
 
 The script will automatically:
