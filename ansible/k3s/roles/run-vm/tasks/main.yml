@@ -100,18 +100,21 @@
   changed_when: false
   failed_when: false
 
-- name: Ensure libvirt image directory exists
-  ansible.builtin.file:
-    path: "{{ libvirt_image_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
 - name: Set qemu user and group
   ansible.builtin.set_fact:
     qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
     qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
+
+
+- name: Ensure libvirt image directory exists
+  ansible.builtin.file:
+    path: "{{ libvirt_image_dir }}"
+    state: directory
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
+    mode: "0755"
+
+
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
@@ -126,6 +129,13 @@
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:
     path: /var/lib/libvirt/boot
+    mode: "0755"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
+
+- name: Fix permissions on libvirt dir
+  ansible.builtin.file:
+    path: /var/lib/libvirt
     mode: "0755"
     owner: "{{ qemu_user }}"
     group: "{{ qemu_group }}"
