@@ -33,8 +33,6 @@
         owner: root
         group: root
         mode: "0644"
-      notify:
-        - reload systemd
 
     - name: Copy k3s dependencies drop-in
       ansible.builtin.copy:
@@ -51,8 +49,6 @@
         owner: root
         group: root
         mode: "0644"
-      notify:
-        - reload systemd
 
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
