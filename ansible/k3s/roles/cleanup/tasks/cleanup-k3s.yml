@@ -172,17 +172,15 @@
         state: stopped
         daemon_reload: yes
 
-    - name: Unmask k3s-config-init service for first boot
+    - name: Set k3s-config-init service for first boot
       ansible.builtin.systemd:
         name: k3s-config-init
-        masked: no
         enabled: yes
         state: stopped
 
-    - name: Unmask k3s-cluster-init service for first boot
+    - name: Set k3s-cluster-init service for first boot
       ansible.builtin.systemd:
         name: k3s-cluster-init
-        masked: no
         enabled: yes
         state: stopped
 
