@@ -158,6 +158,7 @@
   when: vm_exists.rc != 0 or no_cache == 'true'  # Only run if VM does not exist
   changed_when: virt_install_result.rc == 0
   failed_when: virt_install_result.rc != 0
+  become_user: "{{ qemu_user }}"
 
 - name: Check if VM is running
   ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
