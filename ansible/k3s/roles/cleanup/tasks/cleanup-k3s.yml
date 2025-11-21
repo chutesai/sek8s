@@ -157,9 +157,9 @@
         removes: /var/lib/rancher/k3s/init-markers
 
     - name: Check if k3s-cluster-init ran
-      ansbile.builtin.stat:
+      ansible.builtin.stat:
         path: /var/log/k3s-cluster-init.log
-        register: cluster_init_log
+      register: cluster_init_log
 
     - name: Debug
       ansible.builtin.debug:
@@ -187,9 +187,9 @@
         state: stopped
 
     - name: Check if k3s-cluster-init ran
-      ansbile.builtin.stat:
+      ansible.builtin.stat:
         path: /var/log/k3s-cluster-init.log
-        register: cluster_init_log
+      register: cluster_init_log
 
     - name: Debug
       ansible.builtin.debug:
