@@ -156,6 +156,22 @@
         cmd: rm -f /var/lib/rancher/k3s/init-markers/*
         removes: /var/lib/rancher/k3s/init-markers
 
+    - name: Check if k3s-cluster-init ran
+      ansbile.builtin.stat:
+        path: /var/log/k3s-cluster-init.log
+        register: cluster_init_log
+
+    - name: Debug
+      ansible.builtin.debug:
+        msg: "Cluster init log exists = {{ cluster_init_log.stat.exists }}"
+
+    - name: Keep k3s enabled but not started
+      ansible.builtin.systemd:
+        name: k3s
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+
     - name: Unmask k3s-config-init service for first boot
       ansible.builtin.systemd:
         name: k3s-config-init
@@ -170,12 +186,14 @@
         enabled: yes
         state: stopped
 
-    - name: Keep k3s enabled but not started
-      ansible.builtin.systemd:
-        name: k3s
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
+    - name: Check if k3s-cluster-init ran
+      ansbile.builtin.stat:
+        path: /var/log/k3s-cluster-init.log
+        register: cluster_init_log
+
+    - name: Debug
+      ansible.builtin.debug:
+        msg: "Cluster init log exists = {{ cluster_init_log.stat.exists }}"
   rescue:
     - name: k3s cleanup failure
       ansible.builtin.debug:
