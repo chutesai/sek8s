@@ -127,6 +127,8 @@
   ansible.builtin.file:
     path: /var/lib/libvirt/boot
     mode: "0755"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
 
 - name: Start temporary VM
   ansible.builtin.command: |
