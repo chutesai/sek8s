@@ -148,15 +148,15 @@
       --ram 3072 \
       --vcpus 2 \
       --disk path="{{ build_img_path }}",format=qcow2 \
+      --disk path=/var/lib/libvirt/boot/tdx-cloudinit.iso,device=cdrom \
       --os-variant ubuntu{{ ubuntu_version }} \
       --virt-type "{{ virt_type }}" \
       --network network=default,mac={{ build_vm_mac }} \
       --graphics vnc,listen=0.0.0.0,port="{{ vnc_port }}" \
       --import \
-      --cloud-init user-data="{{ user_data_file }}" \
       --noautoconsole
   register: virt_install_result
-  when: vm_exists.rc != 0 or no_cache == 'true'  # Only run if VM does not exist
+  when: vm_exists.rc != 0 or no_cache == 'true'
   changed_when: virt_install_result.rc == 0
   failed_when: virt_install_result.rc != 0
 
