@@ -129,6 +129,18 @@
     path: /var/lib/libvirt
     mode: "0755"
 
+- name: Create cloud-init ISO manually
+  ansible.builtin.command:
+    cmd: cloud-localds /var/lib/libvirt/boot/tdx-cloudinit.iso "{{ user_data_file }}"
+  args:
+    creates: /var/lib/libvirt/boot/tdx-cloudinit.iso
+  when: (not build_image.stat.exists) or (no_cache == 'true')
+
+- name: Set cloud-init ISO permissions
+  ansible.builtin.file:
+    path: /var/lib/libvirt/boot/tdx-cloudinit.iso
+    mode: "0644"
+
 - name: Start temporary VM
   ansible.builtin.command: |
     virt-install \
