@@ -3,6 +3,10 @@
   ansible.builtin.include_tasks: cleanup-k3s.yml
   when: inventory_hostname in groups['vm']
 
+- name: Include k3s drop-ins
+  ansible.builtin.include_tasks: k3s-drop-ins.yml
+  when: inventory_hostname in groups['vm']
+
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
   when: inventory_hostname in groups['vm']

@@ -35,7 +35,6 @@
         mode: "0644"
       notify:
         - reload systemd
-        - restart k3s
 
     - name: Copy k3s dependencies drop-in
       ansible.builtin.copy:
@@ -54,7 +53,6 @@
         mode: "0644"
       notify:
         - reload systemd
-        - restart k3s
 
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
