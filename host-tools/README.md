@@ -84,11 +84,6 @@ dmesg | grep -i tdx
 # Expected output should include: [    x.xxxxx] tdx: TDX module initialized
 ```
 
-The setup script also configures the following kernel parameters (verify in `/proc/cmdline`):
-- `intel_iommu=on` - Enable Intel IOMMU
-- `iommu=pt` - Use passthrough mode
-- `kvm_intel.tdx=on` - Enable TDX support
-
 ---
 
 ### Step 2: Register the Platform
@@ -98,7 +93,6 @@ Ensure the platform is registered with Intel according to Intel's [docs](https:/
 Using Indirect Registration as an example
 ```bash
 $ pccs-configure
-...
 # Configure PCCS with your API key and a password
 
 $ systemctl restart pccs
