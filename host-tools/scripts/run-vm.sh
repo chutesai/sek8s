@@ -5,8 +5,8 @@
 # Default values
 IMG="../../guest-tools/image/tdx-guest.qcow2"
 BIOS="../../firmware/TDVF.fd"
-MEM="1536G"
-VCPUS="24"
+MEM="100G"
+VCPUS="32"
 FOREGROUND=false
 PIDFILE="/tmp/tdx-td-pid.pid"
 LOGFILE="/tmp/tdx-guest-td.log"
@@ -41,6 +41,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-port) SSH_PORT="$2"; shift 2 ;;
     --cache-volume) CACHE_VOLUME="$2"; shift 2 ;;
     --config-volume) CONFIG_VOLUME="$2"; shift 2 ;;
+
     --status)
       if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
       fi
       exit 0
       ;;
+
     --clean)
       if [ -f "$PIDFILE" ]; then
         PID=$(cat "$PIDFILE")
@@ -81,6 +83,7 @@ while [[ $# -gt 0 ]]; do
       echo "VM cleaned."
       exit 0
       ;;
+
     --help)
       echo "Usage: $0 [options]"
       echo ""
@@ -90,7 +93,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --net-iface IFACE         Network interface (for tap mode)"
       echo ""
       echo "Optional:"
-      echo "  --cache-volume PATH       Cache volume qcow2 (from create-cache.sh)"
+      echo "  --cache-volume PATH       Cache volume qcow2 (for persistent guest state)"
       echo "  --image PATH              Guest image path"
       echo "  --mem SIZE                Memory size (default: $MEM)"
       echo "  --vcpus NUM               Number of vCPUs (default: $VCPUS)"
@@ -107,14 +110,16 @@ while [[ $# -gt 0 ]]; do
       echo "  $0 --config-volume config.qcow2 --network-type tap --net-iface vmtap0"
       exit 0
       ;;
-    *) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
+
+    *)
+      echo "Unknown option: $1. Use --help for usage."
+      exit 1 ;;
   esac
 done
 
 # Validate required parameters
 if [ -z "$CONFIG_VOLUME" ]; then
   echo "Error: --config-volume is required."
-  echo "Create one with: sudo ./create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway"
   exit 1
 fi
 
@@ -144,7 +149,7 @@ fi
 
 echo "✓ Config volume validated: $CONFIG_VOLUME"
 
-# Validate cache volume if provided
+# Validate cache volume
 if [ -n "$CACHE_VOLUME" ]; then
   if [ ! -f "$CACHE_VOLUME" ]; then
     echo "Error: Cache volume not found: $CACHE_VOLUME"
@@ -153,7 +158,11 @@ if [ -n "$CACHE_VOLUME" ]; then
   echo "✓ Cache volume validated: $CACHE_VOLUME"
 fi
 
-CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
+# =====================================================================
+# CPU and topology
+# =====================================================================
+CPU_OPTS=( -cpu "host,-avx10" -smp "${VCPUS}" )
+
 
 ##############################################################################
 # Device detection
@@ -170,18 +179,16 @@ TOTAL_NVSW=${#NVSW[@]}
 
 echo
 echo "=== Device Detection ==="
-echo "Found NVIDIA devices:"
-echo "  GPUs: ${GPUS[*]:-none} (count: $TOTAL_GPUS)"
-echo "  NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
+echo "GPUs: ${GPUS[*]:-none} (count: $TOTAL_GPUS)"
+echo "NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
 echo
 
-# Network configuration
+
+##############################################################################
+# 1. Network and virtio devices (must come FIRST) — FIX #4
+##############################################################################
 DEV_OPTS=()
 if [ "$NETWORK_TYPE" = "tap" ]; then
-  if [ -z "$NET_IFACE" ]; then
-    echo "Error: --net-iface must be specified for tap."
-    exit 1
-  fi
   DEV_OPTS+=(
     -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
     -device virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56
@@ -193,98 +200,98 @@ elif [ "$NETWORK_TYPE" = "user" ]; then
   )
 fi
 
-##############################################################################
-# 2. build dynamic -device list
-##############################################################################
-DEV_OPTS+=(
-  -device vhost-vsock-pci,guest-cid=3
-)
-
-# GPU passthrough
-port=16 slot=0x3 func=0
-
-for i in "${!GPUS[@]}"; do
-  id="rp$((i+1))" chassis=$((i+1))
-  if ((func==0)); then
-    DEV_OPTS+=(
-      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
-bus=pcie.0,multifunction=on,addr=$(printf 0x%x "$slot")
-    )
-  else
-    DEV_OPTS+=(
-      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
-bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func")
-    )
-  fi
-  
-  # GPU passthrough
-  DEV_OPTS+=( -device vfio-pci,host=${GPUS[i]},bus=${id},addr=0x0,iommufd=iommufd0 )
-  
-  # Per-GPU 64-bit MMIO window
-  DEV_OPTS+=( -fw_cfg name=opt/ovmf/X-PciMmio64Mb$((i+1)),string=${GPU_MMIO_MB} )
-  
-  echo "GPU $((i+1)): ${GPUS[i]} -> bus=${id}, MMIO64=${GPU_MMIO_MB}MB"
-  
-  ((port++,func++))
-  if ((func==8)); then func=0; ((slot++)); fi
-done
-
-# Add NVSwitch devices
-for j in "${!NVSW[@]}"; do
-  id="rp_nvsw$((j+1))" chassis=$(( ${#GPUS[@]} + j + 1 ))
-  if ((func==0)); then
-    DEV_OPTS+=(
-      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
-bus=pcie.0,multifunction=on,addr=$(printf 0x%x.0x%x "$slot" "$func")
-    )
-  else
-    DEV_OPTS+=(
-      -device pcie-root-port,port=${port},chassis=${chassis},id=${id},\
-bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func")
-    )
-  fi
-  
-  DEV_OPTS+=( -device vfio-pci,host=${NVSW[j]},bus=${id},addr=0x0,iommufd=iommufd0 )
-  
-  echo "NVSwitch $((j+1)): ${NVSW[j]} -> bus=${id}, MMIO64=${NVSWITCH_MMIO_MB}MB"
-  
-  ((port++,func++))
-  if ((func==8)); then func=0; ((slot++)); fi
-done
-
-# Attach config volume as virtio drive
+# Attach config volume before GPUs
 DEV_OPTS+=( -drive file="$CONFIG_VOLUME",if=virtio,format=qcow2,readonly=on )
 
-# Add cache volume if provided
 if [ -n "$CACHE_VOLUME" ]; then
-  echo "Cache volume: $CACHE_VOLUME"
-  echo "  Will be auto mounted at /var/snap by guest verification service"
-  
   DEV_OPTS+=( -drive file="$CACHE_VOLUME",if=virtio,cache=none,format=qcow2 )
 fi
 
+# Attach vsock after virtio and before GPUs
+VSCK_OPTS=(
+  -device vhost-vsock-pci,guest-cid=3
+)
+
+
+##############################################################################
+# 2. GPU & NVSwitch passthrough
+##############################################################################
+port=16
+slot=0x5
+func=0
+
+# GPUs
+for i in "${!GPUS[@]}"; do
+  id="rp$((i+1))"
+  chassis=$((i+1))
+
+  if ((func==0)); then
+    DEV_OPTS+=(
+      -device pcie-root-port,port=$port,chassis=$chassis,id=$id,bus=pcie.0,multifunction=on,addr=$(printf 0x%x $slot)
+    )
+  else
+    DEV_OPTS+=(
+      -device pcie-root-port,port=$port,chassis=$chassis,id=$id,bus=pcie.0,addr=$(printf 0x%x.0x%x $slot $func)
+    )
+  fi
+
+  DEV_OPTS+=(
+    -device vfio-pci,host=${GPUS[i]},bus=$id,addr=0x0,iommufd=iommufd0
+    -fw_cfg name=opt/ovmf/X-PciMmio64Mb$((i+1)),string=$GPU_MMIO_MB
+  )
+
+  ((port++,func++))
+  if ((func==8)); then func=0; ((slot++)); fi
+done
+
+# NVSwitch
+for j in "${!NVSW[@]}"; do
+  id="rp_nvsw$((j+1))"
+  chassis=$((TOTAL_GPUS + j + 1))
+
+  if ((func==0)); then
+    DEV_OPTS+=(
+      -device pcie-root-port,port=$port,chassis=$chassis,id=$id,bus=pcie.0,multifunction=on,addr=$(printf 0x%x.0x%x $slot $func)
+    )
+  else
+    DEV_OPTS+=(
+      -device pcie-root-port,port=$port,chassis=$chassis,id=$id,bus=pcie.0,addr=$(printf 0x%x.0x%x $slot $func)
+    )
+  fi
+
+  DEV_OPTS+=( -device vfio-pci,host=${NVSW[j]},bus=$id,addr=0x0,iommufd=iommufd0 )
+
+  ((port++,func++))
+  if ((func==8)); then func=0; ((slot++)); fi
+done
+
+
+##############################################################################
+# Serial configuration
+##############################################################################
 if [ "$FOREGROUND" = true ]; then
   SERIAL_OPTS=( -serial mon:stdio )
 else
   SERIAL_OPTS=( -serial file:"$LOGFILE" -daemonize -pidfile "$PIDFILE" )
 fi
 
-echo ""
+echo
 echo "=== Starting TEE VM ==="
-echo "Memory: $MEM, vCPUs: $VCPUS"
+echo "Memory: $MEM  |  vCPUs: $VCPUS"
 echo "Network: $NETWORK_TYPE ($NET_IFACE)"
 echo "Config volume: $CONFIG_VOLUME"
-if [ -n "$CACHE_VOLUME" ]; then
-  echo "Cache volume: $CACHE_VOLUME"
-fi
-echo "Manual initialization: Enabled (no cloud-init)"
-echo ""
+echo "Cache volume: ${CACHE_VOLUME:-none}"
+echo
 
-# Launch QEMU
+
+##############################################################################
+# QEMU LAUNCH — Fixes #3, #4, #5 applied
+##############################################################################
 /usr/bin/qemu-system-x86_64 \
+  -name td,process=td,debug-threads=on \
   -accel kvm \
-  -object '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type": "vsock", "cid":"2","port":"4050"}}' \
-  -object memory-backend-memfd,id=ram0,size="$MEM" \
+  -object '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}' \
+  -object memory-backend-ram,id=ram0,size="$MEM" \
   -machine q35,kernel-irqchip=split,confidential-guest-support=tdx,memory-backend=ram0 \
   -m "$MEM" \
   "${CPU_OPTS[@]}" \
@@ -297,10 +304,10 @@ echo ""
   -object iommufd,id=iommufd0 \
   -d int,guest_errors \
   -D /tmp/qemu.log \
-  "${DEV_OPTS[@]}"
+  "${DEV_OPTS[@]}" \
+  "${VSCK_OPTS[@]}"
 
 if [ "$FOREGROUND" = false ]; then
   echo "VM daemonized with PID: $(cat $PIDFILE)"
-  echo "Access: ssh -p $SSH_PORT root@<host_public_ip>"
   echo "Logs: $LOGFILE"
 fi
