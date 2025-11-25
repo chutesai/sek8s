@@ -149,3 +149,14 @@
     group: root
   notify: update initramfs
   register: nvidia_drm_blacklist
+
+- name: Add NVIDIA LKCA preload drop-in
+  copy:
+    dest: /etc/modprobe.d/nvidia-lkca.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Ensures ECDSA/ECDH crypto modules load before nvidia.ko
+      install nvidia /sbin/modprobe ecdsa_generic; /sbin/modprobe ecdh; /sbin/modprobe --ignore-install nvidia
+  notify: update initramfs
