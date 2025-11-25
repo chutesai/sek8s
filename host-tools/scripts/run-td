@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+
+# Canonical TDX run script — minimally extended for:
+#   - config volume
+#   - cache volume
+#   - ssh port override
+#   - TAP networking
+
+import argparse
+import os
+import platform
+import re
+import signal
+import subprocess
+import time
+import sys
+
+file_path = os.path.realpath(os.path.dirname(__file__))
+
+pidfile = '/tmp/tdx-td-pid.pid'
+logfile = '/tmp/tdx-guest-td.log'
+process_name = 'chutes-td'
+
+ubuntu_version = platform.freedesktop_os_release().get('VERSION_ID')
+
+# Default guest image
+if os.environ.get('TD_IMG'):
+    td_img = os.environ.get('TD_IMG')
+else:
+    td_img = f'{file_path}/../../guest-tools/image/tdx-guest.qcow2'
+
+# TDVF MUST NOT be overridden (MRTD depends on it)
+firmware = '/usr/share/ovmf/OVMF.fd'
+
+
+def do_print(ssh_port):
+    try:
+        with open(pidfile) as pid_file:
+            pid = int(pid_file.read())
+            print(f'TDX VM running with PID: {pid}')
+            print(f'Login:')
+            print(f'   ssh -p {ssh_port} tdx@localhost   (default: tdx/123456)')
+            print(f'   ssh -p {ssh_port} root@localhost  (password: 123456)')
+    except:
+        pass
+
+
+def do_clean():
+    print('Clean VM')
+    try:
+        with open(pidfile) as pid_file:
+            pid = int(pid_file.read())
+            os.kill(pid, signal.SIGTERM)
+            time.sleep(3)
+        os.remove(pidfile)
+    except FileNotFoundError:
+        pass
+
+
+def add_vsock(cmd):
+    cmd.extend(['-device', 'vhost-vsock-pci,guest-cid=3'])
+
+
+def detect_nvidia_gpus() -> list[str]:
+    output = subprocess.check_output(["lspci", "-Dn"], stderr=subprocess.STDOUT)
+    devices = []
+    for line in output.decode().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3:
+            addr, class_code, vendor = parts[0], parts[1].rstrip(':'), parts[2]
+            if re.match(r'^(0300|0302)$', class_code) and vendor.startswith('10de:'):
+                devices.append(addr)
+    return sorted(devices)
+
+
+def detect_nvswitches() -> list[str]:
+    output = subprocess.check_output(["lspci", "-Dn"], stderr=subprocess.STDOUT)
+    devices = []
+    for line in output.decode().splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 3:
+            addr, class_code, vendor = parts[0], parts[1].rstrip(':'), parts[2]
+            if class_code == '0680' and vendor.startswith('10de:22a3'):
+                devices.append(addr)
+    return sorted(devices)
+
+
+def prepare_gpus(gpus):
+    gpu_args = ','.join(gpus)
+    setup_cmd = f'sudo {file_path}/../../tdx/gpu-cc/h100/setup-gpus.sh {gpu_args}'
+    print(f'Preparing GPUs: {setup_cmd}')
+    subprocess.check_call(setup_cmd, shell=True, stderr=subprocess.STDOUT)
+
+
+def add_gpu_passthrough(cmd, gpus, nvswitches):
+    if not gpus:
+        return
+
+    print(f'  Detected {len(gpus)} GPUs: {gpus}')
+    print(f'  Detected {len(nvswitches)} NVSwitches: {nvswitches}')
+
+    if len(gpus) == 8 and len(nvswitches) == 4:
+        print('  PPCIe mode: enabled (8 GPUs + 4 NVSwitches)')
+    elif len(gpus) == 8 and len(nvswitches) != 4:
+        print(f'  Warning: 8 GPUs detected but only {len(nvswitches)} NVSwitches (PPCIe requires 4)')
+    elif nvswitches:
+        print(f'  Standard passthrough mode with {len(nvswitches)} NVSwitches')
+
+    prepare_gpus(gpus)
+    cmd.extend(['-object', 'iommufd,id=iommufd0'])
+
+    port = 16
+    slot = 0x5
+    func = 0
+
+    print(f'  Adding {len(gpus)} GPU(s) to PCI topology...')
+    for i, gpu in enumerate(gpus):
+        rp_id = f'rp{i+1}'
+        chassis = i+1
+
+        if func == 0:
+            cmd.extend([
+                '-device',
+                f'pcie-root-port,port={port},chassis={chassis},id={rp_id},'
+                f'bus=pcie.0,multifunction=on,addr={slot:#x}'
+            ])
+        else:
+            cmd.extend([
+                '-device',
+                f'pcie-root-port,port={port},chassis={chassis},id={rp_id},'
+                f'bus=pcie.0,addr={slot:#x}.{func:#x}'
+            ])
+
+        cmd.extend([
+            '-device', f'vfio-pci,host={gpu},bus={rp_id},addr=0x0,iommufd=iommufd0',
+            '-fw_cfg', f'name=opt/ovmf/X-PciMmio64Mb{i+1},string=262144'
+        ])
+
+        port += 1
+        func = (func + 1) % 8
+        if func == 0:
+            slot += 1
+
+    if nvswitches:
+        print(f'  Adding {len(nvswitches)} NVSwitch(es) to PCI topology...')
+
+    for j, nvsw in enumerate(nvswitches):
+        rp_id = f'rp_nvsw{j+1}'
+        chassis = len(gpus) + j + 1
+
+        if func == 0:
+            addr = f'{slot:#x}.{func:#x}'
+            multifunc = 'multifunction=on'
+        else:
+            addr = f'{slot:#x}.{func:#x}'
+            multifunc = None
+
+        cmd.extend([
+            '-device',
+            f'pcie-root-port,port={port},chassis={chassis},id={rp_id},'
+            f'bus=pcie.0,{multifunc+","+("") if multifunc else ""}addr={addr}'
+        ])
+
+        cmd.extend([
+            '-device', f'vfio-pci,host={nvsw},bus={rp_id},addr=0x0,iommufd=iommufd0'
+        ])
+
+        port += 1
+        func = (func + 1) % 8
+        if func == 0:
+            slot += 1
+    print(f'  GPU passthrough configured: {len(gpus)} GPU(s), {len(nvswitches)} NVSwitch(es)')
+
+
+def build_network(cmd, args):
+    """Option A: TAP overrides Canonical networking completely."""
+    if args.network_type == "tap":
+        if not args.net_iface:
+            print("ERROR: --network-type tap requires --net-iface")
+            sys.exit(1)
+
+        print(f"Networking: TAP mode (iface={args.net_iface})")
+        cmd.extend([
+            '-netdev', f'tap,id=n0,ifname={args.net_iface},script=no,downscript=no',
+            '-device', 'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56',
+        ])
+        return
+
+    print("Networking: Canonical user-mode networking")
+    cmd.extend([
+        '-device', 'virtio-net-pci,netdev=nic0_td',
+        '-netdev', f'user,id=nic0_td,hostfwd=tcp::{args.ssh_port}-:22',
+    ])
+
+
+def do_run(img_path, vcpus, mem, pass_gpus, config_volume, cache_volume,
+           ssh_port, foreground, args):
+
+    print(f'Launching TDX VM: {vcpus} vCPUs, {mem} RAM')
+    print(f'Image: {img_path}')
+
+    gpus = detect_nvidia_gpus() if pass_gpus else []
+    nvswitches = detect_nvswitches() if pass_gpus else []
+
+    cpu_args = 'host' if ubuntu_version == '24.04' else 'host,-avx10'
+
+    qemu_cmds = [
+        'qemu-system-x86_64',
+        '-accel', 'kvm',
+        '-m', mem,
+        '-smp', vcpus,
+        '-name', f'{process_name},process={process_name},debug-threads=on',
+        '-cpu', cpu_args,
+        '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
+        '-object', f'memory-backend-ram,id=mem0,size={mem}',
+        '-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0',
+        '-bios', firmware,
+        '-nodefaults',
+        '-vga', 'none',
+    ]
+
+    # Serial logic (canonical restore)
+    if foreground:
+        qemu_cmds.extend(['-nographic', '-serial', 'mon:stdio'])
+    else:
+        qemu_cmds.extend([
+            '-nographic',
+            '-serial', f'file:{logfile}',
+            '-daemonize',
+            '-pidfile', pidfile,
+        ])
+
+    # Boot disk
+    qemu_cmds.extend([
+        '-drive', f'file={img_path},if=none,id=virtio-disk0',
+        '-device', 'virtio-blk-pci,drive=virtio-disk0',
+    ])
+
+    # Networking
+    build_network(qemu_cmds, args)
+
+    # Config + cache volumes
+    if config_volume:
+        qemu_cmds.extend([
+            '-drive', f'file={config_volume},if=virtio,format=qcow2,readonly=on'
+        ])
+    if cache_volume:
+        qemu_cmds.extend([
+            '-drive', f'file={cache_volume},if=virtio,cache=none,format=qcow2'
+        ])
+
+    add_vsock(qemu_cmds)
+
+    if pass_gpus and gpus:
+        add_gpu_passthrough(qemu_cmds, gpus, nvswitches)
+
+    print('Launching QEMU...')
+    subprocess.run(qemu_cmds, stderr=subprocess.STDOUT)
+
+    if not foreground:
+        print(f'Log file: {logfile}')
+    do_print(ssh_port)
+
+
+def run_td(args):
+    try:
+        do_clean()
+    except:
+        pass
+
+    if args.clean:
+        return
+
+    img = args.image if args.image else td_img
+
+    do_run(
+        img_path=img,
+        vcpus=args.vcpus,
+        mem=args.mem,
+        pass_gpus=args.pass_gpus,
+        config_volume=args.config_volume,
+        cache_volume=args.cache_volume,
+        ssh_port=args.ssh_port,
+        foreground=args.foreground,
+        args=args,
+    )
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+
+    # Canonical args
+    parser.add_argument("--image", type=str)
+    parser.add_argument("--vcpus", type=str, default='32')
+    parser.add_argument("--mem", type=str, default='100G')
+    parser.add_argument("--pass-gpus", action='store_true')
+    parser.add_argument("--foreground", action='store_true')
+    parser.add_argument("--clean", action='store_true')
+
+    # Chutes additions
+    parser.add_argument("--config-volume", type=str)
+    parser.add_argument("--cache-volume", type=str)
+    parser.add_argument("--ssh-port", type=int, default=10022)
+
+    # Networking
+    parser.add_argument("--network-type", choices=["tap", "user"], default="user")
+    parser.add_argument("--net-iface", type=str)
+
+    args = parser.parse_args()
+    run_td(args)

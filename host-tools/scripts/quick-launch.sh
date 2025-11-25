@@ -23,13 +23,14 @@ CONFIG_VOLUME=""
 SKIP_BIND="false"
 SKIP_CACHE="false"
 FOREGROUND="false"
-MEMORY="1536G"
+MEMORY="100G"
 VCPUS=24
 GPU_MMIO_MB=262144
 PCI_HOLE_BASE_GB=2048
+SSH_PORT=2222
 
 # --------------------------------------------------------------------
-# Temporary CLI containers (only set when user passes flags)
+# Temporary CLI containers
 # --------------------------------------------------------------------
 CLI_HOSTNAME=""
 CLI_MINER_SS58=""
@@ -48,9 +49,10 @@ CLI_MEMORY=""
 CLI_VCPUS=""
 CLI_GPU_MMIO_MB=""
 CLI_PCI_HOLE_BASE_GB=""
+CLI_SSH_PORT=""
 
 # --------------------------------------------------------------------
-# Parse CLI options (capture only explicit values)
+# Parse CLI options
 # --------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -58,10 +60,7 @@ while [[ $# -gt 0 ]]; do
       CONFIG_FILE="$1"
       shift
       ;;
-    --config)
-      CONFIG_FILE="$2"
-      shift 2
-      ;;
+    --config) CONFIG_FILE="$2"; shift 2 ;;
     --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
     --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
     --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
@@ -79,28 +78,24 @@ while [[ $# -gt 0 ]]; do
     --vcpus) CLI_VCPUS="$2"; shift 2 ;;
     --gpu-mmio-mb) CLI_GPU_MMIO_MB="$2"; shift 2 ;;
     --pci-hole-base-gb) CLI_PCI_HOLE_BASE_GB="$2"; shift 2 ;;
+    --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
 
     --clean)
       echo "=== Cleaning Up TEE VM Environment ==="
-      ./run-vm.sh --clean 2>/dev/null || true
+      ./run-td --clean 2>/dev/null || true
       ./setup-bridge.sh --clean 2>/dev/null || true
       if [ -f "./bind.sh" ]; then
         ./bind.sh --unbind 2>/dev/null || true
       fi
-      echo "Cleanup complete."
       exit 0
       ;;
+
     --template)
-      if [ -f "config.tmpl.yaml" ]; then
-        cp config.tmpl.yaml "config.yaml"
-        echo "Created: config.yaml"
-        echo "Edit this file with your configuration, then run:"
-        echo "  $0 config.yaml"
-      else
-        echo "Error: Template file config.tmpl.yaml not found"
-      fi
+      cp config.tmpl.yaml config.yaml
+      echo "Created config.yaml"
       exit 0
       ;;
+
     --help)
       cat << EOF
 Usage: $0 [config.yaml] [options]
@@ -155,6 +150,7 @@ Examples:
 EOF
       exit 0
       ;;
+
     *)
       echo "Unknown option: $1. Use --help for usage."
       exit 1
@@ -221,6 +217,7 @@ fi
 [[ -n "$CLI_VCPUS" ]] && VCPUS="$CLI_VCPUS"
 [[ -n "$CLI_GPU_MMIO_MB" ]] && GPU_MMIO_MB="$CLI_GPU_MMIO_MB"
 [[ -n "$CLI_PCI_HOLE_BASE_GB" ]] && PCI_HOLE_BASE_GB="$CLI_PCI_HOLE_BASE_GB"
+[[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT" 
 
 # --------------------------------------------------------------------
 # Validate required parameters (must come from YAML or CLI)
@@ -269,27 +266,9 @@ echo "✓ Host IOMMU configuration verified"
 echo "✓ Host TDX enabled"
 echo ""
 
-# --------------------------------------------------------------------
-# Step 1: Bind devices
-# --------------------------------------------------------------------
-if [[ "$SKIP_BIND" != "true" ]]; then
-  echo "Step 1: Binding GPU and NVSwitch devices..."
-  if [ -f "./bind.sh" ]; then
-    if ./bind.sh --bind; then
-      echo "✓ Devices bound"
-    else
-      echo "⚠ Device binding failed"
-    fi
-  else
-    echo "⚠ bind.sh not found, skipping"
-  fi
-else
-  echo "Step 1: Skipping device binding"
-fi
-echo ""
 
 # --------------------------------------------------------------------
-# Step 2: Cache volume
+# Cache volume
 # --------------------------------------------------------------------
 if [[ "$SKIP_CACHE" != "true" ]]; then
   echo "Step 2: Setting up cache volume..."
@@ -302,8 +281,8 @@ if [[ "$SKIP_CACHE" != "true" ]]; then
     else
       echo "Creating cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
       sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" && echo "✓ Cache volume created"
-    fi
   fi
+fi
 else
   echo "Step 2: Skipping cache volume"
   CACHE_VOLUME=""
@@ -311,7 +290,7 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Step 3: Config volume
+# Config volume
 # --------------------------------------------------------------------
 echo "Step 3: Setting up config volume..."
 if [[ -n "$CONFIG_VOLUME" ]] && [[ -f "$CONFIG_VOLUME" ]]; then
@@ -327,14 +306,14 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Step 4: Bridge networking
+# Bridge networking
 # --------------------------------------------------------------------
 echo "Step 4: Setting up bridge networking..."
 BRIDGE_OUTPUT=$(./setup-bridge.sh \
   --bridge-ip "$BRIDGE_IP" \
   --vm-ip "${VM_IP}/24" \
   --vm-dns "$VM_DNS" \
-  --public-iface "$PUBLIC_IFACE" 2>&1)
+  --public-iface "$PUBLIC_IFACE" )
 
 TAP_IFACE=$(echo "$BRIDGE_OUTPUT" | grep "Network interface:" | awk '{print $3}')
 if [[ -z "$TAP_IFACE" ]]; then
@@ -346,33 +325,28 @@ echo "✓ Bridge configured (TAP: $TAP_IFACE)"
 echo ""
 
 # --------------------------------------------------------------------
-# Step 5: Launch VM
+# Launch VM
 # --------------------------------------------------------------------
-echo "Step 5: Launching TEE VM..."
+echo "Launching Chutes VM..."
+
 LAUNCH_ARGS=(
+  --pass-gpus
   --config-volume "$CONFIG_VOLUME"
   --net-iface "$TAP_IFACE"
   --network-type tap
 )
 
-# Add optional arguments
+# Optional args
 [[ -n "$CACHE_VOLUME" ]] && LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 [[ -n "$MEMORY" ]] && LAUNCH_ARGS+=(--mem "$MEMORY")
 [[ -n "$VCPUS" ]] && LAUNCH_ARGS+=(--vcpus "$VCPUS")
-[[ -n "$GPU_MMIO_MB" ]] && LAUNCH_ARGS+=(--gpu-mmio-mb "$GPU_MMIO_MB")
-[[ -n "$PCI_HOLE_BASE_GB" ]] && LAUNCH_ARGS+=(--pci-hole-base-gb "$PCI_HOLE_BASE_GB")
 
-./run-vm.sh "${LAUNCH_ARGS[@]}"
+# Call Python runner
+python3 ./run-td "${LAUNCH_ARGS[@]}"
 
 echo ""
-echo "=== TEE VM Deployed Successfully ==="
+echo "=== Chutes VM Deployed Successfully ==="
 echo ""
-echo "VM: $HOSTNAME ($VM_IP)"
-echo "Access: ssh -p 2222 root@$(curl -s ifconfig.me 2>/dev/null || echo '<host-ip>')"
-echo ""
-echo "Management:"
-echo "  Status: ./run-vm.sh --status"
-echo "  Clean:  $0 --clean"
 
 exit 0

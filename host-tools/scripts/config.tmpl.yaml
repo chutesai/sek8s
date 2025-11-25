@@ -39,7 +39,7 @@ runtime:
 
 # Advanced Options (optional)
 advanced:
-  memory: "1536G"
-  vcpus: 24
+  memory: "100G"
+  vcpus: 32
   gpu_mmio_mb: 262144
   pci_hole_base_gb: 2048
