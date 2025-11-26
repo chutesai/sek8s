@@ -102,14 +102,42 @@
             name: cuda-toolkit-{{ cuda_version }}
             state: present
 
-        - name: Install NVIDIA driver packages
+        - name: Install NVIDIA 580 driver packages
           ansible.builtin.apt:
             name:
-              - nvidia-open-{{nvidia_version}}
-              - nvidia-fabricmanager-{{ nvidia_version }}
+              - libnvidia-cfg1-580=580.82.07-0ubuntu1
+              - libnvidia-common-580=580.82.07-0ubuntu1
+              - libnvidia-compute-580=580.82.07-0ubuntu1
+              - libnvidia-decode-580=580.82.07-0ubuntu1
+              - libnvidia-encode-580=580.82.07-0ubuntu1
+              - libnvidia-extra-580=580.82.07-0ubuntu1
+              - libnvidia-fbc1-580=580.82.07-0ubuntu1
+              - libnvidia-gl-580=580.82.07-0ubuntu1
+              - libnvidia-gpucomp-580=580.82.07-0ubuntu1
+              - nvidia-dkms-580-open=580.82.07-0ubuntu1
+              - nvidia-driver-580-open=580.82.07-0ubuntu1
+              - nvidia-firmware-580=580.82.07-0ubuntu1
+              - nvidia-kernel-common-580=580.82.07-0ubuntu1
+              - nvidia-kernel-source-580-open=580.82.07-0ubuntu1
+              - nvidia-modprobe=580.82.07-0ubuntu1
+              - nvidia-open-580=580.82.07-0ubuntu1
+              - nvidia-persistenced=580.82.07-0ubuntu1
+              - nvidia-settings=580.82.07-0ubuntu1
+              - nvidia-utils-580=580.82.07-0ubuntu1
+              - xserver-xorg-video-nvidia-580=580.82.07-0ubuntu1
             state: present
           register: driver_install
           changed_when: driver_install.changed
+
+        - name: Download Fabric Manager 580
+          ansible.builtin.get_url:
+            url: http://archive.ubuntu.com/ubuntu/pool/multiverse/f/fabric-manager-580/nvidia-fabricmanager-580_580.82.07-0ubuntu1_amd64.deb
+            dest: /tmp/nvidia-fabricmanager-580.deb
+            mode: "0644"
+
+        - name: Install Fabric Manager 580
+          ansible.builtin.apt:
+            deb: /tmp/nvidia-fabricmanager-580.deb
 
         - name: Install NVIDIA Container Toolkit
           ansible.builtin.apt:
