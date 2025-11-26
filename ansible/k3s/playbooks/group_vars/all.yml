@@ -31,7 +31,7 @@ service_cidr: 10.43.0.0/16
 k3s_version: v1.33.1+k3s1
 
 # Ubuntu major/minor version.
-ubuntu_major: "22"
+ubuntu_major: "24"
 ubuntu_minor: "04"
 # CUDA version - leave as-is unless using h200s, in which case either use 12-5 or skip_cuda: true (if provider already pre-installed drivers)
 cuda_version: "13-0"
