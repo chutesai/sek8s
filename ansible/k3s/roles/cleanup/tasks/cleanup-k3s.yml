@@ -42,8 +42,8 @@
           --ignore-daemonsets
           --delete-emptydir-data
           --force
-          --grace-period=30
-          --timeout=120s
+          --grace-period=10
+          --timeout=20s
       environment:
         KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       when: 
