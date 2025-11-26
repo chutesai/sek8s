@@ -2,3 +2,4 @@
 skip_cuda: false # noqa var-naming[no-role-prefix]
 hugepage_size: "1G"
 hugepage_count: 16  # 16 GB reserved — adjust as needed
+blacklist_nvidia_drm: false

@@ -150,6 +150,30 @@
             enabled: true
             masked: false
 
+        - name: Ensure nvidia-persistenced override dir exists
+          ansible.builtin.file:
+            path: /etc/systemd/system/nvidia-persistenced.service.d
+            state: directory
+            mode: '0755'
+
+        - name: Deploy nvidia-persistenced override for UVM persistence
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
+            content: |
+              [Service]
+              ExecStart=
+              ExecStart=/usr/bin/nvidia-persistenced --uvm-persistence-mode --verbose
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Enable and restart nvidia-persistenced
+          ansible.builtin.systemd:
+            name: nvidia-persistenced
+            enabled: true
+            state: restarted
+          register: persistenced_result
+
     - name: Configure file limits
       ansible.builtin.blockinfile:
         path: /etc/security/limits.conf
@@ -176,6 +200,7 @@
     group: root
   notify: update initramfs
   register: nvidia_drm_blacklist
+  when: blacklist_nvidia_drm | default(false) | bool
 
 - name: Add NVIDIA LKCA preload drop-in
   copy:
