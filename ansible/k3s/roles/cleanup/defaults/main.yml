@@ -1,2 +1,4 @@
-ppcie_service_name: nvidia-ppcie.service
 final_img_path: "{{ img_dir }}/tdx-guest.qcow2"
+
+# GPU verification service name
+gpu_verify_service_name: gpu-verify.service

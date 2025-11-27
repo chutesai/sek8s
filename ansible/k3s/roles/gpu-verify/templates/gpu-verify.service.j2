@@ -1,0 +1,15 @@
+[Unit]
+Description=GPU Verification Service
+After=network.target
+ConditionPathExists={{ gpu_verify_script_path }}
+
+[Service]
+Type=oneshot
+ExecStart={{ gpu_verify_script_path }}
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+EnvironmentFile=-{{ gpu_verify_env_file_path }}
+
+[Install]
+WantedBy=multi-user.target

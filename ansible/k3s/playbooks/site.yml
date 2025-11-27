@@ -65,18 +65,18 @@
       ansible.builtin.include_role:
         name: gpu
 
-- name: PPCIe Service
+- name: GPU verification service
   hosts: vm
   become: true
   tags:
-    - ppcie-service
+    - gpu-verify
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Include PPCIe service
+    - name: GPU verification service
       ansible.builtin.include_role:
-        name: ppcie-service
+        name: gpu-verify
 
 - name: Setup Chutes GPU Clusters
   hosts: vm

@@ -1,4 +1,0 @@
-ppcie_script_path: /usr/local/bin/enable-ppcie.sh
-ppcie_service_name: nvidia-ppcie.service
-ppcie_env_file_path: /etc/default/enable-ppcie
-ppcie_debug_mode: false  # Set to true for debug mode

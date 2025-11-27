@@ -1,0 +1,4 @@
+gpu_verify_script_path: /usr/local/bin/gpu-verify.sh
+gpu_verify_service_name: gpu-verify.service
+gpu_verify_env_file_path: /etc/default/gpu-verify
+gpu_verify_debug_mode: false

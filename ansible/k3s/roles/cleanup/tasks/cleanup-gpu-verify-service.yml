@@ -1,7 +1,7 @@
 ---
 - name: Enable PPCIe service
   systemd:
-    name: "{{ ppcie_service_name }}"
+    name: "{{ gpu_verify_service_name | default(ppcie_service_name) }}"
     enabled: yes
     state: stopped
   tags: service

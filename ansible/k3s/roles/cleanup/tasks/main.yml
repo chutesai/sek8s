@@ -11,8 +11,8 @@
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
   when: inventory_hostname in groups['vm']
 
-- name: Cleanup ppcie service
-  ansible.builtin.include_tasks: cleanup-ppcie-service.yml
+- name: Cleanup GPU verification service
+  ansible.builtin.include_tasks: cleanup-gpu-verify-service.yml
   when: inventory_hostname in groups['vm']
 
 - name: Cleanup cloud-init
