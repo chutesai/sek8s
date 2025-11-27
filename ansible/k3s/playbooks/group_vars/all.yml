@@ -37,6 +37,10 @@ ubuntu_minor: "04"
 cuda_version: "13-0"
 # NVIDA GPU drivers - leave as-is unless using h200s, in which case it would be 555
 nvidia_version: "580"
+# NVIDIA package release suffix (minor.patch-release). This is appended to the
+# major `nvidia_version` to form full package versions like
+# "580.82.07-0ubuntu1". Keep this in sync with the package repository.
+nvidia_pkg_release: "82.07-0ubuntu1"
 # Flag to skip the cuda install entirely, if the provider already has cuda 12.x+ installed (note some chutes will not work unless 12.6+)
 skip_cuda: false
 # Flag to enable/disable IPv6. Some hosts may require IPv6 to be on.

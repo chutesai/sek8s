@@ -3,3 +3,12 @@ skip_cuda: false # noqa var-naming[no-role-prefix]
 hugepage_size: "1G"
 hugepage_count: 16  # 16 GB reserved — adjust as needed
 blacklist_nvidia_drm: false
+
+# By default the GPU role actively manages drivers/upgrades when run
+# Set to false to skip package-level driver changes when running against
+# a canonical base image that already contains the expected drivers.
+manage_nvidia_drivers: true
+
+# When true, reboot the VM automatically after a driver upgrade that updates
+# kernel modules. Set to false in test/debug inventory to avoid automatic reboots.
+reboot_on_driver_upgrade: false
