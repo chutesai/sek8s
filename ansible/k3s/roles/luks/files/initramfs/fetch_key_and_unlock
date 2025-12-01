@@ -40,6 +40,7 @@ clear_luks_key() {
 trap clear_luks_key EXIT INT TERM
 
 log_begin_msg "Starting TDX-based disk unlock"
+log_begin_msg "Attestation endpoints: nonce=${NONCE_ENDPOINT}, attest=${API_ENDPOINT}"
 
 # Function to generate self-signed client certificate
 generate_client_cert() {
