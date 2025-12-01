@@ -202,6 +202,12 @@
             mode: '0644'
           when: not persistenced_override.stat.exists
 
+        - name: Reload systemd units after NVIDIA service override
+          ansible.builtin.systemd:
+            daemon_reload: true
+          when:
+            - driver_install is defined and driver_install.changed or not persistenced_override.stat.exists
+
         - name: Enable and restart nvidia-persistenced (only if manage_nvidia_drivers)
           ansible.builtin.systemd:
             name: nvidia-persistenced
