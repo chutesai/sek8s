@@ -28,6 +28,7 @@ VCPUS=24
 GPU_MMIO_MB=262144
 PCI_HOLE_BASE_GB=2048
 SSH_PORT=2222
+NETWORK_TYPE="tap"
 
 # --------------------------------------------------------------------
 # Temporary CLI containers
@@ -50,6 +51,7 @@ CLI_VCPUS=""
 CLI_GPU_MMIO_MB=""
 CLI_PCI_HOLE_BASE_GB=""
 CLI_SSH_PORT=""
+CLI_NETWORK_TYPE=""
 
 # --------------------------------------------------------------------
 # Parse CLI options
@@ -79,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --gpu-mmio-mb) CLI_GPU_MMIO_MB="$2"; shift 2 ;;
     --pci-hole-base-gb) CLI_PCI_HOLE_BASE_GB="$2"; shift 2 ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
+    --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
 
     --clean)
       echo "=== Cleaning Up TEE VM Environment ==="
@@ -131,6 +134,7 @@ Runtime:
   --vcpus N
   --gpu-mmio-mb N
   --pci-hole-base-gb N
+  --network-type [tap|user]
 
 Management:
   --clean                   Clean up everything
@@ -218,6 +222,13 @@ fi
 [[ -n "$CLI_GPU_MMIO_MB" ]] && GPU_MMIO_MB="$CLI_GPU_MMIO_MB"
 [[ -n "$CLI_PCI_HOLE_BASE_GB" ]] && PCI_HOLE_BASE_GB="$CLI_PCI_HOLE_BASE_GB"
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT" 
+[[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
+
+# Validate network type
+if [[ "$NETWORK_TYPE" != "tap" && "$NETWORK_TYPE" != "user" ]]; then
+  echo "Error: --network-type must be 'tap' or 'user'"
+  exit 1
+fi
 
 # --------------------------------------------------------------------
 # Validate required parameters (must come from YAML or CLI)
@@ -246,6 +257,7 @@ echo "Cache: ${SKIP_CACHE:+Skipped}${SKIP_CACHE:-$CACHE_SIZE}"
 echo "Binding: ${SKIP_BIND:+Skipped}${SKIP_BIND:-Enabled}"
 echo "Memory: $MEMORY"
 echo "vCPUs: $VCPUS"
+echo "Network: $NETWORK_TYPE"
 echo ""
 
 # --------------------------------------------------------------------
@@ -308,21 +320,27 @@ echo ""
 # --------------------------------------------------------------------
 # Bridge networking
 # --------------------------------------------------------------------
-echo "Step 4: Setting up bridge networking..."
-BRIDGE_OUTPUT=$(./setup-bridge.sh \
-  --bridge-ip "$BRIDGE_IP" \
-  --vm-ip "${VM_IP}/24" \
-  --vm-dns "$VM_DNS" \
-  --public-iface "$PUBLIC_IFACE" )
+NET_IFACE=""
+if [[ "$NETWORK_TYPE" == "tap" ]]; then
+  echo "Step 4: Setting up bridge networking..."
+  BRIDGE_OUTPUT=$(./setup-bridge.sh \
+    --bridge-ip "$BRIDGE_IP" \
+    --vm-ip "${VM_IP}/24" \
+    --vm-dns "$VM_DNS" \
+    --public-iface "$PUBLIC_IFACE" )
 
-TAP_IFACE=$(echo "$BRIDGE_OUTPUT" | grep "Network interface:" | awk '{print $3}')
-if [[ -z "$TAP_IFACE" ]]; then
-  echo "Error: Failed to extract TAP interface"
-  echo "$BRIDGE_OUTPUT"
-  exit 1
+  NET_IFACE=$(echo "$BRIDGE_OUTPUT" | grep "Network interface:" | awk '{print $3}')
+  if [[ -z "$NET_IFACE" ]]; then
+    echo "Error: Failed to extract TAP interface"
+    echo "$BRIDGE_OUTPUT"
+    exit 1
+  fi
+  echo "✓ Bridge configured (TAP: $NET_IFACE)"
+  echo ""
+else
+  echo "Step 4: Skipping bridge setup (network-type=user)"
+  echo ""
 fi
-echo "✓ Bridge configured (TAP: $TAP_IFACE)"
-echo ""
 
 # --------------------------------------------------------------------
 # Launch VM
@@ -332,9 +350,12 @@ echo "Launching Chutes VM..."
 LAUNCH_ARGS=(
   --pass-gpus
   --config-volume "$CONFIG_VOLUME"
-  --net-iface "$TAP_IFACE"
-  --network-type tap
+  --network-type "$NETWORK_TYPE"
 )
+
+if [[ "$NETWORK_TYPE" == "tap" ]]; then
+  LAUNCH_ARGS+=(--net-iface "$NET_IFACE")
+fi
 
 # Optional args
 [[ -n "$CACHE_VOLUME" ]] && LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
