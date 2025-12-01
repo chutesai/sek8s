@@ -182,6 +182,14 @@
             path: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
           register: persistenced_override
 
+        - name: Ensure nvidia-persistenced override directory is present
+          ansible.builtin.file:
+            path: /etc/systemd/system/nvidia-persistenced.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
         - name: Deploy nvidia-persistenced override for UVM persistence (create only if missing)
           ansible.builtin.copy:
             dest: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
