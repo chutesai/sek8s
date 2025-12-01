@@ -2,8 +2,11 @@ import asyncio
 import json
 import logging
 import re
-from typing import Dict, Optional
+import time
+from typing import Dict, Tuple
 from urllib.parse import urlparse
+
+from cachetools import TTLCache
 
 from sek8s.validators.base import ValidatorBase, ValidationResult
 from sek8s.config import AdmissionConfig, CosignConfig, CosignRegistryConfig, CosignVerificationConfig
@@ -12,12 +15,32 @@ from sek8s.config import AdmissionConfig, CosignConfig, CosignRegistryConfig, Co
 logger = logging.getLogger(__name__)
 
 
+class RateLimitError(Exception):
+    """Raised when upstream registry signals rate limiting."""
+
+
 class CosignValidator(ValidatorBase):
     """Validator that verifies container image signatures using cosign."""
 
     def __init__(self, config: AdmissionConfig):
         super().__init__(config)
         self.cosign_config = CosignConfig()
+        self._result_cache = TTLCache(
+            maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.cache_ttl
+        )
+        self._negative_cache = TTLCache(
+            maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.negative_cache_ttl
+        )
+        self._rate_limit_until = 0.0
+        self._rate_limit_patterns = [
+            re.compile(p, re.IGNORECASE)
+            for p in [
+                r"\brate\s*limit",
+                r"\b429\b",
+                r"too many requests",
+                r"pull rate limit",
+            ]
+        ]
 
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate that all container images have valid cosign signatures."""
@@ -51,7 +74,11 @@ class CosignValidator(ValidatorBase):
 
         # Check each image
         violations = []
+        seen = set()
         for image in images:
+            if image in seen:
+                continue
+            seen.add(image)
             try:
                 # Parse image reference into components
                 registry, org, repo, tag = self._parse_image_reference(image)
@@ -82,6 +109,10 @@ class CosignValidator(ValidatorBase):
                         f"Image {image} has invalid or missing signature (registry: {registry}, org: {org})"
                     )
 
+            except RateLimitError as e:
+                logger.warning(f"Rate limited while verifying {image}: {e}")
+                violations.append(str(e))
+                break  # Avoid hammering upstream during a known backoff window
             except Exception as e:
                 logger.error(f"Error verifying image {image}: {e}")
                 violations.append(f"Verification failed for {image}: {str(e)}")
@@ -156,22 +187,46 @@ class CosignValidator(ValidatorBase):
         self, image: str, verification_config: CosignVerificationConfig
     ) -> bool:
         """Verify image signature using cosign based on verification configuration."""
-        try:
-            logger.debug(f"Verifying image signature for {image=}")
-            # Resolve tag to digest if needed for consistent signature verification
-            resolved_image = await self._resolve_image_reference(image)
+        logger.debug(f"Verifying image signature for {image=}")
 
+        if self._rate_limit_until and time.time() < self._rate_limit_until:
+            raise RateLimitError(
+                f"Cosign verification paused due to upstream rate limiting; retry after "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until))}"
+            )
+
+        resolved_image = await self._resolve_image_reference(image)
+        cache_key = self._make_cache_key(resolved_image, verification_config)
+
+        if cache_key in self._result_cache:
+            logger.debug(f"Cosign cache hit (positive) for {resolved_image}")
+            return True
+        if cache_key in self._negative_cache:
+            logger.debug(f"Cosign cache hit (negative) for {resolved_image}")
+            return False
+
+        try:
             if verification_config.verification_method == "key":
-                return await self._verify_with_key(resolved_image, verification_config)
+                valid = await self._verify_with_key(resolved_image, verification_config)
             elif verification_config.verification_method == "keyless":
-                return await self._verify_keyless(resolved_image, verification_config)
+                valid = await self._verify_keyless(resolved_image, verification_config)
             else:
                 logger.error(f"Unknown verification method: {verification_config.verification_method}")
-                return False
-
+                valid = False
+        except RateLimitError:
+            # propagate so caller can stop hammering upstream
+            raise
         except Exception as e:
             logger.error(f"Exception during cosign verification: {e}")
-            return False
+            valid = False
+
+        # Cache result (success in main cache; failure in short negative cache)
+        if valid:
+            self._result_cache[cache_key] = True
+        else:
+            self._negative_cache[cache_key] = False
+
+        return valid
 
     async def _verify_with_key(self, image: str, verification_config: CosignVerificationConfig) -> bool:
         """Verify image signature using a public key."""
@@ -198,25 +253,22 @@ class CosignValidator(ValidatorBase):
 
                 cmd.append(image)
 
-                logger.debug(f"Running: {' '.join(cmd)}")
+                success, stdout, stderr, rate_limited = await self._run_cosign(cmd)
+                if rate_limited:
+                    self._record_rate_limit()
+                    raise RateLimitError(self._rate_limit_message())
 
-                process = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
-                
-                await process.wait()
-
-                if process.returncode == 0:
-                    result_output = await process.stdout.read()
+                if success:
                     try:
-                        verification_result = json.loads(result_output.decode())
+                        verification_result = json.loads(stdout)
                         logger.debug(f"Verification result: {verification_result}")
                         valid = True
                     except json.JSONDecodeError:
-                        logger.warning(f"Invalid JSON output from cosign verify: {result_output.decode()}")
+                        logger.warning(f"Invalid JSON output from cosign verify: {stdout}")
                 else:
-                    result_output = await process.stderr.read()
-                    logger.error(f"Cosign key verification failed for {image}: {result_output.decode()}")
+                    logger.error(f"Cosign key verification failed for {image}: {stderr or stdout}")
+            except RateLimitError:
+                raise
             except Exception as e:
                 logger.error(f"Exception during key-based verification: {e}")
 
@@ -244,25 +296,24 @@ class CosignValidator(ValidatorBase):
             if verification_config.fulcio_url:
                 cmd.extend(["--fulcio-url", verification_config.fulcio_url])
 
-            logger.debug(f"Running: {' '.join(cmd)}")
+            success, stdout, stderr, rate_limited = await self._run_cosign(cmd)
+            if rate_limited:
+                self._record_rate_limit()
+                raise RateLimitError(self._rate_limit_message())
 
-            process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0:
+            if success:
                 try:
-                    verification_result = json.loads(stdout.decode())
+                    verification_result = json.loads(stdout)
                     return isinstance(verification_result, list) and len(verification_result) > 0
                 except json.JSONDecodeError:
-                    logger.error(f"Invalid JSON output from cosign verify: {stdout.decode()}")
+                    logger.error(f"Invalid JSON output from cosign verify: {stdout}")
                     return False
             else:
-                logger.debug(f"Cosign keyless verification failed for {image}: {stderr.decode()}")
+                logger.debug(f"Cosign keyless verification failed for {image}: {stderr or stdout}")
                 return False
 
+        except RateLimitError:
+            raise
         except Exception as e:
             logger.error(f"Exception during keyless verification: {e}")
             return False
@@ -312,3 +363,49 @@ class CosignValidator(ValidatorBase):
             return "docker.io"
 
         return registry.lower()
+
+    async def _run_cosign(self, cmd: list[str]) -> Tuple[bool, str, str, bool]:
+        """Run cosign command and detect rate limiting."""
+        logger.debug(f"Running: {' '.join(cmd)}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout_bytes, stderr_bytes = await process.communicate()
+        stdout = stdout_bytes.decode()
+        stderr = stderr_bytes.decode()
+        rate_limited = self._is_rate_limited(stdout, stderr)
+        return process.returncode == 0, stdout, stderr, rate_limited
+
+    def _is_rate_limited(self, stdout: str, stderr: str) -> bool:
+        """Check cosign output for rate limit signals."""
+        combined = f"{stdout}\n{stderr}"
+        return any(p.search(combined) for p in self._rate_limit_patterns)
+
+    def _record_rate_limit(self):
+        """Back off for a configured period after a rate-limit signal."""
+        self._rate_limit_until = time.time() + self.cosign_config.rate_limit_backoff_seconds
+
+    def _rate_limit_message(self) -> str:
+        """Human-friendly rate limit message."""
+        if not self._rate_limit_until:
+            return "Cosign verification rate limited by upstream registry"
+        return (
+            "Cosign verification rate limited by upstream registry; retry after "
+            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until))}"
+        )
+
+    def _make_cache_key(
+        self, resolved_image: str, verification_config: CosignVerificationConfig
+    ) -> tuple:
+        """Create a cache key that accounts for image digest and verification config."""
+        return (
+            resolved_image,
+            verification_config.verification_method,
+            str(verification_config.public_key) if verification_config.public_key else None,
+            verification_config.keyless_identity_regex,
+            verification_config.keyless_issuer,
+            verification_config.rekor_url,
+            verification_config.fulcio_url,
+            verification_config.allow_http,
+            verification_config.allow_insecure,
+        )

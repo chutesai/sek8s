@@ -5,13 +5,10 @@ Phase 4a - Basic Python + OPA
 """
 
 import asyncio
-import json
 import logging
 import time
 from typing import Dict, List
 
-from aiohttp import web
-from cachetools import TTLCache
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -41,9 +38,6 @@ class AdmissionController:
         self.validators: List[ValidatorBase] = []
         self._init_validators()
 
-        # Cache for admission decisions (TTL 5 minutes)
-        self.decision_cache = TTLCache(maxsize=1000, ttl=300)
-
         logger.info("Admission controller initialized with %d validators", len(self.validators))
 
     def _init_validators(self):
@@ -57,26 +51,6 @@ class AdmissionController:
         self.validators.append(CosignValidator(self.config))
 
         logger.info("Initialized validators: %s", [v.__class__.__name__ for v in self.validators])
-
-    def _get_cache_key(self, admission_review: Dict) -> str:
-        """Generate cache key for admission review."""
-        request = admission_review.get("request", {})
-
-        # Create deterministic cache key from important fields
-        key_parts = [
-            request.get("uid", ""),
-            request.get("kind", {}).get("kind", ""),
-            request.get("namespace", ""),
-            request.get("name", ""),
-            request.get("operation", ""),
-        ]
-
-        # Add resource generation for updates
-        if request.get("operation") == "UPDATE":
-            obj = request.get("object", {})
-            key_parts.append(str(obj.get("metadata", {}).get("generation", "")))
-
-        return "|".join(key_parts)
 
     async def validate_admission(self, admission_review: Dict) -> Dict:
         """
@@ -100,13 +74,6 @@ class AdmissionController:
         )
 
         try:
-            # Check cache
-            cache_key = self._get_cache_key(admission_review)
-            if cache_key in self.decision_cache:
-                logger.debug("Cache hit for request %s", uid)
-                self.metrics.record_cache_hit()
-                return self.decision_cache[cache_key]
-
             # Run validators in parallel
             validation_tasks = [
                 validator.validate(admission_review) for validator in self.validators
@@ -148,10 +115,6 @@ class AdmissionController:
             response = self._build_response(
                 uid=uid, allowed=allowed, messages=messages, warnings=warnings
             )
-
-            # Cache successful validations
-            if allowed and self.config.cache_enabled:
-                self.decision_cache[cache_key] = response
 
             # Record metrics
             elapsed = time.time() - start_time

@@ -277,6 +277,9 @@ class CosignConfig(BaseSettings):
     """Configuration for Cosign integration (Phase 4b)."""
 
     cache_ttl: int = Field(default=3600, ge=0)
+    cache_maxsize: int = Field(default=1024, ge=1)
+    negative_cache_ttl: int = Field(default=300, ge=0)
+    rate_limit_backoff_seconds: int = Field(default=300, ge=0)
 
     # Cosign config
     oidc_identity_regex: str = Field(default="^https://github.com/your-org/.*")
