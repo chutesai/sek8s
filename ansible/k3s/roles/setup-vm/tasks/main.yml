@@ -1,7 +1,0 @@
-- name: Setup boot scripts
-  include_tasks: setup-boot-scripts.yml
-  tags: setup-boot-scripts
-
-- name: Setup network
-  include_tasks: setup-network.yml
-  tags: setup-network
