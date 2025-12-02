@@ -31,24 +31,26 @@ Internet ←→ Public Interface ←→ Bridge ←→ TAP ←→ TDX VM
 For those familiar with the setup, here's the complete sequence:
 ```bash
 # 1. Setup TDX host (one-time)
+# Edit setup-tdx-config
+nano tdx/setup-tdx-config
+TDX_SETUP_ATTESTATION=1
 cd tdx/setup-tdx-host && sudo ./setup-tdx-host.sh && sudo reboot
 
-# 2. Clone NVIDIA GPU admin tools (one-time)
-git clone https://github.com/NVIDIA/gpu-admin-tools
+# 2. Configure PCCS
+pccs-configure
 
-# 3. Enable PPCIe mode for all GPUs (after each host reboot)
-cd gpu-admin-tools
-for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
-    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
-done
+# 3. Prepare GPUs (vfio)
+cd host-tools/scripts
+sudo ./bind.sh   # binds all NVIDIA GPU/NVSwitch IOMMU groups to vfio-pci
+# quick-launch will also run tdx/gpu-cc/h100/setup-gpus.sh and detach devices
+# (first run clones NVIDIA nvtrust from GitHub)
 
 # 4. Create configuration from template
-cd host-tools/scripts
 ./quick-launch.sh --template
 # Edit config.yaml with your settings
 
-# 5. Launch VM
-./quick-launch.sh config.yaml
+# 5. Launch VM (GPU prep runs every launch; --skip-bind is not wired)
+./quick-launch.sh config.yaml [--miner-ss58 <ss58>] [--miner-seed <seed>(no 0x prefix)]
 ```
 
 ---
@@ -108,60 +110,42 @@ Warning: platform manifest is not available or current platform is not multi-pac
 the data has been sent to cache server successfully
 ```
 
-### Step 3: Install NVIDIA GPU Admin Tools
+**NOTE**
+Obtain your Intel API Key from their portal:
+https://api.portal.trustedservices.intel.com/
+
+### Step 3: Bind devices
 
 Clone the NVIDIA GPU administration toolkit (one-time setup):
 ```bash
-cd ~
-git clone https://github.com/NVIDIA/gpu-admin-tools
-cd gpu-admin-tools
+cd host-tools/scripts
+./bind.sh
 ```
-
-This toolkit provides `nvidia_gpu_tools.py` for managing GPU confidential computing modes.
 
 ---
-
-### Step 4: Enable PPCIe Mode for NVIDIA GPUs
-
-Configure all GPUs and NVSwitches to run in PPCIe (Protected PCIe) mode. This step must be performed after each host reboot.
-```bash
-cd ~/gpu-admin-tools
-
-# First, ensure CC mode is disabled on all devices
-for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
-    sudo python3 ./nvidia_gpu_tools.py --set-cc-mode=off --reset-after-cc-mode-switch --gpu=$i
-done
-
-# Then enable PPCIe mode on all devices (GPUs and NVSwitches)
-for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
-    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
-done
-```
 
 **Important Notes:**
 - PPCIe mode persists across VM launches but NOT across host reboots
 - You can safely ignore errors about NVSwitch devices not supporting CC mode
+- quick-launch always runs `tdx/gpu-cc/h100/setup-gpus.sh` (nvtrust clone required); `--skip-bind` is currently a no-op
 - Individual GPU selection: Replace `--gpu=$i` with `--gpu-bdf=xx:00.0` for specific devices
-
-**Mode Reference:**
-- `on` - Full Confidential Computing mode (single GPU only)
-- `devtools` - Development mode with debugging enabled
-- `off` - Normal operation (no protection)
-- PPCIe mode - Protected PCIe for multi-GPU passthrough (our use case)
 
 ---
 
-### Step 5: Download the VM Image
+### Step 4: Download the VM Image
 
-Download the prebuilt VM image from R2
+Download the prebuilt VM image from R2 to the name the scripts expect:
 ```bash
 cd guest-tools/image
 curl -O https://vm.chutes.ai/tdx-guest.qcow2
 ```
 
+The repo also carries `tdx-guest-ubuntu-24.04.qcow2`; point `TD_IMG` to it or
+symlink it if you prefer that build.
+
 ---
 
-### Step 6: Create Configuration File
+### Step 5: Create Configuration File
 
 Navigate to the scripts directory and create your configuration from the template:
 ```bash
@@ -202,12 +186,12 @@ devices:
 
 # Runtime Configuration
 runtime:
-  foreground: false  # Set to true for foreground mode
+  foreground: false  # Set to true for foreground mode (Ignored for prod image)
 
-# Advanced Options (optional)
+# Advanced Options (leave defaults here)
 advanced:
-  memory: "1536G"
-  vcpus: 24
+  memory: "100G"
+  vcpus: 32
   gpu_mmio_mb: 262144
   pci_hole_base_gb: 2048
 ```
@@ -227,7 +211,7 @@ advanced:
 
 ---
 
-### Step 7: Launch the VM
+### Step 6: Launch the VM
 
 With your configuration file ready, launch the VM:
 ```bash
@@ -235,15 +219,15 @@ With your configuration file ready, launch the VM:
 ```
 
 The script will automatically:
-1. **Validate host configuration** - Check for required kernel parameters
-2. **Reset and bind GPUs** - Prepare GPUs for passthrough using VFIO-PCI
+1. **Validate host configuration** - Currently checks for `kvm_intel.tdx=1`
+2. **Prepare GPUs** - Uses `tdx/gpu-cc/h100/setup-gpus.sh` (runs every launch; not skippable)
 3. **Create cache volume** - Set up container storage (if not existing)
 4. **Create config volume** - Package credentials and network config
 5. **Setup bridge networking** - Configure isolated network with NAT
 6. **Launch TDX VM** - Start the VM with all components
 
 **What happens during launch:**
-- Cache volume is created at `cache-<hostname>.qcow2` (if needed)
+- Cache volume is created at `cache-<hostname>.qcow2`
 - Config volume is created at `config-<hostname>.qcow2` (always fresh)
 - Bridge network `br0` is configured with TAP interface
 - NAT rules are applied for k3s API (6443) and NodePorts (30000-32767)
@@ -255,8 +239,10 @@ The script will automatically:
 
 ### Check VM Status
 ```bash
-./quick-launch.sh config.yaml --status
-# Or directly:
+# quick-launch does not expose --status; check the PID manually
+cat /tmp/tdx-td-pid.pid && ps -p $(cat /tmp/tdx-td-pid.pid)
+
+# If you launched with run-vm.sh instead:
 cd host-tools/scripts
 ./run-vm.sh --status
 ```
@@ -282,7 +268,8 @@ This removes:
 - Running VM process
 - Bridge network and TAP interfaces
 - iptables NAT rules
-- VFIO-PCI device bindings
+
+GPU bindings remain; run `sudo ./unbind.sh` if you need to revert vfio-pci bindings.
 
 **Note**: Volume files (cache and config) are NOT deleted during cleanup.
 
@@ -297,9 +284,6 @@ Override configuration file settings via command line:
 # Run in foreground mode
 ./quick-launch.sh config.yaml --foreground
 
-# Skip device binding (GPUs already bound)
-./quick-launch.sh config.yaml --skip-bind
-
 # Use existing cache volume
 ./quick-launch.sh config.yaml --cache-volume /path/to/existing-cache.qcow2
 
@@ -309,6 +293,8 @@ Override configuration file settings via command line:
 # Override VM IP
 ./quick-launch.sh config.yaml --vm-ip 192.168.100.5
 ```
+
+Note: `--skip-bind` exists as a flag but is not wired up; GPU prep always runs.
 
 ### Manual Component Management
 
@@ -342,28 +328,19 @@ sudo ./create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dns
 ### Verify Host Configuration
 ```bash
 # Check kernel parameters
-cat /proc/cmdline | grep -E 'intel_iommu|iommu=pt|kvm_intel.tdx'
+cat /proc/cmdline | grep -E 'kvm_intel.tdx'
 
 # Verify TDX module
 dmesg | grep -i tdx
-
-# Check IOMMU groups
-ls -l /sys/kernel/iommu_groups/
 ```
 
 ### Verify GPU Configuration
 ```bash
-# Check PPCIe mode status
-nvidia-smi -q | grep "CC Mode"
-
 # List NVIDIA devices
 lspci -nn -d 10de:
 
 # Check VFIO bindings
 ./show-passthrough-devices.sh
-
-# Verify device reset capability
-ls -l /sys/bus/pci/drivers/vfio-pci/*/reset
 ```
 
 ### Verify Network Configuration
@@ -397,23 +374,6 @@ curl -k https://<host_public_ip>:6443
 
 ### Common Issues
 
-**Issue: "intel_iommu=on not found"**
-```bash
-# Add to /etc/default/grub:
-GRUB_CMDLINE_LINUX="intel_iommu=on iommu=pt kvm_intel.tdx=on"
-sudo update-grub && sudo reboot
-```
-
-**Issue: "GPUs not in PPCIe mode after reboot"**
-```bash
-# PPCIe mode must be re-enabled after each host reboot
-cd ~/gpu-admin-tools
-for i in $(seq 0 $(($(lspci -nn | grep -c "10de") - 1))); do 
-    sudo python3 ./nvidia_gpu_tools.py --set-ppcie-mode=on --reset-after-ppcie-mode-switch --gpu=$i
-done
-```
-
-
 **Issue: "VM fails to start with GPU errors"**
 ```bash
 # Manual reset
@@ -425,6 +385,15 @@ OR
 # Launch again, will auto rebind
 ./quick-launch.sh config.yaml
 ```
+
+**Issue: "GPU appears stuck or unhealthy"**
+```bash
+# Use gpu-admin-tools recovery (no host driver needed and none should be installed)
+git clone https://github.com/NVIDIA/gpu-admin-tools.git  # if not already present
+cd gpu-admin-tools/host_tools/python
+sudo python3 ./nvidia_gpu_tools.py --fix-broken-gpu --gpu-bdf=<bdf>
+```
+Drivers should not be installed on the host; rely on `nvidia_gpu_tools.py` utilities for recovery tasks.
 
 **Issue: "Network not accessible"**
 ```bash
@@ -447,16 +416,17 @@ Once the VM is running:
 
 - **k3s API**: `https://<host_public_ip>:6443`
 - **NodePort Services**: `<host_public_ip>:30000-32767`
-- **SSH** (if enabled): `ssh -p 2222 root@<host_public_ip>`
+- **SSH** (debug image only): `ssh -p 2222 root@<host_public_ip>`
 
-**Note**: Production VMs are typically configured without SSH access. All management is done via k3s API and attestation endpoints.
+**Note**: Production VMs do not have any remote access. All management is done via k3s API and attestation endpoints.
 
 ---
 
 ## File Locations
 
-- **VM Images**: `guest-tools/image/tdx-guest-ubuntu-24.04-final.qcow2`
-- **TDVF Firmware**: `firmware/TDVF.fd`
+- **VM Image (default target)**: `guest-tools/image/tdx-guest.qcow2` (or set `TD_IMG`)
+- **Alternate image shipped**: `guest-tools/image/tdx-guest-ubuntu-24.04.qcow2` (symlink or export `TD_IMG` to use)
+- **Firmware**: `/usr/share/ovmf/OVMF.fd` (run-td) or `firmware/TDVF.fd` (run-vm.sh)
 - **Cache Volumes**: `host-tools/scripts/cache-*.qcow2`
 - **Config Volumes**: `host-tools/scripts/config-*.qcow2`
 - **VM Logs**: `/tmp/tdx-guest-td.log`
@@ -504,18 +474,6 @@ Once the VM is running:
 # Watch serial console in real-time
 tail -f /tmp/tdx-guest-td.log
 ```
-
-### Performance Tuning
-
-Adjust advanced options in `config.yaml`:
-```yaml
-advanced:
-  memory: "1536G"              # Adjust based on workload
-  vcpus: 24                    # Match physical core count
-  gpu_mmio_mb: 262144          # Per-GPU MMIO (256GB default)
-  pci_hole_base_gb: 2048       # Minimum PCI hole size
-```
-
 ---
 
 ## Support and Contribution
