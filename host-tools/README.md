@@ -116,19 +116,11 @@ https://api.portal.trustedservices.intel.com/
 
 ### Step 3: Bind devices
 
-Clone the NVIDIA GPU administration toolkit (one-time setup):
+Manually bind the devices:
 ```bash
 cd host-tools/scripts
 ./bind.sh
 ```
-
----
-
-**Important Notes:**
-- PPCIe mode persists across VM launches but NOT across host reboots
-- You can safely ignore errors about NVSwitch devices not supporting CC mode
-- quick-launch always runs `tdx/gpu-cc/h100/setup-gpus.sh` (nvtrust clone required); `--skip-bind` is currently a no-op
-- Individual GPU selection: Replace `--gpu=$i` with `--gpu-bdf=xx:00.0` for specific devices
 
 ---
 
