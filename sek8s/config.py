@@ -2,13 +2,15 @@
 Configuration management for admission controller using Pydantic v2.
 """
 
-import os
-from typing import List, Optional, Dict, Literal, Any
-from pathlib import Path
-from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 import json
 import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlparse
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -468,8 +470,6 @@ class CosignConfig(BaseSettings):
 
     def _normalize_registry_name(self, registry: str) -> str:
         """Normalize registry name for consistent matching."""
-        from urllib.parse import urlparse
-        
         # Remove protocol if present
         if registry.startswith(("http://", "https://")):
             registry = urlparse(registry).netloc

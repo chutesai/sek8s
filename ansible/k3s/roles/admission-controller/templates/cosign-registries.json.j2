@@ -53,7 +53,7 @@
       "verification_method": "disabled"
     },
     {
-      "registry": "{{ validator }}.localregistry.chutes.ai",
+      "registry": "{{ validator }}.localregistry.chutes.ai:{{ registry_port | default('30500') }}",
       "require_signature": true,
       "verification_method": "key",
       "allow_http": true,
