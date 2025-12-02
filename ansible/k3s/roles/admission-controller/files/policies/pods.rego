@@ -292,6 +292,7 @@ allowed_env_vars := {
     "HF_TOKEN",
     "CUDA_VISIBLE_DEVICES",
     "NVIDIA_VISIBLE_DEVICES",
+    "CHUTES_NVIDIA_DEVICES",
     "PATH",
     "HOME",
     "USER",
