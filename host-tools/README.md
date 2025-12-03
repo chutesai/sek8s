@@ -91,7 +91,7 @@ Ensure the platform is registered with Intel according to Intel's [docs](https:/
 Using Indirect Registration as an example
 ```bash
 $ pccs-configure
-# Configure PCCS with your API key and a password
+# Configure PCCS with your API key and a password, otherwise defaults are fine
 
 $ systemctl restart pccs
 $ sudo PCKIDRetrievalTool \
