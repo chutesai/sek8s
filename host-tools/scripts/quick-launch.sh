@@ -85,9 +85,32 @@ while [[ $# -gt 0 ]]; do
 
     --clean)
       echo "=== Cleaning Up TEE VM Environment ==="
-      ./run-td --clean 2>/dev/null || true
+      # Ensure the Chutes VM is stopped before attempting to unbind passthrough devices.
+      # Some runtimes may take a short moment to release devices, so stop the VM
+      # first and then wait for VM-related processes to exit.
+      if [[ -x "./run-td" ]]; then
+        echo "Stopping Chutes VM (if running)..."
+        ./run-td --clean 2>/dev/null || true
+      fi
+
+      # Give the VM a short window to exit and release devices.
+      echo "Waiting for VM processes to exit before unbinding devices..."
+      for i in {1..15}; do
+        # Look for common VM process names. Adjust pattern if your VM runtime differs.
+        if ! pgrep -f 'qemu-system|qemu-kvm|run-td' >/dev/null 2>&1; then
+          echo "No VM processes found. Proceeding with bridge cleanup and device unbind."
+          break
+        fi
+        echo "VM processes still running; waiting... ($i/15)"
+        sleep 1
+      done
+
+      # Clean up networking/bridge
       ./setup-bridge.sh --clean 2>/dev/null || true
+
+      # Only unbind devices once the VM has stopped (or timeout reached).
       if [ -f "./unbind.sh" ]; then
+        echo "Unbinding passthrough devices..."
         sudo ./unbind.sh 2>/dev/null || true
       fi
       exit 0
