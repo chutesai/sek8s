@@ -87,8 +87,8 @@ while [[ $# -gt 0 ]]; do
       echo "=== Cleaning Up TEE VM Environment ==="
       ./run-td --clean 2>/dev/null || true
       ./setup-bridge.sh --clean 2>/dev/null || true
-      if [ -f "./bind.sh" ]; then
-        ./bind.sh --unbind 2>/dev/null || true
+      if [ -f "./unbind.sh" ]; then
+        sudo ./unbind.sh 2>/dev/null || true
       fi
       exit 0
       ;;
@@ -253,8 +253,8 @@ echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Hostname: $HOSTNAME"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
-echo "Cache: ${SKIP_CACHE:+Skipped}${SKIP_CACHE:-$CACHE_SIZE}"
-echo "Binding: ${SKIP_BIND:+Skipped}${SKIP_BIND:-Enabled}"
+echo "Cache: $([[ "$SKIP_CACHE" == "true" ]] && echo "Skipped" || echo "$CACHE_SIZE")"
+echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Memory: $MEMORY"
 echo "vCPUs: $VCPUS"
 echo "Network: $NETWORK_TYPE"
@@ -278,6 +278,23 @@ echo "✓ Host IOMMU configuration verified"
 echo "✓ Host TDX enabled"
 echo ""
 
+# --------------------------------------------------------------------
+# Bind devices for passthrough
+# --------------------------------------------------------------------
+if [[ "$SKIP_BIND" != "true" ]]; then
+  echo "Step 1: Binding NVIDIA devices to vfio-pci..."
+  if [[ -f "./bind.sh" ]]; then
+    sudo ./bind.sh
+    echo "✓ Device binding complete"
+  else
+    echo "Error: bind.sh not found in $(pwd)"
+    exit 1
+  fi
+else
+  echo "Step 1: Skipping device binding (--skip-bind set)"
+fi
+echo ""
+
 
 # --------------------------------------------------------------------
 # Cache volume
@@ -293,8 +310,8 @@ if [[ "$SKIP_CACHE" != "true" ]]; then
     else
       echo "Creating cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
       sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" && echo "✓ Cache volume created"
+    fi
   fi
-fi
 else
   echo "Step 2: Skipping cache volume"
   CACHE_VOLUME=""
