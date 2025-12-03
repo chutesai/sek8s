@@ -268,3 +268,28 @@
           install nvidia /sbin/modprobe ecdsa_generic; /sbin/modprobe ecdh; /sbin/modprobe --ignore-install nvidia
       notify: update initramfs
       when: not nvidia_lkca_stat.stat.exists
+  
+- name: Add nvidia-tdx systemd unit
+  block:
+    - name: Ensure nvidia-tdx.service is present
+      ansible.builtin.copy:
+        dest: /lib/systemd/system/nvidia-tdx.service
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=TDX H100 setup
+          After=nvidia-persistenced.service
+
+          [Service]
+          ExecStart=nvidia-smi conf-compute -srs 1
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable nvidia-tdx service for first-boot (do not start now)
+      ansible.builtin.systemd:
+        name: nvidia-tdx
+        enabled: true
+        state: stopped
