@@ -279,7 +279,7 @@
         mode: '0644'
         content: |
           [Unit]
-          Description=TDX H100 setup
+          Description=TDX GPU setup
           After=nvidia-persistenced.service
 
           [Service]
