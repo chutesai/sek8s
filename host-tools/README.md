@@ -39,17 +39,13 @@ cd tdx/setup-tdx-host && sudo ./setup-tdx-host.sh && sudo reboot
 # 2. Configure PCCS
 pccs-configure
 
-# 3. Prepare GPUs (vfio)
-cd host-tools/scripts
-sudo ./bind.sh   # binds all NVIDIA GPU/NVSwitch IOMMU groups to vfio-pci
-# quick-launch will also run tdx/gpu-cc/h100/setup-gpus.sh and detach devices
-# (first run clones NVIDIA nvtrust from GitHub)
+# 3. Download guest image (see Step 3 below)
 
 # 4. Create configuration from template
 ./quick-launch.sh --template
 # Edit config.yaml with your settings
 
-# 5. Launch VM (GPU prep runs every launch; --skip-bind is not wired)
+# 5. Launch VM (GPU binding + prep run automatically unless --skip-bind)
 ./quick-launch.sh config.yaml [--miner-ss58 <ss58>] [--miner-seed <seed>(no 0x prefix)]
 ```
 
@@ -114,17 +110,7 @@ the data has been sent to cache server successfully
 Obtain your Intel API Key from their portal:
 https://api.portal.trustedservices.intel.com/
 
-### Step 3: Bind devices
-
-Manually bind the devices:
-```bash
-cd host-tools/scripts
-./bind.sh
-```
-
----
-
-### Step 4: Download the VM Image
+### Step 3: Download the VM Image
 
 Download the prebuilt VM image from R2 to the name the scripts expect:
 ```bash
@@ -132,12 +118,9 @@ cd guest-tools/image
 curl -O https://vm.chutes.ai/tdx-guest.qcow2
 ```
 
-The repo also carries `tdx-guest-ubuntu-24.04.qcow2`; point `TD_IMG` to it or
-symlink it if you prefer that build.
-
 ---
 
-### Step 5: Create Configuration File
+### Step 4: Create Configuration File
 
 Navigate to the scripts directory and create your configuration from the template:
 ```bash
@@ -203,7 +186,7 @@ advanced:
 
 ---
 
-### Step 6: Launch the VM
+### Step 5: Launch the VM
 
 With your configuration file ready, launch the VM:
 ```bash
@@ -212,11 +195,12 @@ With your configuration file ready, launch the VM:
 
 The script will automatically:
 1. **Validate host configuration** - Currently checks for `kvm_intel.tdx=1`
-2. **Prepare GPUs** - Uses `tdx/gpu-cc/h100/setup-gpus.sh` (runs every launch; not skippable)
-3. **Create cache volume** - Set up container storage (if not existing)
-4. **Create config volume** - Package credentials and network config
-5. **Setup bridge networking** - Configure isolated network with NAT
-6. **Launch TDX VM** - Start the VM with all components
+2. **Bind NVIDIA devices** - Runs `bind.sh` to attach GPUs/NVSwitch to `vfio-pci` (skip with `--skip-bind`)
+3. **Prepare GPUs** - `run-td` invokes `tdx/gpu-cc/h100/setup-gpus.sh` to configure PPCIe/CC settings on each launch
+4. **Create cache volume** - Set up container storage (if not existing)
+5. **Create config volume** - Package credentials and network config
+6. **Setup bridge networking** - Configure isolated network with NAT
+7. **Launch TDX VM** - Start the VM with all components
 
 **What happens during launch:**
 - Cache volume is created at `cache-<hostname>.qcow2`
@@ -261,7 +245,7 @@ This removes:
 - Bridge network and TAP interfaces
 - iptables NAT rules
 
-GPU bindings remain; run `sudo ./unbind.sh` if you need to revert vfio-pci bindings.
+GPU bindings are also reverted via `unbind.sh`; rerun `bind.sh` if you need to reattach without launching.
 
 **Note**: Volume files (cache and config) are NOT deleted during cleanup.
 
@@ -286,7 +270,7 @@ Override configuration file settings via command line:
 ./quick-launch.sh config.yaml --vm-ip 192.168.100.5
 ```
 
-Note: `--skip-bind` exists as a flag but is not wired up; GPU prep always runs.
+Note: `--skip-bind` skips binding GPUs to `vfio-pci` during launch.
 
 ### Manual Component Management
 
