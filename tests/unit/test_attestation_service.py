@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -50,9 +52,25 @@ def attestation_client(monkeypatch, sample_devices):
 
     provider = FakeGpuDeviceProvider(sample_devices)
 
+    tdx_provider = MagicMock()
+    tdx_provider.get_quote = AsyncMock(return_value=b"fake-quote")
+
+    nvtrust_provider = MagicMock()
+    nvtrust_provider.__enter__.return_value = nvtrust_provider
+    nvtrust_provider.__exit__.return_value = False
+    nvtrust_provider.get_evidence = AsyncMock(return_value='[{"evidence": "ok"}]')
+
     monkeypatch.setattr(
         "sek8s.services.attestation.GpuDeviceProvider",
         lambda: provider,
+    )
+    monkeypatch.setattr(
+        "sek8s.services.attestation.TdxQuoteProvider",
+        lambda: tdx_provider,
+    )
+    monkeypatch.setattr(
+        "sek8s.services.attestation.NvEvidenceProvider",
+        lambda: nvtrust_provider,
     )
 
     config = AttestationServiceConfig(
@@ -62,7 +80,11 @@ def attestation_client(monkeypatch, sample_devices):
         client_ca_path=None,
     )
     server = AttestationServer(config)
-    return TestClient(server.app)
+    client = TestClient(server.app)
+    client.gpu_provider = provider
+    client.tdx_provider = tdx_provider
+    client.nvtrust_provider = nvtrust_provider
+    return client
 
 
 def test_get_devices_with_repeated_query_params(attestation_client):
@@ -101,3 +123,49 @@ def test_get_devices_with_comma_separated_gpu_ids(attestation_client):
         "d52bd15208478ba8ca49e07ec1f002e6",
         "d1cddac2cd1195eedcfe291ce243bf32",
     }
+
+
+def test_attest_with_comma_separated_gpu_ids(attestation_client):
+    nonce = "a" * 64
+    response = attestation_client.get(
+        "/attest",
+        params={
+            "nonce": nonce,
+            "gpu_ids": "GPU-1,GPU-2",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["tdx_quote"] == "ZmFrZS1xdW90ZQ=="  # base64 of fake quote
+    assert (
+        data["nvtrust_evidence"]
+        == attestation_client.nvtrust_provider.get_evidence.return_value
+    )
+
+    attestation_client.tdx_provider.get_quote.assert_awaited_once_with(nonce)
+    attestation_client.nvtrust_provider.get_evidence.assert_awaited_once_with(
+        "test-node",
+        nonce,
+        ["GPU-1", "GPU-2"],
+    )
+
+
+def test_nvtrust_endpoint_with_comma_separated_gpu_ids(attestation_client):
+    response = attestation_client.get(
+        "/nvtrust/evidence",
+        params={
+            "name": "custom-node",
+            "nonce": "123",
+            "gpu_ids": "GPU-a,GPU-b",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == attestation_client.nvtrust_provider.get_evidence.return_value
+
+    attestation_client.nvtrust_provider.get_evidence.assert_awaited_once_with(
+        "custom-node",
+        "123",
+        ["GPU-a", "GPU-b"],
+    )

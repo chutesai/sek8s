@@ -12,6 +12,24 @@ from sek8s.providers.tdx import TdxQuoteProvider
 from sek8s.responses import AttestationResponse
 from sek8s.server import WebServer
 
+from typing import Optional
+
+def _normalize_gpu_ids(gpu_ids: Optional[list[str]]) -> Optional[list[str]]:
+    """Expand comma-separated values so both repeated and CSV params work."""
+    if not gpu_ids:
+        return None
+
+    normalized: list[str] = []
+    for raw_value in gpu_ids:
+        if not raw_value:
+            continue
+        normalized.extend(
+            [value.strip() for value in raw_value.split(",") if value and value.strip()]
+        )
+
+    return normalized or None
+
+
 class AttestationServer(WebServer):
     """Async web server for admission webhook."""
 
@@ -38,6 +56,7 @@ class AttestationServer(WebServer):
         )
     ):
         try:
+            gpu_ids = _normalize_gpu_ids(gpu_ids)
             tdx_provider = TdxQuoteProvider()
             with NvEvidenceProvider() as nvtrust_provider:
                 quote_content = await tdx_provider.get_quote(nonce)
@@ -68,6 +87,7 @@ class AttestationServer(WebServer):
         )
     ) -> list[DeviceInfo]:
         try:
+            gpu_ids = _normalize_gpu_ids(gpu_ids)
             gpu_provider = GpuDeviceProvider()
             device_info = gpu_provider.get_device_info(gpu_ids)
 
@@ -114,6 +134,7 @@ class AttestationServer(WebServer):
         )
     ):
         try:
+            gpu_ids = _normalize_gpu_ids(gpu_ids)
             with NvEvidenceProvider() as provider:
                 evidence = await provider.get_evidence(name, nonce, gpu_ids)
 
