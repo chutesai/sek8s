@@ -155,59 +155,6 @@ deny contains msg if {
 }
 
 # =============================================================================
-# REGISTRY RESTRICTIONS (redundant with Python validator but good for defense in depth)
-# =============================================================================
-
-# deny contains msg if {
-#     helpers.is_pod_resource
-#     not helpers.is_system_namespace
-    
-#     # Check images in Pod containers
-#     input.request.kind.kind == "Pod"
-#     container := input.request.object.spec.containers[_]
-#     not is_allowed_registry(container.image)
-#     msg := sprintf("Container image '%s' from disallowed registry", [container.image])
-# }
-
-# # Check if image is from allowed registry
-# is_allowed_registry(image) if {
-#     registry := extract_registry(image)
-#     registry in input.allowed_registries
-# }
-
-# # Default allow for images without registry (docker.io)
-# is_allowed_registry(image) if {
-#     not contains(image, "/")
-#     "docker.io" in input.allowed_registries
-# }
-
-# # Extract registry from image
-# extract_registry(image) := registry if {
-#     contains(image, "/")
-#     parts := split(image, "/")
-#     contains(parts[0], ".")
-#     registry := parts[0]
-# }
-
-# extract_registry(image) := registry if {
-#     contains(image, "/")
-#     parts := split(image, "/")
-#     contains(parts[0], ":")
-#     registry := parts[0]
-# }
-
-# extract_registry(image) := "docker.io" if {
-#     not contains(image, "/")
-# }
-
-# extract_registry(image) := "docker.io" if {
-#     contains(image, "/")
-#     parts := split(image, "/")
-#     not contains(parts[0], ".")
-#     not contains(parts[0], ":")
-# }
-
-# =============================================================================
 # RESOURCE LIMITS
 # =============================================================================
 
@@ -232,30 +179,6 @@ deny contains msg if {
     container.resources.limits
     not container.resources.limits.memory
     msg := sprintf("Container '%s' missing memory limit", [container.name])
-}
-
-deny contains msg if {
-    helpers.is_pod_resource
-    not helpers.is_system_namespace
-    
-    # Check for excessive CPU requests
-    input.request.kind.kind == "Pod"
-    container := input.request.object.spec.containers[_]
-    container.resources.requests.cpu
-    cpu_value := parse_cpu(container.resources.requests.cpu)
-    cpu_value > 8000  # 8 CPUs in millicores
-    msg := sprintf("Container '%s' requests excessive CPU: %s", [container.name, container.resources.requests.cpu])
-}
-
-# Helper to parse CPU values (simplified)
-parse_cpu(cpu_str) := value if {
-    endswith(cpu_str, "m")
-    value := to_number(trim_suffix(cpu_str, "m"))
-}
-
-parse_cpu(cpu_str) := value if {
-    not endswith(cpu_str, "m")
-    value := to_number(cpu_str) * 1000
 }
 
 # =============================================================================
