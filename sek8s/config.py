@@ -74,6 +74,32 @@ class AttestationServiceConfig(ServerConfig):
         extra='ignore'
     )
 
+
+class SystemInspectorConfig(ServerConfig):
+    """Configuration for the read-only system inspector service."""
+
+    max_output_bytes: int = Field(default=16_384, alias="MAX_OUTPUT_BYTES", ge=1024, le=1_000_000)
+    command_timeout_seconds: float = Field(
+        default=10.0,
+        alias="COMMAND_TIMEOUT_SECONDS",
+        gt=0.0,
+        le=60.0,
+    )
+    log_tail_default: int = Field(default=200, alias="LOG_TAIL_DEFAULT", ge=1, le=5000)
+    log_tail_max: int = Field(default=1000, alias="LOG_TAIL_MAX", ge=100, le=10_000)
+    log_window_max_minutes: int = Field(
+        default=1440,
+        alias="LOG_WINDOW_MAX_MINUTES",
+        ge=1,
+        le=7 * 24 * 60,
+    )
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra='ignore'
+    )
+
 class AttestationProxyConfig(ServerConfig):
 
     _allowed_validators: Optional[list[str]] = None

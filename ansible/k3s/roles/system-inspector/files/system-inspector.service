@@ -1,0 +1,22 @@
+[Unit]
+Description=sek8s System Inspector
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=inspector
+Group=inspector
+WorkingDirectory=/opt/sek8s
+EnvironmentFile=/etc/system-inspector/system-inspector.env
+ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.system_inspector
+Restart=always
+RestartSec=5
+RuntimeDirectory=system-inspector
+RuntimeDirectoryMode=0750
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=system-inspector
+
+[Install]
+WantedBy=multi-user.target

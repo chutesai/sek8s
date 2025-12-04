@@ -1,0 +1,69 @@
+---
+- name: Ensure supplemental groups exist for system inspector
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+    system: yes
+  loop:
+    - systemd-journal
+    - video
+
+- name: Create system inspector user
+  ansible.builtin.user:
+    name: inspector
+    system: yes
+    shell: /usr/sbin/nologin
+    create_home: no
+    groups: "sek8s,systemd-journal,video"
+    append: yes
+    home: /opt/sek8s
+
+- name: Create directories for system inspector
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/system-inspector, owner: root, group: inspector, mode: '0750' }
+    - { path: /var/log/system-inspector, owner: inspector, group: inspector, mode: '0750' }
+
+- name: Deploy environment file
+  ansible.builtin.template:
+    src: system-inspector.env.j2
+    dest: /etc/system-inspector/system-inspector.env
+    owner: root
+    group: inspector
+    mode: '0640'
+
+- name: Install system inspector service
+  ansible.builtin.copy:
+    src: system-inspector.service
+    dest: /etc/systemd/system/system-inspector.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create system inspector drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/system-inspector.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy security drop-in
+  ansible.builtin.copy:
+    src: system-inspector.conf
+    dest: /etc/systemd/system/system-inspector.service.d/10-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start system inspector
+  ansible.builtin.systemd:
+    name: system-inspector.service
+    enabled: yes
+    state: started
+    daemon_reload: yes
