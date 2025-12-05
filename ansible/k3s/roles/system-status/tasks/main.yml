@@ -1,5 +1,5 @@
 ---
-- name: Ensure supplemental groups exist for system inspector
+- name: Ensure supplemental groups exist for system status
   ansible.builtin.group:
     name: "{{ item }}"
     state: present
@@ -8,9 +8,9 @@
     - systemd-journal
     - video
 
-- name: Create system inspector user
+- name: Create system status user
   ansible.builtin.user:
-    name: inspector
+    name: status
     system: yes
     shell: /usr/sbin/nologin
     create_home: no
@@ -18,7 +18,7 @@
     append: yes
     home: /opt/sek8s
 
-- name: Create directories for system inspector
+- name: Create directories for system status service
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -26,28 +26,28 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: /etc/system-inspector, owner: root, group: inspector, mode: '0750' }
-    - { path: /var/log/system-inspector, owner: inspector, group: inspector, mode: '0750' }
+    - { path: /etc/system-status, owner: root, group: status, mode: '0750' }
+    - { path: /var/log/system-status, owner: status, group: status, mode: '0750' }
 
 - name: Deploy environment file
   ansible.builtin.template:
-    src: system-inspector.env.j2
-    dest: /etc/system-inspector/system-inspector.env
+    src: system-status.env.j2
+    dest: /etc/system-status/system-status.env
     owner: root
-    group: inspector
+    group: status
     mode: '0640'
 
-- name: Install system inspector service
+- name: Install system status service
   ansible.builtin.copy:
-    src: system-inspector.service
-    dest: /etc/systemd/system/system-inspector.service
+    src: system-status.service
+    dest: /etc/systemd/system/system-status.service
     owner: root
     group: root
     mode: '0644'
 
-- name: Create system inspector drop-in directory
+- name: Create system status drop-in directory
   ansible.builtin.file:
-    path: /etc/systemd/system/system-inspector.service.d
+    path: /etc/systemd/system/system-status.service.d
     state: directory
     owner: root
     group: root
@@ -55,15 +55,15 @@
 
 - name: Deploy security drop-in
   ansible.builtin.copy:
-    src: system-inspector.conf
-    dest: /etc/systemd/system/system-inspector.service.d/10-security.conf
+    src: system-status.conf
+    dest: /etc/systemd/system/system-status.service.d/10-security.conf
     owner: root
     group: root
     mode: '0644'
 
-- name: Enable and start system inspector
+- name: Enable and start system status
   ansible.builtin.systemd:
-    name: system-inspector.service
+    name: system-status.service
     enabled: yes
     state: started
     daemon_reload: yes

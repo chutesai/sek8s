@@ -75,8 +75,8 @@ class AttestationServiceConfig(ServerConfig):
     )
 
 
-class SystemInspectorConfig(ServerConfig):
-    """Configuration for the read-only system inspector service."""
+class SystemStatusConfig(ServerConfig):
+    """Configuration for the read-only system status service."""
 
     max_output_bytes: int = Field(default=16_384, alias="MAX_OUTPUT_BYTES", ge=1024, le=1_000_000)
     command_timeout_seconds: float = Field(

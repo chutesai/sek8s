@@ -1,4 +1,4 @@
-"""Read-only service exposing curated system state."""
+"""Read-only service exposing curated system status."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException, Query
 from loguru import logger
 
-from sek8s.config import SystemInspectorConfig
+from sek8s.config import SystemStatusConfig
 from sek8s.server import WebServer
 
 
@@ -44,7 +44,7 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
     "k3s": ServiceDefinition(
         service_id="k3s",
         unit="k3s.service",
-        description="Lightweight Kubernetes control plane"
+        description="Lightweight Kubernetes control plane",
     ),
 }
 
@@ -119,10 +119,10 @@ def _ensure_success(result: CommandResult, command_name: str) -> None:
     )
 
 
-class SystemInspectorServer(WebServer):
+class SystemStatusServer(WebServer):
     """FastAPI server exposing read-only system state."""
 
-    def __init__(self, config: SystemInspectorConfig):
+    def __init__(self, config: SystemStatusConfig):
         self.config = config
         super().__init__(config)
 
@@ -262,7 +262,6 @@ class SystemInspectorServer(WebServer):
 
         result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
 
-        # Unlike systemctl/journalctl, we return output even on non-zero exit codes to help debugging
         status_code = 200 if result.exit_code == 0 else 502
         return {
             "command": command,
@@ -283,6 +282,6 @@ class SystemInspectorServer(WebServer):
 
 
 def run() -> None:
-    config = SystemInspectorConfig()
-    server = SystemInspectorServer(config)
+    config = SystemStatusConfig()
+    server = SystemStatusServer(config)
     server.run()

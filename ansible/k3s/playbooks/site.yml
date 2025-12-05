@@ -125,20 +125,20 @@
         apply:
           tags: admission-controller
 
-- name: Setup system inspector
+- name: Setup system status service
   hosts: vm
   become: true
   tags:
-    - system-inspector
+    - system-status
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: System inspector
+    - name: System status
       ansible.builtin.include_role:
-        name: system-inspector
+        name: system-status
         apply:
-          tags: system-inspector
+          tags: system-status
 
 - name: Setup cache volume service
   hosts: vm

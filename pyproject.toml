@@ -44,7 +44,7 @@ build-backend = "poetry.core.masonry.api"
 admission-controller = 'sek8s.serivces.admission_controller:run'
 attestation-service = 'sek8s.services.attestation:run'
 attestation-proxy = 'sek8s.services.attestation_proxy:run'
-system-inspector = 'sek8s.services.system_inspector:run'
+system-status = 'sek8s.services.system_status:run'
 
 [tool.isort]
 profile = "black"
