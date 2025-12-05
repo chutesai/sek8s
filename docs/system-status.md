@@ -11,6 +11,7 @@ The System Status service is a read-only FastAPI endpoint that runs inside the g
 | Service status | Return summarized health derived from `systemctl show` for an allowlisted unit. |
 | Service logs | Tail the latest N log lines (`journalctl -u <unit>`) with optional time window filtering. |
 | GPU telemetry | Surface `nvidia-smi` output in either default (summary) or `-q` (detailed) modes with optional GPU index selection. |
+| Overview summary | Aggregate all service statuses with the latest `nvidia-smi` result to produce an "ok"/"degraded" snapshot. |
 
 Future enhancements (e.g., additional units) must be added explicitly to the allowlist to avoid broadening the attack surface.
 
@@ -33,6 +34,10 @@ All responses are JSON and delivered over HTTPS or a Unix Domain Socket based on
   - `detail=true` swaps the command to `nvidia-smi -q`.
   - `gpu` can be `all` (default) or an integer GPU index; only a single index is accepted to keep the interface deterministic.
   - Output is returned as `{ "stdout": "...", "stderr": "...", "exit_code": <int> }`.
+- `GET /overview`
+  - Collects the status for every allowlisted service plus a default `nvidia-smi` invocation.
+  - Returns `{ "status": "ok" | "degraded", "services": [...], "gpu": {...}, "timestamp": "ISO-8601" }`.
+  - The `status` is `ok` only when every service is loaded/active and `nvidia-smi` exits successfully; otherwise it degrades.
 
 All other paths return 404.
 

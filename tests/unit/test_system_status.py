@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 from sek8s.config import SystemStatusConfig
 from sek8s.services.system_status import (
     CommandResult,
+    SERVICE_ALLOWLIST,
     SystemStatusServer,
 )
 
@@ -73,6 +74,7 @@ def test_service_status_parsing(status_client, fake_runner):
     data = response.json()
     assert data["status"]["active_state"] == "active"
     assert data["status"]["main_pid"] == "1234"
+    assert data["healthy"] is True
     assert fake_runner.commands[-1][0] == "systemctl"
 
 
@@ -117,3 +119,72 @@ def test_nvidia_smi_command_building(status_client, fake_runner):
 def test_unknown_service_returns_404(status_client):
     response = status_client.get("/services/unknown/status")
     assert response.status_code == 404
+
+
+def test_overview_success(status_client, fake_runner):
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=admission-controller.service\n"
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=running\n"
+                "MainPID=1234\n"
+                "ExecMainStatus=0\n"
+                "ExecMainCode=0\n"
+                "UnitFileState=enabled\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+    fake_runner.set_response(
+        "nvidia-smi",
+        CommandResult(
+            exit_code=0,
+            stdout="gpu output",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/overview")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert len(data["services"]) == len(SERVICE_ALLOWLIST)
+    assert all(entry["healthy"] for entry in data["services"])
+    assert data["gpu"]["status"] == "ok"
+
+
+def test_overview_degraded_on_service_failure(status_client, fake_runner):
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=2,
+            stdout="",
+            stderr="boom",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+    fake_runner.set_response(
+        "nvidia-smi",
+        CommandResult(
+            exit_code=0,
+            stdout="gpu output",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/overview")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert any(entry.get("error") for entry in data["services"])

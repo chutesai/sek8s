@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, Query
 from loguru import logger
@@ -144,6 +144,11 @@ class SystemStatusServer(WebServer):
             self.nvidia_smi,
             methods=["GET"],
         )
+        self.app.add_api_route(
+            "/overview",
+            self.overview,
+            methods=["GET"],
+        )
 
     async def health(self) -> Dict[str, str]:
         return {"status": "ok"}
@@ -160,8 +165,36 @@ class SystemStatusServer(WebServer):
             ]
         }
 
+    async def overview(self) -> Dict[str, Any]:
+        services = await asyncio.gather(
+            *(
+                self._collect_service_status(service, tolerate_errors=True)
+                for service in SERVICE_ALLOWLIST.values()
+            )
+        )
+
+        gpu_info = await self.nvidia_smi(detail=False, gpu="all")
+        gpu_healthy = gpu_info.get("status") == "ok"
+        services_healthy = all(entry.get("healthy") for entry in services)
+        overall_status = "ok" if services_healthy and gpu_healthy else "degraded"
+
+        return {
+            "status": overall_status,
+            "services": services,
+            "gpu": gpu_info,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
     async def get_service_status(self, service_id: str) -> Dict[str, object]:
         service = self._resolve_service(service_id)
+        return await self._collect_service_status(service)
+
+    async def _collect_service_status(
+        self,
+        service: ServiceDefinition,
+        *,
+        tolerate_errors: bool = False,
+    ) -> Dict[str, Any]:
         properties = [
             "Id",
             "LoadState",
@@ -179,10 +212,33 @@ class SystemStatusServer(WebServer):
             "--no-pager",
         ] + [f"--property={prop}" for prop in properties]
 
-        result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
-        _ensure_success(result, "systemctl")
+        try:
+            result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
+            _ensure_success(result, "systemctl")
+        except HTTPException as exc:
+            if tolerate_errors:
+                return {
+                    "service": {
+                        "id": service.service_id,
+                        "unit": service.unit,
+                        "description": service.description,
+                    },
+                    "status": None,
+                    "healthy": False,
+                    "error": exc.detail,
+                }
+            raise
 
         data = _parse_key_value(result.stdout)
+        status = {
+            "load_state": data.get("LoadState"),
+            "active_state": data.get("ActiveState"),
+            "sub_state": data.get("SubState"),
+            "unit_file_state": data.get("UnitFileState"),
+            "main_pid": data.get("MainPID"),
+            "exit_code": data.get("ExecMainCode"),
+            "exit_status": data.get("ExecMainStatus"),
+        }
 
         return {
             "service": {
@@ -190,15 +246,8 @@ class SystemStatusServer(WebServer):
                 "unit": service.unit,
                 "description": service.description,
             },
-            "status": {
-                "load_state": data.get("LoadState"),
-                "active_state": data.get("ActiveState"),
-                "sub_state": data.get("SubState"),
-                "unit_file_state": data.get("UnitFileState"),
-                "main_pid": data.get("MainPID"),
-                "exit_code": data.get("ExecMainCode"),
-                "exit_status": data.get("ExecMainStatus"),
-            },
+            "status": status,
+            "healthy": self._is_service_healthy(status),
         }
 
     async def get_service_logs(
@@ -279,6 +328,13 @@ class SystemStatusServer(WebServer):
         if service_id not in SERVICE_ALLOWLIST:
             raise HTTPException(status_code=404, detail="service not allowed")
         return SERVICE_ALLOWLIST[service_id]
+
+    def _is_service_healthy(self, status: Dict[str, Optional[str]]) -> bool:
+        return (
+            status.get("load_state") == "loaded"
+            and status.get("active_state") == "active"
+            and status.get("sub_state") in {"running", "listening", None}
+        )
 
 
 def run() -> None:
