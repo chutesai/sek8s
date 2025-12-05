@@ -19,6 +19,8 @@ Future enhancements (e.g., additional units) must be added explicitly to the all
 
 All responses are JSON and delivered over HTTPS or a Unix Domain Socket based on standard `ServerConfig` parameters.
 
+By default the Ansible role configures the service to listen on `0.0.0.0:8080` inside the guest while still creating a Unix Domain Socket for local consumers. The host bridge script forwards the same TCP port so the status API is reachable from the host network without extra tunneling.
+
 - `GET /health`
   - Returns `{"status": "ok"}` when the service is responsive.
 - `GET /services`
