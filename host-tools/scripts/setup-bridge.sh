@@ -14,6 +14,7 @@ PUBLIC_IFACE="ens9f0np0"
 SSH_PORT=2222
 K3S_API_PORT=6443
 NODE_PORTS="30000:32767"
+STATUS_PORT=8080
 TAP_IFACE="vmtap0"
 BRIDGE_NET="$(echo $BRIDGE_IP | awk -F'[./]' '{printf "%s.%s.%s.0/%s\n",$1,$2,$3,$5}')"
 
@@ -33,6 +34,7 @@ while [[ $# -gt 0 ]]; do
       sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$SSH_PORT" -j DNAT --to-destination "${VM_IP%/*}:22" 2>/dev/null || true
       sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$K3S_API_PORT" -j DNAT --to-destination "${VM_IP%/*}:$K3S_API_PORT" 2>/dev/null || true
       sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}" 2>/dev/null || true
+  sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$STATUS_PORT" -j DNAT --to-destination "${VM_IP%/*}:$STATUS_PORT" 2>/dev/null || true
       sudo iptables -D FORWARD -i "$BRIDGE_NAME" -o "$PUBLIC_IFACE" -j ACCEPT 2>/dev/null || true
       sudo iptables -D FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
       sudo iptables -t nat -D POSTROUTING -s "$BRIDGE_NET" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || true
@@ -118,6 +120,9 @@ sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$K3S_API_P
 
 sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}" 2>/dev/null || \
   sudo iptables -t nat -A PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORTS" -j DNAT --to-destination "${VM_IP%/*}"
+
+sudo iptables -t nat -C PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$STATUS_PORT" -j DNAT --to-destination "${VM_IP%/*}:$STATUS_PORT" 2>/dev/null || \
+  sudo iptables -t nat -A PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$STATUS_PORT" -j DNAT --to-destination "${VM_IP%/*}:$STATUS_PORT"
 
 # Traffic forwarding rules
 sudo iptables -C FORWARD -i "$BRIDGE_NAME" -o "$PUBLIC_IFACE" -j ACCEPT 2>/dev/null || \
