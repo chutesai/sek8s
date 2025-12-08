@@ -53,16 +53,41 @@
         mode: '0644'
         owner: root
         group: root
-      register: mount_unit
+      register: var_snap_mount_unit
+
+    - name: Copy containerd bind mount unit
+      copy:
+        src: "{{ files_dir }}/k3s-containerd.mount"
+        dest: /etc/systemd/system/k3s-containerd.mount
+        mode: '0644'
+        owner: root
+        group: root
+      register: containerd_mount_unit
 
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or mount_unit.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed
 
     - name: Create /var/snap mount point directory
       file:
         path: /var/snap
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create containerd cache directory on /var/snap
+      file:
+        path: /var/snap/containerd
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Ensure containerd mount target exists
+      file:
+        path: /var/lib/rancher/k3s/agent/containerd
         state: directory
         mode: '0755'
         owner: root
@@ -86,6 +111,14 @@
         daemon_reload: yes
       failed_when: false
 
+    - name: Enable containerd bind mount (but do not start)
+      systemd:
+        name: k3s-containerd.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
     - name: Verify installation
       command: systemctl is-enabled verify-cache-volume.service
       register: service_status
@@ -97,3 +130,9 @@
       register: mount_status
       changed_when: false
       failed_when: mount_status.stdout != "enabled"
+
+    - name: Verify containerd mount installation
+      command: systemctl is-enabled k3s-containerd.mount
+      register: containerd_mount_status
+      changed_when: false
+      failed_when: containerd_mount_status.stdout != "enabled"

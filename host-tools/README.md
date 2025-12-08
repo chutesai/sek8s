@@ -201,6 +201,7 @@ The script will automatically:
 
 **What happens during launch:**
 - Cache volume is created at `cache-<hostname>.qcow2`
+- Inside the guest, only the k3s containerd data is bind-mounted to `/var/snap/containerd`, so heavy OCI layers live on the cache volume while secrets remain on the encrypted root disk
 - Config volume is created at `config-<hostname>.qcow2` (always fresh)
 - Bridge network `br0` is configured with TAP interface
 - NAT rules are applied for k3s API (6443) and NodePorts (30000-32767)

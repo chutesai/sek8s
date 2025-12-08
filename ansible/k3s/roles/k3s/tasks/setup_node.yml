@@ -16,7 +16,7 @@
 
     - name: Create K3s data directory
       ansible.builtin.file:
-        path: /var/lib/rancher/k3s
+        path: "{{ k3s_server_location }}"
         state: directory
         mode: "0755"
         owner: root
