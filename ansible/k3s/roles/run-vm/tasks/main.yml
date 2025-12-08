@@ -9,6 +9,7 @@
       - libvirt-daemon-system
       - qemu-utils
       - cryptsetup
+      - cloud-image-utils
     state: present
     update_cache: yes
 
