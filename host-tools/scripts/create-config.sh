@@ -30,6 +30,24 @@ print_info() {
     echo -e "$1"
 }
 
+ensure_parent_directory() {
+    local target_path="$1"
+    local parent_dir
+    parent_dir=$(dirname "$target_path")
+
+    if [[ "$parent_dir" == "." ]] || [[ -z "$parent_dir" ]]; then
+        return 0
+    fi
+
+    if [ ! -d "$parent_dir" ]; then
+        print_info "Creating directory: $parent_dir"
+        if ! mkdir -p "$parent_dir"; then
+            print_error "Failed to create directory: $parent_dir"
+            exit 1
+        fi
+    fi
+}
+
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
@@ -107,6 +125,8 @@ if [ -f "$OUTPUT_PATH" ]; then
     echo "Please remove it first or choose a different path"
     exit 1
 fi
+
+ensure_parent_directory "$OUTPUT_PATH"
 
 # Check for required commands
 for cmd in qemu-img qemu-nbd mkfs.ext4 blkid; do

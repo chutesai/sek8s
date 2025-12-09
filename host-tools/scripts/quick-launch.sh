@@ -324,8 +324,13 @@ echo ""
 # --------------------------------------------------------------------
 if [[ "$SKIP_CACHE" != "true" ]]; then
   echo "Step 2: Setting up cache volume..."
-  if [[ -n "$CACHE_VOLUME" ]] && [[ -f "$CACHE_VOLUME" ]]; then
-    echo "✓ Using existing cache volume: $CACHE_VOLUME"
+  if [[ -n "$CACHE_VOLUME" ]]; then
+    if [[ -f "$CACHE_VOLUME" ]]; then
+      echo "✓ Using existing cache volume: $CACHE_VOLUME"
+    else
+      echo "Creating cache volume at configured path: $CACHE_VOLUME ($CACHE_SIZE)"
+      sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" && echo "✓ Cache volume created"
+    fi
   else
     CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
     if [[ -f "$CACHE_VOLUME" ]]; then
@@ -345,8 +350,14 @@ echo ""
 # Config volume
 # --------------------------------------------------------------------
 echo "Step 3: Setting up config volume..."
-if [[ -n "$CONFIG_VOLUME" ]] && [[ -f "$CONFIG_VOLUME" ]]; then
-  echo "✓ Using existing config volume: $CONFIG_VOLUME"
+if [[ -n "$CONFIG_VOLUME" ]]; then
+  if [[ -f "$CONFIG_VOLUME" ]]; then
+    echo "✓ Using existing config volume: $CONFIG_VOLUME"
+  else
+    echo "Creating config volume at configured path: $CONFIG_VOLUME"
+    sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
+    echo "✓ Config volume created"
+  fi
 else
   CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
   [[ -f "$CONFIG_VOLUME" ]] && sudo rm -f "$CONFIG_VOLUME"
