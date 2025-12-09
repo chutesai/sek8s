@@ -329,7 +329,12 @@ if [[ "$SKIP_CACHE" != "true" ]]; then
       echo "✓ Using existing cache volume: $CACHE_VOLUME"
     else
       echo "Creating cache volume at configured path: $CACHE_VOLUME ($CACHE_SIZE)"
-      sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" && echo "✓ Cache volume created"
+      if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE"; then
+        echo "✓ Cache volume created"
+      else
+        echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
+        exit 1
+      fi
     fi
   else
     CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
@@ -355,16 +360,24 @@ if [[ -n "$CONFIG_VOLUME" ]]; then
     echo "✓ Using existing config volume: $CONFIG_VOLUME"
   else
     echo "Creating config volume at configured path: $CONFIG_VOLUME"
-    sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
-    echo "✓ Config volume created"
+    if sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
+      echo "✓ Config volume created"
+    else
+      echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
+      exit 1
+    fi
   fi
 else
   CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
   [[ -f "$CONFIG_VOLUME" ]] && sudo rm -f "$CONFIG_VOLUME"
 
   echo "Creating config volume: $CONFIG_VOLUME"
-  sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
-  echo "✓ Config volume created"
+  if sudo ./create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
+    echo "✓ Config volume created"
+  else
+    echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
+    exit 1
+  fi
 fi
 echo ""
 

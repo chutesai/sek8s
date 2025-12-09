@@ -35,7 +35,7 @@ ensure_parent_directory() {
     local parent_dir
     parent_dir=$(dirname "$target_path")
 
-    if [[ "$parent_dir" == "." ]] || [[ -z "$parent_dir" ]]; then
+    if [[ -z "$parent_dir" ]] || [[ "$parent_dir" == "." ]]; then
         return 0
     fi
 
