@@ -17,6 +17,7 @@ KillMode=process
 Delegate=yes
 RequiresMountsFor={{ k3s_server_location }}
 RequiresMountsFor=/var/lib/rancher/k3s/agent/containerd
+RequiresMountsFor=/var/lib/chutes/agent
 # Having non-zero Limit*s causes performance problems due to accounting overhead
 # in the kernel. We recommend using cgroups to do container-local accounting.
 LimitNOFILE=1048576

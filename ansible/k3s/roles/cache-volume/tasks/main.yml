@@ -64,10 +64,19 @@
         group: root
       register: containerd_mount_unit
 
+    - name: Copy Chutes agent bind mount unit
+      copy:
+        src: "{{ files_dir }}/chutes-agent.mount"
+        dest: /etc/systemd/system/chutes-agent.mount
+        mode: '0644'
+        owner: root
+        group: root
+      register: chutes_mount_unit
+
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed or chutes_mount_unit.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -85,9 +94,33 @@
         owner: root
         group: root
 
+    - name: Create Chutes agent directory on /var/snap
+      file:
+        path: /var/snap/chutes-agent
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
     - name: Ensure containerd mount target exists
       file:
         path: /var/lib/rancher/k3s/agent/containerd
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Ensure Chutes agent parent directory exists
+      file:
+        path: /var/lib/chutes
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Ensure Chutes agent mount target exists
+      file:
+        path: /var/lib/chutes/agent
         state: directory
         mode: '0755'
         owner: root
@@ -119,6 +152,14 @@
         daemon_reload: yes
       failed_when: false
 
+    - name: Enable Chutes agent bind mount (but do not start)
+      systemd:
+        name: chutes-agent.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
     - name: Verify installation
       command: systemctl is-enabled verify-cache-volume.service
       register: service_status
@@ -136,3 +177,9 @@
       register: containerd_mount_status
       changed_when: false
       failed_when: containerd_mount_status.stdout != "enabled"
+
+    - name: Verify Chutes agent mount installation
+      command: systemctl is-enabled chutes-agent.mount
+      register: chutes_mount_status
+      changed_when: false
+      failed_when: chutes_mount_status.stdout != "enabled"
