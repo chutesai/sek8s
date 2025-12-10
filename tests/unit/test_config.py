@@ -392,6 +392,7 @@ class TestCosignConfig:
                 assert gcr_config.keyless_identity_regex == "^https://github.com/.*"
                 assert gcr_config.keyless_issuer == "https://token.actions.githubusercontent.com"
 
+
     def test_get_registry_config_exact_match(self):
         """Test getting registry config with exact match."""
         registry_configs = [

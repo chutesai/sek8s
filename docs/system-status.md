@@ -19,7 +19,7 @@ Future enhancements (e.g., additional units) must be added explicitly to the all
 
 All responses are JSON and delivered over HTTPS or a Unix Domain Socket based on standard `ServerConfig` parameters.
 
-By default the Ansible role configures the service to listen on `0.0.0.0:8080` inside the guest while still creating a Unix Domain Socket for local consumers. The host bridge script forwards the same TCP port so the status API is reachable from the host network without extra tunneling.
+By default the Ansible role configures the service to listen on `0.0.0.0:8080` inside the guest over HTTP. TLS variables are left blank so operators can supply their own certificates later if needed. The host bridge script forwards TCP/8080 so the status API is reachable from the host network without extra tunneling.
 
 - `GET /health`
   - Returns `{"status": "ok"}` when the service is responsive.
@@ -35,7 +35,7 @@ By default the Ansible role configures the service to listen on `0.0.0.0:8080` i
   - Executes `nvidia-smi`.
   - `detail=true` swaps the command to `nvidia-smi -q`.
   - `gpu` can be `all` (default) or an integer GPU index; only a single index is accepted to keep the interface deterministic.
-  - Output is returned as `{ "stdout": "...", "stderr": "...", "exit_code": <int> }`.
+  - Output is returned as `{ "stdout": "...", "stdout_lines": ["line1", ...], "stderr": "...", "exit_code": <int> }`, making it easier for clients to render the text banner without reprocessing newline escapes.
 - `GET /overview`
   - Collects the status for every allowlisted service plus a default `nvidia-smi` invocation.
   - Returns `{ "status": "ok" | "degraded", "services": [...], "gpu": {...}, "timestamp": "ISO-8601" }`.
@@ -56,10 +56,10 @@ All other paths return 404.
 
 3. **Principle of least privilege**
    - The systemd unit runs as a dedicated `status` user (or another non-privileged account) with membership in the `systemd-journal` and `video` groups. It does not require root and is fully confined via a drop-in (`ProtectSystem=strict`, `NoNewPrivileges=true`, etc.).
-   - Application directories live under `/opt/sek8s` with read-only permissions for service users.
+  - Application directories live under `/opt/sek8s` with read-only permissions for service users. Device sandboxing is tightened via `DevicePolicy=closed` while explicitly allowing the NVIDIA control/uvm nodes plus `/dev/nvidia[0-9]*` and `/dev/nvidia-caps/nvidia-cap*` so `nvidia-smi` can talk to every GPU without exposing unrelated devices.
 
 4. **Transport security**
-   - The service reuses the existing `ServerConfig` foundation: TLS is mandatory for TCP bindings, and UDS deployments (default) inherit filesystem ACLs.
+  - The service reuses the existing `ServerConfig` foundation: TLS can be enabled by providing certificate/key paths, but by default the bridged deployment runs plain HTTP on the isolated host-only network. UDS deployments inherit filesystem ACLs. Future authentication layers (shared secret, mTLS) can be added when consumers require it.
 
 5. **Operational safeguards**
    - Log and command outputs are truncated (configurable, default 16 KiB) to minimize potential sensitive data exposure.

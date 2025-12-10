@@ -109,7 +109,7 @@ def test_nvidia_smi_command_building(status_client, fake_runner):
         "nvidia-smi",
         CommandResult(
             exit_code=0,
-            stdout="gpu output",
+            stdout="gpu output\nsecond line",
             stderr="",
             stdout_truncated=False,
             stderr_truncated=False,
@@ -121,6 +121,7 @@ def test_nvidia_smi_command_building(status_client, fake_runner):
     data = response.json()
     assert data["command"] == ["nvidia-smi", "-q", "-i", "0"]
     assert fake_runner.commands[-1] == ["nvidia-smi", "-q", "-i", "0"]
+    assert data["stdout_lines"] == ["gpu output", "second line"]
 
 
 def test_unknown_service_returns_404(status_client):

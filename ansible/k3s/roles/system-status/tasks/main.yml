@@ -8,13 +8,20 @@
     - systemd-journal
     - video
 
+- name: Ensure tdx-attest group exists for TLS sharing
+  ansible.builtin.group:
+    name: tdx-attest
+    gid: 987
+    state: present
+    system: yes
+
 - name: Create system status user
   ansible.builtin.user:
     name: status
     system: yes
     shell: /usr/sbin/nologin
     create_home: no
-    groups: "sek8s,systemd-journal,video"
+    groups: "sek8s,systemd-journal,video,tdx-attest"
     append: yes
     home: /opt/sek8s
 

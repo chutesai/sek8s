@@ -322,11 +322,15 @@ class SystemStatusServer(WebServer):
         result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
 
         status_code = 200 if result.exit_code == 0 else 502
+        stdout_lines = result.stdout.splitlines()
+        stderr_lines = result.stderr.splitlines()
         return {
             "command": command,
             "exit_code": result.exit_code,
             "stdout": result.stdout,
             "stderr": result.stderr,
+            "stdout_lines": stdout_lines,
+            "stderr_lines": stderr_lines,
             "stdout_truncated": result.stdout_truncated,
             "stderr_truncated": result.stderr_truncated,
             "detail": detail,
@@ -351,3 +355,6 @@ def run() -> None:
     config = SystemStatusConfig()
     server = SystemStatusServer(config)
     server.run()
+
+if __name__ == "__main__":
+    run()
