@@ -57,8 +57,8 @@
 
     - name: Copy containerd bind mount unit
       copy:
-        src: "{{ files_dir }}/k3s-containerd.mount"
-        dest: /etc/systemd/system/k3s-containerd.mount
+        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd.mount"
+        dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd.mount
         mode: '0644'
         owner: root
         group: root
@@ -66,8 +66,8 @@
 
     - name: Copy Chutes agent bind mount unit
       copy:
-        src: "{{ files_dir }}/chutes-agent.mount"
-        dest: /etc/systemd/system/chutes-agent.mount
+        src: "{{ files_dir }}/var-lib-chutes-agent.mount"
+        dest: /etc/systemd/system/var-lib-chutes-agent.mount
         mode: '0644'
         owner: root
         group: root
@@ -146,7 +146,7 @@
 
     - name: Enable containerd bind mount (but do not start)
       systemd:
-        name: k3s-containerd.mount
+        name: var-lib-rancher-k3s-agent-containerd.mount
         enabled: yes
         state: stopped
         daemon_reload: yes
@@ -154,7 +154,7 @@
 
     - name: Enable Chutes agent bind mount (but do not start)
       systemd:
-        name: chutes-agent.mount
+        name: var-lib-chutes-agent.mount
         enabled: yes
         state: stopped
         daemon_reload: yes
@@ -173,13 +173,13 @@
       failed_when: mount_status.stdout != "enabled"
 
     - name: Verify containerd mount installation
-      command: systemctl is-enabled k3s-containerd.mount
+      command: systemctl is-enabled var-lib-rancher-k3s-agent-containerd.mount
       register: containerd_mount_status
       changed_when: false
       failed_when: containerd_mount_status.stdout != "enabled"
 
     - name: Verify Chutes agent mount installation
-      command: systemctl is-enabled chutes-agent.mount
+      command: systemctl is-enabled var-lib-chutes-agent.mount
       register: chutes_mount_status
       changed_when: false
       failed_when: chutes_mount_status.stdout != "enabled"
