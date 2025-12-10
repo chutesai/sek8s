@@ -2,6 +2,8 @@
 
 This guide walks you through setting up a baremetal host to launch TDX-enabled VMs with GPU passthrough, isolated networking, and secure configuration using a streamlined, automated workflow.
 
+> Need the full workflow (host prep → VM launch → deploying the Chutes miner)? Start with [`docs/end-to-end-miner.md`](../docs/end-to-end-miner.md) for an end-to-end view, then return here for host-specific details.
+
 ## Prerequisites
 
 - **Hardware**: Intel TDX-capable CPU, NVIDIA H100/H200 GPUs, NVSwitch (optional)
