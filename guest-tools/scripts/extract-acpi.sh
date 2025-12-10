@@ -9,9 +9,11 @@ set -euo pipefail
 TDVF="firmware/TDVF.fd"
 OUT_DIR="measure/acpi"
 
-# Match run-vm.sh defaults unless overridden via env
-MEM="${MEM:-1536G}"
-VCPUS="${VCPUS:-24}"
+# Match production defaults unless overridden via env
+TD_DEFAULT_MEM="${TD_DEFAULT_MEM:-100G}"
+TD_DEFAULT_VCPUS="${TD_DEFAULT_VCPUS:-32}"
+MEM="${MEM:-$TD_DEFAULT_MEM}"
+VCPUS="${VCPUS:-$TD_DEFAULT_VCPUS}"
 NETWORK_TYPE="${NETWORK_TYPE:-user}"
 NET_IFACE="${NET_IFACE:-}"
 CONFIG_VOLUME="${CONFIG_VOLUME:-}"

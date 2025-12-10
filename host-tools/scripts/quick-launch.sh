@@ -17,16 +17,11 @@ VM_IP="192.168.100.2"
 BRIDGE_IP="192.168.100.1/24"
 VM_DNS="8.8.8.8"
 PUBLIC_IFACE="ens9f0np0"
-CACHE_SIZE="500G"
+CACHE_SIZE="5000G"
 CACHE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
-SKIP_CACHE="false"
 FOREGROUND="false"
-MEMORY="100G"
-VCPUS=24
-GPU_MMIO_MB=262144
-PCI_HOLE_BASE_GB=2048
 SSH_PORT=2222
 NETWORK_TYPE="tap"
 
@@ -44,12 +39,7 @@ CLI_CACHE_SIZE=""
 CLI_CACHE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
-CLI_SKIP_CACHE=""
 CLI_FOREGROUND=""
-CLI_MEMORY=""
-CLI_VCPUS=""
-CLI_GPU_MMIO_MB=""
-CLI_PCI_HOLE_BASE_GB=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 
@@ -74,12 +64,7 @@ while [[ $# -gt 0 ]]; do
     --cache-volume) CLI_CACHE_VOLUME="$2"; shift 2 ;;
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
-    --skip-cache) CLI_SKIP_CACHE="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
-    --mem|--memory) CLI_MEMORY="$2"; shift 2 ;;
-    --vcpus) CLI_VCPUS="$2"; shift 2 ;;
-    --gpu-mmio-mb) CLI_GPU_MMIO_MB="$2"; shift 2 ;;
-    --pci-hole-base-gb) CLI_PCI_HOLE_BASE_GB="$2"; shift 2 ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
 
@@ -149,15 +134,12 @@ Volumes:
   --cache-volume PATH
   --config-volume PATH
   --skip-bind
-  --skip-cache
 
 Runtime:
   --foreground
-  --mem SIZE
-  --vcpus N
-  --gpu-mmio-mb N
-  --pci-hole-base-gb N
   --network-type [tap|user]
+
+Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
 Management:
   --clean                   Clean up everything
@@ -237,13 +219,8 @@ fi
 [[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
-[[ -n "$CLI_SKIP_CACHE" ]] && SKIP_CACHE="$CLI_SKIP_CACHE"
 [[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
 
-[[ -n "$CLI_MEMORY" ]] && MEMORY="$CLI_MEMORY"
-[[ -n "$CLI_VCPUS" ]] && VCPUS="$CLI_VCPUS"
-[[ -n "$CLI_GPU_MMIO_MB" ]] && GPU_MMIO_MB="$CLI_GPU_MMIO_MB"
-[[ -n "$CLI_PCI_HOLE_BASE_GB" ]] && PCI_HOLE_BASE_GB="$CLI_PCI_HOLE_BASE_GB"
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT" 
 [[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
 
@@ -270,16 +247,18 @@ if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" ]]; then
   exit 1
 fi
 
+if [[ -z "$CACHE_VOLUME" ]]; then
+  CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
+fi
+
 echo ""
 echo "=== TEE VM Orchestration ==="
 echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Hostname: $HOSTNAME"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
-echo "Cache: $([[ "$SKIP_CACHE" == "true" ]] && echo "Skipped" || echo "$CACHE_SIZE")"
+echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
-echo "Memory: $MEMORY"
-echo "vCPUs: $VCPUS"
 echo "Network: $NETWORK_TYPE"
 echo ""
 
@@ -320,34 +299,24 @@ echo ""
 
 
 # --------------------------------------------------------------------
-# Cache volume
+# Cache volume (required)
 # --------------------------------------------------------------------
-if [[ "$SKIP_CACHE" != "true" ]]; then
-  echo "Step 2: Setting up cache volume..."
-  if [[ -n "$CACHE_VOLUME" ]]; then
-    if [[ -f "$CACHE_VOLUME" ]]; then
-      echo "✓ Using existing cache volume: $CACHE_VOLUME"
-    else
-      echo "Creating cache volume at configured path: $CACHE_VOLUME ($CACHE_SIZE)"
-      if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE"; then
-        echo "✓ Cache volume created"
-      else
-        echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
-        exit 1
-      fi
-    fi
-  else
-    CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
-    if [[ -f "$CACHE_VOLUME" ]]; then
-      echo "✓ Using existing cache volume: $CACHE_VOLUME"
-    else
-      echo "Creating cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
-      sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" && echo "✓ Cache volume created"
-    fi
-  fi
+echo "Step 2: Preparing cache volume..."
+if [[ -z "$CACHE_VOLUME" ]]; then
+  echo "✗ Error: CACHE_VOLUME is unset"
+  exit 1
+fi
+
+if [[ -f "$CACHE_VOLUME" ]]; then
+  echo "✓ Using existing cache volume: $CACHE_VOLUME"
 else
-  echo "Step 2: Skipping cache volume"
-  CACHE_VOLUME=""
+  echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
+  if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE"; then
+    echo "✓ Cache volume created"
+  else
+    echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
+    exit 1
+  fi
 fi
 echo ""
 
@@ -421,11 +390,9 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
   LAUNCH_ARGS+=(--net-iface "$NET_IFACE")
 fi
 
-# Optional args
-[[ -n "$CACHE_VOLUME" ]] && LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
+# Additional args
+LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
-[[ -n "$MEMORY" ]] && LAUNCH_ARGS+=(--mem "$MEMORY")
-[[ -n "$VCPUS" ]] && LAUNCH_ARGS+=(--vcpus "$VCPUS")
 
 # Call Python runner
 python3 ./run-td "${LAUNCH_ARGS[@]}"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # create-cache-volume.sh - Create and format a cache volume for TDX VMs
 # Usage: ./create-cache.sh <output-path> <size>
-# Example: ./create-cache.sh cache-volume.qcow2 500G
+# Example: ./create-cache.sh cache-volume.qcow2 5000G
 
 set -euo pipefail
 
@@ -57,10 +57,10 @@ Create and format a cache volume for TDX VMs with the required label.
 
 Arguments:
   output-path    Path where the qcow2 file will be created
-  size          Size of the volume (e.g., 500G, 1T, 100G)
+    size          Size of the volume (e.g., 5000G, 5T, 1000G)
 
 Examples:
-  $0 cache-volume.qcow2 500G
+  $0 cache-volume.qcow2 5000G
   $0 /path/to/my-cache.qcow2 1T
   $0 test-cache.qcow2 100G
 
@@ -82,7 +82,7 @@ fi
 if [ $# -ne 2 ]; then
     print_error "Invalid number of arguments"
     echo "Usage: $0 <output-path> <size>"
-    echo "Example: $0 cache-volume.qcow2 500G"
+    echo "Example: $0 cache-volume.qcow2 5000G"
     echo "Run '$0 --help' for more information"
     exit 1
 fi
@@ -94,7 +94,7 @@ SIZE="$2"
 if ! [[ "$SIZE" =~ ^[0-9]+[KMGT]?$ ]]; then
     print_error "Invalid size format: $SIZE"
     echo "Size must be a number followed by optional unit (K, M, G, T)"
-    echo "Examples: 500G, 1T, 100000M"
+    echo "Examples: 5000G, 5T, 1000000M"
     exit 1
 fi
 

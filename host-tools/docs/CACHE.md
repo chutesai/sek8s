@@ -13,8 +13,8 @@ This guide explains how to create and prepare an unencrypted cache volume for us
 ## Quick Start
 
 ```bash
-# Create a 500GB cache volume
-./scripts/create-cache-volume.sh cache-volume.qcow2 500G
+# Create a 5TB cache volume
+./scripts/create-cache-volume.sh cache-volume.qcow2 5000G
 ```
 
 ## Manual Setup (Step-by-Step)
@@ -26,12 +26,12 @@ If you prefer to create the volume manually or the script is not available, foll
 Create an empty qcow2 image file. Adjust the size as needed for your use case:
 
 ```bash
-qemu-img create -f qcow2 cache-volume.qcow2 500G
+qemu-img create -f qcow2 cache-volume.qcow2 5000G
 ```
 
 **Size recommendations:**
 - Minimum: 100G
-- Recommended: 500G - 1T
+- Recommended: 5T (5000G) or larger for production miners
 - Maximum: Limited by host disk space
 
 ### 2. Load the NBD Kernel Module
@@ -98,11 +98,11 @@ sudo qemu-nbd --disconnect /dev/nbd0
 
 ## Complete Example
 
-Here's a complete example creating a 500GB cache volume:
+Here's a complete example creating a 5TB cache volume:
 
 ```bash
 # Create the volume
-qemu-img create -f qcow2 /path/to/cache-volume.qcow2 500G
+qemu-img create -f qcow2 /path/to/cache-volume.qcow2 5000G
 
 # Load NBD module (if not already loaded)
 sudo modprobe nbd max_part=8

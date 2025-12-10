@@ -33,6 +33,11 @@ else:
 firmware = '/usr/share/ovmf/OVMF.fd'
 
 
+# Canonical resource sizing for the production guest
+DEFAULT_MEM = '100G'
+DEFAULT_VCPUS = '32'
+
+
 def do_print(ssh_port):
     try:
         with open(pidfile) as pid_file:
@@ -193,8 +198,11 @@ def build_network(cmd, args):
     ])
 
 
-def do_run(img_path, vcpus, mem, pass_gpus, config_volume, cache_volume,
-           ssh_port, foreground, args):
+def do_run(img_path, pass_gpus, config_volume, cache_volume,
+        ssh_port, foreground, args):
+
+    mem = DEFAULT_MEM
+    vcpus = DEFAULT_VCPUS
 
     print(f'Launching TDX VM: {vcpus} vCPUs, {mem} RAM')
     print(f'Image: {img_path}')
@@ -275,8 +283,6 @@ def run_td(args):
 
     do_run(
         img_path=img,
-        vcpus=args.vcpus,
-        mem=args.mem,
         pass_gpus=args.pass_gpus,
         config_volume=args.config_volume,
         cache_volume=args.cache_volume,
@@ -291,8 +297,6 @@ if __name__ == '__main__':
 
     # Canonical args
     parser.add_argument("--image", type=str)
-    parser.add_argument("--vcpus", type=str, default='32')
-    parser.add_argument("--mem", type=str, default='100G')
     parser.add_argument("--pass-gpus", action='store_true')
     parser.add_argument("--foreground", action='store_true')
     parser.add_argument("--clean", action='store_true')
@@ -307,4 +311,5 @@ if __name__ == '__main__':
     parser.add_argument("--net-iface", type=str)
 
     args = parser.parse_args()
+
     run_td(args)

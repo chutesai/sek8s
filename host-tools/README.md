@@ -150,7 +150,7 @@ network:
 volumes:
   cache:
     enabled: true
-    size: "500G"
+  size: "5000G"
     path: ""  # Leave empty to auto-create
   config:
     path: ""  # Leave empty to auto-create
@@ -162,14 +162,11 @@ devices:
 # Runtime Configuration
 runtime:
   foreground: false  # Set to true for foreground mode (Ignored for prod image)
-
-# Advanced Options (leave defaults here)
-advanced:
-  memory: "100G"
-  vcpus: 32
-  gpu_mmio_mb: 262144
-  pci_hole_base_gb: 2048
 ```
+
+> **Note:** Memory, vCPU count, GPU MMIO, and PCI hole sizing are fixed inside
+> `run-td` to preserve RTMR determinism. These canonical values are baked into
+> the script and are not configurable via CLI flags.
 
 **Required Configuration:**
 - `hostname`: Unique identifier for this miner
@@ -263,14 +260,14 @@ Override configuration file settings via command line:
 # Use existing cache volume
 ./quick-launch.sh config.yaml --cache-volume /path/to/existing-cache.qcow2
 
-# Skip cache volume entirely
-./quick-launch.sh config.yaml --skip-cache
+# Change cache size before creation
+./quick-launch.sh config.yaml --cache-size 1T
 
 # Override VM IP
 ./quick-launch.sh config.yaml --vm-ip 192.168.100.5
 ```
 
-Note: `--skip-bind` skips binding GPUs to `vfio-pci` during launch.
+Note: Cache volume creation is required. `--skip-bind` only affects GPU binding to `vfio-pci` during launch.
 
 ### Manual Component Management
 
@@ -280,7 +277,7 @@ For advanced users who want to manage components separately:
 ./bind.sh
 
 # Manually create cache volume
-sudo ./create-cache.sh cache.qcow2 500G
+sudo ./create-cache.sh cache.qcow2 5000G
 
 # Manually create config volume
 sudo ./create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dns
@@ -436,7 +433,7 @@ Once the VM is running:
 # Create minimal test config
 ./quick-launch.sh --template
 # Edit config.yaml with test values
-./quick-launch.sh config.yaml --foreground --skip-cache
+./quick-launch.sh config.yaml --foreground
 ```
 
 ### Debug Mode

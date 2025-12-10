@@ -38,10 +38,17 @@ def main():
     vm_dns = network.get('dns', '8.8.8.8')
     public_iface = network.get('public_interface', 'ens9f0np0')
     
+    if 'advanced' in config:
+        print("Error: 'advanced' section is no longer supported. Remove it to match the current schema.", file=sys.stderr)
+        sys.exit(1)
+
     volumes = config.get('volumes', {})
-    cache_enabled = volumes.get('cache', {}).get('enabled', True)
-    cache_size = volumes.get('cache', {}).get('size', '500G')
-    cache_volume = volumes.get('cache', {}).get('path', '')
+    cache_cfg = volumes.get('cache', {})
+    if 'enabled' in cache_cfg:
+        print("Error: 'volumes.cache.enabled' has been removed. Delete it from your config.", file=sys.stderr)
+        sys.exit(1)
+    cache_size = cache_cfg.get('size', '5000G')
+    cache_volume = cache_cfg.get('path', '')
     config_volume = volumes.get('config', {}).get('path', '')
     
     devices = config.get('devices', {})
@@ -49,12 +56,6 @@ def main():
     
     runtime = config.get('runtime', {})
     foreground = runtime.get('foreground', False)
-    
-    advanced = config.get('advanced', {})
-    memory = advanced.get('memory', '1536G')
-    vcpus = advanced.get('vcpus', 24)
-    gpu_mmio_mb = advanced.get('gpu_mmio_mb', 262144)
-    pci_hole_base_gb = advanced.get('pci_hole_base_gb', 2048)
     
     # Output shell variable assignments (properly escaped)
     print(f"HOSTNAME={shlex.quote(hostname)}")
@@ -68,12 +69,7 @@ def main():
     print(f"CACHE_VOLUME={shlex.quote(cache_volume)}")
     print(f"CONFIG_VOLUME={shlex.quote(config_volume)}")
     print(f"SKIP_BIND={'true' if not bind_devices else 'false'}")
-    print(f"SKIP_CACHE={'true' if not cache_enabled else 'false'}")
     print(f"FOREGROUND={'true' if foreground else 'false'}")
-    print(f"MEMORY={shlex.quote(memory)}")
-    print(f"VCPUS={vcpus}")
-    print(f"GPU_MMIO_MB={gpu_mmio_mb}")
-    print(f"PCI_HOLE_BASE_GB={pci_hole_base_gb}")
 
 if __name__ == '__main__':
     main()

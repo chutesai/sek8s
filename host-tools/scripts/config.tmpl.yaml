@@ -3,9 +3,9 @@
 
 # VM Identity
 vm:
-  hostname: chutes-miner-tee-0
+  hostname: chutes-miner-tee-0 # Must be unique per miner hotkey
   
-# Miner Credentials
+# Miner Credentials (Optional - prefer passing via CLI for security)
 miner:
   ss58: "your_ss58_credential_here"
   seed: "your_seed_credential_here"
@@ -19,15 +19,15 @@ network:
 
 # Volume Configuration
 volumes:
-  # Cache volume settings
+  # Cache volume settings (required)
   cache:
-    enabled: true
-    size: "500G"
-    path: ""  # Leave empty to auto-generate, or specify existing volume path
+    size: "5000G"
+    path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or set an existing path (/data/cache-volume.qcow2)
   
   # Config volume settings  
   config:
-    path: ""  # Leave empty to auto-generate, or specify existing volume path
+    path: ""  # Leave empty to auto-generate, or specify existing volume path (/data/config-volume.qcow2)
+
 
 # Device Configuration
 devices:
@@ -36,10 +36,3 @@ devices:
 # Runtime Configuration
 runtime:
   foreground: false  # Set to true for foreground mode
-
-# Advanced Options (optional)
-advanced:
-  memory: "100G"
-  vcpus: 32
-  gpu_mmio_mb: 262144
-  pci_hole_base_gb: 2048
