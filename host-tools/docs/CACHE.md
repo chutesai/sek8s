@@ -2,7 +2,7 @@
 
 This guide explains how to create and prepare an unencrypted cache volume for use with TDX VMs. The cache volume will be mounted at `/var/snap` in the guest VM to provide additional storage separate from the encrypted root volume.
 
-By default, the guest keeps only the k3s **containerd** data under `/var/snap/containerd` (bind-mounted into `/var/lib/rancher/k3s/agent/containerd`), keeping Kubernetes secrets and etcd data on the encrypted root disk while still offloading heavy image layers. Additional application caches can live under sibling paths (for example `/var/snap/cache` for model weights).
+By default, the guest keeps only the k3s **containerd** data under `/var/snap/containerd` (bind-mounted into `/var/lib/rancher/k3s/agent/containerd`) and the **Chutes agent state** under `/var/snap/chutes-agent` (bind-mounted into `/var/lib/chutes/agent`). This keeps Kubernetes secrets and etcd data on the encrypted root disk while still offloading heavy image layers and miner cache data. Additional application caches can live under sibling paths (for example `/var/snap/cache` for model weights).
 
 ## Prerequisites
 

@@ -106,7 +106,9 @@ Production VMs require two attached volumes (created by host tools):
 - **Filesystem**: ext4 with label `tdx-cache`
 - **Mount point**: `/var/snap`
 - **Purpose**: Persistent storage for model caches, container images
-- **Size**: Configurable (default 5TB / 5000GB)
+- **Containerd cache**: `/var/snap/containerd` (bind-mounted into `/var/lib/rancher/k3s/agent/containerd`)
+- **Chutes agent state**: `/var/snap/chutes-agent` (bind-mounted into `/var/lib/chutes/agent`)
+- **Size**: Configurable (default 500GB)
 
 Both volumes are validated at boot. Missing or invalid volumes trigger immediate shutdown.
 
