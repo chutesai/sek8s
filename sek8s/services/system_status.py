@@ -46,6 +46,16 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
         unit="k3s.service",
         description="Lightweight Kubernetes control plane",
     ),
+    "nvidia-persistenced": ServiceDefinition(
+        service_id="nvidia-persistenced",
+        unit="nvidia-persistenced.service",
+        description="NVIDIA persistence daemon",
+    ),
+    "nvidia-fabricmanager": ServiceDefinition(
+        service_id="nvidia-fabricmanager",
+        unit="nvidia-fabricmanager.service",
+        description="NVIDIA fabric manager",
+    ),
 }
 
 

@@ -45,7 +45,14 @@ def test_list_services(status_client):
     assert response.status_code == 200
     data = response.json()
     service_ids = {svc["id"] for svc in data["services"]}
-    assert {"admission-controller", "attestation-service", "k3s"}.issubset(service_ids)
+    expected = {
+        "admission-controller",
+        "attestation-service",
+        "k3s",
+        "nvidia-persistenced",
+        "nvidia-fabricmanager",
+    }
+    assert expected.issubset(service_ids)
 
 
 def test_service_status_parsing(status_client, fake_runner):
