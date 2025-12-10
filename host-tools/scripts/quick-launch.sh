@@ -188,8 +188,10 @@ if [[ -n "$CONFIG_FILE" ]]; then
     exit 1
   fi
 
+  set +e
   CONFIG_OUTPUT=$(python3 ./parse-config.py "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
+  set -e
 
   if [[ $CONFIG_EXIT_CODE -ne 0 ]]; then
     echo "Error parsing config file:"
