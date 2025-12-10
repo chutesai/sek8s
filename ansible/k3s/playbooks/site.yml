@@ -156,7 +156,7 @@
           tags: cache-volume
 
 - name: Add dyanmic config services
-  hosts: all
+  hosts: vm
   become: true
   any_errors_fatal: false
   tags:
