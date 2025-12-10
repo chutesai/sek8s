@@ -22,11 +22,11 @@ volumes:
   # Cache volume settings (required)
   cache:
     size: "5000G"
-    path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or set an existing path (/data/cache-volume.qcow2)
+    path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/cache-volume.qcow2)
   
   # Config volume settings  
   config:
-    path: ""  # Leave empty to auto-generate, or specify existing volume path (/data/config-volume.qcow2)
+    path: ""  # Leave empty to auto-generate, or specify volume path (/data/config-volume.qcow2)
 
 
 # Device Configuration
