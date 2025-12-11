@@ -67,10 +67,10 @@ sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
 Format the device with an ext4 filesystem and the required label:
 
 ```bash
-sudo mkfs.ext4 -L tdx-cache-storage /dev/nbd0
+sudo mkfs.ext4 -L tdx-cache /dev/nbd0
 ```
 
-**Important:** The label `tdx-cache-storage` is required. The TDX VM will verify this label at boot time and refuse to start if it's incorrect.
+**Important:** The label `tdx-cache` is required. The TDX VM will verify this label at boot time and refuse to start if it's incorrect.
 
 ### 5. Disconnect the NBD Device
 
@@ -92,7 +92,7 @@ sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
 sudo blkid /dev/nbd0
 
 # Expected output should include:
-# TYPE="ext4" LABEL="tdx-cache-storage"
+# TYPE="ext4" LABEL="tdx-cache"
 
 # Disconnect
 sudo qemu-nbd --disconnect /dev/nbd0
@@ -113,7 +113,7 @@ sudo modprobe nbd max_part=8
 sudo qemu-nbd --connect=/dev/nbd0 /path/to/cache-volume.qcow2
 
 # Format with label
-sudo mkfs.ext4 -L tdx-cache-storage /dev/nbd0
+sudo mkfs.ext4 -L tdx-cache /dev/nbd0
 
 # Verify (optional)
 sudo blkid /dev/nbd0
@@ -146,7 +146,7 @@ The TDX VM will automatically verify the cache volume during boot:
 
 1. **Device check**: Confirms `/dev/vdb` exists
 2. **Filesystem check**: Confirms the filesystem is ext4
-3. **Label check**: Confirms the label is exactly `tdx-cache-storage`
+3. **Label check**: Confirms the label is exactly `tdx-cache`
 4. **Mount check**: Mounts to `/var/snap`
 
 **If any check fails, the VM will immediately shut down.** Check the serial log for error details:
@@ -156,6 +156,10 @@ The TDX VM will automatically verify the cache volume during boot:
 # Or directly:
 cat /tmp/tdx-guest-td.log
 ```
+
+### First-boot seeding of containerd
+
+On the first successful boot with a fresh cache volume, the guest runs the `seed-containerd-cache` systemd unit before k3s starts. This copies the factory containerd state from `/var/lib/rancher/k3s/agent/containerd` (on the encrypted root disk) into `/var/snap/containerd` so that all preloaded images remain available even in offline deployments. A marker file (`/var/snap/containerd/.seeded`) prevents future boots from repeating the expensive copy; you can delete this marker if you intentionally want to reseed the cache after wiping the volume.
 
 ## Troubleshooting
 
@@ -216,7 +220,7 @@ To change a label on an existing formatted volume:
 
 ```bash
 sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
-sudo e2label /dev/nbd0 tdx-cache-storage
+sudo e2label /dev/nbd0 tdx-cache
 sudo qemu-nbd --disconnect /dev/nbd0
 ```
 

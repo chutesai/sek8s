@@ -3,6 +3,8 @@ Description=Bind mount containerd data onto cache volume
 Documentation=man:systemd.mount(5)
 Requires=var-snap.mount
 After=var-snap.mount
+Requires=seed-containerd-cache.service
+After=seed-containerd-cache.service
 Before=k3s.service
 Before=k3s-agent.service
 

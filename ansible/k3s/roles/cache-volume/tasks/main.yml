@@ -46,6 +46,24 @@
         group: root
       register: verify_service
 
+    - name: Copy containerd cache seed script
+      copy:
+        src: "{{ files_dir }}/seed-containerd-cache.sh"
+        dest: /usr/local/bin/seed-containerd-cache.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: seed_script
+
+    - name: Copy containerd cache seed service
+      copy:
+        src: "{{ files_dir }}/seed-containerd-cache.service"
+        dest: /etc/systemd/system/seed-containerd-cache.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: seed_service
+
     - name: Copy mount unit
       copy:
         src: "{{ files_dir }}/var-snap.mount"
@@ -76,7 +94,7 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed or chutes_mount_unit.changed
+      when: verify_service.changed or seed_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed or chutes_mount_unit.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -139,6 +157,14 @@
     - name: Enable var-snap.mount (but do not start)
       systemd:
         name: var-snap.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Enable seed-containerd-cache.service (but do not start)
+      systemd:
+        name: seed-containerd-cache.service
         enabled: yes
         state: stopped
         daemon_reload: yes
