@@ -11,6 +11,16 @@ from fastapi import HTTPException, Query
 from loguru import logger
 
 from sek8s.config import SystemStatusConfig
+from sek8s.responses import (
+    HealthResponse,
+    NvidiaSmiResponse,
+    OverviewResponse,
+    ServiceInfo,
+    ServiceLogsResponse,
+    ServicesListResponse,
+    ServiceStatus,
+    ServiceStatusResponse,
+)
 from sek8s.server import WebServer
 
 
@@ -137,45 +147,71 @@ class SystemStatusServer(WebServer):
         super().__init__(config)
 
     def _setup_routes(self) -> None:
-        self.app.add_api_route("/health", self.health, methods=["GET"])
-        self.app.add_api_route("/services", self.list_services, methods=["GET"])
+        self.app.add_api_route(
+            "/health",
+            self.health,
+            methods=["GET"],
+            response_model=HealthResponse,
+            summary="Health check",
+            description="Returns OK if service is running",
+        )
+        self.app.add_api_route(
+            "/services",
+            self.list_services,
+            methods=["GET"],
+            response_model=ServicesListResponse,
+            summary="List available services",
+            description="Returns list of all services that can be monitored",
+        )
         self.app.add_api_route(
             "/services/{service_id}/status",
             self.get_service_status,
             methods=["GET"],
+            response_model=ServiceStatusResponse,
+            summary="Get service status",
+            description="Returns systemd status for a specific service",
         )
         self.app.add_api_route(
             "/services/{service_id}/logs",
             self.get_service_logs,
             methods=["GET"],
+            response_model=ServiceLogsResponse,
+            summary="Get service logs",
+            description="Returns recent journal logs for a specific service",
         )
         self.app.add_api_route(
             "/gpu/nvidia-smi",
             self.nvidia_smi,
             methods=["GET"],
+            response_model=NvidiaSmiResponse,
+            summary="Get GPU status",
+            description="Returns nvidia-smi output for GPUs",
         )
         self.app.add_api_route(
             "/overview",
             self.overview,
             methods=["GET"],
+            response_model=OverviewResponse,
+            summary="System overview",
+            description="Returns combined status of all services and GPUs",
         )
 
-    async def health(self) -> Dict[str, str]:
-        return {"status": "ok"}
+    async def health(self) -> HealthResponse:
+        return HealthResponse(status="ok")
 
-    async def list_services(self) -> Dict[str, List[Dict[str, str]]]:
-        return {
-            "services": [
-                {
-                    "id": service.service_id,
-                    "unit": service.unit,
-                    "description": service.description,
-                }
+    async def list_services(self) -> ServicesListResponse:
+        return ServicesListResponse(
+            services=[
+                ServiceInfo(
+                    id=service.service_id,
+                    unit=service.unit,
+                    description=service.description,
+                )
                 for service in SERVICE_ALLOWLIST.values()
             ]
-        }
+        )
 
-    async def overview(self) -> Dict[str, Any]:
+    async def overview(self) -> OverviewResponse:
         services = await asyncio.gather(
             *(
                 self._collect_service_status(service, tolerate_errors=True)
@@ -184,18 +220,18 @@ class SystemStatusServer(WebServer):
         )
 
         gpu_info = await self.nvidia_smi(detail=False, gpu="all")
-        gpu_healthy = gpu_info.get("status") == "ok"
-        services_healthy = all(entry.get("healthy") for entry in services)
+        gpu_healthy = gpu_info.status == "ok"
+        services_healthy = all(entry.healthy for entry in services)
         overall_status = "ok" if services_healthy and gpu_healthy else "degraded"
 
-        return {
-            "status": overall_status,
-            "services": services,
-            "gpu": gpu_info,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+        return OverviewResponse(
+            status=overall_status,
+            services=services,
+            gpu=gpu_info,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
 
-    async def get_service_status(self, service_id: str) -> Dict[str, object]:
+    async def get_service_status(self, service_id: str) -> ServiceStatusResponse:
         service = self._resolve_service(service_id)
         return await self._collect_service_status(service)
 
@@ -204,7 +240,7 @@ class SystemStatusServer(WebServer):
         service: ServiceDefinition,
         *,
         tolerate_errors: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> ServiceStatusResponse:
         properties = [
             "Id",
             "LoadState",
@@ -227,45 +263,45 @@ class SystemStatusServer(WebServer):
             _ensure_success(result, "systemctl")
         except HTTPException as exc:
             if tolerate_errors:
-                return {
-                    "service": {
-                        "id": service.service_id,
-                        "unit": service.unit,
-                        "description": service.description,
-                    },
-                    "status": None,
-                    "healthy": False,
-                    "error": exc.detail,
-                }
+                return ServiceStatusResponse(
+                    service=ServiceInfo(
+                        id=service.service_id,
+                        unit=service.unit,
+                        description=service.description,
+                    ),
+                    status=None,
+                    healthy=False,
+                    error=exc.detail,
+                )
             raise
 
         data = _parse_key_value(result.stdout)
-        status = {
-            "load_state": data.get("LoadState"),
-            "active_state": data.get("ActiveState"),
-            "sub_state": data.get("SubState"),
-            "unit_file_state": data.get("UnitFileState"),
-            "main_pid": data.get("MainPID"),
-            "exit_code": data.get("ExecMainCode"),
-            "exit_status": data.get("ExecMainStatus"),
-        }
+        status = ServiceStatus(
+            load_state=data.get("LoadState"),
+            active_state=data.get("ActiveState"),
+            sub_state=data.get("SubState"),
+            unit_file_state=data.get("UnitFileState"),
+            main_pid=data.get("MainPID"),
+            exit_code=data.get("ExecMainCode"),
+            exit_status=data.get("ExecMainStatus"),
+        )
 
-        return {
-            "service": {
-                "id": service.service_id,
-                "unit": service.unit,
-                "description": service.description,
-            },
-            "status": status,
-            "healthy": self._is_service_healthy(status),
-        }
+        return ServiceStatusResponse(
+            service=ServiceInfo(
+                id=service.service_id,
+                unit=service.unit,
+                description=service.description,
+            ),
+            status=status,
+            healthy=self._is_service_healthy(status),
+        )
 
     async def get_service_logs(
         self,
         service_id: str,
         lines: int = Query(200, ge=1),
         since_minutes: Optional[int] = Query(None, ge=1, le=1440),
-    ) -> Dict[str, object]:
+    ) -> ServiceLogsResponse:
         service = self._resolve_service(service_id)
 
         max_lines = self.config.log_tail_max
@@ -290,22 +326,22 @@ class SystemStatusServer(WebServer):
 
         entries = [line for line in result.stdout.splitlines() if line]
 
-        return {
-            "service": {
+        return ServiceLogsResponse(
+            service={
                 "id": service.service_id,
                 "unit": service.unit,
             },
-            "requested_lines": lines,
-            "returned_lines": len(entries),
-            "stdout_truncated": result.stdout_truncated,
-            "logs": entries,
-        }
+            requested_lines=lines,
+            returned_lines=len(entries),
+            stdout_truncated=result.stdout_truncated,
+            logs=entries,
+        )
 
     async def nvidia_smi(
         self,
         detail: bool = Query(False, description="Return detailed (-q) output"),
         gpu: str = Query("all", description="GPU index or 'all'"),
-    ) -> Dict[str, object]:
+    ) -> NvidiaSmiResponse:
         command = ["nvidia-smi"]
         if detail:
             command.append("-q")
@@ -324,30 +360,30 @@ class SystemStatusServer(WebServer):
         status_code = 200 if result.exit_code == 0 else 502
         stdout_lines = result.stdout.splitlines()
         stderr_lines = result.stderr.splitlines()
-        return {
-            "command": command,
-            "exit_code": result.exit_code,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "stdout_lines": stdout_lines,
-            "stderr_lines": stderr_lines,
-            "stdout_truncated": result.stdout_truncated,
-            "stderr_truncated": result.stderr_truncated,
-            "detail": detail,
-            "gpu": gpu,
-            "status": "ok" if status_code == 200 else "error",
-        }
+        return NvidiaSmiResponse(
+            command=command,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            stdout_lines=stdout_lines,
+            stderr_lines=stderr_lines,
+            stdout_truncated=result.stdout_truncated,
+            stderr_truncated=result.stderr_truncated,
+            detail=detail,
+            gpu=gpu,
+            status="ok" if status_code == 200 else "error",
+        )
 
     def _resolve_service(self, service_id: str) -> ServiceDefinition:
         if service_id not in SERVICE_ALLOWLIST:
             raise HTTPException(status_code=404, detail="service not allowed")
         return SERVICE_ALLOWLIST[service_id]
 
-    def _is_service_healthy(self, status: Dict[str, Optional[str]]) -> bool:
+    def _is_service_healthy(self, status: ServiceStatus) -> bool:
         return (
-            status.get("load_state") == "loaded"
-            and status.get("active_state") == "active"
-            and status.get("sub_state") in {"running", "listening", None}
+            status.load_state == "loaded"
+            and status.active_state == "active"
+            and status.sub_state in {"running", "listening", None}
         )
 
 
