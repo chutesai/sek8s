@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from aiocache import cached as aiocache_cached
 from fastapi import HTTPException, Query
 from loguru import logger
 
@@ -196,9 +197,11 @@ class SystemStatusServer(WebServer):
             description="Returns combined status of all services and GPUs",
         )
 
+    @aiocache_cached(ttl=30)
     async def health(self) -> HealthResponse:
         return HealthResponse(status="ok")
 
+    @aiocache_cached(ttl=30)
     async def list_services(self) -> ServicesListResponse:
         return ServicesListResponse(
             services=[
@@ -211,6 +214,7 @@ class SystemStatusServer(WebServer):
             ]
         )
 
+    @aiocache_cached(ttl=30)
     async def overview(self) -> OverviewResponse:
         services = await asyncio.gather(
             *(
@@ -231,6 +235,7 @@ class SystemStatusServer(WebServer):
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
 
+    @aiocache_cached(ttl=30)
     async def get_service_status(self, service_id: str) -> ServiceStatusResponse:
         service = self._resolve_service(service_id)
         return await self._collect_service_status(service)
@@ -296,6 +301,7 @@ class SystemStatusServer(WebServer):
             healthy=self._is_service_healthy(status),
         )
 
+    @aiocache_cached(ttl=30)
     async def get_service_logs(
         self,
         service_id: str,
@@ -337,6 +343,7 @@ class SystemStatusServer(WebServer):
             logs=entries,
         )
 
+    @aiocache_cached(ttl=60)
     async def nvidia_smi(
         self,
         detail: bool = Query(False, description="Return detailed (-q) output"),
