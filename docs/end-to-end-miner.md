@@ -111,7 +111,7 @@ advanced:
   vcpus: 32
 ```
 
-Behind the scenes `quick-launch.sh` also calls `create-config.sh`, which writes the same hostname and credentials into a qcow2 volume mounted at `/var/config` inside the VM. First-boot scripts pick those up and create the `chutes/miner-credentials` Kubernetes secret automatically, so make sure the SS58 + seed are exactly what you want published on-chain.
+Behind the scenes `quick-launch.sh` also calls `create-config.sh`, which writes the same hostname and credentials into a qcow2 volume mounted at `/var/config` inside the VM. First-boot scripts pick those up and create the `chutes/miner-credentials` Kubernetes secret automatically.
 
 > **Tip:** You can override any field without editing YAML by adding CLI flags such as `--miner-ss58`, `--mem 128G`, or `--network-type user` when you launch.
 
