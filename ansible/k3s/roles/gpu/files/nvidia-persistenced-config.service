@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure nvidia-persistenced ExecStart based on NVSwitch topology
+Documentation=man:nvidia-smi(1)
+DefaultDependencies=no
+After=local-fs.target
+Before=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nvidia-persistenced-config.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -177,36 +177,31 @@
             enabled: true
             masked: false
 
-        - name: Ensure nvidia-persistenced override dir exists (only if missing)
-          ansible.builtin.stat:
-            path: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
-          register: persistenced_override
-
-        - name: Ensure nvidia-persistenced override directory is present
-          ansible.builtin.file:
-            path: /etc/systemd/system/nvidia-persistenced.service.d
-            state: directory
+        - name: Install nvidia-persistenced configuration script
+          ansible.builtin.copy:
+            src: nvidia-persistenced-config.sh
+            dest: /usr/local/sbin/nvidia-persistenced-config.sh
             owner: root
             group: root
             mode: '0755'
 
-        - name: Deploy nvidia-persistenced override for UVM persistence (create only if missing)
+        - name: Install nvidia-persistenced configuration service
           ansible.builtin.copy:
-            dest: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
-            content: |
-              [Service]
-              ExecStart=
-              ExecStart=/usr/bin/nvidia-persistenced --uvm-persistence-mode --verbose
+            src: nvidia-persistenced-config.service
+            dest: /etc/systemd/system/nvidia-persistenced-config.service
             owner: root
             group: root
             mode: '0644'
-          when: not persistenced_override.stat.exists
 
-        - name: Reload systemd units after NVIDIA service override
+        - name: Reload systemd after installing nvidia-persistenced config units
           ansible.builtin.systemd:
             daemon_reload: true
-          when:
-            - driver_install is defined and driver_install.changed or not persistenced_override.stat.exists
+
+        - name: Enable nvidia-persistenced configuration service
+          ansible.builtin.systemd:
+            name: nvidia-persistenced-config.service
+            enabled: true
+            state: stopped
 
         - name: Enable nvidia-persistenced for next boot (only if manage_nvidia_drivers)
           ansible.builtin.systemd:
