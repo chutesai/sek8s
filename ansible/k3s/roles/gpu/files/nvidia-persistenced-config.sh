@@ -45,7 +45,7 @@ if have_nvswitch; then
     fi
 else
     MODE="persistence"
-    REASON="No NVSwitch fabric detected from PCI scan; using standard persistence mode"
+    REASON="No NVSwitch/NVLink device nodes detected; using standard persistence mode"
 fi
 
 if [[ "${MODE}" == "uvm" ]]; then

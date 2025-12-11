@@ -203,7 +203,7 @@
             enabled: true
             state: stopped
 
-        - name: Enable nvidia-persistenced for next boot (only if manage_nvidia_drivers)
+        - name: Enable nvidia-persistenced for next boot
           ansible.builtin.systemd:
             name: nvidia-persistenced
             enabled: true

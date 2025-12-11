@@ -1,13 +1,22 @@
 [Unit]
 Description=Configure nvidia-persistenced ExecStart based on NVSwitch topology
 Documentation=man:nvidia-smi(1)
-DefaultDependencies=no
-After=local-fs.target
+# Wait for the nvidia device to appear via udev
+After=local-fs.target systemd-modules-load.service dev-nvidia0.device
+Wants=dev-nvidia0.device
+RequiresMountsFor=/tmp
 Before=nvidia-persistenced.service
+# If device doesn't appear within timeout, proceed anyway with default mode
+DefaultDependencies=no
+ConditionPathExists=/dev/nvidia0
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
+# Add a small delay to ensure NVSwitch devices are also enumerated after nvidia0
+ExecStartPre=/bin/sleep 2
 ExecStart=/usr/local/sbin/nvidia-persistenced-config.sh
+TimeoutStartSec=30
 
 [Install]
 WantedBy=multi-user.target
