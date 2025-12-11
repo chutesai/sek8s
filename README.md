@@ -6,46 +6,49 @@ Confidential GPU infrastructure for Chutes miners and zero-trust workloads. This
 
 ## What's in this repo?
 
-| Area | Contents |
+| Directory | Purpose |
 | --- | --- |
-| `host-tools/` | Bare-metal host preparation, GPU/NVSwitch binding, bridge networking, cache/config volume creation, and VM launch scripts |
-| `tdx/` | Submodule with Intel's upstream host enablement scripts |
-| `guest-tools/`, `ansible/k3s/` | Tooling to build and validate the encrypted guest image (Ubuntu + k3s + attestation stack) |
-| `docs/` | Operator-facing guides like the new end-to-end miner walkthrough |
-| `sek8s/`, `nvevidence/`, `tests/` | Python services, attestation helpers, and validation suites used by Chutes infrastructure |
+| **`guest-tools/`** | Build the encrypted TDX VM image with k3s, attestation services, and GPU drivers |
+| **`host-tools/`** | Set up the host machine and launch the TDX VM (GPU binding, networking, volume management) |
+| **`docs/`** | Integration guide with [chutes-miner](https://github.com/chutesai/chutes-miner) and system-status service documentation |
+| `ansible/k3s/` | Ansible roles for guest image build automation |
+| `sek8s/`, `nvevidence/` | Python services running inside the guest (attestation, evidence verification, system status) |
+| `tdx/` | Submodule with Intel's TDX host enablement scripts |
 
 ---
 
 ## Quick start roadmap
 
-1. **Prepare the host** — Follow the [TDX VM Host Setup Guide](host-tools/README.md) to install the required kernel, PCCS, GPU bindings, and bridge networking.
-2. **Understand the full workflow** — The [End-to-End Chutes Miner Setup](docs/end-to-end-miner.md) explains how host prep, VM launch, k3s, and the Helm-based miner deployment fit together.
-3. **Customize or rebuild the guest image** — See [ansible/k3s/README.md](ansible/k3s/README.md) for details on producing the encrypted `tdx-guest.qcow2` image yourself.
+1. **Set up the host** — Use [`host-tools/`](host-tools/) to prepare your TDX-capable machine with the required kernel, PCCS, GPU bindings, and networking.
+2. **Understand the integration** — Read [`docs/end-to-end-miner.md`](docs/end-to-end-miner.md) to see how this repo integrates with the [chutes-miner](https://github.com/chutesai/chutes-miner) control plane.
+3. **Build the guest image** — Use [`guest-tools/`](guest-tools/) and [`ansible/k3s/`](ansible/k3s/) to customize or rebuild the encrypted VM image.
+4. **Monitor VM status** — See [`docs/system-status.md`](docs/system-status.md) for using the system-status API to inspect service health and GPU telemetry inside the VM.
 
-After that, you can launch `host-tools/scripts/quick-launch.sh` to bind GPUs, create volumes, and boot the miner-ready VM in one shot.
+4. **Monitor VM status** — See [`docs/system-status.md`](docs/system-status.md) for using the system-status API to inspect service health and GPU telemetry inside the VM.
+
+Launch the VM with `host-tools/scripts/quick-launch.sh` to bind GPUs, create volumes, and boot the VM in one command.
 
 > **Important:** The guest root disk is LUKS-encrypted. Only the Chutes attestation/key service (or your own compatible service) can decrypt it after verifying Intel TDX measurements, so simply possessing the qcow2 image is not enough to run the VM.
 
 ### How this repo pairs with `chutes-miner`
 
-- The sek8s guest image already contains the Chutes stack; you do **not** run Helm/Ansible on the TEE VM itself.
-- The [chutes-miner](https://github.com/chutesai/chutes-miner) repo is still required for your **control node** (inventory, scheduling, monitoring) and provides the `chutes-miner-cli` used to enroll both TEE and non-TEE nodes.
-- Use the same control node for every worker, but **never** add a sek8s TEE VM to the chutes-miner Ansible inventory—there is no SSH access, so management happens via the CLI/API only.
+- **Guest image:** Built with `guest-tools/` and `ansible/k3s/`, contains the full Chutes stack pre-installed.
+- **Host operations:** Use `host-tools/` to launch and manage the TDX VM on bare metal.
+- **Control plane:** The [chutes-miner](https://github.com/chutesai/chutes-miner) repo manages your fleet of miners (both TEE and non-TEE) via `chutes-miner-cli`.
+- **Integration:** See [`docs/end-to-end-miner.md`](docs/end-to-end-miner.md) for how the pieces fit together.
+
+> **Note:** TEE VMs have no SSH access. Use the `chutes-miner-cli` for management and the system-status API (see [`docs/system-status.md`](docs/system-status.md)) for read-only monitoring.
 
 ---
 
-## Repository layout (abridged)
+## Key Documentation
 
-```
-sek8s/
-├── host-tools/        # Host automation, docs, scripts
-├── guest-tools/       # Guest image + measurement utilities
-├── ansible/k3s/       # Image build playbooks
-├── docs/              # Operator guides
-├── nvevidence/        # Evidence verification service
-├── sek8s/             # Python services + APIs
-└── tests/             # Integration/unit suites
-```
+- **[`host-tools/README.md`](host-tools/README.md)** — Setting up the TDX host and launching VMs
+- **[`guest-tools/README.md`](guest-tools/README.md)** — Building and measuring the encrypted VM image
+- **[`docs/end-to-end-miner.md`](docs/end-to-end-miner.md)** — Complete integration workflow with chutes-miner
+- **[`docs/system-status.md`](docs/system-status.md)** — System status API for monitoring service health and GPU telemetry
+
+---
 
 ---
 
