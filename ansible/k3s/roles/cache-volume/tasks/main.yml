@@ -46,24 +46,6 @@
         group: root
       register: verify_service
 
-    - name: Copy containerd cache seed script
-      copy:
-        src: "{{ files_dir }}/seed-containerd-cache.sh"
-        dest: /usr/local/bin/seed-containerd-cache.sh
-        mode: '0755'
-        owner: root
-        group: root
-      register: seed_script
-
-    - name: Copy containerd cache seed service
-      copy:
-        src: "{{ files_dir }}/seed-containerd-cache.service"
-        dest: /etc/systemd/system/seed-containerd-cache.service
-        mode: '0644'
-        owner: root
-        group: root
-      register: seed_service
-
     - name: Copy mount unit
       copy:
         src: "{{ files_dir }}/var-snap.mount"
@@ -73,14 +55,14 @@
         group: root
       register: var_snap_mount_unit
 
-    - name: Copy containerd bind mount unit
+    - name: Copy containerd blobs bind mount unit
       copy:
-        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd.mount"
-        dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd.mount
+        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount"
+        dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
         mode: '0644'
         owner: root
         group: root
-      register: containerd_mount_unit
+      register: containerd_blobs_mount_unit
 
     - name: Copy Chutes agent bind mount unit
       copy:
@@ -94,7 +76,7 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or seed_service.changed or var_snap_mount_unit.changed or containerd_mount_unit.changed or chutes_mount_unit.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_mount_unit.changed or chutes_mount_unit.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -104,9 +86,9 @@
         owner: root
         group: root
 
-    - name: Create containerd cache directory on /var/snap
+    - name: Create containerd blobs cache directory on /var/snap
       file:
-        path: /var/snap/containerd
+        path: /var/snap/containerd-blobs
         state: directory
         mode: '0755'
         owner: root
@@ -120,9 +102,9 @@
         owner: root
         group: root
 
-    - name: Ensure containerd mount target exists
+    - name: Ensure containerd blobs mount target exists
       file:
-        path: /var/lib/rancher/k3s/agent/containerd
+        path: /var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content/blobs
         state: directory
         mode: '0755'
         owner: root
@@ -162,17 +144,9 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable seed-containerd-cache.service (but do not start)
+    - name: Enable containerd blobs bind mount (but do not start)
       systemd:
-        name: seed-containerd-cache.service
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
-      failed_when: false
-
-    - name: Enable containerd bind mount (but do not start)
-      systemd:
-        name: var-lib-rancher-k3s-agent-containerd.mount
+        name: var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
         enabled: yes
         state: stopped
         daemon_reload: yes
@@ -198,11 +172,11 @@
       changed_when: false
       failed_when: mount_status.stdout != "enabled"
 
-    - name: Verify containerd mount installation
-      command: systemctl is-enabled var-lib-rancher-k3s-agent-containerd.mount
-      register: containerd_mount_status
+    - name: Verify containerd blobs mount installation
+      command: systemctl is-enabled var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
+      register: containerd_blobs_mount_status
       changed_when: false
-      failed_when: containerd_mount_status.stdout != "enabled"
+      failed_when: containerd_blobs_mount_status.stdout != "enabled"
 
     - name: Verify Chutes agent mount installation
       command: systemctl is-enabled var-lib-chutes-agent.mount
