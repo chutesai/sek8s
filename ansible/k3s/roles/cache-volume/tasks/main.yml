@@ -73,19 +73,28 @@
         group: root
       register: containerd_blobs_symlink_service
 
-    - name: Copy Chutes agent bind mount unit
+    - name: Copy Chutes agent symlink script
       copy:
-        src: "{{ files_dir }}/var-lib-chutes-agent.mount"
-        dest: /etc/systemd/system/var-lib-chutes-agent.mount
+        src: "{{ files_dir }}/setup-chutes-agent-symlink.sh"
+        dest: /usr/local/bin/setup-chutes-agent-symlink.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: chutes_agent_symlink_script
+
+    - name: Copy Chutes agent symlink service
+      copy:
+        src: "{{ files_dir }}/setup-chutes-agent-symlink.service"
+        dest: /etc/systemd/system/setup-chutes-agent-symlink.service
         mode: '0644'
         owner: root
         group: root
-      register: chutes_mount_unit
+      register: chutes_agent_symlink_service
 
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_symlink_service.changed or chutes_mount_unit.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_symlink_service.changed or chutes_agent_symlink_service.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -119,13 +128,7 @@
         owner: root
         group: root
 
-    - name: Ensure Chutes agent mount target exists
-      file:
-        path: /var/lib/chutes/agent
-        state: directory
-        mode: '0755'
-        owner: root
-        group: root
+    # Symlink script will handle agent target
 
     - name: Enable verify-cache-volume.service (but do not start)
       systemd:
@@ -153,9 +156,9 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable Chutes agent bind mount (but do not start)
+    - name: Enable Chutes agent symlink service (but do not start)
       systemd:
-        name: var-lib-chutes-agent.mount
+        name: setup-chutes-agent-symlink.service
         enabled: yes
         state: stopped
         daemon_reload: yes
@@ -179,8 +182,8 @@
       changed_when: false
       failed_when: containerd_blobs_symlink_status.stdout != "enabled"
 
-    - name: Verify Chutes agent mount installation
-      command: systemctl is-enabled var-lib-chutes-agent.mount
-      register: chutes_mount_status
+    - name: Verify Chutes agent symlink service installation
+      command: systemctl is-enabled setup-chutes-agent-symlink.service
+      register: chutes_agent_symlink_status
       changed_when: false
-      failed_when: chutes_mount_status.stdout != "enabled"
+      failed_when: chutes_agent_symlink_status.stdout != "enabled"
