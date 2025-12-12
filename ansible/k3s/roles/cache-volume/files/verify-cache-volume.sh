@@ -117,48 +117,4 @@ log_info "=== Cache Volume Verification Complete ==="
 log_info "Device $DEVICE is ready to be mounted"
 log_info "Filesystem: $FS_TYPE, Label: $FS_LABEL, UUID: $FS_UUID"
 
-# === One-time cleanup of legacy containerd data ===
-# Previously the entire containerd directory was cached, which could leak
-# sensitive data and cause database mismatches. Now we only cache blobs.
-# This cleanup removes the old data structure if present.
-# TODO: Remove this cleanup block after all cache volumes have been migrated.
-
-MOUNT_POINT="/var/snap"
-
-# Temporarily mount to check for and clean up legacy data
-log_info "Temporarily mounting $DEVICE to check for legacy data..."
-mount -t ext4 -o defaults,noatime "$DEVICE" "$MOUNT_POINT"
-
-LEGACY_CONTAINERD="$MOUNT_POINT/containerd"
-CLEANUP_MARKER="$MOUNT_POINT/.containerd-cleanup-done"
-
-if [ -d "$LEGACY_CONTAINERD" ] && [ ! -f "$CLEANUP_MARKER" ]; then
-    log_info "Found legacy containerd directory, performing one-time cleanup..."
-
-    # Preserve blobs if they exist (content-addressed, safe to keep)
-    LEGACY_BLOBS="$LEGACY_CONTAINERD/io.containerd.content.v1.content/blobs"
-    BLOBS_DIR="$MOUNT_POINT/containerd-blobs"
-
-    if [ -d "$LEGACY_BLOBS" ]; then
-        log_info "Migrating blobs from legacy location..."
-        mkdir -p "$BLOBS_DIR"
-        if [ -d "$LEGACY_BLOBS/sha256" ]; then
-            mv "$LEGACY_BLOBS/sha256" "$BLOBS_DIR/" 2>/dev/null || true
-        fi
-    fi
-
-    # Remove the legacy containerd directory
-    log_info "Removing legacy containerd data (database, snapshots, runtime state)..."
-    rm -rf "$LEGACY_CONTAINERD"
-
-    touch "$CLEANUP_MARKER"
-    log_info "Legacy containerd cleanup complete"
-fi
-
-# Ensure the blobs directory exists for the bind mount
-mkdir -p "$MOUNT_POINT/containerd-blobs/sha256"
-
-umount "$MOUNT_POINT"
-log_info "Temporary mount removed, systemd will mount properly"
-
 exit 0

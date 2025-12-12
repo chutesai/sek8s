@@ -23,6 +23,34 @@ if ! mountpoint -q /var/snap; then
     exit 1
 fi
 
+# === One-time cleanup of legacy containerd data ===
+# Previously the entire containerd directory was cached, which could leak
+# sensitive data and cause database mismatches. Now we only cache blobs.
+# TODO: Remove this cleanup block after all cache volumes have been migrated.
+
+LEGACY_CONTAINERD="/var/snap/containerd"
+CLEANUP_MARKER="/var/snap/.containerd-cleanup-done"
+
+if [ -d "$LEGACY_CONTAINERD" ] && [ ! -f "$CLEANUP_MARKER" ]; then
+    log "Found legacy containerd directory, performing one-time cleanup..."
+
+    # Preserve blobs if they exist (content-addressed, safe to keep)
+    LEGACY_BLOBS="$LEGACY_CONTAINERD/io.containerd.content.v1.content/blobs"
+
+    if [ -d "$LEGACY_BLOBS/sha256" ]; then
+        log "Migrating blobs from legacy location..."
+        mkdir -p "$CACHE_BLOBS"
+        mv "$LEGACY_BLOBS/sha256" "$CACHE_BLOBS/" 2>/dev/null || true
+    fi
+
+    # Remove the legacy containerd directory
+    log "Removing legacy containerd data (database, snapshots, runtime state)..."
+    rm -rf "$LEGACY_CONTAINERD"
+
+    touch "$CLEANUP_MARKER"
+    log "Legacy containerd cleanup complete"
+fi
+
 # Ensure cache blobs directory exists
 mkdir -p "$CACHE_BLOBS/sha256"
 
