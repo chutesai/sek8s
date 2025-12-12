@@ -16,7 +16,7 @@ By default, the guest keeps only the k3s **containerd** data under `/var/snap/co
 
 ```bash
 # Create a 5TB cache volume
-./scripts/create-cache-volume.sh cache-volume.qcow2 5000G
+./scripts/create-cache.sh cache-volume.qcow2 5000G
 ```
 
 ## Manual Setup (Step-by-Step)
