@@ -19,7 +19,14 @@
           "keyless_identity_regex": "^https://github.com/bitnami/.*",
           "keyless_issuer": "https://token.actions.githubusercontent.com",
           "rekor_url": "https://rekor.sigstore.dev"
-        }
+          "repositories": {
+            "kubectl": {
+              "repository": "kubectl",
+              "require_signature": false,
+              "verification_method": "disabled"
+            }
+          }
+        },
       }
     },
     {
