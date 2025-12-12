@@ -19,7 +19,35 @@ kind: ServiceAccount
 metadata:
   name: attestation-proxy
   namespace: attestation-system
-automountServiceAccountToken: false
+
+---
+# Role to allow checking for miner-credentials secret
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: secret-reader
+  namespace: attestation-system
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["miner-credentials"]
+  verbs: ["get"]
+
+---
+# Bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: attestation-proxy-secret-reader
+  namespace: attestation-system
+subjects:
+- kind: ServiceAccount
+  name: attestation-proxy
+  namespace: attestation-system
+roleRef:
+  kind: Role
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io
 
 ---
 # Secret containing allowed validator hotkeys
@@ -59,6 +87,34 @@ spec:
       securityContext:
         supplementalGroups:
         - 987  # tdx-attest group GID
+      initContainers:
+      - name: wait-for-credentials
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for miner-credentials secret..."
+          until kubectl get secret miner-credentials -n attestation-system >/dev/null 2>&1; do
+            echo "Secret not found, waiting 5s..."
+            sleep 5
+          done
+          echo "Secret found, proceeding with startup"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
       containers:
       - name: attestation-proxy
         image: parachutes/sek8s:latest
@@ -163,8 +219,8 @@ spec:
               - https://localhost:8443/health
           initialDelaySeconds: 5
           periodSeconds: 5
-          timeoutSeconds: 3
-          failureThreshold: 10
+          timeoutSeconds: 10
+          failureThreshold: 12
 
       volumes:
       - name: attestation-socket
