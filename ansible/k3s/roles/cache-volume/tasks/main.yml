@@ -55,14 +55,23 @@
         group: root
       register: var_snap_mount_unit
 
-    - name: Copy containerd blobs bind mount unit
+    - name: Copy containerd blobs symlink script
       copy:
-        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount"
-        dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
+        src: "{{ files_dir }}/setup-containerd-blobs-symlink.sh"
+        dest: /usr/local/bin/setup-containerd-blobs-symlink.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: containerd_blobs_symlink_script
+
+    - name: Copy containerd blobs symlink service
+      copy:
+        src: "{{ files_dir }}/setup-containerd-blobs-symlink.service"
+        dest: /etc/systemd/system/setup-containerd-blobs-symlink.service
         mode: '0644'
         owner: root
         group: root
-      register: containerd_blobs_mount_unit
+      register: containerd_blobs_symlink_service
 
     - name: Copy Chutes agent bind mount unit
       copy:
@@ -76,7 +85,7 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_mount_unit.changed or chutes_mount_unit.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_symlink_service.changed or chutes_mount_unit.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -97,14 +106,6 @@
     - name: Create Chutes agent directory on /var/snap
       file:
         path: /var/snap/chutes-agent
-        state: directory
-        mode: '0755'
-        owner: root
-        group: root
-
-    - name: Ensure containerd blobs mount target exists
-      file:
-        path: /var/lib/rancher/k3s/agent/containerd/io.containerd.content.v1.content/blobs
         state: directory
         mode: '0755'
         owner: root
@@ -144,9 +145,9 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable containerd blobs bind mount (but do not start)
+    - name: Enable containerd blobs symlink service (but do not start)
       systemd:
-        name: var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
+        name: setup-containerd-blobs-symlink.service
         enabled: yes
         state: stopped
         daemon_reload: yes
@@ -172,11 +173,11 @@
       changed_when: false
       failed_when: mount_status.stdout != "enabled"
 
-    - name: Verify containerd blobs mount installation
-      command: systemctl is-enabled var-lib-rancher-k3s-agent-containerd-io.containerd.content.v1.content-blobs.mount
-      register: containerd_blobs_mount_status
+    - name: Verify containerd blobs symlink service installation
+      command: systemctl is-enabled setup-containerd-blobs-symlink.service
+      register: containerd_blobs_symlink_status
       changed_when: false
-      failed_when: containerd_blobs_mount_status.stdout != "enabled"
+      failed_when: containerd_blobs_symlink_status.stdout != "enabled"
 
     - name: Verify Chutes agent mount installation
       command: systemctl is-enabled var-lib-chutes-agent.mount
