@@ -55,24 +55,6 @@
         group: root
       register: var_snap_mount_unit
 
-    - name: Copy containerd blobs symlink script
-      copy:
-        src: "{{ files_dir }}/setup-containerd-blobs-symlink.sh"
-        dest: /usr/local/bin/setup-containerd-blobs-symlink.sh
-        mode: '0755'
-        owner: root
-        group: root
-      register: containerd_blobs_symlink_script
-
-    - name: Copy containerd blobs symlink service
-      copy:
-        src: "{{ files_dir }}/setup-containerd-blobs-symlink.service"
-        dest: /etc/systemd/system/setup-containerd-blobs-symlink.service
-        mode: '0644'
-        owner: root
-        group: root
-      register: containerd_blobs_symlink_service
-
     - name: Copy Chutes agent symlink script
       copy:
         src: "{{ files_dir }}/setup-chutes-agent-symlink.sh"
@@ -94,19 +76,11 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or containerd_blobs_symlink_service.changed or chutes_agent_symlink_service.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or chutes_agent_symlink_service.changed
 
     - name: Create /var/snap mount point directory
       file:
         path: /var/snap
-        state: directory
-        mode: '0755'
-        owner: root
-        group: root
-
-    - name: Create containerd blobs cache directory on /var/snap
-      file:
-        path: /var/snap/containerd-blobs
         state: directory
         mode: '0755'
         owner: root
@@ -148,14 +122,6 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable containerd blobs symlink service (but do not start)
-      systemd:
-        name: setup-containerd-blobs-symlink.service
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
-      failed_when: false
-
     - name: Enable Chutes agent symlink service (but do not start)
       systemd:
         name: setup-chutes-agent-symlink.service
@@ -175,12 +141,6 @@
       register: mount_status
       changed_when: false
       failed_when: mount_status.stdout != "enabled"
-
-    - name: Verify containerd blobs symlink service installation
-      command: systemctl is-enabled setup-containerd-blobs-symlink.service
-      register: containerd_blobs_symlink_status
-      changed_when: false
-      failed_when: containerd_blobs_symlink_status.stdout != "enabled"
 
     - name: Verify Chutes agent symlink service installation
       command: systemctl is-enabled setup-chutes-agent-symlink.service
