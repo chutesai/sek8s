@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aiocache import cached as aiocache_cached
@@ -13,6 +16,8 @@ from loguru import logger
 
 from sek8s.config import SystemStatusConfig
 from sek8s.responses import (
+    DirectoryInfo,
+    DiskSpaceResponse,
     HealthResponse,
     NvidiaSmiResponse,
     OverviewResponse,
@@ -195,6 +200,14 @@ class SystemStatusServer(WebServer):
             response_model=OverviewResponse,
             summary="System overview",
             description="Returns combined status of all services and GPUs",
+        )
+        self.app.add_api_route(
+            "/disk/space",
+            self.get_disk_space,
+            methods=["GET"],
+            response_model=DiskSpaceResponse,
+            summary="Get directory sizes",
+            description="Returns sizes of immediate subdirectories within a given path",
         )
 
     @aiocache_cached(ttl=30)
@@ -391,6 +404,108 @@ class SystemStatusServer(WebServer):
             status.load_state == "loaded"
             and status.active_state == "active"
             and status.sub_state in {"running", "listening", None}
+        )
+
+    def _validate_path(self, path: str) -> Path:
+        """Validate and resolve path, ensuring it's safe to query."""
+        try:
+            resolved = Path(path).resolve()
+        except (ValueError, RuntimeError) as exc:
+            logger.error("Invalid path: {}", path)
+            raise HTTPException(status_code=400, detail="Invalid path") from exc
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="Path does not exist")
+
+        if not resolved.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+
+        return resolved
+
+    def _parse_du_line(self, line: str) -> tuple[int, str]:
+        """Parse a line from du output: size<tab>path."""
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid du output line: {line}")
+        try:
+            size_kb = int(parts[0])
+        except ValueError as exc:
+            raise ValueError(f"Invalid size in du output: {parts[0]}") from exc
+        return size_kb * 1024, parts[1]
+
+    def _human_readable_size(self, size_bytes: int) -> str:
+        """Convert bytes to human-readable format."""
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
+
+    @aiocache_cached(ttl=60)
+    async def get_disk_space(
+        self,
+        path: str = Query("/", description="Directory path to analyze"),
+    ) -> DiskSpaceResponse:
+        """Get sizes of immediate subdirectories within the given path."""
+        validated_path = self._validate_path(path)
+
+        # Use du to get directory sizes (immediate subdirectories only)
+        # -s: summarize (don't recurse into subdirectories)
+        # -k: output in kilobytes
+        # --max-depth=1: only immediate children
+        command = [
+            "du",
+            "-sk",
+            "--max-depth=1",
+            str(validated_path),
+        ]
+
+        result = await _run_command(
+            command,
+            self.config.command_timeout_seconds,
+            self.config.max_output_bytes,
+        )
+        _ensure_success(result, "du")
+
+        directories: List[DirectoryInfo] = []
+        parent_size = 0
+
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+
+            try:
+                size_bytes, dir_path = self._parse_du_line(line)
+            except ValueError as exc:
+                logger.warning("Failed to parse du line: {}", exc)
+                continue
+
+            # Skip the parent directory itself (it appears in the output)
+            if Path(dir_path).resolve() == validated_path:
+                parent_size = size_bytes
+                continue
+
+            dir_name = Path(dir_path).name
+            directories.append(
+                DirectoryInfo(
+                    name=dir_name,
+                    size_bytes=size_bytes,
+                    size_human=self._human_readable_size(size_bytes),
+                )
+            )
+
+        # Sort by size descending
+        directories.sort(key=lambda d: d.size_bytes, reverse=True)
+
+        # Calculate total (use parent_size if available, otherwise sum subdirs)
+        total_bytes = parent_size if parent_size > 0 else sum(d.size_bytes for d in directories)
+
+        return DiskSpaceResponse(
+            path=str(validated_path),
+            directories=directories,
+            total_size_bytes=total_bytes,
+            total_size_human=self._human_readable_size(total_bytes),
+            stdout_truncated=result.stdout_truncated,
         )
 
 

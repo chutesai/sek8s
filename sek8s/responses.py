@@ -71,3 +71,17 @@ class OverviewResponse(BaseModel):
     services: List[ServiceStatusResponse] = Field(..., description="Status of all monitored services")
     gpu: NvidiaSmiResponse = Field(..., description="GPU status from nvidia-smi")
     timestamp: str = Field(..., description="ISO 8601 timestamp of the report")
+
+
+class DirectoryInfo(BaseModel):
+    name: str = Field(..., description="Directory name")
+    size_bytes: int = Field(..., description="Total size in bytes")
+    size_human: str = Field(..., description="Human-readable size")
+
+
+class DiskSpaceResponse(BaseModel):
+    path: str = Field(..., description="Parent directory path")
+    directories: List[DirectoryInfo] = Field(..., description="List of immediate subdirectories with sizes")
+    total_size_bytes: int = Field(..., description="Total size of all directories in bytes")
+    total_size_human: str = Field(..., description="Total size in human-readable format")
+    stdout_truncated: bool = Field(..., description="Whether output was truncated")
