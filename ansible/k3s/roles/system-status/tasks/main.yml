@@ -68,6 +68,17 @@
     group: root
     mode: '0644'
 
+- name: Allow status user to execute shutdown without password
+  ansible.builtin.copy:
+    content: |
+      # Allow system-status service to perform graceful shutdown
+      status ALL=(ALL) NOPASSWD: /sbin/shutdown
+    dest: /etc/sudoers.d/system-status-shutdown
+    owner: root
+    group: root
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+
 - name: Enable and start system status
   ansible.builtin.systemd:
     name: system-status.service

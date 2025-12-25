@@ -75,8 +75,11 @@ class OverviewResponse(BaseModel):
 
 class DirectoryInfo(BaseModel):
     name: str = Field(..., description="Directory name")
+    path: str = Field(..., description="Full directory path")
     size_bytes: int = Field(..., description="Total size in bytes")
     size_human: str = Field(..., description="Human-readable size")
+    depth: int = Field(..., description="Depth level from root path")
+    percentage: Optional[float] = Field(None, description="Percentage of total disk usage")
 
 
 class DiskSpaceResponse(BaseModel):
@@ -85,3 +88,12 @@ class DiskSpaceResponse(BaseModel):
     total_size_bytes: int = Field(..., description="Total size of all directories in bytes")
     total_size_human: str = Field(..., description="Total size in human-readable format")
     stdout_truncated: bool = Field(..., description="Whether output was truncated")
+    diagnostic_mode: bool = Field(False, description="Whether diagnostic mode was enabled")
+    max_depth: Optional[int] = Field(None, description="Maximum depth analyzed in diagnostic mode")
+    top_n: Optional[int] = Field(None, description="Number of top offenders shown per level")
+
+
+class ShutdownResponse(BaseModel):
+    status: str = Field(..., description="Shutdown status", example="initiated")
+    message: str = Field(..., description="Shutdown message")
+    timestamp: str = Field(..., description="ISO 8601 timestamp of shutdown request")

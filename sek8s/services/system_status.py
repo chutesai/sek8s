@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aiocache import cached as aiocache_cached
-from fastapi import HTTPException, Query
+from fastapi import Depends, HTTPException, Query
 from loguru import logger
 
 from sek8s.config import SystemStatusConfig
@@ -26,8 +27,10 @@ from sek8s.responses import (
     ServicesListResponse,
     ServiceStatus,
     ServiceStatusResponse,
+    ShutdownResponse,
 )
 from sek8s.server import WebServer
+from sek8s.services.util import authorize
 
 
 @dataclass(frozen=True)
@@ -208,6 +211,15 @@ class SystemStatusServer(WebServer):
             response_model=DiskSpaceResponse,
             summary="Get directory sizes",
             description="Returns sizes of immediate subdirectories within a given path",
+        )
+        self.app.add_api_route(
+            "/system/shutdown",
+            self.shutdown_system,
+            methods=["POST"],
+            response_model=ShutdownResponse,
+            summary="Graceful system shutdown",
+            description="Initiates a graceful system shutdown (requires miner authentication)",
+            dependencies=[Depends(authorize(allow_miner=True, purpose="/system/shutdown"))],
         )
 
     @aiocache_cached(ttl=30)
@@ -441,21 +453,45 @@ class SystemStatusServer(WebServer):
             size_bytes /= 1024.0
         return f"{size_bytes:.1f} PB"
 
-    @aiocache_cached(ttl=60)
     async def get_disk_space(
         self,
         path: str = Query("/", description="Directory path to analyze"),
+        diagnostic: bool = Query(False, description="Enable diagnostic mode for deep analysis"),
+        max_depth: int = Query(3, ge=1, le=10, description="Maximum depth for diagnostic mode (default: 3)"),
+        top_n: int = Query(10, ge=1, le=100, description="Show top N directories per level (default: 10)"),
     ) -> DiskSpaceResponse:
-        """Get sizes of immediate subdirectories within the given path."""
-        validated_path = self._validate_path(path)
+        """Get sizes of subdirectories within the given path.
+        
+        Standard mode: Shows immediate subdirectories only.
+        Diagnostic mode: Recursively analyzes up to max_depth levels and shows top N offenders.
+        The max_depth and top_n parameters are only used when diagnostic=true.
+        """
+        # Extract actual values from Query objects if needed (for direct calls in tests)
+        actual_path = path.default if hasattr(path, 'default') else path
+        actual_diagnostic = diagnostic.default if hasattr(diagnostic, 'default') else diagnostic
+        actual_max_depth = max_depth.default if hasattr(max_depth, 'default') else max_depth
+        actual_top_n = top_n.default if hasattr(top_n, 'default') else top_n
+        
+        validated_path = self._validate_path(actual_path)
 
+        if actual_diagnostic:
+            return await self._get_disk_space_diagnostic(
+                validated_path, actual_max_depth, actual_top_n
+            )
+        else:
+            return await self._get_disk_space_simple(validated_path)
+
+    async def _get_disk_space_simple(
+        self, validated_path: Path
+    ) -> DiskSpaceResponse:
+        """Get sizes of immediate subdirectories only."""
         # Use du to get directory sizes (immediate subdirectories only)
-        # -s: summarize (don't recurse into subdirectories)
         # -k: output in kilobytes
         # --max-depth=1: only immediate children
+        # Note: Don't use -s with --max-depth as they conflict
         command = [
             "du",
-            "-sk",
+            "-k",
             "--max-depth=1",
             str(validated_path),
         ]
@@ -489,8 +525,11 @@ class SystemStatusServer(WebServer):
             directories.append(
                 DirectoryInfo(
                     name=dir_name,
+                    path=dir_path,
                     size_bytes=size_bytes,
                     size_human=self._human_readable_size(size_bytes),
+                    depth=1,
+                    percentage=None,
                 )
             )
 
@@ -500,12 +539,144 @@ class SystemStatusServer(WebServer):
         # Calculate total (use parent_size if available, otherwise sum subdirs)
         total_bytes = parent_size if parent_size > 0 else sum(d.size_bytes for d in directories)
 
+        # Add percentages
+        if total_bytes > 0:
+            for d in directories:
+                d.percentage = (d.size_bytes / total_bytes) * 100
+
         return DiskSpaceResponse(
             path=str(validated_path),
             directories=directories,
             total_size_bytes=total_bytes,
             total_size_human=self._human_readable_size(total_bytes),
             stdout_truncated=result.stdout_truncated,
+            diagnostic_mode=False,
+        )
+
+    async def _get_disk_space_diagnostic(
+        self, validated_path: Path, max_depth: int, top_n: int
+    ) -> DiskSpaceResponse:
+        """Recursive analysis to find worst disk space offenders at multiple depth levels."""
+        # Use du with specified max-depth to get all directories up to that level
+        # This gives us a complete picture of disk usage at all levels
+        command = [
+            "du",
+            "-k",
+            f"--max-depth={max_depth}",
+            str(validated_path),
+        ]
+
+        result = await _run_command(
+            command,
+            self.config.command_timeout_seconds * 3,  # Allow more time for deep scans
+            self.config.max_output_bytes * 2,  # Allow larger output
+        )
+        _ensure_success(result, "du")
+
+        # Parse all directory entries
+        all_entries: List[tuple[int, str, int]] = []  # (size_bytes, path, depth)
+        root_size = 0
+
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+
+            try:
+                size_bytes, dir_path = self._parse_du_line(line)
+            except ValueError as exc:
+                logger.warning("Failed to parse du line: {}", exc)
+                continue
+
+            resolved = Path(dir_path).resolve()
+            
+            # Calculate depth relative to validated_path
+            try:
+                relative = resolved.relative_to(validated_path)
+                depth = len(relative.parts) if str(relative) != "." else 0
+            except ValueError:
+                # Path is not relative to validated_path (shouldn't happen)
+                continue
+
+            if depth == 0:
+                root_size = size_bytes
+                continue
+
+            all_entries.append((size_bytes, str(resolved), depth))
+
+        # Group by depth and get top N for each level
+        depth_groups: Dict[int, List[tuple[int, str]]] = {}
+        for size_bytes, path, depth in all_entries:
+            if depth not in depth_groups:
+                depth_groups[depth] = []
+            depth_groups[depth].append((size_bytes, path))
+
+        # Get top N from each depth level
+        top_offenders: List[DirectoryInfo] = []
+        for depth in sorted(depth_groups.keys()):
+            entries = depth_groups[depth]
+            entries.sort(reverse=True)  # Sort by size descending
+            
+            for size_bytes, path in entries[:top_n]:
+                percentage = (size_bytes / root_size * 100) if root_size > 0 else 0
+                top_offenders.append(
+                    DirectoryInfo(
+                        name=Path(path).name,
+                        path=path,
+                        size_bytes=size_bytes,
+                        size_human=self._human_readable_size(size_bytes),
+                        depth=depth,
+                        percentage=percentage,
+                    )
+                )
+
+        # Sort all results by size descending for final output
+        top_offenders.sort(key=lambda d: d.size_bytes, reverse=True)
+
+        return DiskSpaceResponse(
+            path=str(validated_path),
+            directories=top_offenders,
+            total_size_bytes=root_size,
+            total_size_human=self._human_readable_size(root_size),
+            stdout_truncated=result.stdout_truncated,
+            diagnostic_mode=True,
+            max_depth=max_depth,
+            top_n=top_n,
+        )
+
+    async def shutdown_system(self) -> ShutdownResponse:
+        """Initiate a graceful system shutdown.
+        
+        This endpoint requires miner authentication via signed message.
+        It triggers a graceful shutdown using the shutdown command.
+        Note: Requires sudoers configuration for the status user.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        logger.warning("Graceful shutdown requested at {}", timestamp)
+        
+        # Schedule the shutdown command to run after we return the response
+        # Use 'shutdown -h now' for graceful shutdown
+        # Requires: status ALL=(ALL) NOPASSWD: /sbin/shutdown
+        async def delayed_shutdown():
+            await asyncio.sleep(2)  # Give time for response to be sent
+            logger.critical("Executing graceful shutdown...")
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "sudo", "/sbin/shutdown", "-h", "now",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await process.communicate()
+            except Exception as e:
+                logger.error("Failed to execute shutdown: {}", e)
+        
+        # Schedule shutdown in background
+        asyncio.create_task(delayed_shutdown())
+        
+        return ShutdownResponse(
+            status="initiated",
+            message="Graceful shutdown initiated. System will power off in 2 seconds.",
+            timestamp=timestamp,
         )
 
 
