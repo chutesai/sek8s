@@ -110,15 +110,26 @@
   ansible.builtin.file:
     path: "{{ libvirt_image_dir }}"
     state: directory
-    mode: "0755"
+    mode: "0711"
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
     src: "{{ base_img_path }}"
     dest: "{{  build_img_path }}"
-    mode: "0640"
+    mode: "0644"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
+
+- name: Configure libvirt to disable DAC security for this VM
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/qemu.conf
+    regexp: '^#?dynamic_ownership\s*='
+    line: 'dynamic_ownership = 0'
+    backup: yes
+  notify: restart libvirtd
+
+- name: Ensure libvirt changes are applied
+  ansible.builtin.meta: flush_handlers
 
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:
