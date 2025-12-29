@@ -9,8 +9,14 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
-API_ENDPOINT="${TDX_API_ENDPOINT:-https://tdx-attestation.chutes.ai/servers/boot/attestation}"
-NONCE_ENDPOINT="${TDX_NONCE_ENDPOINT:-https://api.chutes.ai/servers/nonce}"
+# Validate required configuration
+if [ -z "$TDX_API_ENDPOINT" ] || [ -z "$TDX_NONCE_ENDPOINT" ]; then
+    echo "ERROR: Missing required TDX configuration. Check /etc/tdx-luks.conf" >&2
+    exit 1
+fi
+
+API_ENDPOINT="$TDX_API_ENDPOINT"
+NONCE_ENDPOINT="$TDX_NONCE_ENDPOINT"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
@@ -19,8 +25,10 @@ CLIENT_CERT="/tmp/client_cert.pem"
 CLIENT_KEY="/tmp/client_key.pem"
 API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 
-# Global variable for the retrieved key
+# Global variables
 LUKS_KEY=""
+BOOT_TOKEN=""
+VM_ID=""
 
 # Function to securely clear the LUKS key and temporary files
 clear_luks_key() {
@@ -30,6 +38,12 @@ clear_luks_key() {
         LUKS_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
         LUKS_KEY=""
         unset LUKS_KEY
+    fi
+    
+    if [ -n "$BOOT_TOKEN" ]; then
+        BOOT_TOKEN="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        BOOT_TOKEN=""
+        unset BOOT_TOKEN
     fi
     
     # Clear any temporary files that might contain sensitive data
@@ -290,9 +304,10 @@ fetch_luks_key() {
         case "$http_code" in
             200)
                 LUKS_KEY=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                BOOT_TOKEN=$(grep -o '"boot_token":"[^"]*"' "$response_file" | cut -d'"' -f4)
                 if [ -n "$LUKS_KEY" ]; then
                     rm -f "$response_file"
-                    log_success_msg "LUKS key retrieved successfully"
+                    log_success_msg "LUKS key and boot token retrieved successfully"
                     return 0
                 else
                     log_failure_msg "API response missing key field"
@@ -343,6 +358,53 @@ unlock_device() {
         log_failure_msg "Failed to unlock LUKS device"
         return 1
     fi
+}
+
+# Function to get or generate VM ID from root filesystem
+get_or_generate_vm_id() {
+    local root_mount="/mnt/root-vmid"
+    local vm_id_file="/etc/chutes/vm-id"
+    
+    log_begin_msg "Checking for VM identity"
+    
+    mkdir -p "$root_mount"
+    
+    # Mount root (already unlocked)
+    if ! mount -o rw "/dev/mapper/$LUKS_NAME" "$root_mount" 2>/dev/null; then
+        log_failure_msg "Failed to mount root to check vm-id"
+        return 1
+    fi
+    
+    # Check for existing VM ID
+    if [ -f "$root_mount$vm_id_file" ]; then
+        VM_ID=$(cat "$root_mount$vm_id_file")
+        umount "$root_mount"
+        log_success_msg "Found existing VM ID: ${VM_ID:0:8}..."
+        return 0
+    fi
+    
+    # No ID exists - generate new one
+    log_begin_msg "Generating new VM ID"
+    
+    # Generate UUID-like ID
+    VM_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || \
+            dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    
+    if [ -z "$VM_ID" ]; then
+        umount "$root_mount"
+        log_failure_msg "Failed to generate VM ID"
+        return 1
+    fi
+    
+    # Save VM ID to root filesystem
+    mkdir -p "$root_mount/etc/chutes"
+    echo "$VM_ID" > "$root_mount$vm_id_file"
+    chmod 600 "$root_mount$vm_id_file"
+    sync
+    
+    umount "$root_mount"
+    log_success_msg "Generated and saved new VM ID: ${VM_ID:0:8}..."
+    return 0
 }
 
 # Function to handle failure and shutdown
@@ -398,6 +460,19 @@ main() {
     
     # Unlock the device
     if unlock_device; then
+        # Get or generate VM ID (root is now unlocked)
+        if ! get_or_generate_vm_id; then
+            handle_failure "Failed to determine VM ID"
+            return 1
+        fi
+        
+        # Save VM ID and boot token to /run for containerd cache setup
+        mkdir -p /run/chutes
+        echo "$VM_ID" > /run/chutes/vm-id
+        if [ -n "$BOOT_TOKEN" ]; then
+            echo "$BOOT_TOKEN" > /run/chutes/boot-token
+        fi
+        
         # Clear key from memory immediately after successful unlock
         clear_luks_key
         log_success_msg "TDX-based unlock completed successfully"

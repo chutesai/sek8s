@@ -19,6 +19,8 @@ VM_DNS="8.8.8.8"
 PUBLIC_IFACE="ens9f0np0"
 CACHE_SIZE="5000G"
 CACHE_VOLUME=""
+CONTAINERD_SIZE="500G"
+CONTAINERD_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
@@ -37,6 +39,8 @@ CLI_VM_DNS=""
 CLI_PUBLIC_IFACE=""
 CLI_CACHE_SIZE=""
 CLI_CACHE_VOLUME=""
+CLI_CONTAINERD_SIZE=""
+CLI_CONTAINERD_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
@@ -62,6 +66,8 @@ while [[ $# -gt 0 ]]; do
     --public-iface) CLI_PUBLIC_IFACE="$2"; shift 2 ;;
     --cache-size) CLI_CACHE_SIZE="$2"; shift 2 ;;
     --cache-volume) CLI_CACHE_VOLUME="$2"; shift 2 ;;
+    --containerd-size) CLI_CONTAINERD_SIZE="$2"; shift 2 ;;
+    --containerd-volume) CLI_CONTAINERD_VOLUME="$2"; shift 2 ;;
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
@@ -132,7 +138,8 @@ Network:
 Volumes:
   --cache-size SIZE
   --cache-volume PATH
-  --config-volume PATH
+  --containerd-size SIZE
+  --containerd-volume PATH
   --skip-bind
 
 Runtime:
@@ -218,6 +225,8 @@ fi
 
 [[ -n "$CLI_CACHE_SIZE" ]] && CACHE_SIZE="$CLI_CACHE_SIZE"
 [[ -n "$CLI_CACHE_VOLUME" ]] && CACHE_VOLUME="$CLI_CACHE_VOLUME"
+[[ -n "$CLI_CONTAINERD_SIZE" ]] && CONTAINERD_SIZE="$CLI_CONTAINERD_SIZE"
+[[ -n "$CLI_CONTAINERD_VOLUME" ]] && CONTAINERD_VOLUME="$CLI_CONTAINERD_VOLUME"
 [[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
@@ -253,6 +262,10 @@ if [[ -z "$CACHE_VOLUME" ]]; then
   CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
 fi
 
+if [[ -z "$CONTAINERD_VOLUME" ]]; then
+  CONTAINERD_VOLUME="containerd-${HOSTNAME}.qcow2"
+fi
+
 echo ""
 echo "=== TEE VM Orchestration ==="
 echo "Config source: ${CONFIG_FILE:-command line only}"
@@ -260,6 +273,7 @@ echo "Hostname: $HOSTNAME"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
+echo "Containerd volume: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Network: $NETWORK_TYPE"
 echo ""
@@ -313,7 +327,7 @@ if [[ -f "$CACHE_VOLUME" ]]; then
   echo "✓ Using existing cache volume: $CACHE_VOLUME"
 else
   echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
-  if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE"; then
+  if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" "tdx-cache"; then
     echo "✓ Cache volume created"
   else
     echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
@@ -323,9 +337,31 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
+# Containerd cache volume (required for encrypted containerd storage)
+# --------------------------------------------------------------------
+echo "Step 3: Preparing containerd cache volume..."
+if [[ -z "$CONTAINERD_VOLUME" ]]; then
+  echo "✗ Error: CONTAINERD_VOLUME is unset"
+  exit 1
+fi
+
+if [[ -f "$CONTAINERD_VOLUME" ]]; then
+  echo "✓ Using existing containerd volume: $CONTAINERD_VOLUME"
+else
+  echo "Creating containerd volume at: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
+  if sudo ./create-cache.sh "$CONTAINERD_VOLUME" "$CONTAINERD_SIZE" "tdx-containerd-cache"; then
+    echo "✓ Containerd volume created"
+  else
+    echo "✗ Error: Failed to create containerd volume at $CONTAINERD_VOLUME"
+    exit 1
+  fi
+fi
+echo ""
+
+# --------------------------------------------------------------------
 # Config volume
 # --------------------------------------------------------------------
-echo "Step 3: Setting up config volume..."
+echo "Step 4: Setting up config volume..."
 if [[ -n "$CONFIG_VOLUME" ]]; then
   if [[ -f "$CONFIG_VOLUME" ]]; then
     echo "✓ Using existing config volume: $CONFIG_VOLUME"
@@ -357,7 +393,7 @@ echo ""
 # --------------------------------------------------------------------
 NET_IFACE=""
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
-  echo "Step 4: Setting up bridge networking..."
+  echo "Step 5: Setting up bridge networking..."
   BRIDGE_OUTPUT=$(./setup-bridge.sh \
     --bridge-ip "$BRIDGE_IP" \
     --vm-ip "${VM_IP}/24" \
@@ -373,7 +409,7 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
   echo "✓ Bridge configured (TAP: $NET_IFACE)"
   echo ""
 else
-  echo "Step 4: Skipping bridge setup (network-type=user)"
+  echo "Step 5: Skipping bridge setup (network-type=user)"
   echo ""
 fi
 
@@ -394,6 +430,7 @@ fi
 
 # Additional args
 LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
+LAUNCH_ARGS+=(--containerd-volume "$CONTAINERD_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner

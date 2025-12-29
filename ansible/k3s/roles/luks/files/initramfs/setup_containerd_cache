@@ -1,0 +1,244 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-bottom/setup_containerd_cache
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+# Configuration
+[ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
+
+CONTAINERD_LABEL="${CONTAINERD_LABEL:-tdx-containerd-cache}"
+CONTAINERD_LUKS_NAME="containerd_cache"
+
+# Global variables
+CONTAINERD_DEVICE=""
+CONTAINERD_KEY=""
+VM_ID=""
+BOOT_TOKEN=""
+
+# Function to securely clear sensitive data
+clear_sensitive_data() {
+    if [ -n "$CONTAINERD_KEY" ]; then
+        CONTAINERD_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        CONTAINERD_KEY=""
+        unset CONTAINERD_KEY
+    fi
+    
+    if [ -n "$BOOT_TOKEN" ]; then
+        BOOT_TOKEN="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        BOOT_TOKEN=""
+        unset BOOT_TOKEN
+    fi
+    
+    rm -f /tmp/containerd_response
+}
+
+trap clear_sensitive_data EXIT INT TERM
+
+log_begin_msg "Starting containerd cache setup"
+
+# Function to load VM ID and boot token
+load_vm_data() {
+    if [ ! -f /run/chutes/vm-id ]; then
+        log_failure_msg "VM ID not found in /run/chutes/vm-id"
+        return 1
+    fi
+    
+    VM_ID=$(cat /run/chutes/vm-id)
+    
+    if [ ! -f /run/chutes/boot-token ]; then
+        log_failure_msg "Boot token not found in /run/chutes/boot-token"
+        return 1
+    fi
+    
+    BOOT_TOKEN=$(cat /run/chutes/boot-token)
+    
+    log_success_msg "Loaded VM ID: ${VM_ID:0:8}..."
+    return 0
+}
+
+# Function to detect containerd cache device by label
+detect_containerd_device() {
+    log_begin_msg "Detecting containerd cache device by label: $CONTAINERD_LABEL"
+    
+    # Wait a bit for devices to settle
+    sleep 2
+    
+    # Find device by filesystem label (always present)
+    CONTAINERD_DEVICE=$(blkid -l -o device -t LABEL="$CONTAINERD_LABEL" 2>/dev/null)
+    
+    if [ -z "$CONTAINERD_DEVICE" ]; then
+        log_failure_msg "No device found with label '$CONTAINERD_LABEL'"
+        log_failure_msg "Ensure the cache volume was created with create-cache.sh script"
+        return 1
+    fi
+    
+    if [ ! -b "$CONTAINERD_DEVICE" ]; then
+        log_failure_msg "Device $CONTAINERD_DEVICE is not a block device"
+        return 1
+    fi
+    
+    log_success_msg "Found containerd device: $CONTAINERD_DEVICE"
+    return 0
+}
+
+# Function to fetch containerd key using boot token (works for both first and subsequent boots)
+fetch_containerd_key() {
+    local response_file="/tmp/containerd_response"
+    
+    # Validate required configuration
+    if [ -z "$TDX_LUKS_ENDPOINT" ]; then
+        log_failure_msg "TDX_LUKS_ENDPOINT not configured in /etc/tdx-luks.conf"
+        return 1
+    fi
+    
+    local luks_endpoint="$TDX_LUKS_ENDPOINT"
+    local timeout="${TDX_TIMEOUT:-30}"
+    local ca_cert="/etc/ssl/certs/ca-certificates.crt"
+    
+    # Substitute {vm_id} in endpoint URL
+    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_id}/$VM_ID/g")"
+    
+    log_begin_msg "Fetching containerd key from $endpoint_url"
+    
+    local request_json="{\"boot_token\":\"$BOOT_TOKEN\"}"
+    
+    # No mTLS needed - boot token is sufficient authentication
+    http_code=$(curl -s -w "%{http_code}" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -H "User-Agent: TDX-LUKS-Containerd/1.0" \
+        --max-time "$timeout" \
+        --retry 0 \
+        --cacert "$ca_cert" \
+        -d "$request_json" \
+        -o "$response_file" \
+        "$endpoint_url")
+    
+    if [ "$http_code" = "200" ]; then
+        CONTAINERD_KEY=$(grep -o '"containerd_key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        
+        if [ -n "$CONTAINERD_KEY" ]; then
+            rm -f "$response_file"
+            log_success_msg "Containerd key retrieved"
+            return 0
+        fi
+    fi
+    
+    rm -f "$response_file"
+    log_failure_msg "Failed to get containerd key (HTTP $http_code)"
+    return 1
+}
+
+# Function to setup containerd cache device
+setup_containerd_cache() {
+    local is_encrypted=false
+    
+    # Check if device is LUKS encrypted
+    if cryptsetup isLuks "$CONTAINERD_DEVICE" 2>/dev/null; then
+        is_encrypted=true
+        log_begin_msg "Containerd device is LUKS encrypted"
+    else
+        log_begin_msg "Containerd device is NOT encrypted (first boot)"
+    fi
+    
+    # Get containerd key using boot token (works for both first and subsequent boots)
+    if [ -z "$BOOT_TOKEN" ]; then
+        log_failure_msg "No boot token available"
+        return 1
+    fi
+    
+    if ! fetch_containerd_key; then
+        log_failure_msg "Failed to fetch containerd key"
+        return 1
+    fi
+    
+    # Now encrypt or unlock the device
+    if [ "$is_encrypted" = "true" ]; then
+        # Unlock existing encrypted device
+        log_begin_msg "Unlocking containerd cache"
+        
+        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksOpen "$CONTAINERD_DEVICE" "$CONTAINERD_LUKS_NAME" --key-file=-; then
+            log_failure_msg "Failed to unlock containerd cache"
+            return 1
+        fi
+        
+        log_success_msg "Containerd cache unlocked"
+    else
+        # First boot: wipe, restore label, encrypt, open, format interior
+        log_begin_msg "Encrypting containerd cache (first boot)"
+        
+        # SECURITY: Wipe device
+        log_begin_msg "Wiping device..."
+        wipefs -a "$CONTAINERD_DEVICE" 2>/dev/null || true
+        dd if=/dev/zero of="$CONTAINERD_DEVICE" bs=1M count=10 2>/dev/null || true
+        
+        # Restore filesystem label so it's always detectable
+        log_begin_msg "Restoring filesystem label..."
+        if ! mkfs.ext4 -L "$CONTAINERD_LABEL" "$CONTAINERD_DEVICE"; then
+            log_failure_msg "Failed to restore filesystem label"
+            return 1
+        fi
+        
+        # Create LUKS container (no subsystem label needed)
+        log_begin_msg "Creating LUKS container..."
+        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksFormat --type luks2 "$CONTAINERD_DEVICE" --key-file=-; then
+            log_failure_msg "Failed to create LUKS container"
+            return 1
+        fi
+        
+        # Open encrypted device
+        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksOpen "$CONTAINERD_DEVICE" "$CONTAINERD_LUKS_NAME" --key-file=-; then
+            log_failure_msg "Failed to open LUKS container"
+            return 1
+        fi
+        
+        # Format with ext4 and label
+        log_begin_msg "Formatting containerd cache..."
+        if ! mkfs.ext4 -L "$CONTAINERD_LABEL" "/dev/mapper/$CONTAINERD_LUKS_NAME"; then
+            log_failure_msg "Failed to format containerd cache"
+            return 1
+        fi
+        
+        log_success_msg "Containerd cache encrypted and formatted"
+    fi
+    
+    return 0
+}
+
+# Main execution
+main() {
+    # Load VM ID and boot token from /run
+    if ! load_vm_data; then
+        log_failure_msg "Cannot proceed without VM ID, skipping containerd cache"
+        return 0
+    fi
+    
+    # Detect containerd device
+    if ! detect_containerd_device; then
+        log_failure_msg "No containerd device found, skipping cache setup"
+        return 0
+    fi
+    
+    # Setup (encrypt or unlock) containerd cache
+    if ! setup_containerd_cache; then
+        log_failure_msg "Failed to setup containerd cache, VM will boot without it"
+        clear_sensitive_data
+        return 0
+    fi
+    
+    # Clear all sensitive data
+    clear_sensitive_data
+    
+    log_success_msg "Containerd cache setup completed successfully"
+    return 0
+}
+
+# Run main
+main
+exit_code=$?
+
+log_end_msg $exit_code
+exit $exit_code

@@ -325,14 +325,23 @@
     owner: root
     group: root
 
+- name: Copy containerd cache setup script (init-bottom)
+  ansible.builtin.copy:
+    src: files/initramfs/setup_containerd_cache
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/setup_containerd_cache"
+    mode: '0755'
+    owner: root
+    group: root
+
 - name: Create TDX environment configuration
   ansible.builtin.copy:
     content: |
       # TDX LUKS Configuration
-      TDX_API_ENDPOINT="{{ tdx_api_endpoint | default('https://your-api.example.com/luks-key') }}"
-      TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint | default('https://your-api.example.com/luks-nonce') }}"
-      TDX_TIMEOUT="30"
-      TDX_RETRY_COUNT="3"
+      TDX_API_ENDPOINT="{{ tdx_api_endpoint }}"
+      TDX_NONCE_ENDPOINT="{{ tdx_nonce_endpoint }}"
+      TDX_LUKS_ENDPOINT="{{ tdx_luks_endpoint }}"
+      TDX_TIMEOUT="{{ tdx_timeout }}"
+      TDX_RETRY_COUNT="{{ tdx_retry_count }}"
     dest: "{{ newroot_mount }}/etc/tdx-luks.conf"
     mode: '0644'
     owner: root

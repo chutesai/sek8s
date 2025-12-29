@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # create-cache-volume.sh - Create and format a cache volume for TDX VMs
-# Usage: ./create-cache.sh <output-path> <size>
-# Example: ./create-cache.sh cache-volume.qcow2 5000G
+# Usage: ./create-cache.sh <output-path> <size> <label>
+# Example: ./create-cache.sh cache-volume.qcow2 5000G tdx-containerd-cache
 
 set -euo pipefail
 
-# Max 16 chars
-LABEL="tdx-cache"
+LABEL=""
 
 # Color output
 RED='\033[0;31m'
@@ -51,22 +50,23 @@ ensure_parent_directory() {
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
-Usage: $0 <output-path> <size>
+Usage: $0 <output-path> <size> <label>
 
-Create and format a cache volume for TDX VMs with the required label.
+Create and format a cache volume for TDX VMs with the specified label.
 
 Arguments:
   output-path    Path where the qcow2 file will be created
-    size          Size of the volume (e.g., 5000G, 5T, 1000G)
+  size           Size of the volume (e.g., 5000G, 5T, 1000G)
+  label          Filesystem label (required, max 16 chars)
 
 Examples:
-  $0 cache-volume.qcow2 5000G
-  $0 /path/to/my-cache.qcow2 1T
-  $0 test-cache.qcow2 100G
+  $0 containerd-cache.qcow2 5000G tdx-containerd-cache
+  $0 /path/to/my-cache.qcow2 1T my-custom-label
+  $0 test-cache.qcow2 100G tdx-cache
 
 The volume will be formatted with:
   - Filesystem: ext4
-  - Label: $LABEL (required by TDX VMs)
+  - Label: As specified
 
 Requirements:
   - qemu-img (for creating qcow2 images)
@@ -79,16 +79,23 @@ EOF
 fi
 
 # Validate arguments
-if [ $# -ne 2 ]; then
+if [ $# -ne 3 ]; then
     print_error "Invalid number of arguments"
-    echo "Usage: $0 <output-path> <size>"
-    echo "Example: $0 cache-volume.qcow2 5000G"
+    echo "Usage: $0 <output-path> <size> <label>"
+    echo "Example: $0 cache-volume.qcow2 5000G tdx-containerd-cache"
     echo "Run '$0 --help' for more information"
     exit 1
 fi
 
 OUTPUT_PATH="$1"
 SIZE="$2"
+LABEL="$3"
+
+# Validate label length (ext4 max is 16 chars)
+if [ ${#LABEL} -gt 16 ]; then
+    print_error "Label too long: $LABEL (max 16 characters)"
+    exit 1
+fi
 
 # Validate size format
 if ! [[ "$SIZE" =~ ^[0-9]+[KMGT]?$ ]]; then
@@ -246,10 +253,11 @@ print_info "  Size: $SIZE"
 print_info "  Filesystem: ext4"
 print_info "  Label: $LABEL"
 print_info ""
-print_info "To use with run-tdx.sh:"
-print_info "  ./run-tdx.sh --cache-volume $OUTPUT_PATH [other options...]"
+if [ "$LABEL" = "tdx-containerd-cache" ]; then
+    print_info "Note: This volume is configured for containerd cache (auto-encrypted at boot)"
+fi
 print_info ""
-print_info "To verify the volume later:"
+print_info "To verify the volume:"
 print_info "  sudo qemu-nbd --connect=/dev/nbd0 $OUTPUT_PATH"
 print_info "  sudo blkid /dev/nbd0"
 print_info "  sudo qemu-nbd --disconnect /dev/nbd0"

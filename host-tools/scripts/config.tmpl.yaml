@@ -19,10 +19,15 @@ network:
 
 # Volume Configuration
 volumes:
-  # Cache volume settings (required)
+  # General cache volume settings (optional)
   cache:
     size: "5000G"
     path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/cache-volume.qcow2)
+  
+  # Containerd cache volume settings (required for encrypted containerd storage)
+  containerd:
+    size: "500G"
+    path: ""  # Leave empty to auto-generate (containerd-<hostname>.qcow2) or specify path (/data/containerd-cache.qcow2)
   
   # Config volume settings  
   config:
