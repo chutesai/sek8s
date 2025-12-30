@@ -282,18 +282,36 @@ echo ""
 # Step 0: Verify host configuration
 # --------------------------------------------------------------------
 echo "Step 0: Verifying host configuration..."
-HOST_CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
 
-# Check for kvm_intel.tdx=on
-if ! echo "$HOST_CMDLINE" | grep -q "kvm_intel.tdx=1"; then
-  echo "✗ Error: Host kernel missing 'kvm_intel.tdx=1' parameter"
-  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... kvm_intel.tdx=1 ...\""
-  echo "  Then run: sudo update-grub && sudo reboot"
+# Check if TDX module is initialized via dmesg
+TDX_DMESG=$(sudo dmesg | grep -i tdx 2>/dev/null || echo "")
+
+if ! echo "$TDX_DMESG" | grep -q "module initialized"; then
+  echo "✗ Error: TDX module not initialized on this host"
+  echo ""
+  echo "TDX-related kernel messages:"
+  if [[ -n "$TDX_DMESG" ]]; then
+    echo "$TDX_DMESG" | tail -n 10
+  else
+    echo "  (none found)"
+  fi
+  echo ""
+  echo "To enable TDX:"
+  echo "  1. Verify CPU supports TDX: grep tdx /proc/cpuinfo"
+  echo "  2. Enable TDX in BIOS/UEFI settings"
+  echo "  3. Ensure TDX kernel support is installed"
+  echo "  4. Reboot and check: dmesg | grep -i tdx"
   exit 1
 fi
 
-echo "✓ Host IOMMU configuration verified"
-echo "✓ Host TDX enabled"
+# Additionally check CPU support
+if ! grep -q tdx /proc/cpuinfo 2>/dev/null; then
+  echo "⚠ Warning: TDX instruction not found in /proc/cpuinfo"
+  echo "  This may indicate incomplete TDX support"
+fi
+
+echo "✓ TDX module initialized"
+echo "✓ Host TDX configuration verified"
 echo ""
 
 # --------------------------------------------------------------------
