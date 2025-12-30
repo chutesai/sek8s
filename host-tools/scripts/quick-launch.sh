@@ -367,7 +367,7 @@ if [[ -f "$CONTAINERD_VOLUME" ]]; then
   echo "✓ Using existing containerd volume: $CONTAINERD_VOLUME"
 else
   echo "Creating containerd volume at: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
-  if sudo ./create-cache.sh "$CONTAINERD_VOLUME" "$CONTAINERD_SIZE" "tdx-containerd-cache"; then
+  if sudo ./create-cache.sh "$CONTAINERD_VOLUME" "$CONTAINERD_SIZE" "containerd-cache"; then
     echo "✓ Containerd volume created"
   else
     echo "✗ Error: Failed to create containerd volume at $CONTAINERD_VOLUME"

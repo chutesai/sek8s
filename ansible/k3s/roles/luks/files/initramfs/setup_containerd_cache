@@ -9,7 +9,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
-CONTAINERD_LABEL="${CONTAINERD_LABEL:-tdx-containerd-cache}"
+CONTAINERD_LABEL="${CONTAINERD_LABEL:-containerd-cache}"
 CONTAINERD_LUKS_NAME="containerd_cache"
 
 # Global variables

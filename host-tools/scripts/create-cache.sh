@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # create-cache-volume.sh - Create and format a cache volume for TDX VMs
 # Usage: ./create-cache.sh <output-path> <size> <label>
-# Example: ./create-cache.sh cache-volume.qcow2 5000G tdx-containerd-cache
+# Example: ./create-cache.sh cache-volume.qcow2 5000G containerd-cache
 
 set -euo pipefail
 
@@ -60,7 +60,7 @@ Arguments:
   label          Filesystem label (required, max 16 chars)
 
 Examples:
-  $0 containerd-cache.qcow2 5000G tdx-containerd-cache
+  $0 containerd-cache.qcow2 5000G containerd-cache
   $0 /path/to/my-cache.qcow2 1T my-custom-label
   $0 test-cache.qcow2 100G tdx-cache
 
@@ -82,7 +82,7 @@ fi
 if [ $# -ne 3 ]; then
     print_error "Invalid number of arguments"
     echo "Usage: $0 <output-path> <size> <label>"
-    echo "Example: $0 cache-volume.qcow2 5000G tdx-containerd-cache"
+    echo "Example: $0 cache-volume.qcow2 5000G containerd-cache"
     echo "Run '$0 --help' for more information"
     exit 1
 fi
@@ -253,7 +253,7 @@ print_info "  Size: $SIZE"
 print_info "  Filesystem: ext4"
 print_info "  Label: $LABEL"
 print_info ""
-if [ "$LABEL" = "tdx-containerd-cache" ]; then
+if [ "$LABEL" = "containerd-cache" ]; then
     print_info "Note: This volume is configured for containerd cache (auto-encrypted at boot)"
 fi
 print_info ""
