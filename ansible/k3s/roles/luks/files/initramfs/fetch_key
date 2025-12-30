@@ -16,6 +16,11 @@ copy_exec /usr/bin/base64
 copy_exec /usr/bin/openssl
 copy_exec /usr/bin/sha256sum
 
+# Tools for containerd cache setup (init-bottom script)
+copy_exec /sbin/blkid
+copy_exec /sbin/mkfs.ext4
+copy_exec /sbin/wipefs
+
 # Network configuration
 mkdir -p $DESTDIR/etc/network
 if [ -d /etc/netplan ]; then

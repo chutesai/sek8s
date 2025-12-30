@@ -15,7 +15,8 @@ CONTAINERD_LUKS_NAME="containerd_cache"
 # Global variables
 CONTAINERD_DEVICE=""
 CONTAINERD_KEY=""
-VM_ID=""
+VM_NAME=""
+HOTKEY=""
 BOOT_TOKEN=""
 
 # Function to securely clear sensitive data
@@ -39,14 +40,21 @@ trap clear_sensitive_data EXIT INT TERM
 
 log_begin_msg "Starting containerd cache setup"
 
-# Function to load VM ID and boot token
+# Function to load VM name, hotkey, and boot token
 load_vm_data() {
-    if [ ! -f /run/chutes/vm-id ]; then
-        log_failure_msg "VM ID not found in /run/chutes/vm-id"
+    if [ ! -f /run/chutes/vm-name ]; then
+        log_failure_msg "VM name not found in /run/chutes/vm-name"
         return 1
     fi
     
-    VM_ID=$(cat /run/chutes/vm-id)
+    VM_NAME=$(cat /run/chutes/vm-name)
+    
+    if [ ! -f /run/chutes/hotkey ]; then
+        log_failure_msg "Hotkey not found in /run/chutes/hotkey"
+        return 1
+    fi
+    
+    HOTKEY=$(cat /run/chutes/hotkey)
     
     if [ ! -f /run/chutes/boot-token ]; then
         log_failure_msg "Boot token not found in /run/chutes/boot-token"
@@ -55,7 +63,7 @@ load_vm_data() {
     
     BOOT_TOKEN=$(cat /run/chutes/boot-token)
     
-    log_success_msg "Loaded VM ID: ${VM_ID:0:8}..."
+    log_success_msg "Loaded VM name: $VM_NAME, hotkey: ${HOTKEY:0:8}..."
     return 0
 }
 
@@ -84,8 +92,8 @@ detect_containerd_device() {
     return 0
 }
 
-# Function to fetch containerd key using boot token (works for both first and subsequent boots)
-fetch_containerd_key() {
+# Function to retrieve existing containerd key (GET) for encrypted devices
+get_containerd_key() {
     local response_file="/tmp/containerd_response"
     
     # Validate required configuration
@@ -98,22 +106,21 @@ fetch_containerd_key() {
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
     
-    # Substitute {vm_id} in endpoint URL
-    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_id}/$VM_ID/g")"
+    # Substitute {vm_name} in endpoint URL
+    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_name}/$VM_NAME/g")"
+    # Add query parameters for GET
+    endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
-    log_begin_msg "Fetching containerd key from $endpoint_url"
+    log_begin_msg "Retrieving existing containerd key from $endpoint_url"
     
-    local request_json="{\"boot_token\":\"$BOOT_TOKEN\"}"
-    
-    # No mTLS needed - boot token is sufficient authentication
+    # GET request with boot token in X-Boot-Token header
     http_code=$(curl -s -w "%{http_code}" \
-        -X POST \
-        -H "Content-Type: application/json" \
+        -X GET \
+        -H "X-Boot-Token: $BOOT_TOKEN" \
         -H "User-Agent: TDX-LUKS-Containerd/1.0" \
         --max-time "$timeout" \
         --retry 0 \
         --cacert "$ca_cert" \
-        -d "$request_json" \
         -o "$response_file" \
         "$endpoint_url")
     
@@ -132,6 +139,55 @@ fetch_containerd_key() {
     return 1
 }
 
+# Function to store new containerd key (PUT) for unencrypted devices (first boot)
+put_containerd_key() {
+    local response_file="/tmp/containerd_response"
+    
+    # Validate required configuration
+    if [ -z "$TDX_LUKS_ENDPOINT" ]; then
+        log_failure_msg "TDX_LUKS_ENDPOINT not configured in /etc/tdx-luks.conf"
+        return 1
+    fi
+    
+    local luks_endpoint="$TDX_LUKS_ENDPOINT"
+    local timeout="${TDX_TIMEOUT:-30}"
+    local ca_cert="/etc/ssl/certs/ca-certificates.crt"
+    
+    # Substitute {vm_name} in endpoint URL
+    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_name}/$VM_NAME/g")"
+    
+    log_begin_msg "Requesting new containerd key from $endpoint_url"
+    
+    local request_json="{\"hotkey\":\"$HOTKEY\"}"
+    
+    # PUT request - validator generates and returns new key, boot token in header
+    http_code=$(curl -s -w "%{http_code}" \
+        -X PUT \
+        -H "Content-Type: application/json" \
+        -H "X-Boot-Token: $BOOT_TOKEN" \
+        -H "User-Agent: TDX-LUKS-Containerd/1.0" \
+        --max-time "$timeout" \
+        --retry 0 \
+        --cacert "$ca_cert" \
+        -d "$request_json" \
+        -o "$response_file" \
+        "$endpoint_url")
+    
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        CONTAINERD_KEY=$(grep -o '"containerd_key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        
+        if [ -n "$CONTAINERD_KEY" ]; then
+            rm -f "$response_file"
+            log_success_msg "Received new containerd key from validator"
+            return 0
+        fi
+    fi
+    
+    rm -f "$response_file"
+    log_failure_msg "Failed to get new containerd key (HTTP $http_code)"
+    return 1
+}
+
 # Function to setup containerd cache device
 setup_containerd_cache() {
     local is_encrypted=false
@@ -144,19 +200,20 @@ setup_containerd_cache() {
         log_begin_msg "Containerd device is NOT encrypted (first boot)"
     fi
     
-    # Get containerd key using boot token (works for both first and subsequent boots)
+    # Validate boot token exists
     if [ -z "$BOOT_TOKEN" ]; then
         log_failure_msg "No boot token available"
         return 1
     fi
     
-    if ! fetch_containerd_key; then
-        log_failure_msg "Failed to fetch containerd key"
-        return 1
-    fi
-    
     # Now encrypt or unlock the device
     if [ "$is_encrypted" = "true" ]; then
+        # GET existing key for encrypted device
+        if ! get_containerd_key; then
+            log_failure_msg "Failed to retrieve existing containerd key"
+            return 1
+        fi
+        
         # Unlock existing encrypted device
         log_begin_msg "Unlocking containerd cache"
         
@@ -167,8 +224,19 @@ setup_containerd_cache() {
         
         log_success_msg "Containerd cache unlocked"
     else
-        # First boot: wipe, restore label, encrypt, open, format interior
+        # First boot: Request new key from validator, wipe, restore label, encrypt
         log_begin_msg "Encrypting containerd cache (first boot)"
+        
+        # PUT request to validator to generate/return new key (create or overwrite if old cache was recreated)
+        if ! put_containerd_key; then
+            log_failure_msg "Failed to get new containerd key from validator"
+            return 1
+        fi
+        
+        if [ -z "$CONTAINERD_KEY" ]; then
+            log_failure_msg "Validator returned empty containerd key"
+            return 1
+        fi
         
         # SECURITY: Wipe device
         log_begin_msg "Wiping device..."

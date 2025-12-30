@@ -28,7 +28,8 @@ API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 # Global variables
 LUKS_KEY=""
 BOOT_TOKEN=""
-VM_ID=""
+VM_NAME=""
+HOTKEY=""
 
 # Function to securely clear the LUKS key and temporary files
 clear_luks_key() {
@@ -177,6 +178,72 @@ setup_network() {
     return 0
 }
 
+# Function to read VM name from config volume
+read_vm_name() {
+    local cfg_mount="/run/tdx-config"
+    local hostname_file="$cfg_mount/hostname"
+    
+    log_begin_msg "Reading VM name from config volume"
+    
+    mkdir -p "$cfg_mount"
+    
+    # Mount config volume if not already mounted
+    if ! mountpoint -q "$cfg_mount"; then
+        for device in /dev/disk/by-label/tdx-config; do
+            if [ -b "$device" ]; then
+                if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Read hostname file (VM name is same as hostname)
+    if [ -f "$hostname_file" ]; then
+        VM_NAME=$(cat "$hostname_file" | tr -d '\n\r' | tr -cd '[:alnum:]_-')
+        if [ -n "$VM_NAME" ]; then
+            log_success_msg "Found VM name: $VM_NAME"
+            return 0
+        fi
+    fi
+    
+    log_failure_msg "VM name not found in $hostname_file"
+    return 1
+}
+
+# Function to read hotkey from config volume (miner SS58 address)
+read_hotkey() {
+    local cfg_mount="/run/tdx-config"
+    local hotkey_file="$cfg_mount/miner-ss58"
+    
+    log_begin_msg "Reading miner hotkey from config volume"
+    
+    mkdir -p "$cfg_mount"
+    
+    # Mount config volume if not already mounted
+    if ! mountpoint -q "$cfg_mount"; then
+        for device in /dev/disk/by-label/tdx-config; do
+            if [ -b "$device" ]; then
+                if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Read miner SS58 (hotkey)
+    if [ -f "$hotkey_file" ]; then
+        HOTKEY=$(cat "$hotkey_file" | tr -d '\n\r' | head -c 64)
+        if [ -n "$HOTKEY" ]; then
+            log_success_msg "Found miner hotkey: ${HOTKEY:0:8}..."
+            return 0
+        fi
+    fi
+    
+    log_failure_msg "Miner hotkey not found in $hotkey_file"
+    return 1
+}
+
 # Function to fetch nonce from API
 fetch_nonce() {
     local response_file="/tmp/nonce_response"
@@ -286,7 +353,8 @@ fetch_luks_key() {
             continue
         fi
         
-        # Make API request, use mTLS for API request
+        # Make API request with vm_name and hotkey, use mTLS for API request
+        log_begin_msg "Sending attestation for VM '$VM_NAME' with hotkey ${HOTKEY:0:8}..."
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
@@ -297,7 +365,7 @@ fetch_luks_key() {
             --cacert "$API_CA_CERT" \
             --cert "$CLIENT_CERT" \
             --key "$CLIENT_KEY" \
-            -d "{\"quote\":\"$QUOTE_B64\"}" \
+            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"hotkey\":\"$HOTKEY\"}" \
             -o "$response_file" \
             "$API_ENDPOINT")
         
@@ -360,52 +428,7 @@ unlock_device() {
     fi
 }
 
-# Function to get or generate VM ID from root filesystem
-get_or_generate_vm_id() {
-    local root_mount="/mnt/root-vmid"
-    local vm_id_file="/etc/chutes/vm-id"
-    
-    log_begin_msg "Checking for VM identity"
-    
-    mkdir -p "$root_mount"
-    
-    # Mount root (already unlocked)
-    if ! mount -o rw "/dev/mapper/$LUKS_NAME" "$root_mount" 2>/dev/null; then
-        log_failure_msg "Failed to mount root to check vm-id"
-        return 1
-    fi
-    
-    # Check for existing VM ID
-    if [ -f "$root_mount$vm_id_file" ]; then
-        VM_ID=$(cat "$root_mount$vm_id_file")
-        umount "$root_mount"
-        log_success_msg "Found existing VM ID: ${VM_ID:0:8}..."
-        return 0
-    fi
-    
-    # No ID exists - generate new one
-    log_begin_msg "Generating new VM ID"
-    
-    # Generate UUID-like ID
-    VM_ID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || \
-            dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
-    
-    if [ -z "$VM_ID" ]; then
-        umount "$root_mount"
-        log_failure_msg "Failed to generate VM ID"
-        return 1
-    fi
-    
-    # Save VM ID to root filesystem
-    mkdir -p "$root_mount/etc/chutes"
-    echo "$VM_ID" > "$root_mount$vm_id_file"
-    chmod 600 "$root_mount$vm_id_file"
-    sync
-    
-    umount "$root_mount"
-    log_success_msg "Generated and saved new VM ID: ${VM_ID:0:8}..."
-    return 0
-}
+
 
 # Function to handle failure and shutdown
 handle_failure() {
@@ -446,6 +469,18 @@ main() {
         return 1
     fi
     
+    # Read VM name from config volume
+    if ! read_vm_name; then
+        handle_failure "Failed to read VM name from config volume"
+        return 1
+    fi
+    
+    # Read hotkey from config volume
+    if ! read_hotkey; then
+        handle_failure "Failed to read miner hotkey from config volume"
+        return 1
+    fi
+    
     # Fetch LUKS key from API (nonce and quote generated per attempt)
     if ! fetch_luks_key; then
         handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
@@ -460,15 +495,10 @@ main() {
     
     # Unlock the device
     if unlock_device; then
-        # Get or generate VM ID (root is now unlocked)
-        if ! get_or_generate_vm_id; then
-            handle_failure "Failed to determine VM ID"
-            return 1
-        fi
-        
-        # Save VM ID and boot token to /run for containerd cache setup
+        # Save vm_name, hotkey, and boot token to /run for containerd cache setup
         mkdir -p /run/chutes
-        echo "$VM_ID" > /run/chutes/vm-id
+        echo "$VM_NAME" > /run/chutes/vm-name
+        echo "$HOTKEY" > /run/chutes/hotkey
         if [ -n "$BOOT_TOKEN" ]; then
             echo "$BOOT_TOKEN" > /run/chutes/boot-token
         fi
