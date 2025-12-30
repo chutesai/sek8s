@@ -198,7 +198,7 @@ def build_network(cmd, args):
     ])
 
 
-def do_run(img_path, pass_gpus, config_volume, cache_volume,
+def do_run(img_path, pass_gpus, config_volume, cache_volume, containerd_volume,
         ssh_port, foreground, args):
 
     mem = DEFAULT_MEM
@@ -256,6 +256,10 @@ def do_run(img_path, pass_gpus, config_volume, cache_volume,
         qemu_cmds.extend([
             '-drive', f'file={cache_volume},if=virtio,cache=none,format=qcow2'
         ])
+    if containerd_volume:
+        qemu_cmds.extend([
+            '-drive', f'file={containerd_volume},if=virtio,cache=none,format=qcow2'
+        ])
 
     add_vsock(qemu_cmds)
 
@@ -286,6 +290,7 @@ def run_td(args):
         pass_gpus=args.pass_gpus,
         config_volume=args.config_volume,
         cache_volume=args.cache_volume,
+        containerd_volume=args.containerd_volume,
         ssh_port=args.ssh_port,
         foreground=args.foreground,
         args=args,
@@ -304,6 +309,7 @@ if __name__ == '__main__':
     # Chutes additions
     parser.add_argument("--config-volume", type=str)
     parser.add_argument("--cache-volume", type=str)
+    parser.add_argument("--containerd-volume", type=str)
     parser.add_argument("--ssh-port", type=int, default=10022)
 
     # Networking
