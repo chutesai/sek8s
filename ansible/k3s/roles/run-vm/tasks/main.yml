@@ -120,11 +120,11 @@
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
 
-- name: Configure libvirt to disable DAC security for this VM
+- name: Configure libvirt to enable dynamic ownership
   ansible.builtin.lineinfile:
     path: /etc/libvirt/qemu.conf
     regexp: '^#?dynamic_ownership\s*='
-    line: 'dynamic_ownership = 0'
+    line: 'dynamic_ownership = 1'
     backup: yes
   notify: restart libvirtd
 
