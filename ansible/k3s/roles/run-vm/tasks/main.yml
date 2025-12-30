@@ -110,7 +110,7 @@
   ansible.builtin.file:
     path: "{{ libvirt_image_dir }}"
     state: directory
-    mode: "0711"
+    mode: "0755"
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
