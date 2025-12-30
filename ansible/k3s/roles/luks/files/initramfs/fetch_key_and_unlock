@@ -353,8 +353,8 @@ fetch_luks_key() {
             continue
         fi
         
-        # Make API request with vm_name and hotkey, use mTLS for API request
-        log_begin_msg "Sending attestation for VM '$VM_NAME' with hotkey ${HOTKEY:0:8}..."
+        # Make API request with vm_name and miner_hotkey, use mTLS for API request
+        log_begin_msg "Sending attestation for VM '$VM_NAME' with miner_hotkey ${HOTKEY:0:8}..."
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
@@ -365,7 +365,7 @@ fetch_luks_key() {
             --cacert "$API_CA_CERT" \
             --cert "$CLIENT_CERT" \
             --key "$CLIENT_KEY" \
-            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"hotkey\":\"$HOTKEY\"}" \
+            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\"}" \
             -o "$response_file" \
             "$API_ENDPOINT")
         
