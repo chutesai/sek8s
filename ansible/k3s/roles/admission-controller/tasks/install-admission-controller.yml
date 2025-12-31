@@ -20,14 +20,6 @@
     - { path: /var/log/admission-controller, owner: admission }
     - { path: /run/admission-controller, owner: admission }
 
-- name: Create admission controller configuration
-  ansible.builtin.template:
-    src: admission-config.json.j2
-    dest: /etc/admission-controller/config.json
-    owner: root
-    group: admission
-    mode: '0640'
-
 - name: Create environment file for admission controller
   ansible.builtin.template:
     src: admission-controller.env.j2

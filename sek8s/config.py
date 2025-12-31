@@ -223,9 +223,6 @@ class AdmissionConfig(ServerConfig):
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")
 
-    # Config file support
-    config_file: Optional[Path] = Field(default=None, alias="CONFIG_FILE")
-
     @field_validator("namespace_policies", mode="before")
     @classmethod
     def parse_namespace_policies(cls, v: Any) -> Dict[str, NamespacePolicy]:
@@ -252,24 +249,6 @@ class AdmissionConfig(ServerConfig):
         if not v.exists():
             v.mkdir(parents=True, exist_ok=True)
         return v
-
-    def __init__(self, **kwargs):
-        """Initialize config with support for config file."""
-        # Check if config file is specified
-        config_file_path = kwargs.get("config_file") or kwargs.get("CONFIG_FILE")
-        if not config_file_path:
-            config_file_path = Path("/etc/admission-controller/config.json")
-
-        # Load from config file if it exists
-        file_config = {}
-        if config_file_path and Path(config_file_path).exists():
-            with open(config_file_path, "r") as f:
-                file_config = json.load(f)
-
-        # Merge configurations (kwargs take precedence over file)
-        merged_config = {**file_config, **kwargs}
-
-        super().__init__(**merged_config)
 
     def get_namespace_policy(self, namespace: str) -> NamespacePolicy:
         """Get policy for a specific namespace."""
@@ -459,24 +438,34 @@ class CosignConfig(BaseSettings):
             ]
 
     def get_verification_config(
-        self, registry: str, organization: str, repository: str
+        self, registry: str, organization: str = "", repository: str = ""
     ) -> Optional[CosignVerificationConfig]:
         """
         Get the most specific verification config for an image.
         
         Precedence (most specific wins):
-        1. Repository-level config (if specified)
-        2. Organization-level config (if specified)
+        1. Repository-level config (if organization and repository specified)
+        2. Organization-level config (if organization specified)
         3. Registry-level config (default for that registry)
         4. Wildcard registry (*) config
         
         Args:
             registry: Registry hostname (e.g., "docker.io", "gcr.io")
-            organization: Organization/namespace (e.g., "parachutes", "library")
-            repository: Repository name (e.g., "chutes-agent", "nginx")
+            organization: Optional organization/namespace (e.g., "parachutes", "library")
+            repository: Optional repository name (e.g., "chutes-agent", "nginx")
         
         Returns:
             The most specific CosignVerificationConfig, or None if no config found
+        
+        Examples:
+            # Get registry-level config
+            config.get_verification_config("docker.io")
+            
+            # Get org-level config
+            config.get_verification_config("docker.io", "parachutes")
+            
+            # Get repo-level config
+            config.get_verification_config("docker.io", "parachutes", "chutes-agent")
         """
         # Normalize registry name
         registry = self._normalize_registry_name(registry)
@@ -561,7 +550,15 @@ class CosignConfig(BaseSettings):
         return registry.lower()
 
     def _matches_registry_pattern(self, registry: str, pattern: str) -> bool:
-        """Match registry against a pattern."""
+        """Match registry against a pattern.
+        
+        Supports:
+        - Exact match: "docker.io" matches "docker.io"
+        - Prefix with wildcard: "docker.io/*" matches "docker.io"
+        - Prefix match: "gcr.io*" matches "gcr.io", "gcr.io.local", etc.
+        - Suffix match: "*.gcr.io" matches "us.gcr.io", "eu.gcr.io", etc.
+        - Wildcard: "*" matches everything
+        """
         if pattern == "*":
             return True
         
@@ -570,7 +567,11 @@ class CosignConfig(BaseSettings):
         
         # Simple wildcard support
         if "*" in pattern:
-            if pattern.endswith("*"):
+            if pattern.endswith("/*"):
+                # Prefix with slash: "docker.io/*" matches "docker.io"
+                prefix = pattern[:-2]
+                return registry.startswith(prefix + "/") or registry == prefix
+            elif pattern.endswith("*"):
                 # Prefix match: gcr.io* matches gcr.io, gcr.io.local, etc.
                 prefix = pattern[:-1]
                 return registry.startswith(prefix)
