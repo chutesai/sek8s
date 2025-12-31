@@ -95,7 +95,10 @@ def _truncate(value: str, limit: int) -> tuple[str, bool]:
 
 
 async def _run_command(command: List[str], timeout: float, limit: int) -> CommandResult:
+    """Run a command and return its output. Raises HTTPException on failure."""
     logger.debug("Executing command: {}", command)
+    command_name = command[1] if command[0] == "sudo" else command[0]
+    
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -107,13 +110,13 @@ async def _run_command(command: List[str], timeout: float, limit: int) -> Comman
         logger.error("Command timeout for {}", command)
         raise HTTPException(
             status_code=504,
-            detail={"error": "timeout", "command": command[0]},
+            detail={"error": "timeout", "command": command_name},
         ) from exc
     except FileNotFoundError as exc:
         logger.error("Binary not found for {}", command)
         raise HTTPException(
             status_code=503,
-            detail={"error": "missing_binary", "binary": command[0]},
+            detail={"error": "missing_binary", "binary": command_name},
         ) from exc
 
     stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -122,18 +125,23 @@ async def _run_command(command: List[str], timeout: float, limit: int) -> Comman
     stdout, stdout_truncated = _truncate(stdout, limit)
     stderr, stderr_truncated = _truncate(stderr, limit)
 
-    return CommandResult(
+    result = CommandResult(
         exit_code=process.returncode,
         stdout=stdout,
         stderr=stderr,
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
     )
-
-
-def _ensure_success(result: CommandResult, command_name: str) -> None:
+    
+    # Check exit code and raise if command failed
     if result.exit_code == 0:
-        return
+        return result
+    
+    # du exits with code 1 when it encounters permission denied errors
+    # but still produces valid output. Accept this as success if stdout has data.
+    if command_name == "du" and result.exit_code == 1 and result.stdout.strip():
+        logger.debug("du completed with exit code 1 (permission errors) but has valid output")
+        return result
 
     logger.error("Command {} failed with exit code {}", command_name, result.exit_code)
     raise HTTPException(
@@ -146,6 +154,7 @@ def _ensure_success(result: CommandResult, command_name: str) -> None:
             "stderr_truncated": result.stderr_truncated,
         },
     )
+
 
 
 class SystemStatusServer(WebServer):
@@ -290,7 +299,6 @@ class SystemStatusServer(WebServer):
 
         try:
             result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
-            _ensure_success(result, "systemctl")
         except HTTPException as exc:
             if tolerate_errors:
                 return ServiceStatusResponse(
@@ -353,7 +361,6 @@ class SystemStatusServer(WebServer):
             command.append(f"--since={since_time.isoformat()}")
 
         result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
-        _ensure_success(result, "journalctl")
 
         entries = [line for line in result.stdout.splitlines() if line]
 
@@ -459,49 +466,53 @@ class SystemStatusServer(WebServer):
         diagnostic: bool = Query(False, description="Enable diagnostic mode for deep analysis"),
         max_depth: int = Query(3, ge=1, le=10, description="Maximum depth for diagnostic mode (default: 3)"),
         top_n: int = Query(10, ge=1, le=100, description="Show top N directories per level (default: 10)"),
+        cross_filesystems: bool = Query(False, description="Cross filesystem boundaries (include mounted volumes)"),
     ) -> DiskSpaceResponse:
         """Get sizes of subdirectories within the given path.
         
         Standard mode: Shows immediate subdirectories only.
         Diagnostic mode: Recursively analyzes up to max_depth levels and shows top N offenders.
+        By default, stays within a single filesystem. Set cross_filesystems=true to include mounted volumes.
         The max_depth and top_n parameters are only used when diagnostic=true.
         """
-        # Extract actual values from Query objects if needed (for direct calls in tests)
-        actual_path = path.default if hasattr(path, 'default') else path
-        actual_diagnostic = diagnostic.default if hasattr(diagnostic, 'default') else diagnostic
-        actual_max_depth = max_depth.default if hasattr(max_depth, 'default') else max_depth
-        actual_top_n = top_n.default if hasattr(top_n, 'default') else top_n
-        
-        validated_path = self._validate_path(actual_path)
+        validated_path = self._validate_path(path)
 
-        if actual_diagnostic:
+        if diagnostic:
             return await self._get_disk_space_diagnostic(
-                validated_path, actual_max_depth, actual_top_n
+                validated_path, max_depth, top_n, cross_filesystems
             )
         else:
-            return await self._get_disk_space_simple(validated_path)
+            return await self._get_disk_space_simple(validated_path, cross_filesystems)
 
     async def _get_disk_space_simple(
-        self, validated_path: Path
+        self, validated_path: Path, cross_filesystems: bool = False
     ) -> DiskSpaceResponse:
         """Get sizes of immediate subdirectories only."""
-        # Use du to get directory sizes (immediate subdirectories only)
+        # Use sudo du to access all directories
         # -k: output in kilobytes
+        # -x: don't cross filesystem boundaries (unless cross_filesystems=True)
         # --max-depth=1: only immediate children
         # Note: Don't use -s with --max-depth as they conflict
         command = [
+            "sudo",
             "du",
             "-k",
+        ]
+        if not cross_filesystems:
+            command.append("-x")  # Don't cross filesystem boundaries
+        command.extend([
             "--max-depth=1",
             str(validated_path),
-        ]
+        ])
+
+        # Use longer timeout for diagnostic mode to handle large directory trees
+        timeout = max(self.config.command_timeout_seconds * 5, 120)  # Max 2 minutes
 
         result = await _run_command(
             command,
-            self.config.command_timeout_seconds,
+            timeout,
             self.config.max_output_bytes,
         )
-        _ensure_success(result, "du")
 
         directories: List[DirectoryInfo] = []
         parent_size = 0
@@ -554,24 +565,31 @@ class SystemStatusServer(WebServer):
         )
 
     async def _get_disk_space_diagnostic(
-        self, validated_path: Path, max_depth: int, top_n: int
+        self, validated_path: Path, max_depth: int, top_n: int, cross_filesystems: bool = False
     ) -> DiskSpaceResponse:
         """Recursive analysis to find worst disk space offenders at multiple depth levels."""
-        # Use du with specified max-depth to get all directories up to that level
+        # Use sudo du with specified max-depth to get all directories up to that level
         # This gives us a complete picture of disk usage at all levels
         command = [
+            "sudo",
             "du",
             "-k",
+        ]
+        if not cross_filesystems:
+            command.append("-x")  # Don't cross filesystem boundaries
+        command.extend([
             f"--max-depth={max_depth}",
             str(validated_path),
-        ]
+        ])
 
+        # Use longer timeout for diagnostic mode to handle large directory trees
+        timeout = max(self.config.command_timeout_seconds * 5, 120)  # Max 2 minutes
+        
         result = await _run_command(
             command,
-            self.config.command_timeout_seconds * 3,  # Allow more time for deep scans
+            timeout,
             self.config.max_output_bytes * 2,  # Allow larger output
         )
-        _ensure_success(result, "du")
 
         # Parse all directory entries
         all_entries: List[tuple[int, str, int]] = []  # (size_bytes, path, depth)

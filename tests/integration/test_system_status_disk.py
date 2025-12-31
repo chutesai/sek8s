@@ -2,11 +2,20 @@
 Integration tests for system status disk space endpoints.
 
 Tests both simple and diagnostic modes with real filesystem interaction.
+
+NOTE: These tests require sudo access to run the 'du' command. In CI/CD environments,
+run these tests in a Docker container with appropriate sudoers configuration, or
+configure the test environment to allow passwordless sudo for the 'du' command:
+    echo "$USER ALL=(ALL) NOPASSWD: /usr/bin/du" | sudo tee /etc/sudoers.d/test-du
+
+Alternatively, skip these tests in environments without sudo by running:
+    pytest -m "not requires_sudo"
 """
 
 import asyncio
 import os
 import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -14,6 +23,27 @@ import pytest
 
 from sek8s.config import SystemStatusConfig
 from sek8s.services.system_status import SystemStatusServer
+
+
+# Check if sudo is available for du command
+def _can_use_sudo_du():
+    """Check if current user can run sudo du without password."""
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "du", "--version"],
+            capture_output=True,
+            timeout=2
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+# Skip tests if sudo is not available
+pytestmark = pytest.mark.skipif(
+    not _can_use_sudo_du(),
+    reason="sudo access required for du command. Run in Docker or configure sudoers."
+)
 
 
 @pytest.fixture
