@@ -106,8 +106,8 @@ get_containerd_key() {
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
     
-    # Substitute {vm_name} in endpoint URL
-    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_name}/$VM_NAME/g")"
+    # Substitute vm_name in endpoint URL
+    local endpoint_url="$(echo "$luks_endpoint" | sed "s/vm_name/$VM_NAME/g")"
     # Add query parameters for GET
     endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
@@ -125,7 +125,7 @@ get_containerd_key() {
         "$endpoint_url")
     
     if [ "$http_code" = "200" ]; then
-        CONTAINERD_KEY=$(grep -o '"containerd_key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        CONTAINERD_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
         
         if [ -n "$CONTAINERD_KEY" ]; then
             rm -f "$response_file"
@@ -153,28 +153,26 @@ put_containerd_key() {
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
     
-    # Substitute {vm_name} in endpoint URL
-    local endpoint_url="$(echo "$luks_endpoint" | sed "s/{vm_name}/$VM_NAME/g")"
+    # Substitute vm_name in endpoint URL
+    local endpoint_url="$(echo "$luks_endpoint" | sed "s/vm_name/$VM_NAME/g")"
+    # Add query parameters for PUT
+    endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
     log_begin_msg "Requesting new containerd key from $endpoint_url"
-    
-    local request_json="{\"hotkey\":\"$HOTKEY\"}"
     
     # PUT request - validator generates and returns new key, boot token in header
     http_code=$(curl -s -w "%{http_code}" \
         -X PUT \
-        -H "Content-Type: application/json" \
         -H "X-Boot-Token: $BOOT_TOKEN" \
         -H "User-Agent: TDX-LUKS-Containerd/1.0" \
         --max-time "$timeout" \
         --retry 0 \
         --cacert "$ca_cert" \
-        -d "$request_json" \
         -o "$response_file" \
         "$endpoint_url")
     
     if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        CONTAINERD_KEY=$(grep -o '"containerd_key":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        CONTAINERD_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
         
         if [ -n "$CONTAINERD_KEY" ]; then
             rm -f "$response_file"
