@@ -83,6 +83,39 @@ class ServerConfig(BaseSettings):
             raise ValueError(f"Directory for UDS path does not exist: {v}")
         return v
 
+
+class AuthConfig(ServerConfig):
+    """Base configuration for services that require authentication.
+    
+    Services can inherit from this to get auth capabilities.
+    Auth fields are optional by default - services can make them required if needed.
+    """
+    
+    miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
+    allowed_validators_str: Optional[str] = Field(default=None, alias="ALLOWED_VALIDATORS")
+    
+    _allowed_validators: Optional[list[str]] = None
+
+    @property
+    def allowed_validators(self) -> list[str]:
+        """Parse comma-separated validator list."""
+        if self._allowed_validators is None:
+            if self.allowed_validators_str:
+                self._allowed_validators = [
+                    item.strip() 
+                    for item in self.allowed_validators_str.split(',') 
+                    if item.strip()
+                ]
+            else:
+                self._allowed_validators = []
+        return self._allowed_validators
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra='ignore'
+    )
+
 class AttestationServiceConfig(ServerConfig):
 
     hostname: str = os.getenv("HOSTNAME")
@@ -94,8 +127,11 @@ class AttestationServiceConfig(ServerConfig):
     )
 
 
-class SystemStatusConfig(ServerConfig):
-    """Configuration for the read-only system status service."""
+class SystemStatusConfig(AuthConfig):
+    """Configuration for the read-only system status service.
+    
+    Inherits auth capabilities from AuthConfig for endpoints like shutdown.
+    """
 
     require_tls: bool = Field(default=False, alias="REQUIRE_TLS")
 
@@ -121,18 +157,15 @@ class SystemStatusConfig(ServerConfig):
         extra='ignore'
     )
 
-class AttestationProxyConfig(ServerConfig):
+class AttestationProxyConfig(AuthConfig):
+    """Configuration for attestation proxy service.
+    
+    Requires auth fields to be configured.
+    """
 
-    _allowed_validators: Optional[list[str]] = None
-
+    # Override to make these required
     allowed_validators_str: str = Field(..., alias="ALLOWED_VALIDATORS")
     miner_ss58: str = Field(..., alias="MINER_SS58")
-
-    @property
-    def allowed_validators(self) -> list[str]:
-        if self._allowed_validators is None:
-            self._allowed_validators = [item.strip() for item in self.allowed_validators_str.split(',') if item.strip()]
-        return self._allowed_validators
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",
