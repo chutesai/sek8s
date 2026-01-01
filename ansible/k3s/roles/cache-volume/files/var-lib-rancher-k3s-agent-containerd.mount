@@ -1,0 +1,21 @@
+[Unit]
+Description=Containerd cache storage
+Documentation=man:systemd.mount(5)
+# This mount unit runs after device is available
+After=local-fs-pre.target
+# Must be mounted before containerd and k3s
+Before=containerd.service
+Before=k3s.service
+Before=k3s-agent.service
+
+[Mount]
+# Use the mapped LUKS device (unlocked by initramfs)
+What=/dev/mapper/containerd_cache
+Where=/var/lib/rancher/k3s/agent/containerd
+Type=ext4
+Options=defaults,noatime
+# Don't allow boot to continue if mount fails
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

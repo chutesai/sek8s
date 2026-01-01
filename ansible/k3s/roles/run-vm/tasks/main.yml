@@ -116,9 +116,20 @@
   ansible.builtin.copy:
     src: "{{ base_img_path }}"
     dest: "{{  build_img_path }}"
-    mode: "0640"
+    mode: "0644"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
+
+- name: Configure libvirt to enable dynamic ownership
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/qemu.conf
+    regexp: '^#?dynamic_ownership\s*='
+    line: 'dynamic_ownership = 1'
+    backup: yes
+  notify: restart libvirtd
+
+- name: Ensure libvirt changes are applied
+  ansible.builtin.meta: flush_handlers
 
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:

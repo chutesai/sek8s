@@ -203,8 +203,9 @@ The script will automatically:
 
 **What happens during launch:**
 - Cache volume is created at `cache-<hostname>.qcow2`
-- Inside the guest, k3s containerd data (`/var/snap/containerd`) and Chutes agent state (`/var/snap/chutes-agent`) are bind-mounted from the cache volume, so heavy OCI layers and miner cache data persist across reboots while secrets remain on the encrypted root disk
-- Config volume is created at `config-<hostname>.qcow2` (always fresh)
+- Inside the guest, k3s containerd data (`/var/lib/rancher/k3s/agent/containerd`) is mounted from an encrypted containerd cache volume
+- General cache (`/var/snap`) persists across reboots for miner state
+- Config volume is created at `config-<hostname>.qcow2` (always fresh, contains miner credentials for attestation)
 - Bridge network `br0` is configured with TAP interface
 - NAT rules are applied for k3s API (6443) and NodePorts (30000-32767)
 - VM starts in daemon mode with PID tracking

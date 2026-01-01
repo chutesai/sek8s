@@ -395,7 +395,7 @@ async def test_keyless_verification_configuration():
     cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     # Verify the configuration is loaded correctly
-    registry_config = cosign_config.get_registry_config("gcr.io")
+    registry_config = cosign_config.get_verification_config("gcr.io")
     assert registry_config is not None
     assert registry_config.verification_method == "keyless"
     assert registry_config.keyless_identity_regex == "^https://github.com/myorg/.*"
@@ -484,14 +484,14 @@ def test_cosign_config_loading():
     assert len(cosign_config.registry_configs) == 2
 
     # Test localhost:5000 config
-    local_config = cosign_config.get_registry_config("localhost:5000")
+    local_config = cosign_config.get_verification_config("localhost:5000")
     assert local_config is not None
     assert local_config.verification_method == "key"
     assert local_config.require_signature is True
     assert local_config.public_key == COSIGN_KEY_PATH
 
     # Test docker.io config
-    docker_config = cosign_config.get_registry_config("docker.io")
+    docker_config = cosign_config.get_verification_config("docker.io")
     assert docker_config is not None
     assert docker_config.verification_method == "disabled"
     assert docker_config.require_signature is False
@@ -525,15 +525,15 @@ def test_registry_pattern_matching():
     cosign_config = CosignConfig(cosign_registries_file=config_file)
 
     # Test exact match
-    config = cosign_config.get_registry_config("gcr.io")
+    config = cosign_config.get_verification_config("gcr.io")
     assert config.registry == "gcr.io"
 
     # Test pattern match
-    config = cosign_config.get_registry_config("docker.io")
+    config = cosign_config.get_verification_config("docker.io")
     assert config.registry == "docker.io/*"
 
     # Test wildcard fallback
-    config = cosign_config.get_registry_config("unknown.registry.com")
+    config = cosign_config.get_verification_config("unknown.registry.com")
     assert config.registry == "*"
 
 

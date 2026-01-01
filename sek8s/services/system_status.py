@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from aiocache import cached as aiocache_cached
-from fastapi import HTTPException, Query
+from fastapi import Depends, HTTPException, Query
 from loguru import logger
 
 from sek8s.config import SystemStatusConfig
 from sek8s.responses import (
+    DirectoryInfo,
+    DiskSpaceResponse,
     HealthResponse,
     NvidiaSmiResponse,
     OverviewResponse,
@@ -21,8 +27,10 @@ from sek8s.responses import (
     ServicesListResponse,
     ServiceStatus,
     ServiceStatusResponse,
+    ShutdownResponse,
 )
 from sek8s.server import WebServer
+from sek8s.services.util import authorize
 
 
 @dataclass(frozen=True)
@@ -87,7 +95,10 @@ def _truncate(value: str, limit: int) -> tuple[str, bool]:
 
 
 async def _run_command(command: List[str], timeout: float, limit: int) -> CommandResult:
+    """Run a command and return its output. Raises HTTPException on failure."""
     logger.debug("Executing command: {}", command)
+    command_name = command[1] if command[0] == "sudo" else command[0]
+    
     try:
         process = await asyncio.create_subprocess_exec(
             *command,
@@ -99,13 +110,13 @@ async def _run_command(command: List[str], timeout: float, limit: int) -> Comman
         logger.error("Command timeout for {}", command)
         raise HTTPException(
             status_code=504,
-            detail={"error": "timeout", "command": command[0]},
+            detail={"error": "timeout", "command": command_name},
         ) from exc
     except FileNotFoundError as exc:
         logger.error("Binary not found for {}", command)
         raise HTTPException(
             status_code=503,
-            detail={"error": "missing_binary", "binary": command[0]},
+            detail={"error": "missing_binary", "binary": command_name},
         ) from exc
 
     stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -114,30 +125,20 @@ async def _run_command(command: List[str], timeout: float, limit: int) -> Comman
     stdout, stdout_truncated = _truncate(stdout, limit)
     stderr, stderr_truncated = _truncate(stderr, limit)
 
-    return CommandResult(
+    result = CommandResult(
         exit_code=process.returncode,
         stdout=stdout,
         stderr=stderr,
         stdout_truncated=stdout_truncated,
         stderr_truncated=stderr_truncated,
     )
+    
+    # Always return the result - let callers decide how to handle non-zero exit codes
+    if result.exit_code != 0:
+        logger.warning("Command {} returned exit code {}", command_name, result.exit_code)
+    
+    return result
 
-
-def _ensure_success(result: CommandResult, command_name: str) -> None:
-    if result.exit_code == 0:
-        return
-
-    logger.error("Command {} failed with exit code {}", command_name, result.exit_code)
-    raise HTTPException(
-        status_code=502,
-        detail={
-            "error": "command_failed",
-            "command": command_name,
-            "exit_code": result.exit_code,
-            "stderr": result.stderr,
-            "stderr_truncated": result.stderr_truncated,
-        },
-    )
 
 
 class SystemStatusServer(WebServer):
@@ -195,6 +196,23 @@ class SystemStatusServer(WebServer):
             response_model=OverviewResponse,
             summary="System overview",
             description="Returns combined status of all services and GPUs",
+        )
+        self.app.add_api_route(
+            "/disk/space",
+            self.get_disk_space,
+            methods=["GET"],
+            response_model=DiskSpaceResponse,
+            summary="Get directory sizes",
+            description="Returns sizes of immediate subdirectories within a given path",
+        )
+        self.app.add_api_route(
+            "/system/shutdown",
+            self.shutdown_system,
+            methods=["POST"],
+            response_model=ShutdownResponse,
+            summary="Graceful system shutdown",
+            description="Initiates a graceful system shutdown (requires miner authentication)",
+            dependencies=[Depends(authorize(allow_miner=True, purpose="/system/shutdown"))],
         )
 
     @aiocache_cached(ttl=30)
@@ -265,7 +283,6 @@ class SystemStatusServer(WebServer):
 
         try:
             result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
-            _ensure_success(result, "systemctl")
         except HTTPException as exc:
             if tolerate_errors:
                 return ServiceStatusResponse(
@@ -279,6 +296,27 @@ class SystemStatusServer(WebServer):
                     error=exc.detail,
                 )
             raise
+
+        # Check if command failed
+        if result.exit_code != 0:
+            error_detail = {
+                "error": "command_failed",
+                "command": "systemctl",
+                "exit_code": result.exit_code,
+                "stderr": result.stderr,
+            }
+            if tolerate_errors:
+                return ServiceStatusResponse(
+                    service=ServiceInfo(
+                        id=service.service_id,
+                        unit=service.unit,
+                        description=service.description,
+                    ),
+                    status=None,
+                    healthy=False,
+                    error=error_detail,
+                )
+            raise HTTPException(status_code=502, detail=error_detail)
 
         data = _parse_key_value(result.stdout)
         status = ServiceStatus(
@@ -328,7 +366,6 @@ class SystemStatusServer(WebServer):
             command.append(f"--since={since_time.isoformat()}")
 
         result = await _run_command(command, self.config.command_timeout_seconds, self.config.max_output_bytes)
-        _ensure_success(result, "journalctl")
 
         entries = [line for line in result.stdout.splitlines() if line]
 
@@ -391,6 +428,278 @@ class SystemStatusServer(WebServer):
             status.load_state == "loaded"
             and status.active_state == "active"
             and status.sub_state in {"running", "listening", None}
+        )
+
+    def _validate_path(self, path: str) -> Path:
+        """Validate and resolve path, ensuring it's safe to query."""
+        try:
+            resolved = Path(path).resolve()
+        except (ValueError, RuntimeError) as exc:
+            logger.error("Invalid path: {}", path)
+            raise HTTPException(status_code=400, detail="Invalid path") from exc
+
+        if not resolved.exists():
+            raise HTTPException(status_code=404, detail="Path does not exist")
+
+        if not resolved.is_dir():
+            raise HTTPException(status_code=400, detail="Path is not a directory")
+
+        return resolved
+
+    def _parse_du_line(self, line: str) -> tuple[int, str]:
+        """Parse a line from du output: size<tab>path."""
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid du output line: {line}")
+        try:
+            size_kb = int(parts[0])
+        except ValueError as exc:
+            raise ValueError(f"Invalid size in du output: {parts[0]}") from exc
+        return size_kb * 1024, parts[1]
+
+    def _human_readable_size(self, size_bytes: int) -> str:
+        """Convert bytes to human-readable format."""
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} PB"
+
+    async def get_disk_space(
+        self,
+        path: str = Query("/", description="Directory path to analyze"),
+        diagnostic: bool = Query(False, description="Enable diagnostic mode for deep analysis"),
+        max_depth: int = Query(3, ge=1, le=10, description="Maximum depth for diagnostic mode (default: 3)"),
+        top_n: int = Query(10, ge=1, le=100, description="Show top N directories per level (default: 10)"),
+        cross_filesystems: bool = Query(False, description="Cross filesystem boundaries (include mounted volumes)"),
+    ) -> DiskSpaceResponse:
+        """Get sizes of subdirectories within the given path.
+        
+        Standard mode: Shows immediate subdirectories only.
+        Diagnostic mode: Recursively analyzes up to max_depth levels and shows top N offenders.
+        By default, stays within a single filesystem. Set cross_filesystems=true to include mounted volumes.
+        The max_depth and top_n parameters are only used when diagnostic=true.
+        """
+        validated_path = self._validate_path(path)
+
+        if diagnostic:
+            return await self._get_disk_space_diagnostic(
+                validated_path, max_depth, top_n, cross_filesystems
+            )
+        else:
+            return await self._get_disk_space_simple(validated_path, cross_filesystems)
+
+    async def _get_disk_space_simple(
+        self, validated_path: Path, cross_filesystems: bool = False
+    ) -> DiskSpaceResponse:
+        """Get sizes of immediate subdirectories only."""
+        # Use sudo du to access all directories
+        # -k: output in kilobytes
+        # -x: don't cross filesystem boundaries (unless cross_filesystems=True)
+        # --max-depth=1: only immediate children
+        # Note: Don't use -s with --max-depth as they conflict
+        command = [
+            "sudo",
+            "du",
+            "-k",
+        ]
+        if not cross_filesystems:
+            command.append("-x")  # Don't cross filesystem boundaries
+        command.extend([
+            "--max-depth=1",
+            str(validated_path),
+        ])
+
+        # Use longer timeout for diagnostic mode to handle large directory trees
+        timeout = max(self.config.command_timeout_seconds * 5, 120)  # Max 2 minutes
+
+        result = await _run_command(
+            command,
+            timeout,
+            self.config.max_output_bytes,
+        )
+
+        directories: List[DirectoryInfo] = []
+        parent_size = 0
+
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+
+            try:
+                size_bytes, dir_path = self._parse_du_line(line)
+            except ValueError as exc:
+                logger.warning("Failed to parse du line: {}", exc)
+                continue
+
+            # Skip the parent directory itself (it appears in the output)
+            if Path(dir_path).resolve() == validated_path:
+                parent_size = size_bytes
+                continue
+
+            dir_name = Path(dir_path).name
+            directories.append(
+                DirectoryInfo(
+                    name=dir_name,
+                    path=dir_path,
+                    size_bytes=size_bytes,
+                    size_human=self._human_readable_size(size_bytes),
+                    depth=1,
+                    percentage=None,
+                )
+            )
+
+        # Sort by size descending
+        directories.sort(key=lambda d: d.size_bytes, reverse=True)
+
+        # Calculate total (use parent_size if available, otherwise sum subdirs)
+        total_bytes = parent_size if parent_size > 0 else sum(d.size_bytes for d in directories)
+
+        # Add percentages
+        if total_bytes > 0:
+            for d in directories:
+                d.percentage = (d.size_bytes / total_bytes) * 100
+
+        return DiskSpaceResponse(
+            path=str(validated_path),
+            directories=directories,
+            total_size_bytes=total_bytes,
+            total_size_human=self._human_readable_size(total_bytes),
+            stdout_truncated=result.stdout_truncated,
+            diagnostic_mode=False,
+        )
+
+    async def _get_disk_space_diagnostic(
+        self, validated_path: Path, max_depth: int, top_n: int, cross_filesystems: bool = False
+    ) -> DiskSpaceResponse:
+        """Recursive analysis to find worst disk space offenders at multiple depth levels."""
+        # Use sudo du with specified max-depth to get all directories up to that level
+        # This gives us a complete picture of disk usage at all levels
+        command = [
+            "sudo",
+            "du",
+            "-k",
+        ]
+        if not cross_filesystems:
+            command.append("-x")  # Don't cross filesystem boundaries
+        command.extend([
+            f"--max-depth={max_depth}",
+            str(validated_path),
+        ])
+
+        # Use longer timeout for diagnostic mode to handle large directory trees
+        timeout = max(self.config.command_timeout_seconds * 5, 120)  # Max 2 minutes
+        
+        result = await _run_command(
+            command,
+            timeout,
+            self.config.max_output_bytes * 2,  # Allow larger output
+        )
+
+        # Parse all directory entries
+        all_entries: List[tuple[int, str, int]] = []  # (size_bytes, path, depth)
+        root_size = 0
+
+        for line in result.stdout.strip().splitlines():
+            if not line:
+                continue
+
+            try:
+                size_bytes, dir_path = self._parse_du_line(line)
+            except ValueError as exc:
+                logger.warning("Failed to parse du line: {}", exc)
+                continue
+
+            resolved = Path(dir_path).resolve()
+            
+            # Calculate depth relative to validated_path
+            try:
+                relative = resolved.relative_to(validated_path)
+                depth = len(relative.parts) if str(relative) != "." else 0
+            except ValueError:
+                # Path is not relative to validated_path (shouldn't happen)
+                continue
+
+            if depth == 0:
+                root_size = size_bytes
+                continue
+
+            all_entries.append((size_bytes, str(resolved), depth))
+
+        # Group by depth and get top N for each level
+        depth_groups: Dict[int, List[tuple[int, str]]] = {}
+        for size_bytes, path, depth in all_entries:
+            if depth not in depth_groups:
+                depth_groups[depth] = []
+            depth_groups[depth].append((size_bytes, path))
+
+        # Get top N from each depth level
+        top_offenders: List[DirectoryInfo] = []
+        for depth in sorted(depth_groups.keys()):
+            entries = depth_groups[depth]
+            entries.sort(reverse=True)  # Sort by size descending
+            
+            for size_bytes, path in entries[:top_n]:
+                percentage = (size_bytes / root_size * 100) if root_size > 0 else 0
+                top_offenders.append(
+                    DirectoryInfo(
+                        name=Path(path).name,
+                        path=path,
+                        size_bytes=size_bytes,
+                        size_human=self._human_readable_size(size_bytes),
+                        depth=depth,
+                        percentage=percentage,
+                    )
+                )
+
+        # Sort all results by size descending for final output
+        top_offenders.sort(key=lambda d: d.size_bytes, reverse=True)
+
+        return DiskSpaceResponse(
+            path=str(validated_path),
+            directories=top_offenders,
+            total_size_bytes=root_size,
+            total_size_human=self._human_readable_size(root_size),
+            stdout_truncated=result.stdout_truncated,
+            diagnostic_mode=True,
+            max_depth=max_depth,
+            top_n=top_n,
+        )
+
+    async def shutdown_system(self) -> ShutdownResponse:
+        """Initiate a graceful system shutdown.
+        
+        This endpoint requires miner authentication via signed message.
+        It triggers a graceful shutdown using the shutdown command.
+        Note: Requires sudoers configuration for the status user.
+        """
+        timestamp = datetime.now(timezone.utc).isoformat()
+        
+        logger.warning("Graceful shutdown requested at {}", timestamp)
+        
+        # Schedule the shutdown command to run after we return the response
+        # Use 'shutdown -h now' for graceful shutdown
+        # Requires: status ALL=(ALL) NOPASSWD: /sbin/shutdown
+        async def delayed_shutdown():
+            await asyncio.sleep(2)  # Give time for response to be sent
+            logger.critical("Executing graceful shutdown...")
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "sudo", "/sbin/shutdown", "-h", "now",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await process.communicate()
+            except Exception as e:
+                logger.error("Failed to execute shutdown: {}", e)
+        
+        # Schedule shutdown in background
+        asyncio.create_task(delayed_shutdown())
+        
+        return ShutdownResponse(
+            status="initiated",
+            message="Graceful shutdown initiated. System will power off in 2 seconds.",
+            timestamp=timestamp,
         )
 
 

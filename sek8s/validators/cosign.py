@@ -352,18 +352,6 @@ class CosignValidator(ValidatorBase):
             logger.debug(f"Could not resolve image reference {image}: {e}")
             return image
 
-    def _normalize_registry_name(self, registry: str) -> str:
-        """Normalize registry name for consistent matching."""
-        # Remove protocol if present
-        if registry.startswith(("http://", "https://")):
-            registry = urlparse(registry).netloc
-
-        # Handle Docker Hub special cases
-        if registry in ["docker.io", "registry-1.docker.io", "index.docker.io"]:
-            return "docker.io"
-
-        return registry.lower()
-
     async def _run_cosign(self, cmd: list[str]) -> Tuple[bool, str, str, bool]:
         """Run cosign command and detect rate limiting."""
         logger.debug(f"Running: {' '.join(cmd)}")

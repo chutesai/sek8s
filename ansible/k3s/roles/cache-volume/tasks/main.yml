@@ -55,6 +55,33 @@
         group: root
       register: var_snap_mount_unit
 
+    - name: Copy containerd cache mount unit
+      copy:
+        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd.mount"
+        dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd.mount
+        mode: '0644'
+        owner: root
+        group: root
+      register: var_lib_rancher_mount_unit
+
+    - name: Copy containerd cache init script
+      copy:
+        src: "{{ files_dir }}/init-containerd-cache.sh"
+        dest: /usr/local/bin/init-containerd-cache.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: containerd_init_script
+
+    - name: Template containerd cache init service
+      template:
+        src: containerd-cache-init.service.j2
+        dest: /etc/systemd/system/containerd-cache-init.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: containerd_init_service
+
     - name: Copy Chutes agent symlink script
       copy:
         src: "{{ files_dir }}/setup-chutes-agent-symlink.sh"
@@ -76,11 +103,19 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or chutes_agent_symlink_service.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or var_lib_rancher_mount_unit.changed or containerd_init_service.changed or chutes_agent_symlink_service.changed
 
     - name: Create /var/snap mount point directory
       file:
         path: /var/snap
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create containerd cache mount point directory
+      file:
+        path: /var/lib/rancher/k3s/agent/containerd
         state: directory
         mode: '0755'
         owner: root
@@ -122,6 +157,22 @@
         daemon_reload: yes
       failed_when: false
 
+    - name: Enable containerd cache mount (but do not start)
+      systemd:
+        name: var-lib-rancher-k3s-agent-containerd.mount
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
+    - name: Enable containerd cache init service (but do not start)
+      systemd:
+        name: containerd-cache-init.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
     - name: Enable Chutes agent symlink service (but do not start)
       systemd:
         name: setup-chutes-agent-symlink.service
@@ -141,6 +192,18 @@
       register: mount_status
       changed_when: false
       failed_when: mount_status.stdout != "enabled"
+
+    - name: Verify containerd mount unit installation
+      command: systemctl is-enabled var-lib-rancher-k3s-agent-containerd.mount
+      register: containerd_mount_status
+      changed_when: false
+      failed_when: containerd_mount_status.stdout != "enabled"
+
+    - name: Verify containerd init service installation
+      command: systemctl is-enabled containerd-cache-init.service
+      register: containerd_init_status
+      changed_when: false
+      failed_when: containerd_init_status.stdout != "enabled"
 
     - name: Verify Chutes agent symlink service installation
       command: systemctl is-enabled setup-chutes-agent-symlink.service

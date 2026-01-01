@@ -12,6 +12,8 @@ def pytest_configure(config):
 
     os.environ["POLICY_PATH"] = os.path.join(os.getcwd(), "opa/policies")
 
+    os.environ["ALLOWED_VALIDATORS"] = "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ,5DAAnrj7VHTz5kZ8Yx9T6UzU6Fv5fV8qD5T4v4k1zX7N6P4Y"
+
     os.environ.setdefault("DEBUG", "false")
     os.environ.setdefault("REGISTRY_URL", "localhost:5000")
     os.environ.setdefault("COSIGN_PASSWORD", "testpassword")

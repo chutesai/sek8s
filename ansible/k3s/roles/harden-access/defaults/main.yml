@@ -1,0 +1,4 @@
+---
+# Debug build flag - set to true to skip access hardening
+# Can be overridden in inventory.yml
+debug_build: false

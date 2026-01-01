@@ -5,10 +5,7 @@ from bittensor_wallet import Keypair
 from fastapi import HTTPException, Header, Request, status
 from loguru import logger
 from substrateinterface import KeypairType
-from sek8s.config import AttestationProxyConfig
 from sek8s.services._shared import HOTKEY_HEADER, MINER_HEADER, NONCE_HEADER, NONCE_MAX_AGE_SECONDS, SIGNATURE_HEADER, VALIDATOR_HEADER
-
-settings = AttestationProxyConfig()
 
 @lru_cache(maxsize=2)
 def get_keypair(ss58: str) -> Keypair:
@@ -30,6 +27,9 @@ async def verify_validator_signature(
     
     This ensures only authorized validators can access the external endpoints.
     """
+    # Lazy import to avoid loading config at module import time
+    from sek8s.config import AuthConfig
+    settings = AuthConfig()
     
     logger.info(f"Checking external request: {validator}:{nonce} - {signature}")
 
@@ -125,7 +125,22 @@ async def verify_validator_signature(
             detail="Signature verification failed"
         )
     
-def authorize(allow_miner=False, allow_validator=False, purpose: Optional[str] = None):
+def authorize(
+    allow_miner: bool = False,
+    allow_validator: bool = False,
+    purpose: Optional[str] = None
+):
+    """
+    Create an authorization dependency for FastAPI routes.
+    
+    Args:
+        allow_miner: Whether to allow miner authentication
+        allow_validator: Whether to allow validator authentication
+        purpose: Purpose string for signature verification (used when no body)
+    
+    Returns:
+        FastAPI dependency function that validates signatures
+    """
     def _authorize(
         request: Request,
         hotkey: str | None = Header(None, alias=HOTKEY_HEADER),
@@ -135,13 +150,26 @@ def authorize(allow_miner=False, allow_validator=False, purpose: Optional[str] =
         """
         Verify the authenticity of a request.
         """
-
+        # Lazy import to avoid loading config at module import time
+        from sek8s.config import AuthConfig
+        settings = AuthConfig()
+        
         logger.info(f"Authorizing {request.url.path}: {hotkey=} {nonce=} {signature=} {purpose=} {request.state.body_sha256=}")
 
         allowed_signers = []
         if allow_miner:
+            if not settings.miner_ss58:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server misconfiguration: miner_ss58 not configured"
+                )
             allowed_signers.append(settings.miner_ss58)
         if allow_validator:
+            if not settings.allowed_validators:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Server misconfiguration: allowed_validators not configured"
+                )
             allowed_signers += settings.allowed_validators
         logger.info(f"{allowed_signers=}")
         if (

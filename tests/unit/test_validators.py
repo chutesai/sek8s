@@ -322,10 +322,50 @@ class TestValidationResult:
         assert "Warning" in combined.warnings
 
 class TestCosignValidator:
+    """Tests for CosignValidator."""
 
-    def test_extract_registry(self, config):
-        validator=CosignValidator(config)
+    def test_parse_image_reference_docker_hub_with_org(self, config):
+        """Test parsing Docker Hub image with organization."""
+        validator = CosignValidator(config)
 
-        registry = validator._extract_registry('parachutes/chutes-agent:k3s-latest')
+        registry, org, repo, tag = validator._parse_image_reference('parachutes/chutes-agent:k3s-latest')
 
-        assert registry == 'parachutes'
+        assert registry == 'docker.io'
+        assert org == 'parachutes'
+        assert repo == 'chutes-agent'
+        assert tag == 'k3s-latest'
+
+    def test_parse_image_reference_official_image(self, config):
+        """Test parsing Docker Hub official image."""
+        validator = CosignValidator(config)
+
+        registry, org, repo, tag = validator._parse_image_reference('nginx:latest')
+
+        assert registry == 'docker.io'
+        assert org == 'library'
+        assert repo == 'nginx'
+        assert tag == 'latest'
+
+    def test_parse_image_reference_with_registry(self, config):
+        """Test parsing image with explicit registry."""
+        validator = CosignValidator(config)
+
+        registry, org, repo, tag = validator._parse_image_reference('gcr.io/google-containers/pause:3.9')
+
+        assert registry == 'gcr.io'
+        assert org == 'google-containers'
+        assert repo == 'pause'
+        assert tag == '3.9'
+
+    def test_parse_image_reference_with_digest(self, config):
+        """Test parsing image with digest."""
+        validator = CosignValidator(config)
+
+        registry, org, repo, tag = validator._parse_image_reference(
+            'docker.io/parachutes/app@sha256:abcd1234'
+        )
+
+        assert registry == 'docker.io'
+        assert org == 'parachutes'
+        assert repo == 'app'
+        assert tag == '@sha256:abcd1234'

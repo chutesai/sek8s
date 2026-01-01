@@ -10,6 +10,7 @@ set -e
 CONFIG_FILE=""
 
 HOSTNAME=""
+VM_IMAGE=""
 MINER_SS58=""
 MINER_SEED=""
 
@@ -19,6 +20,8 @@ VM_DNS="8.8.8.8"
 PUBLIC_IFACE="ens9f0np0"
 CACHE_SIZE="5000G"
 CACHE_VOLUME=""
+CONTAINERD_SIZE="500G"
+CONTAINERD_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
@@ -29,6 +32,7 @@ NETWORK_TYPE="tap"
 # Temporary CLI containers
 # --------------------------------------------------------------------
 CLI_HOSTNAME=""
+CLI_VM_IMAGE=""
 CLI_MINER_SS58=""
 CLI_MINER_SEED=""
 CLI_VM_IP=""
@@ -37,6 +41,8 @@ CLI_VM_DNS=""
 CLI_PUBLIC_IFACE=""
 CLI_CACHE_SIZE=""
 CLI_CACHE_VOLUME=""
+CLI_CONTAINERD_SIZE=""
+CLI_CONTAINERD_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
@@ -54,6 +60,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
+    --image) CLI_VM_IMAGE="$2"; shift 2 ;;
     --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
     --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
     --vm-ip) CLI_VM_IP="$2"; shift 2 ;;
@@ -62,6 +69,8 @@ while [[ $# -gt 0 ]]; do
     --public-iface) CLI_PUBLIC_IFACE="$2"; shift 2 ;;
     --cache-size) CLI_CACHE_SIZE="$2"; shift 2 ;;
     --cache-volume) CLI_CACHE_VOLUME="$2"; shift 2 ;;
+    --containerd-size) CLI_CONTAINERD_SIZE="$2"; shift 2 ;;
+    --containerd-volume) CLI_CONTAINERD_VOLUME="$2"; shift 2 ;;
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
@@ -120,6 +129,7 @@ Config File:
 
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
+  --image PATH              Path to VM image (overrides YAML and CHUTES_IMAGE env)
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)
 
@@ -132,7 +142,8 @@ Network:
 Volumes:
   --cache-size SIZE
   --cache-volume PATH
-  --config-volume PATH
+  --containerd-size SIZE
+  --containerd-volume PATH
   --skip-bind
 
 Runtime:
@@ -208,6 +219,7 @@ fi
 # Apply CLI overrides (highest precedence)
 # --------------------------------------------------------------------
 [[ -n "$CLI_HOSTNAME" ]] && HOSTNAME="$CLI_HOSTNAME"
+[[ -n "$CLI_VM_IMAGE" ]] && VM_IMAGE="$CLI_VM_IMAGE"
 [[ -n "$CLI_MINER_SS58" ]] && MINER_SS58="$CLI_MINER_SS58"
 [[ -n "$CLI_MINER_SEED" ]] && MINER_SEED="$CLI_MINER_SEED"
 
@@ -218,6 +230,8 @@ fi
 
 [[ -n "$CLI_CACHE_SIZE" ]] && CACHE_SIZE="$CLI_CACHE_SIZE"
 [[ -n "$CLI_CACHE_VOLUME" ]] && CACHE_VOLUME="$CLI_CACHE_VOLUME"
+[[ -n "$CLI_CONTAINERD_SIZE" ]] && CONTAINERD_SIZE="$CLI_CONTAINERD_SIZE"
+[[ -n "$CLI_CONTAINERD_VOLUME" ]] && CONTAINERD_VOLUME="$CLI_CONTAINERD_VOLUME"
 [[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
@@ -253,13 +267,19 @@ if [[ -z "$CACHE_VOLUME" ]]; then
   CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
 fi
 
+if [[ -z "$CONTAINERD_VOLUME" ]]; then
+  CONTAINERD_VOLUME="containerd-${HOSTNAME}.qcow2"
+fi
+
 echo ""
 echo "=== TEE VM Orchestration ==="
 echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Hostname: $HOSTNAME"
+echo "Image: ${VM_IMAGE:-<from CHUTES_IMAGE env or run-td default>}"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
+echo "Containerd volume: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Network: $NETWORK_TYPE"
 echo ""
@@ -268,18 +288,36 @@ echo ""
 # Step 0: Verify host configuration
 # --------------------------------------------------------------------
 echo "Step 0: Verifying host configuration..."
-HOST_CMDLINE=$(cat /proc/cmdline 2>/dev/null || echo "")
 
-# Check for kvm_intel.tdx=on
-if ! echo "$HOST_CMDLINE" | grep -q "kvm_intel.tdx=1"; then
-  echo "✗ Error: Host kernel missing 'kvm_intel.tdx=1' parameter"
-  echo "  Add to /etc/default/grub: GRUB_CMDLINE_LINUX=\"... kvm_intel.tdx=1 ...\""
-  echo "  Then run: sudo update-grub && sudo reboot"
+# Check if TDX module is initialized via dmesg
+TDX_DMESG=$(sudo dmesg | grep -i tdx 2>/dev/null || echo "")
+
+if ! echo "$TDX_DMESG" | grep -q "module initialized"; then
+  echo "✗ Error: TDX module not initialized on this host"
+  echo ""
+  echo "TDX-related kernel messages:"
+  if [[ -n "$TDX_DMESG" ]]; then
+    echo "$TDX_DMESG" | tail -n 10
+  else
+    echo "  (none found)"
+  fi
+  echo ""
+  echo "To enable TDX:"
+  echo "  1. Verify CPU supports TDX: grep tdx /proc/cpuinfo"
+  echo "  2. Enable TDX in BIOS/UEFI settings"
+  echo "  3. Ensure TDX kernel support is installed"
+  echo "  4. Reboot and check: dmesg | grep -i tdx"
   exit 1
 fi
 
-echo "✓ Host IOMMU configuration verified"
-echo "✓ Host TDX enabled"
+# Additionally check CPU support
+if ! grep -q tdx /proc/cpuinfo 2>/dev/null; then
+  echo "⚠ Warning: TDX instruction not found in /proc/cpuinfo"
+  echo "  This may indicate incomplete TDX support"
+fi
+
+echo "✓ TDX module initialized"
+echo "✓ Host TDX configuration verified"
 echo ""
 
 # --------------------------------------------------------------------
@@ -313,7 +351,7 @@ if [[ -f "$CACHE_VOLUME" ]]; then
   echo "✓ Using existing cache volume: $CACHE_VOLUME"
 else
   echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
-  if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE"; then
+  if sudo ./create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" "tdx-cache"; then
     echo "✓ Cache volume created"
   else
     echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
@@ -323,9 +361,31 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
+# Containerd cache volume (required for encrypted containerd storage)
+# --------------------------------------------------------------------
+echo "Step 3: Preparing containerd cache volume..."
+if [[ -z "$CONTAINERD_VOLUME" ]]; then
+  echo "✗ Error: CONTAINERD_VOLUME is unset"
+  exit 1
+fi
+
+if [[ -f "$CONTAINERD_VOLUME" ]]; then
+  echo "✓ Using existing containerd volume: $CONTAINERD_VOLUME"
+else
+  echo "Creating containerd volume at: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
+  if sudo ./create-cache.sh "$CONTAINERD_VOLUME" "$CONTAINERD_SIZE" "containerd-cache"; then
+    echo "✓ Containerd volume created"
+  else
+    echo "✗ Error: Failed to create containerd volume at $CONTAINERD_VOLUME"
+    exit 1
+  fi
+fi
+echo ""
+
+# --------------------------------------------------------------------
 # Config volume
 # --------------------------------------------------------------------
-echo "Step 3: Setting up config volume..."
+echo "Step 4: Setting up config volume..."
 if [[ -n "$CONFIG_VOLUME" ]]; then
   if [[ -f "$CONFIG_VOLUME" ]]; then
     echo "✓ Using existing config volume: $CONFIG_VOLUME"
@@ -357,7 +417,7 @@ echo ""
 # --------------------------------------------------------------------
 NET_IFACE=""
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
-  echo "Step 4: Setting up bridge networking..."
+  echo "Step 5: Setting up bridge networking..."
   BRIDGE_OUTPUT=$(./setup-bridge.sh \
     --bridge-ip "$BRIDGE_IP" \
     --vm-ip "${VM_IP}/24" \
@@ -373,7 +433,7 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
   echo "✓ Bridge configured (TAP: $NET_IFACE)"
   echo ""
 else
-  echo "Step 4: Skipping bridge setup (network-type=user)"
+  echo "Step 5: Skipping bridge setup (network-type=user)"
   echo ""
 fi
 
@@ -388,12 +448,18 @@ LAUNCH_ARGS=(
   --network-type "$NETWORK_TYPE"
 )
 
+# Add image if specified in config or CLI
+if [[ -n "$VM_IMAGE" ]]; then
+  LAUNCH_ARGS+=(--image "$VM_IMAGE")
+fi
+
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
   LAUNCH_ARGS+=(--net-iface "$NET_IFACE")
 fi
 
 # Additional args
 LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
+LAUNCH_ARGS+=(--containerd-volume "$CONTAINERD_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner
