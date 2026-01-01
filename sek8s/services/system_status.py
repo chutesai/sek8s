@@ -133,27 +133,11 @@ async def _run_command(command: List[str], timeout: float, limit: int) -> Comman
         stderr_truncated=stderr_truncated,
     )
     
-    # Check exit code and raise if command failed
-    if result.exit_code == 0:
-        return result
+    # Always return the result - let callers decide how to handle non-zero exit codes
+    if result.exit_code != 0:
+        logger.warning("Command {} returned exit code {}", command_name, result.exit_code)
     
-    # du exits with code 1 when it encounters permission denied errors
-    # but still produces valid output. Accept this as success if stdout has data.
-    if command_name == "du" and result.exit_code == 1 and result.stdout.strip():
-        logger.debug("du completed with exit code 1 (permission errors) but has valid output")
-        return result
-
-    logger.error("Command {} failed with exit code {}", command_name, result.exit_code)
-    raise HTTPException(
-        status_code=502,
-        detail={
-            "error": "command_failed",
-            "command": command_name,
-            "exit_code": result.exit_code,
-            "stderr": result.stderr,
-            "stderr_truncated": result.stderr_truncated,
-        },
-    )
+    return result
 
 
 
@@ -312,6 +296,27 @@ class SystemStatusServer(WebServer):
                     error=exc.detail,
                 )
             raise
+
+        # Check if command failed
+        if result.exit_code != 0:
+            error_detail = {
+                "error": "command_failed",
+                "command": "systemctl",
+                "exit_code": result.exit_code,
+                "stderr": result.stderr,
+            }
+            if tolerate_errors:
+                return ServiceStatusResponse(
+                    service=ServiceInfo(
+                        id=service.service_id,
+                        unit=service.unit,
+                        description=service.description,
+                    ),
+                    status=None,
+                    healthy=False,
+                    error=error_detail,
+                )
+            raise HTTPException(status_code=502, detail=error_detail)
 
         data = _parse_key_value(result.stdout)
         status = ServiceStatus(
