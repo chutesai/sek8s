@@ -73,9 +73,9 @@
         group: root
       register: containerd_init_script
 
-    - name: Copy containerd cache init service
-      copy:
-        src: "{{ files_dir }}/containerd-cache-init.service"
+    - name: Template containerd cache init service
+      template:
+        src: containerd-cache-init.service.j2
         dest: /etc/systemd/system/containerd-cache-init.service
         mode: '0644'
         owner: root

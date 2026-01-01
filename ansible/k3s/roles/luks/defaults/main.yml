@@ -11,3 +11,7 @@ tdx_nonce_endpoint: "{{ lookup('env', 'TDX_NONCE_ENDPOINT') | default('https://a
 tdx_luks_endpoint: "{{ lookup('env', 'TDX_LUKS_ENDPOINT') | default('https://api.chutes.ai/servers/vm_name/luks', true) }}"
 tdx_timeout: 30
 tdx_retry_count: 3
+
+# Debug build flag - set to true to skip encryption
+# Can be overridden in inventory.yml
+debug_build: false

@@ -1,0 +1,4 @@
+---
+# Debug build flag - set to true for unencrypted containerd cache
+# Can be overridden in inventory.yml
+debug_build: false

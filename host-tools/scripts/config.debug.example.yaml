@@ -1,0 +1,38 @@
+# Debug TEE VM Configuration  
+# Unencrypted volumes, debug image, SSH access preserved
+
+vm:
+  hostname: chutes-miner-debug-0
+  image: "../../guest-tools/image/tdx-guest-debug.qcow2"  # Debug image (no encryption, SSH enabled)
+  
+miner:
+  ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+  seed: "your_seed_here"
+
+network:
+  vm_ip: "192.168.100.2"
+  bridge_ip: "192.168.100.1/24"
+  dns: "8.8.8.8"
+  public_interface: "ens9f0np0"
+  type: "tap"
+  ssh_port: 2222
+
+volumes:
+  cache:
+    size: "500G"  # Smaller for debug
+    path: ""  # Auto-generate: cache-chutes-miner-debug-0.qcow2
+  
+  containerd:
+    size: "100G"  # Smaller for debug
+    path: ""  # Auto-generate: containerd-chutes-miner-debug-0.qcow2
+    # Note: Debug VMs use UNENCRYPTED containerd cache
+    # Do not mix debug and production containerd volumes!
+  
+  config:
+    path: ""  # Auto-generate: config-chutes-miner-debug-0.qcow2
+
+devices:
+  bind_devices: true
+
+runtime:
+  foreground: false

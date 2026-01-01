@@ -5,6 +5,35 @@ import sys
 import os
 import yaml
 import shlex
+import json
+
+def validate_config(config, schema_path):
+    """Validate config against JSON schema"""
+    try:
+        import jsonschema
+    except ImportError:
+        print("Warning: jsonschema not installed. Skipping validation.", file=sys.stderr)
+        print("Install with: pip3 install jsonschema", file=sys.stderr)
+        return True
+    
+    try:
+        with open(schema_path, 'r') as f:
+            schema = json.load(f)
+        
+        jsonschema.validate(instance=config, schema=schema)
+        return True
+    except jsonschema.ValidationError as e:
+        print(f"Config validation error: {e.message}", file=sys.stderr)
+        print(f"Path: {' -> '.join(str(p) for p in e.path)}", file=sys.stderr)
+        return False
+    except FileNotFoundError:
+        print(f"Warning: Schema file not found: {schema_path}", file=sys.stderr)
+        print("Proceeding without validation.", file=sys.stderr)
+        return True
+    except Exception as e:
+        print(f"Warning: Schema validation failed: {e}", file=sys.stderr)
+        print("Proceeding without validation.", file=sys.stderr)
+        return True
 
 def main():
     if len(sys.argv) != 2:
@@ -27,8 +56,19 @@ def main():
         print(f"Error reading config file: {e}", file=sys.stderr)
         sys.exit(1)
     
+    # Validate against schema
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    schema_path = os.path.join(script_dir, 'config-schema.json')
+    
+    if not validate_config(config, schema_path):
+        print("\nPlease fix the validation errors above.", file=sys.stderr)
+        sys.exit(1)
+    
     # Extract values with defaults
-    hostname = config.get('vm', {}).get('hostname', '')
+    vm_config = config.get('vm', {})
+    hostname = vm_config.get('hostname', '')
+    vm_image = vm_config.get('image', '')
+    
     miner_ss58 = config.get('miner', {}).get('ss58', '')
     miner_seed = config.get('miner', {}).get('seed', '')
     
@@ -37,6 +77,8 @@ def main():
     bridge_ip = network.get('bridge_ip', '192.168.100.1/24')
     vm_dns = network.get('dns', '8.8.8.8')
     public_iface = network.get('public_interface', 'ens9f0np0')
+    network_type = network.get('type', 'tap')
+    ssh_port = network.get('ssh_port', 2222)
     
     if 'advanced' in config:
         print("Error: 'advanced' section is no longer supported. Remove it to match the current schema.", file=sys.stderr)
@@ -65,12 +107,15 @@ def main():
     
     # Output shell variable assignments (properly escaped)
     print(f"HOSTNAME={shlex.quote(hostname)}")
+    print(f"VM_IMAGE={shlex.quote(vm_image)}")
     print(f"MINER_SS58={shlex.quote(miner_ss58)}")
     print(f"MINER_SEED={shlex.quote(miner_seed)}")
     print(f"VM_IP={shlex.quote(vm_ip)}")
     print(f"BRIDGE_IP={shlex.quote(bridge_ip)}")
     print(f"VM_DNS={shlex.quote(vm_dns)}")
     print(f"PUBLIC_IFACE={shlex.quote(public_iface)}")
+    print(f"NETWORK_TYPE={shlex.quote(network_type)}")
+    print(f"SSH_PORT={shlex.quote(str(ssh_port))}")
     print(f"CACHE_SIZE={shlex.quote(cache_size)}")
     print(f"CACHE_VOLUME={shlex.quote(cache_volume)}")
     print(f"CONTAINERD_SIZE={shlex.quote(containerd_size)}")

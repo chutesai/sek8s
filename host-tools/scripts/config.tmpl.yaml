@@ -4,6 +4,7 @@
 # VM Identity
 vm:
   hostname: chutes-miner-tee-0 # Must be unique per miner hotkey
+  image: ""  # Path to VM image (e.g., tdx-guest.qcow2). Leave empty to use CHUTES_IMAGE env var or run-td default
   
 # Miner Credentials (Optional - prefer passing via CLI for security)
 miner:
@@ -16,10 +17,12 @@ network:
   bridge_ip: "192.168.100.1/24"
   dns: "8.8.8.8"
   public_interface: "ens9f0np0"
+  type: "tap"  # Network type: "tap" (bridged) or "user" (SLIRP/port forwarding)
+  ssh_port: 2222  # SSH port for user mode networking
 
 # Volume Configuration
 volumes:
-  # General cache volume settings (optional)
+  # General cache volume settings (required)
   cache:
     size: "5000G"
     path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/cache-volume.qcow2)

@@ -1,14 +1,28 @@
 #!/bin/bash
 # Initialize containerd cache volume by copying existing content from root filesystem
-# This runs AFTER the device has been encrypted/unlocked by the boot script
+# This runs AFTER the device has been encrypted/unlocked by the boot script (production)
+# or directly on unencrypted device (debug mode)
 # and BEFORE the mount unit mounts it to the final location
 
 set -euo pipefail
 
 CONTAINERD_SOURCE="/var/lib/rancher/k3s/agent/containerd"
 TEMP_MOUNT="/mnt/containerd-init"
-DEVICE="/dev/mapper/containerd_cache"
+DEBUG_MODE="${DEBUG_MODE:-false}"
 LOG_TAG="containerd-cache-init"
+
+# Determine device based on debug mode
+if [ "$DEBUG_MODE" = "true" ]; then
+    # Debug mode: use unencrypted device directly (detect by label)
+    DEVICE=$(blkid -l -o device -t LABEL="containerd-cache" 2>/dev/null)
+    if [ -z "$DEVICE" ]; then
+        echo "[$LOG_TAG] ERROR: Could not find device with label 'containerd-cache'" >&2
+        exit 1
+    fi
+else
+    # Production mode: use encrypted mapper device
+    DEVICE="/dev/mapper/containerd_cache"
+fi
 
 log_info() {
     echo "[$LOG_TAG] $*" | systemd-cat -t "$LOG_TAG" -p info
@@ -20,19 +34,34 @@ log_error() {
     echo "[$LOG_TAG] ERROR: $*" >&2
 }
 
-# Verify the encrypted device exists (setup_containerd_cache should have created this)
+# Verify the device exists
 if [ ! -b "$DEVICE" ]; then
-    log_error "Encrypted device $DEVICE does not exist - boot script may have failed"
+    log_error "Device $DEVICE does not exist"
+    if [ "$DEBUG_MODE" = "false" ]; then
+        log_error "Boot script may have failed to unlock encrypted device"
+    fi
     exit 1
 fi
 
-# Verify this is actually a decrypted LUKS device (security check)
-if ! dmsetup info "$DEVICE" &>/dev/null; then
-    log_error "$DEVICE is not a valid device mapper device"
-    exit 1
+# In production mode, verify this is actually a decrypted LUKS device (security check)
+if [ "$DEBUG_MODE" = "false" ]; then
+    if ! dmsetup info "$DEVICE" &>/dev/null; then
+        log_error "$DEVICE is not a valid device mapper device"
+        exit 1
+    fi
+    log_info "Verified encrypted containerd cache device exists"
+else
+    # In debug mode, check if someone accidentally attached an encrypted volume
+    if cryptsetup isLuks "$DEVICE" 2>/dev/null; then
+        log_error "Device $DEVICE is LUKS encrypted but debug mode is enabled"
+        log_error "Debug VMs require unencrypted containerd cache volumes"
+        log_error "Either:"
+        log_error "  1. Create a new unencrypted cache volume for debug VMs"
+        log_error "  2. Build with debug_build: false for production VMs with encryption"
+        exit 1
+    fi
+    log_info "Debug mode: using unencrypted containerd cache device $DEVICE"
 fi
-
-log_info "Verified encrypted containerd cache device exists"
 
 # Create temporary mount point
 mkdir -p "$TEMP_MOUNT"

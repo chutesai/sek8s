@@ -1,0 +1,36 @@
+# Production TEE VM Configuration
+# Encrypted volumes, production image
+
+vm:
+  hostname: chutes-miner-prod-0
+  image: "../../guest-tools/image/tdx-guest.qcow2"  # Production encrypted image
+  
+miner:
+  ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+  seed: "your_production_seed_here"
+
+network:
+  vm_ip: "192.168.100.2"
+  bridge_ip: "192.168.100.1/24"
+  dns: "8.8.8.8"
+  public_interface: "ens9f0np0"
+  type: "tap"
+  ssh_port: 2222
+
+volumes:
+  cache:
+    size: "5000G"
+    path: ""  # Auto-generate: cache-chutes-miner-prod-0.qcow2
+  
+  containerd:
+    size: "500G"
+    path: ""  # Auto-generate: containerd-chutes-miner-prod-0.qcow2
+  
+  config:
+    path: ""  # Auto-generate: config-chutes-miner-prod-0.qcow2
+
+devices:
+  bind_devices: true
+
+runtime:
+  foreground: false

@@ -10,6 +10,7 @@ set -e
 CONFIG_FILE=""
 
 HOSTNAME=""
+VM_IMAGE=""
 MINER_SS58=""
 MINER_SEED=""
 
@@ -31,6 +32,7 @@ NETWORK_TYPE="tap"
 # Temporary CLI containers
 # --------------------------------------------------------------------
 CLI_HOSTNAME=""
+CLI_VM_IMAGE=""
 CLI_MINER_SS58=""
 CLI_MINER_SEED=""
 CLI_VM_IP=""
@@ -58,6 +60,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
+    --image) CLI_VM_IMAGE="$2"; shift 2 ;;
     --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
     --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
     --vm-ip) CLI_VM_IP="$2"; shift 2 ;;
@@ -126,6 +129,7 @@ Config File:
 
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
+  --image PATH              Path to VM image (overrides YAML and CHUTES_IMAGE env)
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)
 
@@ -215,6 +219,7 @@ fi
 # Apply CLI overrides (highest precedence)
 # --------------------------------------------------------------------
 [[ -n "$CLI_HOSTNAME" ]] && HOSTNAME="$CLI_HOSTNAME"
+[[ -n "$CLI_VM_IMAGE" ]] && VM_IMAGE="$CLI_VM_IMAGE"
 [[ -n "$CLI_MINER_SS58" ]] && MINER_SS58="$CLI_MINER_SS58"
 [[ -n "$CLI_MINER_SEED" ]] && MINER_SEED="$CLI_MINER_SEED"
 
@@ -270,6 +275,7 @@ echo ""
 echo "=== TEE VM Orchestration ==="
 echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Hostname: $HOSTNAME"
+echo "Image: ${VM_IMAGE:-<from CHUTES_IMAGE env or run-td default>}"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
@@ -441,6 +447,11 @@ LAUNCH_ARGS=(
   --config-volume "$CONFIG_VOLUME"
   --network-type "$NETWORK_TYPE"
 )
+
+# Add image if specified in config or CLI
+if [[ -n "$VM_IMAGE" ]]; then
+  LAUNCH_ARGS+=(--image "$VM_IMAGE")
+fi
 
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
   LAUNCH_ARGS+=(--net-iface "$NET_IFACE")

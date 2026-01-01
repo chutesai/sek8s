@@ -185,6 +185,7 @@
         name: harden-access
         apply:
           tags: harden-access
+      when: not debug_build | default(false)
 
 - name: Security Hardening
   hosts: vm
@@ -229,3 +230,4 @@
         name: luks
         apply:
           tags: luks
+      when: not debug_build | default(false)

@@ -1,0 +1,22 @@
+[Unit]
+Description=Initialize Containerd Cache Volume
+Documentation=https://github.com/yourusername/sek8s
+After=local-fs-pre.target
+Before=var-lib-rancher-k3s-agent-containerd.mount containerd.service k3s.service k3s-agent.service
+Requires=local-fs-pre.target
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Run with a timeout in case something goes wrong
+TimeoutStartSec=300
+
+# Pass debug mode flag to script
+Environment="DEBUG_MODE={{ 'true' if debug_build | default(false) else 'false' }}"
+
+# Script to initialize empty containerd cache by copying from root filesystem
+ExecStart=/usr/local/bin/init-containerd-cache.sh
+
+[Install]
+WantedBy=local-fs.target
