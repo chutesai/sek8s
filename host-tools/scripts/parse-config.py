@@ -12,9 +12,9 @@ def validate_config(config, schema_path):
     try:
         import jsonschema
     except ImportError:
-        print("Warning: jsonschema not installed. Skipping validation.", file=sys.stderr)
+        print("Error: jsonschema not installed. Config validation is required.", file=sys.stderr)
         print("Install with: pip3 install jsonschema", file=sys.stderr)
-        return True
+        return False
     
     try:
         with open(schema_path, 'r') as f:
@@ -27,13 +27,12 @@ def validate_config(config, schema_path):
         print(f"Path: {' -> '.join(str(p) for p in e.path)}", file=sys.stderr)
         return False
     except FileNotFoundError:
-        print(f"Warning: Schema file not found: {schema_path}", file=sys.stderr)
-        print("Proceeding without validation.", file=sys.stderr)
-        return True
+        print(f"Error: Schema file not found: {schema_path}", file=sys.stderr)
+        print("This is required for config validation.", file=sys.stderr)
+        return False
     except Exception as e:
-        print(f"Warning: Schema validation failed: {e}", file=sys.stderr)
-        print("Proceeding without validation.", file=sys.stderr)
-        return True
+        print(f"Error: Schema validation failed: {e}", file=sys.stderr)
+        return False
 
 def main():
     if len(sys.argv) != 2:
@@ -61,7 +60,8 @@ def main():
     schema_path = os.path.join(script_dir, 'config-schema.json')
     
     if not validate_config(config, schema_path):
-        print("\nPlease fix the validation errors above.", file=sys.stderr)
+        print("\nConfig validation failed. Please fix the errors above.", file=sys.stderr)
+        print("Validation is required to prevent launching VMs with invalid configuration.", file=sys.stderr)
         sys.exit(1)
     
     # Extract values with defaults
