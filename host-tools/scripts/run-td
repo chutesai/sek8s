@@ -30,7 +30,7 @@ else:
     td_img = f'{file_path}/../../guest-tools/image/tdx-guest.qcow2'
 
 # TDVF MUST NOT be overridden (MRTD depends on it)
-firmware = '/usr/share/ovmf/OVMF.fd'
+firmware = '../../firmware/TDVF.fd'
 
 
 # Canonical resource sizing for the production guest
