@@ -55,9 +55,9 @@
         group: root
       register: var_snap_mount_unit
 
-    - name: Copy containerd cache mount unit
-      copy:
-        src: "{{ files_dir }}/var-lib-rancher-k3s-agent-containerd.mount"
+    - name: Template containerd cache mount unit
+      template:
+        src: var-lib-rancher-k3s-agent-containerd.mount.j2
         dest: /etc/systemd/system/var-lib-rancher-k3s-agent-containerd.mount
         mode: '0644'
         owner: root

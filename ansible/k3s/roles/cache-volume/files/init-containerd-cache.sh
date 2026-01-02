@@ -12,7 +12,7 @@ DEBUG_MODE="${DEBUG_MODE:-false}"
 LOG_TAG="containerd-cache-init"
 
 # Determine device based on debug mode
-if [ "$DEBUG_MODE" = "true" ]; then
+if [[ "$DEBUG_MODE" == "true" ]]; then
     # Debug mode: use unencrypted device directly (detect by label)
     DEVICE=$(blkid -l -o device -t LABEL="containerd-cache" 2>/dev/null)
     if [ -z "$DEVICE" ]; then
@@ -37,14 +37,14 @@ log_error() {
 # Verify the device exists
 if [ ! -b "$DEVICE" ]; then
     log_error "Device $DEVICE does not exist"
-    if [ "$DEBUG_MODE" = "false" ]; then
+    if [[ "$DEBUG_MODE" == "false" ]]; then
         log_error "Boot script may have failed to unlock encrypted device"
     fi
     exit 1
 fi
 
 # In production mode, verify this is actually a decrypted LUKS device (security check)
-if [ "$DEBUG_MODE" = "false" ]; then
+if [[ "$DEBUG_MODE" == "false" ]]; then
     if ! dmsetup info "$DEVICE" &>/dev/null; then
         log_error "$DEVICE is not a valid device mapper device"
         exit 1
@@ -77,7 +77,7 @@ fi
 # Count files/dirs excluding lost+found (created by ext4 format)
 file_count=$(find "$TEMP_MOUNT" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
 
-if [ "$file_count" -eq 0 ]; then
+if [[ "$file_count" -eq 0 ]]; then
     log_info "Containerd cache is empty, syncing from root filesystem"
     
     # Check if source directory exists and has content
