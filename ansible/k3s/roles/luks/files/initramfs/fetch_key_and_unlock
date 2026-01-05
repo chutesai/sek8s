@@ -252,13 +252,8 @@ read_hotkey() {
     # Read miner SS58 (hotkey)
     if [ -f "$hotkey_file" ]; then
         HOTKEY=$(cat "$hotkey_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
-        if [ -n "$HOTKEY" ] && [ ${#HOTKEY} -gt 0 ]; then
-            # Only try substring if HOTKEY is long enough
-            if [ ${#HOTKEY} -ge 8 ]; then
-                log_success_msg "Found miner hotkey: ${HOTKEY:0:8}..."
-            else
-                log_success_msg "Found miner hotkey: $HOTKEY"
-            fi
+        if [ -n "$HOTKEY" ]; then
+            log_success_msg "Found miner hotkey from config"
             return 0
         else
             log_failure_msg "Miner hotkey is empty or invalid in $hotkey_file"
@@ -381,11 +376,7 @@ fetch_luks_key() {
         fi
         
         # Make API request with vm_name and miner_hotkey, use mTLS for API request
-        local hotkey_preview="$HOTKEY"
-        if [ ${#HOTKEY} -ge 8 ]; then
-            hotkey_preview="${HOTKEY:0:8}..."
-        fi
-        log_begin_msg "Sending attestation for VM '$VM_NAME' with miner_hotkey $hotkey_preview"
+        log_begin_msg "Sending attestation for VM '$VM_NAME' with miner_hotkey"
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
