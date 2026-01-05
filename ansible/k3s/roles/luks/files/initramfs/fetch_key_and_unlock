@@ -188,7 +188,8 @@ read_vm_name() {
     mkdir -p "$cfg_mount"
     
     # Mount config volume if not already mounted
-    if ! mountpoint -q "$cfg_mount"; then
+    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
+        # Use same pattern as setup_network function
         for device in /dev/disk/by-label/tdx-config; do
             if [ -b "$device" ]; then
                 if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
@@ -198,16 +199,26 @@ read_vm_name() {
         done
     fi
     
+    # Verify mount succeeded
+    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
+        log_failure_msg "Failed to mount config volume"
+        return 1
+    fi
+    
     # Read hostname file (VM name is same as hostname)
     if [ -f "$hostname_file" ]; then
-        VM_NAME=$(cat "$hostname_file" | tr -d '\n\r' | tr -cd '[:alnum:]_-')
-        if [ -n "$VM_NAME" ]; then
+        VM_NAME=$(cat "$hostname_file" 2>/dev/null | tr -d '\n\r\t ' | grep -o '^[[:alnum:]_-]*')
+        if [ -n "$VM_NAME" ] && [ ${#VM_NAME} -gt 0 ]; then
             log_success_msg "Found VM name: $VM_NAME"
             return 0
+        else
+            log_failure_msg "VM name is empty or invalid in $hostname_file"
+            cat "$hostname_file" 2>/dev/null | od -c
+            return 1
         fi
     fi
     
-    log_failure_msg "VM name not found in $hostname_file"
+    log_failure_msg "VM name file not found: $hostname_file"
     return 1
 }
 
@@ -221,7 +232,8 @@ read_hotkey() {
     mkdir -p "$cfg_mount"
     
     # Mount config volume if not already mounted
-    if ! mountpoint -q "$cfg_mount"; then
+    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
+        # Use same pattern as setup_network function
         for device in /dev/disk/by-label/tdx-config; do
             if [ -b "$device" ]; then
                 if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
@@ -231,16 +243,31 @@ read_hotkey() {
         done
     fi
     
+    # Verify mount succeeded
+    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
+        log_failure_msg "Failed to mount config volume"
+        return 1
+    fi
+    
     # Read miner SS58 (hotkey)
     if [ -f "$hotkey_file" ]; then
-        HOTKEY=$(cat "$hotkey_file" | tr -d '\n\r' | head -c 64)
-        if [ -n "$HOTKEY" ]; then
-            log_success_msg "Found miner hotkey: ${HOTKEY:0:8}..."
+        HOTKEY=$(cat "$hotkey_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
+        if [ -n "$HOTKEY" ] && [ ${#HOTKEY} -gt 0 ]; then
+            # Only try substring if HOTKEY is long enough
+            if [ ${#HOTKEY} -ge 8 ]; then
+                log_success_msg "Found miner hotkey: ${HOTKEY:0:8}..."
+            else
+                log_success_msg "Found miner hotkey: $HOTKEY"
+            fi
             return 0
+        else
+            log_failure_msg "Miner hotkey is empty or invalid in $hotkey_file"
+            cat "$hotkey_file" 2>/dev/null | od -c
+            return 1
         fi
     fi
     
-    log_failure_msg "Miner hotkey not found in $hotkey_file"
+    log_failure_msg "Miner hotkey file not found: $hotkey_file"
     return 1
 }
 
@@ -354,7 +381,11 @@ fetch_luks_key() {
         fi
         
         # Make API request with vm_name and miner_hotkey, use mTLS for API request
-        log_begin_msg "Sending attestation for VM '$VM_NAME' with miner_hotkey ${HOTKEY:0:8}..."
+        local hotkey_preview="$HOTKEY"
+        if [ ${#HOTKEY} -ge 8 ]; then
+            hotkey_preview="${HOTKEY:0:8}..."
+        fi
+        log_begin_msg "Sending attestation for VM '$VM_NAME' with miner_hotkey $hotkey_preview"
         http_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
