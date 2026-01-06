@@ -13,3 +13,10 @@ all:
     ansible_user: "{{ lookup('env', 'USER') }}"
     cosign_public_key_path: "~/.cosign/cosign.pub"
     luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"
+    tdx_api_endpoint: "https://api.example.com/servers/boot/attestation"
+    tdx_nonce_endpoint: "https://api.example.com/servers/nonce"
+    tdx_luks_endpoint: "https://api.example.com/servers/vm_name/luks"
+    final_img_path: "{{ img_dir }}/tdx-guest.qcow2"
+    gpu_verify_debug_mode: false
+    debug_build: false
+    validator: "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ"
