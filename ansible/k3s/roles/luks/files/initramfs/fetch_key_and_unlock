@@ -30,6 +30,7 @@ LUKS_KEY=""
 BOOT_TOKEN=""
 VM_NAME=""
 HOTKEY=""
+SUCCESS_FLAG=0
 
 # Function to securely clear the LUKS key and temporary files
 clear_luks_key() {
@@ -49,6 +50,14 @@ clear_luks_key() {
     
     # Clear any temporary files that might contain sensitive data
     rm -f "$CLIENT_CERT" "$CLIENT_KEY" /tmp/api_response /tmp/nonce_response
+    
+    # If script exits without success flag, shutdown the VM
+    if [ "$SUCCESS_FLAG" -ne 1 ]; then
+        log_failure_msg "TDX unlock failed - VM will shut down in 5 seconds..."
+        echo "TDX-LUKS-UNLOCK-FAILED" > /dev/kmsg
+        sleep 5
+        poweroff -f
+    fi
 }
 
 # Set up trap to ensure cleanup happens on ANY exit
@@ -524,6 +533,9 @@ main() {
         if [ -n "$BOOT_TOKEN" ]; then
             echo "$BOOT_TOKEN" > /run/chutes/boot-token
         fi
+        
+        # Mark as successful before cleanup
+        SUCCESS_FLAG=1
         
         # Clear key from memory immediately after successful unlock
         clear_luks_key
