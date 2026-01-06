@@ -63,7 +63,7 @@ load_vm_data() {
     
     BOOT_TOKEN=$(cat /run/chutes/boot-token)
     
-    log_success_msg "Loaded VM name: $VM_NAME, hotkey: ${HOTKEY:0:8}..."
+    log_success_msg "Loaded VM name: $VM_NAME, hotkey loaded from config"
     return 0
 }
 
