@@ -103,34 +103,54 @@ generate_client_cert() {
     return 0
 }
 
-# Function to setup network from cloud-init config
-setup_network() {
+# Function to mount config volume
+mount_config_volume() {
     local cfg_mount="/run/tdx-config"
-
-    log_begin_msg "Setting up network from config volume"
-
+    
+    log_begin_msg "Mounting config volume"
+    
     mkdir -p "$cfg_mount"
-
+    
     # Load virtio drivers (for vdb/vdc attachment)
     modprobe virtio_blk 2>/dev/null
     modprobe virtio_pci 2>/dev/null
     sleep 1
-
+    
     # Mount ext4 config volume labeled "tdx-config"
     for device in /dev/disk/by-label/tdx-config; do
         if [ -b "$device" ]; then
             if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
-                break
+                log_success_msg "Config volume mounted at $cfg_mount"
+                return 0
             fi
         fi
     done
+    
+    log_failure_msg "Failed to mount config volume"
+    return 1
+}
 
-    if [ ! -f "$cfg_mount/network-config.yaml" ]; then
-        log_failure_msg "network-config.yaml not found on config volume"
+# Function to unmount config volume
+unmount_config_volume() {
+    local cfg_mount="/run/tdx-config"
+    
+    if grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
+        umount "$cfg_mount" 2>/dev/null || true
+        log_success_msg "Config volume unmounted"
+    fi
+}
+
+# Function to setup network from cloud-init config (assumes volume is already mounted)
+setup_network() {
+    local cfg_mount="/run/tdx-config"
+    local netconfig="$cfg_mount/network-config.yaml"
+
+    log_begin_msg "Setting up network from config"
+
+    if [ ! -f "$netconfig" ]; then
+        log_failure_msg "network-config.yaml not found"
         return 1
     fi
-
-    local netconfig="$cfg_mount/network-config.yaml"
 
     # Find the first en* interface (auto-detect instead of parsing from config)
     iface=$(ls /sys/class/net/ | grep '^en' | head -n1)
@@ -142,7 +162,6 @@ setup_network() {
 
     if [ -z "$iface" ] || [ -z "$ip_addr" ] || [ -z "$gateway" ]; then
         log_failure_msg "Failed to detect interface or parse network-config.yaml"
-        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
 
@@ -152,7 +171,6 @@ setup_network() {
 
     if [ ! -e "/sys/class/net/$iface" ]; then
         log_failure_msg "Interface $iface not found"
-        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
 
@@ -171,108 +189,64 @@ setup_network() {
     # Verify
     if ! ip addr show "$iface" | grep -q "inet "; then
         log_failure_msg "Failed to configure IP"
-        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
 
     if ! ip route show | grep -q "default"; then
         log_failure_msg "Failed to configure default route"
-        umount "$cfg_mount" 2>/dev/null || true
         return 1
     fi
 
     log_success_msg "Network setup complete"
-
-    umount "$cfg_mount" 2>/dev/null || true
     return 0
 }
 
-# Function to read VM name from config volume
+# Function to read VM name from config volume (assumes volume is already mounted)
 read_vm_name() {
     local cfg_mount="/run/tdx-config"
     local hostname_file="$cfg_mount/hostname"
     
-    log_begin_msg "Reading VM name from config volume"
+    log_begin_msg "Reading VM name from config"
     
-    mkdir -p "$cfg_mount"
-    
-    # Mount config volume if not already mounted
-    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
-        # Use same pattern as setup_network function
-        for device in /dev/disk/by-label/tdx-config; do
-            if [ -b "$device" ]; then
-                if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
-                    break
-                fi
-            fi
-        done
-    fi
-    
-    # Verify mount succeeded
-    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
-        log_failure_msg "Failed to mount config volume"
+    # Read hostname file (VM name is same as hostname)
+    if [ ! -f "$hostname_file" ]; then
+        log_failure_msg "VM name file not found: $hostname_file"
         return 1
     fi
     
-    # Read hostname file (VM name is same as hostname)
-    if [ -f "$hostname_file" ]; then
-        VM_NAME=$(cat "$hostname_file" 2>/dev/null | tr -d '\n\r\t ' | grep -o '^[[:alnum:]_-]*')
-        if [ -n "$VM_NAME" ] && [ ${#VM_NAME} -gt 0 ]; then
-            log_success_msg "Found VM name: $VM_NAME"
-            return 0
-        else
-            log_failure_msg "VM name is empty or invalid in $hostname_file"
-            cat "$hostname_file" 2>/dev/null | od -c
-            return 1
-        fi
+    VM_NAME=$(cat "$hostname_file" 2>/dev/null | tr -d '\n\r\t ' | grep -o '^[[:alnum:]_-]*')
+    if [ -n "$VM_NAME" ]; then
+        log_success_msg "Found VM name: $VM_NAME"
+        return 0
+    else
+        log_failure_msg "VM name is empty or invalid in $hostname_file"
+        cat "$hostname_file" 2>/dev/null | od -c
+        return 1
     fi
-    
-    log_failure_msg "VM name file not found: $hostname_file"
-    return 1
 }
 
-# Function to read hotkey from config volume (miner SS58 address)
+# Function to read hotkey from config volume (assumes volume is already mounted)
 read_hotkey() {
     local cfg_mount="/run/tdx-config"
     local hotkey_file="$cfg_mount/miner-ss58"
     
-    log_begin_msg "Reading miner hotkey from config volume"
+    log_begin_msg "Reading miner hotkey from config"
     
-    mkdir -p "$cfg_mount"
-    
-    # Mount config volume if not already mounted
-    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
-        # Use same pattern as setup_network function
-        for device in /dev/disk/by-label/tdx-config; do
-            if [ -b "$device" ]; then
-                if mount -t ext4 -o ro "$device" "$cfg_mount" 2>/dev/null; then
-                    break
-                fi
-            fi
-        done
-    fi
-    
-    # Verify mount succeeded
-    if ! grep -q "$cfg_mount" /proc/mounts 2>/dev/null; then
-        log_failure_msg "Failed to mount config volume"
+    # Read miner SS58 (hotkey)
+    if [ ! -f "$hotkey_file" ]; then
+        log_failure_msg "Miner hotkey file not found: $hotkey_file"
         return 1
     fi
     
-    # Read miner SS58 (hotkey)
-    if [ -f "$hotkey_file" ]; then
-        HOTKEY=$(cat "$hotkey_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
-        if [ -n "$HOTKEY" ]; then
-            log_success_msg "Found miner hotkey from config"
-            return 0
-        else
-            log_failure_msg "Miner hotkey is empty or invalid in $hotkey_file"
-            cat "$hotkey_file" 2>/dev/null | od -c
-            return 1
-        fi
+    HOTKEY=$(cat "$hotkey_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
+    if [ -n "$HOTKEY" ]; then
+        log_success_msg "Found miner hotkey from config"
+        return 0
+    else
+        log_failure_msg "Miner hotkey is empty or invalid in $hotkey_file"
+        cat "$hotkey_file" 2>/dev/null | od -c
+        return 1
     fi
-    
-    log_failure_msg "Miner hotkey file not found: $hotkey_file"
-    return 1
 }
 
 # Function to fetch nonce from API
@@ -495,22 +469,35 @@ main() {
         return 1
     fi
     
+    # Mount config volume once for all config reads
+    if ! mount_config_volume; then
+        handle_failure "Failed to mount config volume"
+        return 1
+    fi
+    
+    # Setup network (reads from mounted config volume)
     if ! setup_network; then
+        unmount_config_volume
         handle_failure "Network setup failed"
         return 1
     fi
     
     # Read VM name from config volume
     if ! read_vm_name; then
+        unmount_config_volume
         handle_failure "Failed to read VM name from config volume"
         return 1
     fi
     
     # Read hotkey from config volume
     if ! read_hotkey; then
+        unmount_config_volume
         handle_failure "Failed to read miner hotkey from config volume"
         return 1
     fi
+    
+    # Unmount config volume now that we have all the data
+    unmount_config_volume
     
     # Fetch LUKS key from API (nonce and quote generated per attempt)
     if ! fetch_luks_key; then
