@@ -278,21 +278,24 @@ setup_containerd_cache() {
 main() {
     # Load VM ID and boot token from /run
     if ! load_vm_data; then
-        log_failure_msg "Cannot proceed without VM ID, skipping containerd cache"
-        return 0
+        log_failure_msg "CRITICAL: Cannot proceed without VM ID"
+        log_failure_msg "Containerd cache is required for operation"
+        return 1
     fi
     
     # Detect containerd device
     if ! detect_containerd_device; then
-        log_failure_msg "No containerd device found, skipping cache setup"
-        return 0
+        log_failure_msg "CRITICAL: No containerd device found"
+        log_failure_msg "Containerd cache is required for operation"
+        return 1
     fi
     
     # Setup (encrypt or unlock) containerd cache
     if ! setup_containerd_cache; then
-        log_failure_msg "Failed to setup containerd cache, VM will boot without it"
+        log_failure_msg "CRITICAL: Failed to setup containerd cache"
+        log_failure_msg "Containerd cache is required for operation"
         clear_sensitive_data
-        return 0
+        return 1
     fi
     
     # Clear all sensitive data
