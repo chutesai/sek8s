@@ -1,7 +1,6 @@
 repo_root: "{{ playbook_dir }}/../../.."
 ubuntu_version: "24.04"
 img_dir: "{{ repo_root }}/guest-tools/image"
-cosign_key_path: "{{ ansible_env.HOME }}/.cosign/cosign.pub"
 base_img_path: "{{ img_dir }}/tdx-guest-ubuntu-{{ ubuntu_version }}.qcow2"
 libvirt_image_dir: "/var/lib/libvirt/images"
 build_img_path: "{{ libvirt_image_dir }}/tdx-guest.qcow2"
