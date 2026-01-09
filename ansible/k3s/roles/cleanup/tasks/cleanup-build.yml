@@ -4,3 +4,9 @@
     state: absent
   loop:
     - /root/charts
+
+- name: Trim filesystem to reduce disk size
+  ansible.builtin.command: fstrim -av
+  register: fstrim_result
+  changed_when: fstrim_result.rc == 0
+  failed_when: false
