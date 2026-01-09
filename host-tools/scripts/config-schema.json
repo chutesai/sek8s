@@ -8,6 +8,7 @@
     "vm": {
       "type": "object",
       "required": ["hostname"],
+      "additionalProperties": false,
       "properties": {
         "hostname": {
           "type": "string",
@@ -25,6 +26,7 @@
     "miner": {
       "type": "object",
       "required": ["ss58", "seed"],
+      "additionalProperties": false,
       "properties": {
         "ss58": {
           "type": "string",
@@ -41,6 +43,7 @@
     "network": {
       "type": "object",
       "required": ["vm_ip", "bridge_ip", "dns", "public_interface"],
+      "additionalProperties": false,
       "properties": {
         "vm_ip": {
           "type": "string",
@@ -80,10 +83,12 @@
     "volumes": {
       "type": "object",
       "required": ["cache", "containerd"],
+      "additionalProperties": false,
       "properties": {
         "cache": {
           "type": "object",
           "required": ["size"],
+          "additionalProperties": false,
           "properties": {
             "size": {
               "type": "string",
@@ -100,6 +105,7 @@
         "containerd": {
           "type": "object",
           "required": ["size"],
+          "additionalProperties": false,
           "properties": {
             "size": {
               "type": "string",
@@ -115,6 +121,7 @@
         },
         "config": {
           "type": "object",
+          "additionalProperties": false,
           "properties": {
             "path": {
               "type": "string",
@@ -127,6 +134,7 @@
     },
     "devices": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "bind_devices": {
           "type": "boolean",
@@ -137,6 +145,7 @@
     },
     "runtime": {
       "type": "object",
+      "additionalProperties": false,
       "properties": {
         "foreground": {
           "type": "boolean",
