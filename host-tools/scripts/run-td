@@ -157,15 +157,15 @@ def get_gpu_bar_size(gpu_addr: str, gpu_device_ids: dict[str, str]) -> int:
 def ensure_gpu_tools_available() -> str:
     """Ensure nvidia-gpu-tools CLI is available.
     
-    Checks if nvidia-gpu-tools is in PATH. If not, installs from bundled wheel.
-    This is a separate reusable method that can be called independently.
+    Checks if nvidia-gpu-tools is in PATH. If not, installs from bundled wheel into a venv
+    and creates a system-wide symlink. This handles externally-managed Python environments.
     
     Returns:
         Command string to use for nvidia-gpu-tools (either 'nvidia-gpu-tools' or path)
     
     Raises:
         FileNotFoundError: If bundled wheel file is not found
-        RuntimeError: If pip3/python3 -m pip is not available
+        RuntimeError: If python3 is not available or installation fails
         subprocess.CalledProcessError: If installation fails
     """
     # Check if already in PATH
@@ -174,24 +174,14 @@ def ensure_gpu_tools_available() -> str:
     if result.returncode == 0:
         return 'nvidia-gpu-tools'
     
-    # Check for pip3 or python3 -m pip
-    pip_cmd = None
-    result = subprocess.run(['which', 'pip3'], capture_output=True)
-    if result.returncode == 0:
-        pip_cmd = ['pip3']
-    else:
-        # Try python3 -m pip as fallback
-        result = subprocess.run(['python3', '-m', 'pip', '--version'], 
-                              capture_output=True)
-        if result.returncode == 0:
-            pip_cmd = ['python3', '-m', 'pip']
-        else:
-            raise RuntimeError(
-                "Neither 'pip3' nor 'python3 -m pip' is available. "
-                "Please install pip3 to install GPU admin tools from the bundled wheel."
-            )
+    # Check if python3 is available
+    result = subprocess.run(['which', 'python3'], capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "python3 is not available. Please install python3 to install GPU admin tools."
+        )
     
-    # Install from bundled wheel
+    # Install from bundled wheel into a venv
     bundled_tools_dir = f'{file_path}/gpu-tools'
     if not os.path.exists(bundled_tools_dir):
         raise FileNotFoundError(
@@ -208,8 +198,49 @@ def ensure_gpu_tools_available() -> str:
         )
     
     wheel_file = os.path.join(bundled_tools_dir, wheel_files[0])
+    venv_dir = os.path.join(bundled_tools_dir, 'venv')
+    venv_python = os.path.join(venv_dir, 'bin', 'python')
+    venv_pip = os.path.join(venv_dir, 'bin', 'pip')
+    venv_bin = os.path.join(venv_dir, 'bin')
+    cli_symlink = '/usr/local/bin/nvidia-gpu-tools'
+    
+    # Create venv if it doesn't exist
+    if not os.path.exists(venv_dir):
+        print(f'  Creating virtual environment for GPU admin tools...')
+        subprocess.check_call(['sudo', 'python3', '-m', 'venv', venv_dir])
+    
+    # Install wheel into venv
     print(f'  Installing GPU admin tools from bundled wheel: {os.path.basename(wheel_file)}')
-    subprocess.check_call(['sudo'] + pip_cmd + ['install', '--quiet', wheel_file])
+    subprocess.check_call(['sudo', venv_pip, 'install', '--quiet', '--upgrade', wheel_file])
+    
+    # Find the CLI entry point in the venv
+    cli_in_venv = os.path.join(venv_bin, 'nvidia-gpu-tools')
+    if not os.path.exists(cli_in_venv):
+        # Try to find it - it might be in a different location
+        # Check if there's a script in the venv bin directory
+        if os.path.exists(venv_bin):
+            for entry in os.listdir(venv_bin):
+                if entry.startswith('nvidia-gpu'):
+                    cli_in_venv = os.path.join(venv_bin, entry)
+                    break
+        
+        if not os.path.exists(cli_in_venv):
+            raise RuntimeError(
+                "nvidia-gpu-tools CLI not found in venv after installation. "
+                "The wheel may not have installed correctly."
+            )
+    
+    # Create system-wide symlink
+    if os.path.exists(cli_symlink):
+        # Remove existing symlink if it exists
+        if os.path.islink(cli_symlink):
+            os.remove(cli_symlink)
+        else:
+            # If it's not a symlink, we should warn but not overwrite
+            print(f'  Warning: {cli_symlink} exists and is not a symlink, skipping symlink creation')
+    else:
+        print(f'  Creating system-wide symlink: {cli_symlink}')
+        subprocess.check_call(['sudo', 'ln', '-s', cli_in_venv, cli_symlink])
     
     # Verify it's now available
     result = subprocess.run(['which', 'nvidia-gpu-tools'],
@@ -217,7 +248,10 @@ def ensure_gpu_tools_available() -> str:
     if result.returncode == 0:
         return 'nvidia-gpu-tools'
     else:
-        raise RuntimeError("nvidia-gpu-tools installation succeeded but CLI not found in PATH")
+        raise RuntimeError(
+            "nvidia-gpu-tools installation succeeded but CLI not found in PATH. "
+            f"Symlink created at {cli_symlink}, but it may not be in your PATH."
+        )
 
 
 def get_gpu_tool_args(gpu_addr: str, gpu_device_ids: dict[str, str], 
