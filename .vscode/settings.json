@@ -18,5 +18,8 @@
         "**/.DS_Store": true,
         "**/Thumbs.db": true,
         "nvevidence": true
-    }
+    },
+    "cursorpyright.analysis.exclude": [
+        "**/.venv/*"
+    ]
 }
