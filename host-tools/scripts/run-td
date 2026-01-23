@@ -169,7 +169,7 @@ def ensure_gpu_tools_available() -> str:
     """
     # Check if already in PATH
     result = subprocess.run(['which', 'nvidia-gpu-tools'], 
-                          capture_output=True, stderr=subprocess.DEVNULL)
+                          capture_output=True)
     if result.returncode == 0:
         return 'nvidia-gpu-tools'
     
@@ -195,7 +195,7 @@ def ensure_gpu_tools_available() -> str:
     
     # Verify it's now available
     result = subprocess.run(['which', 'nvidia-gpu-tools'],
-                          capture_output=True, stderr=subprocess.DEVNULL)
+                          capture_output=True)
     if result.returncode == 0:
         return 'nvidia-gpu-tools'
     else:
@@ -257,7 +257,7 @@ def load_vfio_modules():
     for module in modules:
         try:
             subprocess.run(['modprobe', module], check=False, 
-                         capture_output=True, stderr=subprocess.DEVNULL)
+                         capture_output=True)
         except Exception:
             pass  # Module may already be loaded
 
@@ -483,16 +483,20 @@ def add_gpu_passthrough(cmd, gpus, nvswitches):
     # Determine mode: B200 GPUs use CC mode (no NVSwitches), H200 can use PPCIe if 8 GPUs + 4 NVSwitches
     # Check if any B200 GPUs exist
     has_b200 = any(detect_gpu_model(gpu_device_ids.get(gpu, '')) == 'B200' for gpu in gpus)
+    has_h200 = any(detect_gpu_model(gpu_device_ids.get(gpu, '')) == 'H200' for gpu in gpus)
     
     if has_b200:
-        print('  CC mode: enabled (B200 GPUs detected - B200 does not support NVSwitches/PPCIe)')
+        print('  CC mode: enabled (B200 GPUs detected - B200 architecture uses CC mode, no NVSwitches)')
         if nvswitches:
             print(f'  Warning: B200 GPUs detected but {len(nvswitches)} NVSwitch(es) found (B200 does not use NVSwitches)')
     elif len(gpus) == 8 and len(nvswitches) == 4:
         print('  PPCIe mode: enabled (8 GPUs + 4 NVSwitches)')
-    elif len(gpus) == 8 and len(nvswitches) != 4:
-        print(f'  Warning: 8 GPUs detected but only {len(nvswitches)} NVSwitches (PPCIe requires 4)')
-        print('  CC mode: enabled (fallback due to missing NVSwitches)')
+    elif len(gpus) == 8 and has_h200 and len(nvswitches) != 4:
+        raise ValueError(
+            f"8 H200 GPUs detected but only {len(nvswitches)} NVSwitch(es) found. "
+            "H200 systems with 8 GPUs require 4 NVSwitches for PPCIe mode. "
+            "Please ensure all NVSwitches are properly detected and available."
+        )
     elif nvswitches:
         print(f'  Standard passthrough mode with {len(nvswitches)} NVSwitch(es)')
     else:
