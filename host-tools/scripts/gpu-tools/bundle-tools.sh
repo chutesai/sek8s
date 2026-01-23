@@ -43,36 +43,10 @@ for dir in utils gpu pci cli; do
     fi
 done
 
-# Create pyproject.toml with correct entry point: cli.main:main
-# nvidia_gpu_tools.py imports cli.main and calls cli.main.main() when run as __main__
-echo "  Creating pyproject.toml with entry point: cli.main:main"
-cat > "${BUILD_SRC_DIR}/pyproject.toml" << 'PYPROJECT_EOF'
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
-name = "nvidia-gpu-admin-tools"
-version = "2025.11.21"
-description = "NVIDIA GPU Admin Tools for Confidential Computing configuration"
-authors = ["NVIDIA"]
-license = "MIT"
-homepage = "https://github.com/NVIDIA/gpu-admin-tools"
-repository = "https://github.com/NVIDIA/gpu-admin-tools"
-packages = [
-    { include = "nvidia_gpu_tools.py" },
-    { include = "cli" },
-    { include = "gpu" },
-    { include = "pci" },
-    { include = "utils" },
-]
-
-[tool.poetry.dependencies]
-python = ">=3.8"
-
-[tool.poetry.scripts]
-nvidia-gpu-tools = "cli.main:main"
-PYPROJECT_EOF
+# Copy entry_point.py and pyproject.toml from our repo
+echo "  Copying entry_point.py and pyproject.toml from repository..."
+cp "${TARGET_DIR}/entry_point.py" "${BUILD_SRC_DIR}/"
+cp "${TARGET_DIR}/pyproject.toml" "${BUILD_SRC_DIR}/"
 
 echo ""
 echo "Building wheel package..."
@@ -114,9 +88,9 @@ fi
 
 # Clean up build directory and any leftover source files
 rm -rf "${BUILD_DIR}"
-# Remove any source files that might have been left behind
+# Remove any source files that might have been left behind (but keep entry_point.py)
 rm -rf "${TARGET_DIR}"/utils "${TARGET_DIR}"/gpu "${TARGET_DIR}"/pci "${TARGET_DIR}"/cli
-rm -f "${TARGET_DIR}"/nvidia_gpu_tools.py "${TARGET_DIR}"/setup.py "${TARGET_DIR}"/pyproject.toml
+rm -f "${TARGET_DIR}"/nvidia_gpu_tools.py "${TARGET_DIR}"/setup.py
 rm -rf "${TARGET_DIR}"/build "${TARGET_DIR}"/dist "${TARGET_DIR}"/*.egg-info
 
 echo ""

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "nvidia-gpu-admin-tools"
+version = "2025.11.21"
+description = "NVIDIA GPU Admin Tools for Confidential Computing configuration"
+authors = ["NVIDIA"]
+license = "MIT"
+homepage = "https://github.com/NVIDIA/gpu-admin-tools"
+repository = "https://github.com/NVIDIA/gpu-admin-tools"
+packages = [
+    { include = "nvidia_gpu_tools.py" },
+    { include = "entry_point.py" },
+    { include = "cli" },
+    { include = "gpu" },
+    { include = "pci" },
+    { include = "utils" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.8"
+
+[tool.poetry.scripts]
+nvidia-gpu-tools = "entry_point:main"

@@ -14,9 +14,11 @@ host-tools/scripts/config.yaml
 measure
 **/*.qcow2
 
-# GPU admin tools - ignore source files, keep wheel
+# GPU admin tools - ignore source files and build artifacts, keep wheel and config files
 host-tools/scripts/gpu-tools/*
 !host-tools/scripts/gpu-tools/bundle-tools.sh
 !host-tools/scripts/gpu-tools/README.md
 !host-tools/scripts/gpu-tools/*.whl
+!host-tools/scripts/gpu-tools/entry_point.py
+!host-tools/scripts/gpu-tools/pyproject.toml
 # Note: .whl files are NOT ignored and should be committed

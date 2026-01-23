@@ -10,7 +10,7 @@ The wheel file (`nvidia_gpu_admin_tools-*.whl`) is a pre-built Python package th
 
 The wheel is built from:
 - Repository: https://github.com/NVIDIA/gpu-admin-tools
-- Built using: `python3 -m build --wheel`
+- Built using: `poetry build --format wheel` or `python3 -m build --wheel`
 
 ### Building the Wheel
 
@@ -23,9 +23,10 @@ cd host-tools/scripts/gpu-tools
 
 This script will:
 1. Clone the gpu-admin-tools repository
-2. Build a wheel package
-3. Place the wheel file in this directory
-4. Clean up all source files (only the wheel remains)
+2. Create a pyproject.toml with the correct entry point
+3. Build a wheel package
+4. Place the wheel file in this directory
+5. Clean up all source files (only the wheel remains)
 
 **Note:** Only the `.whl` file should be committed to the repository. Source files are ignored via `.gitignore`.
 
@@ -34,8 +35,7 @@ This script will:
 The `run-td` script automatically handles installation:
 
 1. **Checks for installed package** - If `nvidia-gpu-tools` command is in PATH, uses it
-2. **Installs from bundled wheel** - If not installed, automatically installs from the wheel file in this directory
-3. **Falls back to cloning** - If no wheel is found, clones the repository as a last resort
+2. **Installs from bundled wheel** - If not installed, automatically installs from the wheel file in this directory into a venv and creates a system-wide symlink
 
 Users don't need to manually install anything - the `run-td` script handles it automatically.
 
