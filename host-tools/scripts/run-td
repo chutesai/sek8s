@@ -280,26 +280,30 @@ def ensure_gpu_tools_available() -> str:
     
     # Find the CLI entry point in the venv
     cli_in_venv = os.path.join(venv_bin, 'nvidia-gpu-tools')
+    
+    # Verify the entry point exists and works
     if not os.path.exists(cli_in_venv):
-        # Try to find it - it might be in a different location
-        # Check if there's a script in the venv bin directory
-        if os.path.exists(venv_bin):
-            for entry in os.listdir(venv_bin):
-                if entry.startswith('nvidia-gpu'):
-                    cli_in_venv = os.path.join(venv_bin, entry)
-                    break
-        
-        if not os.path.exists(cli_in_venv):
-            raise RuntimeError(
-                "nvidia-gpu-tools CLI not found in venv after installation. "
-                "The wheel may not have installed correctly."
-            )
+        raise RuntimeError(
+            "nvidia-gpu-tools CLI not found in venv after installation. "
+            "The wheel may not have installed correctly or the entry point is misconfigured."
+        )
+    
+    # Test if the entry point works
+    test_result = subprocess.run([cli_in_venv, '--help'], 
+                                capture_output=True, timeout=5)
+    if test_result.returncode != 0:
+        error_msg = test_result.stderr.decode() if test_result.stderr else "Unknown error"
+        raise RuntimeError(
+            f"nvidia-gpu-tools CLI entry point is broken. "
+            f"The wheel was not built correctly. Error: {error_msg}\n"
+            f"Please rebuild the wheel using: cd {bundled_tools_dir} && ./bundle-tools.sh"
+        )
     
     # Create system-wide symlink
     if os.path.exists(cli_symlink):
         # Remove existing symlink if it exists
         if os.path.islink(cli_symlink):
-            os.remove(cli_symlink)
+            subprocess.check_call(['sudo', 'rm', cli_symlink])
         else:
             # If it's not a symlink, we should warn but not overwrite
             print(f'  Warning: {cli_symlink} exists and is not a symlink, skipping symlink creation')
