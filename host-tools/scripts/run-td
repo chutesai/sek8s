@@ -181,6 +181,22 @@ def ensure_gpu_tools_available() -> str:
             "python3 is not available. Please install python3 to install GPU admin tools."
         )
     
+    # Check if venv module is available
+    result = subprocess.run(['python3', '-m', 'venv', '--help'], 
+                          capture_output=True)
+    if result.returncode != 0:
+        # Try to get python version for more specific error message
+        version_result = subprocess.run(['python3', '--version'], 
+                                      capture_output=True)
+        python_version = version_result.stdout.decode().strip() if version_result.returncode == 0 else "python3"
+        raise RuntimeError(
+            f"The python3-venv package is not installed. "
+            f"Please install it using: sudo apt install python3-venv\n"
+            f"For Python 3.13 specifically: sudo apt install python3.13-venv\n"
+            f"After installing, the script will automatically create a virtual environment "
+            f"and install the GPU admin tools."
+        )
+    
     # Install from bundled wheel into a venv
     bundled_tools_dir = f'{file_path}/gpu-tools'
     if not os.path.exists(bundled_tools_dir):
@@ -207,7 +223,17 @@ def ensure_gpu_tools_available() -> str:
     # Create venv if it doesn't exist
     if not os.path.exists(venv_dir):
         print(f'  Creating virtual environment for GPU admin tools...')
-        subprocess.check_call(['sudo', 'python3', '-m', 'venv', venv_dir])
+        try:
+            subprocess.check_call(['sudo', 'python3', '-m', 'venv', venv_dir], 
+                               stderr=subprocess.STDOUT)
+        except subprocess.CalledProcessError as e:
+            # Provide helpful error message if venv creation fails
+            raise RuntimeError(
+                f"Failed to create virtual environment: {e}\n"
+                f"The python3-venv package may not be installed. "
+                f"Please install it using: sudo apt install python3-venv\n"
+                f"For Python 3.13 specifically: sudo apt install python3.13-venv"
+            )
     
     # Install wheel into venv
     print(f'  Installing GPU admin tools from bundled wheel: {os.path.basename(wheel_file)}')
