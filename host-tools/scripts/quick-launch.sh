@@ -322,20 +322,10 @@ echo "✓ Host TDX configuration verified"
 echo ""
 
 # --------------------------------------------------------------------
-# Bind devices for passthrough
+# Device binding is now handled by run-td script
 # --------------------------------------------------------------------
-if [[ "$SKIP_BIND" != "true" ]]; then
-  echo "Step 1: Binding NVIDIA devices to vfio-pci..."
-  if [[ -f "./bind.sh" ]]; then
-    sudo ./bind.sh
-    echo "✓ Device binding complete"
-  else
-    echo "Error: bind.sh not found in $(pwd)"
-    exit 1
-  fi
-else
-  echo "Step 1: Skipping device binding (--skip-bind set)"
-fi
+# Note: Device binding to vfio-pci is now done inside prepare_gpus()
+# in the run-td script, so we no longer need to call bind.sh separately
 echo ""
 
 
