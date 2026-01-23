@@ -117,7 +117,7 @@ https://api.portal.trustedservices.intel.com/
 Download the prebuilt VM image from R2 to the name the scripts expect:
 ```bash
 cd guest-tools/image
-curl -O https://vm.chutes.ai/tdx-guest.qcow2
+curl -L -O -C - --retry 5 --retry-delay 5 --retry-connrefused https://vm.chutes.ai/tdx-guest.qcow2
 ```
 
 ---
