@@ -13,3 +13,10 @@ tests/integration/test-data
 host-tools/scripts/config.yaml
 measure
 **/*.qcow2
+
+# GPU admin tools - ignore source files, keep wheel
+host-tools/scripts/gpu-tools/*
+!host-tools/scripts/gpu-tools/bundle-tools.sh
+!host-tools/scripts/gpu-tools/README.md
+!host-tools/scripts/gpu-tools/*.whl
+# Note: .whl files are NOT ignored and should be committed
