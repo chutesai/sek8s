@@ -127,7 +127,9 @@ def get_gpu_device_ids(gpus: list[str]) -> dict[str, str]:
 def detect_gpu_model(device_id: str) -> str:
     """Detect GPU model from PCI device ID.
     
-    B200 device IDs are typically in the 20B0-20BF range (Blackwell architecture)
+    B200 device IDs are in various ranges (Blackwell architecture):
+    - 20B0-20BF (primary range)
+    - 2901 and other variants
     H200 device IDs are typically 1B38 (Hopper architecture)
     """
     if not device_id:
@@ -135,16 +137,21 @@ def detect_gpu_model(device_id: str) -> str:
     
     # Extract device ID (last 4 hex digits after vendor ID)
     device_part = device_id.split(':')[-1] if ':' in device_id else device_id
+    device_part_lower = device_part.lower()
     
-    # B200 device IDs (Blackwell) - typically 20B0-20BF
-    if device_part.startswith('20b') or device_part.startswith('20B'):
+    # B200 device IDs (Blackwell) - 20B0-20BF range
+    if device_part_lower.startswith('20b'):
+        return 'B200'
+    
+    # B200 device IDs (Blackwell) - 2901 variant
+    if device_part_lower == '2901':
         return 'B200'
     
     # H200 device IDs (Hopper) - typically 1B38
-    if device_part.startswith('1b38') or device_part.startswith('1B38'):
+    if device_part_lower == '1b38':
         return 'H200'
     
-    # Default to H200 size for unknown GPUs
+    # Default to unknown for unsupported GPUs
     return 'default'
 
 
