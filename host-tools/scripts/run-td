@@ -165,6 +165,7 @@ def ensure_gpu_tools_available() -> str:
     
     Raises:
         FileNotFoundError: If bundled wheel file is not found
+        RuntimeError: If pip3/python3 -m pip is not available
         subprocess.CalledProcessError: If installation fails
     """
     # Check if already in PATH
@@ -172,6 +173,23 @@ def ensure_gpu_tools_available() -> str:
                           capture_output=True)
     if result.returncode == 0:
         return 'nvidia-gpu-tools'
+    
+    # Check for pip3 or python3 -m pip
+    pip_cmd = None
+    result = subprocess.run(['which', 'pip3'], capture_output=True)
+    if result.returncode == 0:
+        pip_cmd = ['pip3']
+    else:
+        # Try python3 -m pip as fallback
+        result = subprocess.run(['python3', '-m', 'pip', '--version'], 
+                              capture_output=True)
+        if result.returncode == 0:
+            pip_cmd = ['python3', '-m', 'pip']
+        else:
+            raise RuntimeError(
+                "Neither 'pip3' nor 'python3 -m pip' is available. "
+                "Please install pip3 to install GPU admin tools from the bundled wheel."
+            )
     
     # Install from bundled wheel
     bundled_tools_dir = f'{file_path}/gpu-tools'
@@ -191,7 +209,7 @@ def ensure_gpu_tools_available() -> str:
     
     wheel_file = os.path.join(bundled_tools_dir, wheel_files[0])
     print(f'  Installing GPU admin tools from bundled wheel: {os.path.basename(wheel_file)}')
-    subprocess.check_call(['sudo', 'pip3', 'install', '--quiet', wheel_file])
+    subprocess.check_call(['sudo'] + pip_cmd + ['install', '--quiet', wheel_file])
     
     # Verify it's now available
     result = subprocess.run(['which', 'nvidia-gpu-tools'],
