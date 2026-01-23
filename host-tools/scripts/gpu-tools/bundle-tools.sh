@@ -43,65 +43,72 @@ for dir in utils gpu pci cli; do
     fi
 done
 
-# Check for setup.py or pyproject.toml in the repo
-if [ -f "${REPO_DIR}/setup.py" ]; then
-    cp "${REPO_DIR}/setup.py" "${BUILD_SRC_DIR}/"
-elif [ -f "${REPO_DIR}/pyproject.toml" ]; then
-    cp "${REPO_DIR}/pyproject.toml" "${BUILD_SRC_DIR}/"
-else
-    # Create a minimal setup.py if neither exists
-    echo "  Creating setup.py..."
-    cat > "${BUILD_SRC_DIR}/setup.py" << 'SETUP_EOF'
-from setuptools import setup, find_packages
+# Create pyproject.toml with correct entry point: cli.main:main
+# nvidia_gpu_tools.py imports cli.main and calls cli.main.main() when run as __main__
+echo "  Creating pyproject.toml with entry point: cli.main:main"
+cat > "${BUILD_SRC_DIR}/pyproject.toml" << 'PYPROJECT_EOF'
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
 
-setup(
-    name="nvidia-gpu-admin-tools",
-    version="2025.11.21",
-    description="NVIDIA GPU Admin Tools for Confidential Computing configuration",
-    long_description="Tools for configuring GPU modes (CC mode vs PPCIe mode) for GPU passthrough in TDX VMs",
-    author="NVIDIA",
-    url="https://github.com/NVIDIA/gpu-admin-tools",
-    license="MIT",
-    py_modules=['nvidia_gpu_tools'],
-    packages=find_packages(exclude=['tests', '*.tests', '*.tests.*']),
-    python_requires=">=3.8",
-    entry_points={
-        'console_scripts': [
-            'nvidia-gpu-tools=nvidia_gpu_tools:main',
-        ],
-    },
-)
-SETUP_EOF
-fi
+[tool.poetry]
+name = "nvidia-gpu-admin-tools"
+version = "2025.11.21"
+description = "NVIDIA GPU Admin Tools for Confidential Computing configuration"
+authors = ["NVIDIA"]
+license = "MIT"
+homepage = "https://github.com/NVIDIA/gpu-admin-tools"
+repository = "https://github.com/NVIDIA/gpu-admin-tools"
+packages = [
+    { include = "nvidia_gpu_tools.py" },
+    { include = "cli" },
+    { include = "gpu" },
+    { include = "pci" },
+    { include = "utils" },
+]
+
+[tool.poetry.dependencies]
+python = ">=3.8"
+
+[tool.poetry.scripts]
+nvidia-gpu-tools = "cli.main:main"
+PYPROJECT_EOF
 
 echo ""
 echo "Building wheel package..."
 cd "${BUILD_SRC_DIR}"
 
-# Build the wheel
-if command -v python3 &> /dev/null; then
-    python3 -m pip install --upgrade pip build wheel 2>&1 | grep -v "^Requirement\|^Collecting\|^Using\|^Already" || true
-    python3 -m build --wheel 2>&1 | grep -v "^Creating\|^Adding\|^Copying\|^Building" || true
-    
-    # Find the built wheel and move it to target directory
+# Try poetry build first, fall back to python -m build
+if command -v poetry &> /dev/null; then
+    echo "  Using poetry to build wheel..."
+    poetry build --format wheel 2>&1 | grep -v "^Building\|^Created" || true
     WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
-    if [ -n "${WHEEL_FILE}" ]; then
-        WHEEL_NAME=$(basename "${WHEEL_FILE}")
-        # Remove any existing wheel files
-        rm -f "${TARGET_DIR}"/*.whl
-        mv "${WHEEL_FILE}" "${TARGET_DIR}/${WHEEL_NAME}"
-        echo ""
-        echo "✓ Successfully built wheel package"
-        echo "  Location: ${TARGET_DIR}/${WHEEL_NAME}"
-        echo ""
-        echo "The wheel file is ready to be committed to the repository."
-        echo "The run-td script will automatically install it if nvidia-gpu-tools is not in PATH."
+else
+    echo "  Poetry not found, using python -m build..."
+    if command -v python3 &> /dev/null; then
+        python3 -m pip install --upgrade pip build wheel 2>&1 | grep -v "^Requirement\|^Collecting\|^Using\|^Already" || true
+        python3 -m build --wheel 2>&1 | grep -v "^Creating\|^Adding\|^Copying\|^Building" || true
+        WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
     else
-        echo "Error: Could not find built wheel file"
+        echo "Error: Neither poetry nor python3 found, cannot build wheel"
         exit 1
     fi
+fi
+    
+# Find the built wheel and move it to target directory
+if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+    WHEEL_NAME=$(basename "${WHEEL_FILE}")
+    # Remove any existing wheel files
+    rm -f "${TARGET_DIR}"/*.whl
+    mv "${WHEEL_FILE}" "${TARGET_DIR}/${WHEEL_NAME}"
+    echo ""
+    echo "✓ Successfully built wheel package"
+    echo "  Location: ${TARGET_DIR}/${WHEEL_NAME}"
+    echo ""
+    echo "The wheel file is ready to be committed to the repository."
+    echo "The run-td script will automatically install it if nvidia-gpu-tools is not in PATH."
 else
-    echo "Error: python3 not found, cannot build wheel"
+    echo "Error: Could not find built wheel file"
     exit 1
 fi
 
