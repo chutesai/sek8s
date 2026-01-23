@@ -94,17 +94,33 @@ def detect_nvswitches() -> list[str]:
 
 
 def get_gpu_device_ids(gpus: list[str]) -> dict[str, str]:
-    """Get device IDs (vendor:device) for each GPU address."""
+    """Get device IDs (vendor:device) for each GPU address.
+    
+    lspci -Dnn output format is typically:
+    0000:18:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device [10de:20b0] (rev a1)
+    The vendor:device is in brackets: [10de:20b0]
+    """
     gpu_device_ids = {}
     output = subprocess.check_output(["lspci", "-Dnn"], stderr=subprocess.STDOUT)
+    # Use regex to find vendor:device pattern [xxxx:xxxx]
+    vendor_device_pattern = re.compile(r'\[([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\]')
+    
     for line in output.decode().splitlines():
         parts = line.strip().split()
-        if len(parts) >= 3:
+        if len(parts) >= 1:
             addr = parts[0]
             if addr in gpus:
-                # Extract vendor:device from format like "10de:20b0"
-                vendor_device = parts[-1].strip('[]')
-                gpu_device_ids[addr] = vendor_device
+                # Find all vendor:device patterns in the line (there may be class code and vendor:device)
+                matches = vendor_device_pattern.findall(line)
+                # The last match is typically the vendor:device (class code comes first)
+                if matches:
+                    vendor_device = matches[-1]
+                    gpu_device_ids[addr] = vendor_device
+                else:
+                    # Fallback: try to find pattern without brackets
+                    match = re.search(r'([0-9a-fA-F]{4}:[0-9a-fA-F]{4})', line)
+                    if match:
+                        gpu_device_ids[addr] = match.group(1)
     return gpu_device_ids
 
 
@@ -224,22 +240,16 @@ def ensure_gpu_tools_available() -> str:
     if not os.path.exists(venv_dir):
         print(f'  Creating virtual environment for GPU admin tools...')
         try:
-            # Try to create venv with pip first
-            subprocess.check_call(['sudo', 'python3', '-m', 'venv', '--with-pip', venv_dir], 
+            subprocess.check_call(['sudo', 'python3', '-m', 'venv', venv_dir], 
                                stderr=subprocess.STDOUT)
-        except subprocess.CalledProcessError:
-            # If --with-pip fails, try without it and bootstrap pip manually
-            try:
-                subprocess.check_call(['sudo', 'python3', '-m', 'venv', venv_dir], 
-                                   stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError as e:
-                # Provide helpful error message if venv creation fails
-                raise RuntimeError(
-                    f"Failed to create virtual environment: {e}\n"
-                    f"The python3-venv package may not be installed. "
-                    f"Please install it using: sudo apt install python3-venv\n"
-                    f"For Python 3.13 specifically: sudo apt install python3.13-venv"
-                )
+        except subprocess.CalledProcessError as e:
+            # Provide helpful error message if venv creation fails
+            raise RuntimeError(
+                f"Failed to create virtual environment: {e}\n"
+                f"The python3-venv package may not be installed. "
+                f"Please install it using: sudo apt install python3-venv\n"
+                f"For Python 3.13 specifically: sudo apt install python3.13-venv"
+            )
     
     # Ensure pip is available in the venv
     if not os.path.exists(venv_pip):
