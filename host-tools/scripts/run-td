@@ -306,10 +306,14 @@ def ensure_gpu_tools_available() -> str:
             subprocess.check_call(['sudo', 'rm', cli_symlink])
         else:
             # If it's not a symlink, we should warn but not overwrite
-            print(f'  Warning: {cli_symlink} exists and is not a symlink, skipping symlink creation')
-    else:
-        print(f'  Creating system-wide symlink: {cli_symlink}')
-        subprocess.check_call(['sudo', 'ln', '-s', cli_in_venv, cli_symlink])
+            raise RuntimeError(
+                f"Cannot create symlink: {cli_symlink} exists and is not a symlink. "
+                "Please remove it manually and try again."
+            )
+    
+    # Create the symlink (always create it, even if we just removed an existing one)
+    print(f'  Creating system-wide symlink: {cli_symlink}')
+    subprocess.check_call(['sudo', 'ln', '-s', cli_in_venv, cli_symlink])
     
     # Verify it's now available
     result = subprocess.run(['which', 'nvidia-gpu-tools'],
@@ -348,8 +352,8 @@ def get_gpu_tool_args(gpu_addr: str, gpu_device_ids: dict[str, str],
     
     if model == 'B200':
         # B200 always uses CC mode (no NVSwitches)
+        # B200 doesn't support PPCIe, so we skip --set-ppcie-mode=off
         return [
-            ['--set-ppcie-mode=off', '--reset-after-ppcie-mode-switch'],
             ['--set-cc-mode=on', '--reset-after-cc-mode-switch']
         ]
     elif model == 'H200':
