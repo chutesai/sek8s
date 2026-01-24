@@ -147,8 +147,8 @@ def detect_gpu_model(device_id: str) -> str:
     if device_part_lower == '2901':
         return 'B200'
     
-    # H200 device IDs (Hopper) - typically 1B38
-    if device_part_lower == '1b38':
+    # H200 device IDs (Hopper) - typically 1B38 or 2335
+    if device_part_lower in ['1b38', '2335']:
         return 'H200'
     
     # Default to unknown for unsupported GPUs
