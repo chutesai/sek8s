@@ -1,14 +1,13 @@
 [Unit]
 Description=Configure nvidia-persistenced ExecStart based on NVSwitch topology
 Documentation=man:nvidia-smi(1)
-# Wait for the nvidia device to appear via udev
-After=local-fs.target systemd-modules-load.service dev-nvidia0.device
-Wants=dev-nvidia0.device
+# Wait for the nvidia device to appear via udev (tagged with systemd in 99-nvidia-systemd.rules)
+After=dev-nvidia0.device
+BindsTo=dev-nvidia0.device
 RequiresMountsFor=/tmp
-Before=nvidia-persistenced.service
+Before=nvidia-persistenced.service nvidia-fabricmanager.service
 # If device doesn't appear within timeout, proceed anyway with default mode
 DefaultDependencies=no
-ConditionPathExists=/dev/nvidia0
 
 [Service]
 Type=oneshot
@@ -19,4 +18,4 @@ ExecStart=/usr/local/sbin/nvidia-persistenced-config.sh
 TimeoutStartSec=30
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target sysinit.target

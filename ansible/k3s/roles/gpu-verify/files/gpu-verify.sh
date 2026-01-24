@@ -21,6 +21,7 @@ mapfile -t expected_gpu_bdfs < <(
         [[ -f "$dev/vendor" ]] || continue
         vendor=$(cat "$dev/vendor")
         class=$(cat "$dev/class")
+        # 0x0300: VGA compatible controller, 0x0302: 3D controller (used by H200/B200)
         if [[ "$vendor" == "0x10de" && ( "$class" == 0x0300* || "$class" == 0x0302* ) ]]; then
             basename "$dev"
         fi

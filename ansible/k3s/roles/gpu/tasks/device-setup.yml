@@ -203,11 +203,34 @@
             enabled: true
             state: stopped
 
+        - name: Create nvidia-fabricmanager override directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/nvidia-fabricmanager.service.d
+            state: directory
+            mode: '0755'
+
+        - name: Add dependency on nvidia-persistenced-config for fabricmanager
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/nvidia-fabricmanager.service.d/dependency.conf
+            content: |
+              [Unit]
+              After=nvidia-persistenced-config.service
+            mode: '0644'
+
         - name: Enable nvidia-persistenced for next boot
           ansible.builtin.systemd:
             name: nvidia-persistenced
             enabled: true
             state: stopped
+
+        - name: Install NVIDIA systemd udev rules
+          ansible.builtin.copy:
+            src: 99-nvidia-systemd.rules
+            dest: /etc/udev/rules.d/99-nvidia-systemd.rules
+            owner: root
+            group: root
+            mode: '0644'
+          notify: reload udev
 
         - name: Reboot if driver install updated kernel modules and reboot is requested
           ansible.builtin.reboot:

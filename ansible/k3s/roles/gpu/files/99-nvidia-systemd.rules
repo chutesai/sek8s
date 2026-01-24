@@ -1,0 +1,3 @@
+# Tag NVIDIA GPU character devices for systemd
+KERNEL=="nvidia[0-9]*", TAG+="systemd"
+KERNEL=="nvidiactl", TAG+="systemd"
