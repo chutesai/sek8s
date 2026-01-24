@@ -7,14 +7,24 @@
 - name: Update Helm repositories
   shell: helm repo update
 
+- name: Generate Chutes values file
+  ansible.builtin.template:
+    src: chutes-values.yaml.j2
+    dest: /tmp/chutes-values.yaml
+    mode: '0644'
+  when: chutes_validators is defined and chutes_validators | length > 0
+
 - name: Install or upgrade Chutes GPU charts
-  ansible.builtin.command: >
-    helm upgrade --install chutes chutes/chutes-miner-gpu
-    --namespace chutes
-    --create-namespace
-    --set-string minerCredentials.ss58Address="REPLACE_ME"
-    --set-string minerCredentials.secretSeed="REPLACE_ME"
-    --kubeconfig=/etc/rancher/k3s/k3s.yaml
+  ansible.builtin.shell: |
+    helm upgrade --install chutes chutes/chutes-miner-gpu \
+      --namespace chutes \
+      --create-namespace \
+      --set-string minerCredentials.ss58Address="REPLACE_ME" \
+      --set-string minerCredentials.secretSeed="REPLACE_ME" \
+      {% if chutes_validators is defined and chutes_validators | length > 0 %}
+      -f /tmp/chutes-values.yaml \
+      {% endif %}
+      --kubeconfig=/etc/rancher/k3s/k3s.yaml
   register: miner_deployment
   changed_when: miner_deployment.rc == 0
   no_log: true

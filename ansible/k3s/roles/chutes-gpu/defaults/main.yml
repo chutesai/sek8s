@@ -1,2 +1,16 @@
 monitoring_namespace: monitoring
 chutes_charts: "{{ playbook_dir }}/../../../charts/chutes-miner-gpu"
+
+# Chutes validator configuration
+# Provide the full validators YAML structure as shown in the chart documentation
+# This can be overridden in group_vars or host_vars
+chutes_validators: {}
+# Example:
+# chutes_validators:
+#   defaultRegistry: registry.dev
+#   defaultApi: https://registry.dev
+#   supported:
+#     - hotkey: 5FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+#       registry: registry.dev
+#       api: https://regisitry.dev
+#       socket: wss://ws.registry.dev:6443
