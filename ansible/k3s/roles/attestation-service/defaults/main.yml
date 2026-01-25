@@ -6,3 +6,7 @@ admission_port: 8080
 
 # Chutes config
 validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
+
+# Sek8s image configuration
+# Override via inventory to use dev/test images (e.g., sek8s_image_tag: "dev-latest")
+sek8s_image_tag: "latest"

@@ -20,3 +20,5 @@ all:
     gpu_verify_debug_mode: false
     debug_build: false
     validator: "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ"
+    # Optional: Override sek8s image tag for testing (default: "latest")
+    # sek8s_image_tag: "dev-latest"

@@ -117,7 +117,7 @@ spec:
             cpu: "10m"
       containers:
       - name: attestation-proxy
-        image: parachutes/sek8s:latest
+        image: parachutes/sek8s:{{ sek8s_image_tag }}
         imagePullPolicy: Always
         command:
         - attestation-proxy
