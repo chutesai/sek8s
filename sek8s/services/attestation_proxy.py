@@ -24,8 +24,8 @@ MAX_CONSECUTIVE_FAILURES = 5
 # Port configuration
 EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT", "8443"))
 INTERNAL_PORT = int(os.getenv("INTERNAL_PORT", "8444"))
-# Default port for chute services (can be overridden via SERVICE_PORT env var)
-SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8000"))
+# Dedicated port for chute proxy services (restricted via network policies)
+SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8002"))
 
 
 class SharedProxyResources:
@@ -288,7 +288,7 @@ class BaseProxyServer(WebServer):
             if key.lower() not in ["host", "content-length"]:
                 headers[key] = value
         
-        # Build K8s service URL with port
+        # Build K8s service URL with dedicated proxy port (8002)
         service_url = f"http://{service_name}.{SERVICE_NAMESPACE}.{CLUSTER_DOMAIN}:{SERVICE_PORT}"
         
         return await self.proxy_request(

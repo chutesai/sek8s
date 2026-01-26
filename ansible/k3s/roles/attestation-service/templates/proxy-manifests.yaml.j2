@@ -358,3 +358,30 @@ spec:
     - namespaceSelector: {}
     ports:
     - protocol: TCP
+
+---
+# NetworkPolicy: Allow attestation-proxy to access chute services on port 8002
+# This allows the attestation-proxy to connect to chute pods' proxy server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: chute-proxy-access
+  namespace: chutes
+spec:
+  podSelector:
+    matchLabels:
+      chutes/chute: "true"
+  policyTypes:
+  - Ingress
+  ingress:
+  # Allow attestation-proxy pods to connect to chute services on port 8002
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: attestation-system
+      podSelector:
+        matchLabels:
+          app: attestation-proxy
+    ports:
+    - protocol: TCP
+      port: 8002
