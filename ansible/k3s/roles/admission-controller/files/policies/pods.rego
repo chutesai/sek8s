@@ -232,6 +232,7 @@ allowed_env_vars := {
     "CHUTES_LAUNCH_JWT",
     "CHUTES_PORT_LOGGING",
     "CHUTES_PORT_PRIMARY",
+    "CHUTES_PORT_ATTESTATION",
     "HF_HOME",
     "CIVITAI_HOME",
     "NCCL_DEBUG",
