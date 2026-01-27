@@ -226,10 +226,11 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable verify storage service (but do not start)
+    # Don't enable by default during multi-phase builds. Let cleanup/enable step enable it.
+    - name: Set verify storage service state (disabled during build)
       systemd:
         name: verify-storage.service
-        enabled: yes
+        enabled: no
         state: stopped
         daemon_reload: yes
       failed_when: false
@@ -276,11 +277,11 @@
       changed_when: false
       failed_when: cache_storage_mount_status.stdout != "enabled"
 
-    - name: Verify verify storage service installation
+    - name: Verify verify storage service installation (disabled during build, will be enabled in cleanup)
       command: systemctl is-enabled verify-storage.service
       register: verify_storage_status
       changed_when: false
-      failed_when: verify_storage_status.stdout != "enabled"
+      failed_when: verify_storage_status.stdout != "disabled"
 
     - name: Verify storage init service installation
       command: systemctl is-enabled storage-init.service

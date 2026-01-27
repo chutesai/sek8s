@@ -1,0 +1,7 @@
+---
+- name: Enable verify storage service
+  systemd:
+    name: verify-storage.service
+    enabled: yes
+    state: stopped
+  tags: service

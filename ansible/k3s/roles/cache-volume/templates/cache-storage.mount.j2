@@ -8,6 +8,8 @@ Before=setup-storage-bind-mounts.service
 Before=containerd.service
 Before=k3s.service
 Before=k3s-agent.service
+# If this mount fails, don't continue boot
+OnFailure=poweroff.target
 
 [Mount]
 {% if debug_build | default(false) %}

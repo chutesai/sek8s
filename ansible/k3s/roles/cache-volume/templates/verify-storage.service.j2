@@ -5,12 +5,17 @@ After=cache-storage.mount
 Before=storage-init.service setup-storage-bind-mounts.service containerd.service k3s.service k3s-agent.service
 Requires=cache-storage.mount
 DefaultDependencies=no
+# If this service fails, don't continue boot
+OnFailure=poweroff.target
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Run with a timeout in case something goes wrong
-TimeoutStartSec=60
+# Don't timeout - verification is critical
+TimeoutStartSec=infinity
+# Output to both journal and console for debugging
+StandardOutput=journal+console
+StandardError=journal+console
 
 # Pass debug mode flag to script
 Environment="DEBUG_MODE={{ 'true' if debug_build | default(false) else 'false' }}"
