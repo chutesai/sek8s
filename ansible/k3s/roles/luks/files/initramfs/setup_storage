@@ -1,5 +1,5 @@
 #!/bin/sh
-# /etc/initramfs-tools/scripts/init-bottom/setup_containerd_cache
+# /etc/initramfs-tools/scripts/init-bottom/setup_storage
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
@@ -9,12 +9,12 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
-CONTAINERD_LABEL="${CONTAINERD_LABEL:-containerd-cache}"
-CONTAINERD_LUKS_NAME="containerd_cache"
+STORAGE_LABEL="${STORAGE_LABEL:-storage}"
+STORAGE_LUKS_NAME="storage"
 
 # Global variables
-CONTAINERD_DEVICE=""
-CONTAINERD_KEY=""
+STORAGE_DEVICE=""
+STORAGE_KEY=""
 VM_NAME=""
 HOTKEY=""
 BOOT_TOKEN=""
@@ -22,10 +22,10 @@ SUCCESS_FLAG=0
 
 # Function to securely clear sensitive data
 clear_sensitive_data() {
-    if [ -n "$CONTAINERD_KEY" ]; then
-        CONTAINERD_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
-        CONTAINERD_KEY=""
-        unset CONTAINERD_KEY
+    if [ -n "$STORAGE_KEY" ]; then
+        STORAGE_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        STORAGE_KEY=""
+        unset STORAGE_KEY
     fi
     
     if [ -n "$BOOT_TOKEN" ]; then
@@ -34,12 +34,12 @@ clear_sensitive_data() {
         unset BOOT_TOKEN
     fi
     
-    rm -f /tmp/containerd_response
+    rm -f /tmp/storage_response
     
     # If script exits without success flag, shutdown the VM
     if [ "$SUCCESS_FLAG" -ne 1 ]; then
-        log_failure_msg "Containerd cache setup failed - VM will shut down in 10 seconds..."
-        echo "CONTAINERD-CACHE-SETUP-FAILED" > /dev/kmsg
+        log_failure_msg "Storage setup failed - VM will shut down in 10 seconds..."
+        echo "STORAGE-SETUP-FAILED" > /dev/kmsg
         sleep 10
         poweroff -f
     fi
@@ -47,7 +47,7 @@ clear_sensitive_data() {
 
 trap clear_sensitive_data EXIT INT TERM
 
-log_begin_msg "Starting containerd cache setup"
+log_begin_msg "Starting storage setup"
 
 # Function to load VM name, hotkey, and boot token
 load_vm_data() {
@@ -76,19 +76,19 @@ load_vm_data() {
     return 0
 }
 
-# Function to detect containerd cache device by label
-detect_containerd_device() {
-    log_begin_msg "Detecting containerd cache device by label: $CONTAINERD_LABEL"
+# Function to detect storage device by label
+detect_storage_device() {
+    log_begin_msg "Detecting storage device by label: $STORAGE_LABEL"
     
     # Wait a bit for devices to settle
     sleep 2
     
     # First, try to find device by filesystem label (works for unencrypted devices on first boot)
-    CONTAINERD_DEVICE=$(blkid -l -o device -t LABEL="$CONTAINERD_LABEL" 2>/dev/null)
+    STORAGE_DEVICE=$(blkid -l -o device -t LABEL="$STORAGE_LABEL" 2>/dev/null)
     
     # If not found, check for LUKS devices with the subsystem label
     # This is more reliable than filesystem labels since LUKS metadata is accessible without opening
-    if [ -z "$CONTAINERD_DEVICE" ]; then
+    if [ -z "$STORAGE_DEVICE" ]; then
         log_begin_msg "Filesystem label not found, checking for LUKS devices"
         
         # Use blkid to find all block devices, then check each for LUKS with our label
@@ -103,33 +103,33 @@ detect_containerd_device() {
                 
                 log_begin_msg "Checking device $dev: label='$luks_label'"
                 
-                if [ "$luks_label" = "$CONTAINERD_LABEL" ]; then
-                    CONTAINERD_DEVICE="$dev"
-                    log_success_msg "Found LUKS device with label: $CONTAINERD_DEVICE"
+                if [ "$luks_label" = "$STORAGE_LABEL" ]; then
+                    STORAGE_DEVICE="$dev"
+                    log_success_msg "Found LUKS device with label: $STORAGE_DEVICE"
                     break
                 fi
             fi
         done
     fi
     
-    if [ -z "$CONTAINERD_DEVICE" ]; then
-        log_failure_msg "No device found with label '$CONTAINERD_LABEL'"
-        log_failure_msg "Ensure the cache volume was created with create-cache.sh script"
+    if [ -z "$STORAGE_DEVICE" ]; then
+        log_failure_msg "No device found with label '$STORAGE_LABEL'"
+        log_failure_msg "Ensure the storage volume was created with create-cache.sh script"
         return 1
     fi
     
-    if [ ! -b "$CONTAINERD_DEVICE" ]; then
-        log_failure_msg "Device $CONTAINERD_DEVICE is not a block device"
+    if [ ! -b "$STORAGE_DEVICE" ]; then
+        log_failure_msg "Device $STORAGE_DEVICE is not a block device"
         return 1
     fi
     
-    log_success_msg "Found containerd device: $CONTAINERD_DEVICE"
+    log_success_msg "Found storage device: $STORAGE_DEVICE"
     return 0
 }
 
-# Function to retrieve existing containerd key (GET) for encrypted devices
-get_containerd_key() {
-    local response_file="/tmp/containerd_response"
+# Function to retrieve existing storage key (GET) for encrypted devices
+get_storage_key() {
+    local response_file="/tmp/storage_response"
     
     # Validate required configuration
     if [ -z "$TDX_LUKS_ENDPOINT" ]; then
@@ -146,13 +146,13 @@ get_containerd_key() {
     # Add query parameters for GET
     endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
-    log_begin_msg "Retrieving existing containerd key from $endpoint_url"
+    log_begin_msg "Retrieving existing storage key from $endpoint_url"
     
     # GET request with boot token in X-Boot-Token header
     http_code=$(curl -s -w "%{http_code}" \
         -X GET \
         -H "X-Boot-Token: $BOOT_TOKEN" \
-        -H "User-Agent: TDX-LUKS-Containerd/1.0" \
+        -H "User-Agent: TDX-LUKS-Storage/1.0" \
         --max-time "$timeout" \
         --retry 0 \
         --cacert "$ca_cert" \
@@ -160,23 +160,23 @@ get_containerd_key() {
         "$endpoint_url")
     
     if [ "$http_code" = "200" ]; then
-        CONTAINERD_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        STORAGE_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
         
-        if [ -n "$CONTAINERD_KEY" ]; then
+        if [ -n "$STORAGE_KEY" ]; then
             rm -f "$response_file"
-            log_success_msg "Containerd key retrieved"
+            log_success_msg "Storage key retrieved"
             return 0
         fi
     fi
     
     rm -f "$response_file"
-    log_failure_msg "Failed to get containerd key (HTTP $http_code)"
+    log_failure_msg "Failed to get storage key (HTTP $http_code)"
     return 1
 }
 
-# Function to store new containerd key (PUT) for unencrypted devices (first boot)
-put_containerd_key() {
-    local response_file="/tmp/containerd_response"
+# Function to store new storage key (PUT) for unencrypted devices (first boot)
+put_storage_key() {
+    local response_file="/tmp/storage_response"
     
     # Validate required configuration
     if [ -z "$TDX_LUKS_ENDPOINT" ]; then
@@ -193,13 +193,13 @@ put_containerd_key() {
     # Add query parameters for PUT
     endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
-    log_begin_msg "Requesting new containerd key from $endpoint_url"
+    log_begin_msg "Requesting new storage key from $endpoint_url"
     
     # PUT request - validator generates and returns new key, boot token in header
     http_code=$(curl -s -w "%{http_code}" \
         -X PUT \
         -H "X-Boot-Token: $BOOT_TOKEN" \
-        -H "User-Agent: TDX-LUKS-Containerd/1.0" \
+        -H "User-Agent: TDX-LUKS-Storage/1.0" \
         --max-time "$timeout" \
         --retry 0 \
         --cacert "$ca_cert" \
@@ -207,30 +207,30 @@ put_containerd_key() {
         "$endpoint_url")
     
     if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        CONTAINERD_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
+        STORAGE_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
         
-        if [ -n "$CONTAINERD_KEY" ]; then
+        if [ -n "$STORAGE_KEY" ]; then
             rm -f "$response_file"
-            log_success_msg "Received new containerd key from validator"
+            log_success_msg "Received new storage key from validator"
             return 0
         fi
     fi
     
     rm -f "$response_file"
-    log_failure_msg "Failed to get new containerd key (HTTP $http_code)"
+    log_failure_msg "Failed to get new storage key (HTTP $http_code)"
     return 1
 }
 
-# Function to setup containerd cache device
-setup_containerd_cache() {
+# Function to setup storage device
+setup_storage() {
     local is_encrypted=false
     
     # Check if device is LUKS encrypted
-    if cryptsetup isLuks "$CONTAINERD_DEVICE" 2>/dev/null; then
+    if cryptsetup isLuks "$STORAGE_DEVICE" 2>/dev/null; then
         is_encrypted=true
-        log_begin_msg "Containerd device is LUKS encrypted"
+        log_begin_msg "Storage device is LUKS encrypted"
     else
-        log_begin_msg "Containerd device is NOT encrypted (first boot)"
+        log_begin_msg "Storage device is NOT encrypted (first boot or debug mode)"
     fi
     
     # Validate boot token exists
@@ -242,65 +242,65 @@ setup_containerd_cache() {
     # Now encrypt or unlock the device
     if [ "$is_encrypted" = "true" ]; then
         # GET existing key for encrypted device
-        if ! get_containerd_key; then
-            log_failure_msg "Failed to retrieve existing containerd key"
+        if ! get_storage_key; then
+            log_failure_msg "Failed to retrieve existing storage key"
             return 1
         fi
         
         # Unlock existing encrypted device
-        log_begin_msg "Unlocking containerd cache"
+        log_begin_msg "Unlocking storage"
         
-        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksOpen "$CONTAINERD_DEVICE" "$CONTAINERD_LUKS_NAME" --key-file=-; then
-            log_failure_msg "Failed to unlock containerd cache"
+        if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=-; then
+            log_failure_msg "Failed to unlock storage"
             return 1
         fi
         
-        log_success_msg "Containerd cache unlocked"
+        log_success_msg "Storage unlocked"
     else
         # First boot: Request new key from validator, wipe, restore label, encrypt
-        log_begin_msg "Encrypting containerd cache (first boot)"
+        log_begin_msg "Encrypting storage (first boot)"
         
-        # PUT request to validator to generate/return new key (create or overwrite if old cache was recreated)
-        if ! put_containerd_key; then
-            log_failure_msg "Failed to get new containerd key from validator"
+        # PUT request to validator to generate/return new key (create or overwrite if old storage was recreated)
+        if ! put_storage_key; then
+            log_failure_msg "Failed to get new storage key from validator"
             return 1
         fi
         
-        if [ -z "$CONTAINERD_KEY" ]; then
-            log_failure_msg "Validator returned empty containerd key"
+        if [ -z "$STORAGE_KEY" ]; then
+            log_failure_msg "Validator returned empty storage key"
             return 1
         fi
         
         # SECURITY: Wipe device
         log_begin_msg "Wiping device..."
-        wipefs -a "$CONTAINERD_DEVICE" 2>/dev/null || true
-        dd if=/dev/zero of="$CONTAINERD_DEVICE" bs=1M count=10 2>/dev/null || true
+        wipefs -a "$STORAGE_DEVICE" 2>/dev/null || true
+        dd if=/dev/zero of="$STORAGE_DEVICE" bs=1M count=10 2>/dev/null || true
         
         # SECURITY: Wipe any old LUKS header
         log_begin_msg "Wiping old LUKS header if present..."
-        cryptsetup erase "$CONTAINERD_DEVICE" 2>/dev/null || true
+        cryptsetup erase "$STORAGE_DEVICE" 2>/dev/null || true
         
         # Create LUKS container with subsystem label for detection on subsequent boots
         log_begin_msg "Creating LUKS container with label..."
-        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksFormat --type luks2 --label "$CONTAINERD_LABEL" "$CONTAINERD_DEVICE" --key-file=-; then
+        if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksFormat --type luks2 --label "$STORAGE_LABEL" "$STORAGE_DEVICE" --key-file=-; then
             log_failure_msg "Failed to create LUKS container"
             return 1
         fi
         
         # Open encrypted device
-        if ! printf '%s' "$CONTAINERD_KEY" | cryptsetup luksOpen "$CONTAINERD_DEVICE" "$CONTAINERD_LUKS_NAME" --key-file=-; then
+        if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=-; then
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
         
         # Format with ext4 and label
-        log_begin_msg "Formatting containerd cache..."
-        if ! mkfs.ext4 -L "$CONTAINERD_LABEL" "/dev/mapper/$CONTAINERD_LUKS_NAME"; then
-            log_failure_msg "Failed to format containerd cache"
+        log_begin_msg "Formatting storage..."
+        if ! mkfs.ext4 -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
+            log_failure_msg "Failed to format storage"
             return 1
         fi
         
-        log_success_msg "Containerd cache encrypted and formatted"
+        log_success_msg "Storage encrypted and formatted"
     fi
     
     return 0
@@ -310,11 +310,11 @@ setup_containerd_cache() {
 handle_failure() {
     local reason="$1"
     
-    log_failure_msg "Containerd cache setup failed: $reason"
+    log_failure_msg "Storage setup failed: $reason"
     log_failure_msg "VM will shut down in 10 seconds..."
     
     # Log to kernel ring buffer for debugging
-    echo "CONTAINERD-CACHE-SETUP-FAILED: $reason" > /dev/kmsg
+    echo "STORAGE-SETUP-FAILED: $reason" > /dev/kmsg
     
     # Clear sensitive data before shutdown
     clear_sensitive_data
@@ -334,15 +334,15 @@ main() {
         return 1
     fi
     
-    # Detect containerd device
-    if ! detect_containerd_device; then
-        handle_failure "No containerd device found"
+    # Detect storage device
+    if ! detect_storage_device; then
+        handle_failure "No storage device found"
         return 1
     fi
     
-    # Setup (encrypt or unlock) containerd cache
-    if ! setup_containerd_cache; then
-        handle_failure "Failed to setup containerd cache"
+    # Setup (encrypt or unlock) storage
+    if ! setup_storage; then
+        handle_failure "Failed to setup storage"
         return 1
     fi
     
@@ -352,7 +352,7 @@ main() {
     # Clear all sensitive data
     clear_sensitive_data
     
-    log_success_msg "Containerd cache setup completed successfully"
+    log_success_msg "Storage setup completed successfully"
     return 0
 }
 

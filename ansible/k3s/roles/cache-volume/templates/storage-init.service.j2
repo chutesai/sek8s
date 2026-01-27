@@ -1,0 +1,22 @@
+[Unit]
+Description=Initialize Storage Volume
+Documentation=https://github.com/yourusername/sek8s
+After=cache-storage.mount
+After=verify-storage.service
+Before=setup-storage-bind-mounts.service containerd.service k3s.service k3s-agent.service
+Requires=cache-storage.mount
+Requires=verify-storage.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Run with a timeout in case something goes wrong
+TimeoutStartSec=300
+
+# Run initialization scripts in sequence (verification already done by verify-storage.service)
+ExecStart=/usr/local/bin/init-containerd-storage.sh
+ExecStart=/usr/local/bin/init-kubelet-pods-storage.sh
+
+[Install]
+WantedBy=local-fs.target

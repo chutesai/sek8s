@@ -4,7 +4,8 @@ Documentation=https://k3s.io
 After=network-online.target
 Requires=network-online.target
 Wants=network-online.target
-RequiresMountsFor=/var/lib/rancher/k3s/agent/containerd
+# Note: RequiresMountsFor for containerd is added at runtime via cleanup role drop-in
+# because the storage volume doesn't exist during build phase
 
 [Install]
 WantedBy=multi-user.target

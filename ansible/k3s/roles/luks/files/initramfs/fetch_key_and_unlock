@@ -513,7 +513,7 @@ main() {
     
     # Unlock the device
     if unlock_device; then
-        # Save vm_name, hotkey, and boot token to /run for containerd cache setup
+        # Save vm_name, hotkey, and boot token to /run for storage setup
         mkdir -p /run/chutes
         echo "$VM_NAME" > /run/chutes/vm-name
         echo "$HOTKEY" > /run/chutes/hotkey

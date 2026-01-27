@@ -325,10 +325,10 @@
     owner: root
     group: root
 
-- name: Copy containerd cache setup script (init-bottom)
+- name: Copy storage setup script (init-bottom)
   ansible.builtin.copy:
-    src: files/initramfs/setup_containerd_cache
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/setup_containerd_cache"
+    src: files/initramfs/setup_storage
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/setup_storage"
     mode: '0755'
     owner: root
     group: root

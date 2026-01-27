@@ -57,6 +57,7 @@
         owner: root
         group: root
         mode: "0644"
+      # This is added at runtime (cleanup phase) because the storage volume doesn't exist during build
 
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:

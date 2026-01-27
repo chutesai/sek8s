@@ -1,9 +1,10 @@
 [Unit]
-Description=Containerd cache storage
+Description=VM storage
 Documentation=man:systemd.mount(5)
 # This mount unit runs after device is available
 After=local-fs-pre.target systemd-udev-settle.service
-# Must be mounted before containerd and k3s
+# Must be mounted before bind mounts, containerd and k3s
+Before=setup-storage-bind-mounts.service
 Before=containerd.service
 Before=k3s.service
 Before=k3s-agent.service
@@ -11,12 +12,12 @@ Before=k3s-agent.service
 [Mount]
 {% if debug_build | default(false) %}
 # Debug mode: Use unencrypted device by label
-What=/dev/disk/by-label/containerd-cache
+What=/dev/disk/by-label/storage
 {% else %}
 # Production mode: Use the mapped LUKS device (unlocked by initramfs)
-What=/dev/mapper/containerd_cache
+What=/dev/mapper/storage
 {% endif %}
-Where=/var/lib/rancher/k3s/agent/containerd
+Where=/cache/storage
 Type=ext4
 Options=defaults,noatime
 # Don't allow boot to continue if mount fails

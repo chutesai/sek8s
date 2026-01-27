@@ -1,0 +1,20 @@
+[Unit]
+Description=Setup bind mounts for containerd and kubelet-pods on storage volume
+Documentation=man:systemd.service(5)
+Requires=cache-storage.mount
+Requires=verify-storage.service
+Requires=storage-init.service
+After=cache-storage.mount
+After=verify-storage.service
+After=storage-init.service
+Before=containerd.service
+Before=k3s.service
+Before=k3s-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/setup-storage-bind-mounts.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

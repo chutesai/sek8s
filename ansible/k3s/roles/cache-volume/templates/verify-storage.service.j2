@@ -1,0 +1,22 @@
+[Unit]
+Description=Verify Storage Volume Encryption
+Documentation=https://github.com/yourusername/sek8s
+After=cache-storage.mount
+Before=storage-init.service setup-storage-bind-mounts.service containerd.service k3s.service k3s-agent.service
+Requires=cache-storage.mount
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Run with a timeout in case something goes wrong
+TimeoutStartSec=60
+
+# Pass debug mode flag to script
+Environment="DEBUG_MODE={{ 'true' if debug_build | default(false) else 'false' }}"
+
+# Verify storage encryption before any data copying
+ExecStart=/usr/local/bin/verify-storage.sh
+
+[Install]
+WantedBy=local-fs.target
