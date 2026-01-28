@@ -14,6 +14,15 @@ log() {
     logger -t "${LOG_TAG}" "${msg}" >/dev/null 2>&1 || true
 }
 
+# Verify nvidia device is present (service should not start without it due to BindsTo)
+if [ ! -e /dev/nvidia0 ] && [ ! -e /dev/nvidiactl ]; then
+    log "ERROR: NVIDIA devices not found (/dev/nvidia0 or /dev/nvidiactl)"
+    log "This service requires NVIDIA devices to be present"
+    exit 1
+fi
+
+log "NVIDIA devices detected, proceeding with configuration"
+
 have_nvswitch() {
     shopt -s nullglob
     local devices=(

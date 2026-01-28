@@ -1,3 +1,4 @@
 # Tag NVIDIA GPU character devices for systemd
-KERNEL=="nvidia[0-9]*", TAG+="systemd"
-KERNEL=="nvidiactl", TAG+="systemd"
+# SYMLINK ensures proper device unit creation, TAG makes systemd track it
+KERNEL=="nvidia[0-9]*", SYMLINK+="nvidia%n", TAG+="systemd"
+KERNEL=="nvidiactl", SYMLINK+="nvidiactl", TAG+="systemd"
