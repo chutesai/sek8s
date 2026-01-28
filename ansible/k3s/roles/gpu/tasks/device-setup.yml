@@ -223,14 +223,6 @@
             enabled: true
             state: stopped
 
-        - name: Install NVIDIA systemd udev rules
-          ansible.builtin.copy:
-            src: 99-nvidia-systemd.rules
-            dest: /etc/udev/rules.d/99-nvidia-systemd.rules
-            owner: root
-            group: root
-            mode: '0644'
-          notify: reload udev
 
         - name: Reboot if driver install updated kernel modules and reboot is requested
           ansible.builtin.reboot:
