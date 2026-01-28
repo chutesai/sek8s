@@ -69,111 +69,110 @@ def add_vsock(cmd):
     cmd.extend(['-device', 'vhost-vsock-pci,guest-cid=3'])
 
 
+# NVIDIA PCI vendor ID (matches setup-gpus.sh NVIDIA_VENDOR_ID)
+_NVIDIA_VENDOR = '10de'
+
+
+def _lspci_nvidia_lines() -> list[str]:
+    """lspci -Dnn lines for NVIDIA devices (vendor 10de).
+
+    We intentionally use -D so BDFs are always in full domain form (0000:bb:dd.f),
+    matching nvidia-gpu-tools output and sysfs/virsh expectations.
+    """
+    output = subprocess.check_output(["lspci", "-Dnn"], stderr=subprocess.STDOUT)
+    return [line for line in output.decode().splitlines() if _NVIDIA_VENDOR in line]
+
 def detect_nvidia_gpus() -> list[str]:
-    output = subprocess.check_output(["lspci", "-Dn"], stderr=subprocess.STDOUT)
+    """Detect NVIDIA GPU BDFs via lspci: vendor 10de, description contains H200 or B200 (matches setup-gpus.sh intent)."""
     devices = []
-    for line in output.decode().splitlines():
+    for line in _lspci_nvidia_lines():
         parts = line.strip().split()
-        if len(parts) >= 3:
-            addr, class_code, vendor = parts[0], parts[1].rstrip(':'), parts[2]
-            if re.match(r'^(0300|0302)$', class_code) and vendor.startswith('10de:'):
-                devices.append(addr)
+        if not parts:
+            continue
+        bdf = parts[0]
+        # Match setup-gpus.sh: grep for device name in description (H200, B200)
+        if 'B200' in line or 'H200' in line:
+            devices.append(bdf)
     return sorted(devices)
+
+
+def get_gpu_bdfs() -> list[str] | None:
+    """Get GPU BDFs from nvidia_gpu_tools --query-cc-mode (matches setup-gpus.sh gpus_bdfs()).
+
+    Used for both H200 and B200 so device selection is consistent and tool-driven.
+    Returns None if the tool is unavailable or returns no GPUs.
+    """
+    try:
+        cmd = ensure_gpu_tools_available()
+        out = subprocess.run(
+            [cmd, '--query-cc-mode'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if out.returncode != 0:
+            return None
+        # Match setup-gpus.sh: "  N GPU BDF" -> BDF (regex uses [0-9] for domain, not [0-0])
+        bdf_re = re.compile(
+            r'\s+\d+\s+GPU\s+([0-9a-f]{4}:[0-9a-f]{2,4}:[0-9a-f]{2}\.[0-9])',
+            re.IGNORECASE,
+        )
+        bdfs = []
+        for line in (out.stdout or '').splitlines():
+            m = bdf_re.search(line)
+            if m:
+                bdfs.append(m.group(1))
+        return sorted(bdfs) if bdfs else None
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, RuntimeError):
+        return None
 
 
 def detect_nvswitches() -> list[str]:
-    output = subprocess.check_output(["lspci", "-Dn"], stderr=subprocess.STDOUT)
+    """Detect NVSwitch BDFs via lspci: vendor 10de, description contains NVSwitch (matches setup-gpus.sh)."""
     devices = []
-    for line in output.decode().splitlines():
+    for line in _lspci_nvidia_lines():
         parts = line.strip().split()
-        if len(parts) >= 3:
-            addr, class_code, vendor = parts[0], parts[1].rstrip(':'), parts[2]
-            if class_code == '0680' and vendor.startswith('10de:22a3'):
-                devices.append(addr)
+        if not parts:
+            continue
+        if 'NVSwitch' in line:
+            devices.append(parts[0])
     return sorted(devices)
 
 
-def get_gpu_device_ids(gpus: list[str]) -> dict[str, str]:
-    """Get device IDs (vendor:device) for each GPU address.
-    
-    lspci -Dnn output format is typically:
-    0000:18:00.0 VGA compatible controller [0300]: NVIDIA Corporation Device [10de:20b0] (rev a1)
-    The vendor:device is in brackets: [10de:20b0]
+def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
+    """Get GPU model per BDF from lspci: vendor 10de, grep for B200 or H200 in description (matches setup-gpus.sh).
+
+    Returns dict BDF -> 'B200' | 'H200' | 'default'. Check B200 before H200 (substring order).
     """
-    gpu_device_ids = {}
-    output = subprocess.check_output(["lspci", "-Dnn"], stderr=subprocess.STDOUT)
-    # Use regex to find vendor:device pattern [xxxx:xxxx]
-    vendor_device_pattern = re.compile(r'\[([0-9a-fA-F]{4}:[0-9a-fA-F]{4})\]')
-    
-    for line in output.decode().splitlines():
+    bdf_set = set(bdfs)
+    result = {}
+    for line in _lspci_nvidia_lines():
         parts = line.strip().split()
-        if len(parts) >= 1:
-            addr = parts[0]
-            if addr in gpus:
-                # Find all vendor:device patterns in the line (there may be class code and vendor:device)
-                matches = vendor_device_pattern.findall(line)
-                # The last match is typically the vendor:device (class code comes first)
-                if matches:
-                    vendor_device = matches[-1]
-                    gpu_device_ids[addr] = vendor_device
-                else:
-                    # Fallback: try to find pattern without brackets
-                    match = re.search(r'([0-9a-fA-F]{4}:[0-9a-fA-F]{4})', line)
-                    if match:
-                        gpu_device_ids[addr] = match.group(1)
-    return gpu_device_ids
+        if not parts:
+            continue
+        bdf = parts[0]
+        if bdf not in bdf_set:
+            continue
+        # Match setup-gpus.sh: device name in lspci description (B200 before H200)
+        if 'B200' in line:
+            result[bdf] = 'B200'
+        elif 'H200' in line:
+            result[bdf] = 'H200'
+        else:
+            result[bdf] = 'default'
+    return result
 
 
-def detect_gpu_model(device_id: str) -> str:
-    """Detect GPU model from PCI device ID.
-    
-    B200 device IDs are in various ranges (Blackwell architecture):
-    - 20B0-20BF (primary range)
-    - 2901 and other variants
-    H200 device IDs are typically 1B38 (Hopper architecture)
-    """
-    if not device_id:
-        return 'default'
-    
-    # Extract device ID (last 4 hex digits after vendor ID)
-    device_part = device_id.split(':')[-1] if ':' in device_id else device_id
-    device_part_lower = device_part.lower()
-    
-    # B200 device IDs (Blackwell) - 20B0-20BF range
-    if device_part_lower.startswith('20b'):
-        return 'B200'
-    
-    # B200 device IDs (Blackwell) - 2901 variant
-    if device_part_lower == '2901':
-        return 'B200'
-    
-    # H200 device IDs (Hopper) - typically 1B38 or 2335
-    if device_part_lower in ['1b38', '2335']:
-        return 'H200'
-    
-    # Default to unknown for unsupported GPUs
-    return 'default'
-
-
-def get_gpu_bar_size(gpu_addr: str, gpu_device_ids: dict[str, str]) -> int:
-    """Get the BAR size (in MB) for a specific GPU."""
-    device_id = gpu_device_ids.get(gpu_addr, '')
-    model = detect_gpu_model(device_id)
-    
-    # Validate GPU model - we only support B200 and H200
+def get_gpu_bar_size(gpu_addr: str, gpu_models: dict[str, str]) -> int:
+    """Get the BAR size (in MB) for a specific GPU from lspci-derived model (B200, H200)."""
+    model = gpu_models.get(gpu_addr, 'default')
     if model not in ['B200', 'H200']:
         raise ValueError(
-            f"Unsupported GPU model detected for GPU {gpu_addr} (device ID: {device_id}). "
+            f"Unsupported GPU model for {gpu_addr} (lspci: {model}). "
             "Only B200 and H200 GPUs are supported."
         )
-    
     bar_size = GPU_BAR_SIZES.get(model, GPU_BAR_SIZES['default'])
-    
-    if model == 'B200':
-        print(f'    GPU {gpu_addr}: B200 detected (device ID: {device_id}), using {bar_size} MB (512GB) BAR')
-    elif model == 'H200':
-        print(f'    GPU {gpu_addr}: H200 detected (device ID: {device_id}), using {bar_size} MB (256GB) BAR')
-    
+    print(f'    GPU {gpu_addr}: {model} detected, using {bar_size} MB BAR')
     return bar_size
 
 
@@ -327,53 +326,29 @@ def ensure_gpu_tools_available() -> str:
         )
 
 
-def get_gpu_tool_args(gpu_addr: str, gpu_device_ids: dict[str, str], 
-                      nvswitches: list[str], total_gpus: int) -> list[list[str]]:
-    """Get nvidia-gpu-tools arguments for a specific GPU.
-    
+def get_gpu_tool_args(gpu_addr: str, model: str, total_gpus: int) -> list[list[str]]:
+    """Get nvidia-gpu-tools arguments for a GPU (model from lspci: B200, H200).
+
     Returns a list of command argument lists (each sublist is one command to run).
-    Similar pattern to get_gpu_bar_size() for extensibility.
-    
-    Args:
-        gpu_addr: GPU BDF address
-        gpu_device_ids: Dict mapping GPU BDF to device ID string
-        nvswitches: List of NVSwitch BDF addresses
-        total_gpus: Total number of GPUs in system
-    
-    Returns:
-        List of argument lists, e.g.:
-        - CC mode: [['--set-ppcie-mode=off', '--reset-after-ppcie-mode-switch'],
-                    ['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
-        - PPCIe mode: [['--set-cc-mode=off', '--reset-after-cc-mode-switch'],
-                       ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch']]
     """
-    device_id = gpu_device_ids.get(gpu_addr, '')
-    model = detect_gpu_model(device_id)
-    
     if model == 'B200':
-        # B200 always uses CC mode (no NVSwitches)
-        # B200 doesn't support PPCIe, so we skip --set-ppcie-mode=off
-        return [
-            ['--set-cc-mode=on', '--reset-after-cc-mode-switch']
-        ]
-    elif model == 'H200':
-        # H200 uses PPCIe if 8 GPUs + 4 NVSwitches, else CC
-        if total_gpus == 8 and len(nvswitches) == 4:
+        # B200 always uses CC mode (no NVSwitches); no PPCIe
+        return [['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
+    if model == 'H200':
+        # H200: PPCIe when 8 GPUs (matches setup-gpus.sh)
+        if total_gpus == 8:
             return [
                 ['--set-cc-mode=off', '--reset-after-cc-mode-switch'],
                 ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch']
             ]
-        else:
-            return [
-                ['--set-ppcie-mode=off', '--reset-after-ppcie-mode-switch'],
-                ['--set-cc-mode=on', '--reset-after-cc-mode-switch']
-            ]
-    else:
-        # Unknown GPU model - we only support B200 and H200
-        raise ValueError(
-            f"Unsupported GPU model detected for GPU {gpu_addr} (device ID: {device_id}). "
-            "Only B200 and H200 GPUs are supported."
-        )
+        return [
+            ['--set-ppcie-mode=off', '--reset-after-ppcie-mode-switch'],
+            ['--set-cc-mode=on', '--reset-after-cc-mode-switch']
+        ]
+    raise ValueError(
+        f"Unsupported GPU model for {gpu_addr} (lspci: {model}). "
+        "Only B200 and H200 GPUs are supported."
+    )
 
 
 def load_vfio_modules():
@@ -400,90 +375,19 @@ def bind_device_to_vfio(device_bdf: str):
         print(f'  Warning: Failed to bind {device_bdf} to vfio-pci: {e}')
 
 
-def bind_iommu_group(device_bdf: str, processed_groups: set):
-    """Bind all devices in an IOMMU group to vfio-pci.
-    
-    Args:
-        device_bdf: BDF address of a device in the IOMMU group
-        processed_groups: Set of already processed IOMMU group IDs
-    """
-    try:
-        iommu_group_path = f'/sys/bus/pci/devices/{device_bdf}/iommu_group'
-        if not os.path.exists(iommu_group_path):
-            print(f'  Warning: {device_bdf} has no IOMMU group (IOMMU may not be enabled)')
-            return
-        
-        group_link = os.readlink(iommu_group_path)
-        group_id = os.path.basename(group_link)
-        
-        if group_id in processed_groups:
-            return
-        
-        processed_groups.add(group_id)
-        group_dir = f'/sys/kernel/iommu_groups/{group_id}/devices'
-        
-        if not os.path.exists(group_dir):
-            return
-        
-        print(f'  Binding IOMMU group {group_id} (triggered by {device_bdf})')
-        
-        for device_file in os.listdir(group_dir):
-            device_bdf_in_group = device_file
-            
-            # Check if already bound to vfio-pci
-            driver_path = f'/sys/bus/pci/devices/{device_bdf_in_group}/driver'
-            if os.path.exists(driver_path):
-                driver_name = os.path.basename(os.readlink(driver_path))
-                if driver_name == 'vfio-pci':
-                    print(f'    {device_bdf_in_group} already on vfio-pci')
-                    continue
-            
-            # Check if this is a PCIe bridge (class 0x060400) - skip it
-            class_path = f'/sys/bus/pci/devices/{device_bdf_in_group}/class'
-            if os.path.exists(class_path):
-                try:
-                    with open(class_path, 'r') as f:
-                        device_class = f.read().strip()
-                    if device_class == '0x060400':
-                        print(f'    {device_bdf_in_group} is a PCIe bridge (skipping)')
-                        continue
-                except Exception:
-                    pass
-            
-            # Unbind from current driver if bound
-            if os.path.exists(driver_path):
-                driver_name = os.path.basename(os.readlink(driver_path))
-                unbind_path = f'/sys/bus/pci/drivers/{driver_name}/unbind'
-                if os.path.exists(unbind_path):
-                    try:
-                        with open(unbind_path, 'w') as f:
-                            f.write(device_bdf_in_group)
-                        print(f'    Unbound {device_bdf_in_group} from {driver_name}')
-                    except Exception:
-                        print(f'    Warning: Could not unbind {device_bdf_in_group} from {driver_name}')
-            
-            # Bind to vfio-pci
-            bind_device_to_vfio(device_bdf_in_group)
-            print(f'    {device_bdf_in_group} → vfio-pci')
-        
-    except Exception as e:
-        print(f'  Warning: Failed to bind IOMMU group for {device_bdf}: {e}')
+def bind_explicit_devices_to_vfio(devices: list[str]):
+    """Bind only the given BDFs to vfio-pci (no IOMMU group binding).
 
-
-def bind_devices_to_vfio(devices: list[str]):
-    """Bind all devices and their IOMMU groups to vfio-pci.
-    
-    Args:
-        devices: List of device BDF addresses
+    Matches setup-gpus.sh semantics: explicit device list only, no bridges
+    or unrelated fabric endpoints. Deterministic and reproducible across boots.
     """
     load_vfio_modules()
-    processed_groups = set()
-    
     for device in devices:
-        bind_iommu_group(device, processed_groups)
+        bind_device_to_vfio(device)
+        print(f'    {device} → vfio-pci')
 
 
-def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
+def prepare_gpus(gpus, nvswitches, gpu_models: dict[str, str]):
     """Prepare GPUs and NVSwitches for passthrough.
 
     Order must match tdx/gpu-cc/h100/setup-gpus.sh: configure mode (CC/PPCIe)
@@ -492,16 +396,10 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
     from configuring the devices and can cause NVSwitches to be missing in
     the VM.
 
-    Handles:
-    - Setting GPU/NVSwitch mode (CC vs PPCIe) via nvidia_gpu_tools (before vfio bind)
-    - Binding devices to vfio-pci (IOMMU groups)
-    - Virsh device detachment
-    - Udev rules setup
-
     Args:
         gpus: List of GPU BDF addresses
-        nvswitches: List of NVSwitch BDF addresses  
-        gpu_device_ids: Dict mapping GPU BDF to device ID string
+        nvswitches: List of NVSwitch BDF addresses
+        gpu_models: Dict mapping GPU BDF to model string (B200, H200) from lspci
     """
     # Step 1: Ensure GPU tools are available
     print('  Ensuring GPU admin tools are available...')
@@ -509,7 +407,9 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
     cmd_base = ['sudo', nvidia_tools_cmd]
 
     total_gpus = len(gpus)
-    is_ppcie_mode = (total_gpus == 8 and len(nvswitches) == 4)
+    # H200 PPCIe when 8 GPUs (matches setup-gpus.sh); B200 never uses PPCIe
+    has_h200 = any(gpu_models.get(g, '') == 'H200' for g in gpus)
+    is_ppcie_mode = has_h200 and total_gpus == 8
 
     # Step 2: Configure NVSwitches FIRST before binding to vfio (matches setup-gpus.sh)
     if is_ppcie_mode and nvswitches:
@@ -528,16 +428,14 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
     # Step 3: Configure each GPU before binding to vfio (matches setup-gpus.sh)
     print('  Configuring GPUs...')
     for gpu in gpus:
-        device_id = gpu_device_ids.get(gpu, '')
-        model = detect_gpu_model(device_id)
-
-        if model not in ['B200', 'H200']:
+        model = gpu_models.get(gpu, 'default')
+        if model not in ('B200', 'H200'):
             raise ValueError(
-                f"Unsupported GPU model detected for GPU {gpu} (device ID: {device_id}). "
+                f"Unsupported GPU model for {gpu} (lspci: {model}). "
                 "Only B200 and H200 GPUs are supported."
             )
 
-        tool_args_list = get_gpu_tool_args(gpu, gpu_device_ids, nvswitches, total_gpus)
+        tool_args_list = get_gpu_tool_args(gpu, model, total_gpus)
 
         if model == 'B200':
             mode_str = 'CC mode (B200)'
@@ -554,10 +452,15 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
                 stderr=subprocess.STDOUT
             )
 
-    # Step 4: Bind devices to vfio-pci after configuration (order matches setup-gpus.sh)
-    print('  Binding devices to vfio-pci...')
-    all_devices = gpus + nvswitches
-    bind_devices_to_vfio(all_devices)
+    # Step 4: Bind explicit BDF list to vfio-pci (no IOMMU group binding; matches setup-gpus.sh)
+    # B200: GPUs only. H200: GPUs + NVSwitches when PPCIe (8 GPUs).
+    has_b200 = any(gpu_models.get(g, '') == 'B200' for g in gpus)
+    if has_b200:
+        devices_to_bind = gpus
+    else:
+        devices_to_bind = gpus + nvswitches if is_ppcie_mode and nvswitches else gpus
+    print('  Binding devices to vfio-pci (explicit BDF list)...')
+    bind_explicit_devices_to_vfio(devices_to_bind)
 
     # Step 5: Virsh binding for each GPU (matches setup-gpus.sh behavior)
     for gpu in gpus:
@@ -572,62 +475,77 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
             stderr=subprocess.STDOUT
         )
 
-    # Step 6: Setup udev rules once
-    udev_rules = f'{file_path}/vfio-passthrough.rules'
-    if not os.path.exists(udev_rules):
+    # Step 6: Install udev rules only if they do not already exist (host-level state)
+    udev_rules_src = f'{file_path}/vfio-passthrough.rules'
+    udev_rules_dst = '/etc/udev/rules.d/vfio-passthrough.rules'
+    if not os.path.exists(udev_rules_src):
         raise FileNotFoundError(
-            f"Udev rules file not found: {udev_rules}. "
+            f"Udev rules file not found: {udev_rules_src}. "
             "This file should be in the same directory as run-td."
         )
-    print('  Setting up udev rules...')
-    subprocess.check_call(
-        ['sudo', 'cp', udev_rules, '/etc/udev/rules.d/'],
-        stderr=subprocess.STDOUT
-    )
-    subprocess.check_call(
-        ['sudo', 'udevadm', 'control', '--reload-rules'],
-        stderr=subprocess.STDOUT
-    )
-    subprocess.check_call(
-        ['sudo', 'udevadm', 'trigger'],
-        stderr=subprocess.STDOUT
-    )
+    if not os.path.exists(udev_rules_dst):
+        print('  Installing udev rules...')
+        subprocess.check_call(
+            ['sudo', 'cp', udev_rules_src, '/etc/udev/rules.d/'],
+            stderr=subprocess.STDOUT
+        )
+        subprocess.check_call(
+            ['sudo', 'udevadm', 'control', '--reload-rules'],
+            stderr=subprocess.STDOUT
+        )
+        subprocess.check_call(
+            ['sudo', 'udevadm', 'trigger'],
+            stderr=subprocess.STDOUT
+        )
+    else:
+        print('  Udev rules already present (skipping install)')
 
 
-def add_gpu_passthrough(cmd, gpus, nvswitches):
+def add_gpu_passthrough(cmd):
+    """Discover + prepare GPUs (and NVSwitch when required) for passthrough.
+
+    This mirrors setup-gpus.sh behavior:
+    - GPUs are enumerated via nvidia-gpu-tools --query-cc-mode (fallback to lspci).
+    - NVSwitch devices are only enumerated (via lspci) when topology requires them (H200 + 8 GPUs).
+    """
+    # Primary source of truth (setup-gpus.sh): nvidia_gpu_tools --query-cc-mode
+    gpus = get_gpu_bdfs()
+    if not gpus:
+        # Fallback only (e.g. older tool versions / unexpected environments)
+        gpus = detect_nvidia_gpus()
+
     if not gpus:
         return
+
+    # Model from lspci: vendor 10de, grep B200 / H200 in description (matches setup-gpus.sh)
+    gpu_models = get_gpu_models_from_lspci(gpus)
+    has_h200 = any(gpu_models.get(g, '') == 'H200' for g in gpus)
+    has_b200 = any(gpu_models.get(g, '') == 'B200' for g in gpus)
+
+    # setup-gpus.sh only considers NVSwitch for the 8-GPU PPCIe (H200) topology.
+    # B200 treats NVSwitch as integrated CC fabric: do not enumerate or pass through.
+    nvswitches = detect_nvswitches() if (has_h200 and len(gpus) == 8 and not has_b200) else []
 
     print(f'  Detected {len(gpus)} GPUs: {gpus}')
     print(f'  Detected {len(nvswitches)} NVSwitches: {nvswitches}')
 
-    # Get device IDs for all GPUs to determine BAR sizes and GPU models
-    gpu_device_ids = get_gpu_device_ids(gpus)
-
-    # Determine mode: B200 GPUs use CC mode (no NVSwitches), H200 can use PPCIe if 8 GPUs + 4 NVSwitches
-    # Check if any B200 GPUs exist
-    has_b200 = any(detect_gpu_model(gpu_device_ids.get(gpu, '')) == 'B200' for gpu in gpus)
-    has_h200 = any(detect_gpu_model(gpu_device_ids.get(gpu, '')) == 'H200' for gpu in gpus)
-    
+    # Mode: B200 = CC only; H200 = PPCIe when 8 GPUs (matches setup-gpus.sh, no NVSwitch count check)
     if has_b200:
         print('  CC mode: enabled (B200 GPUs detected - B200 architecture uses CC mode, no NVSwitches)')
         if nvswitches:
             print(f'  Warning: B200 GPUs detected but {len(nvswitches)} NVSwitch(es) found (B200 does not use NVSwitches)')
-    elif len(gpus) == 8 and len(nvswitches) == 4:
-        print('  PPCIe mode: enabled (8 GPUs + 4 NVSwitches)')
-    elif len(gpus) == 8 and has_h200 and len(nvswitches) != 4:
-        raise ValueError(
-            f"8 H200 GPUs detected but only {len(nvswitches)} NVSwitch(es) found. "
-            "H200 systems with 8 GPUs require 4 NVSwitches for PPCIe mode. "
-            "Please ensure all NVSwitches are properly detected and available."
-        )
+    elif len(gpus) == 8 and has_h200:
+        print('  PPCIe mode: enabled (8 GPUs, H200)')
     elif nvswitches:
         print(f'  Standard passthrough mode with {len(nvswitches)} NVSwitch(es)')
     else:
         print('  CC mode: enabled (standard configuration)')
 
-    prepare_gpus(gpus, nvswitches, gpu_device_ids)
+    prepare_gpus(gpus, nvswitches, gpu_models)
     cmd.extend(['-object', 'iommufd,id=iommufd0'])
+
+    # B200: no NVSwitch in VM (integrated CC fabric). H200: pass NVSwitches when PPCIe.
+    nvswitches_for_vm = [] if has_b200 else nvswitches
 
     port = 16
     slot = 0x5
@@ -652,7 +570,7 @@ def add_gpu_passthrough(cmd, gpus, nvswitches):
             ])
 
         # Get BAR size for this specific GPU
-        bar_size_mb = get_gpu_bar_size(gpu, gpu_device_ids)
+        bar_size_mb = get_gpu_bar_size(gpu, gpu_models)
 
         cmd.extend([
             '-device', f'vfio-pci,host={gpu},bus={rp_id},addr=0x0,iommufd=iommufd0',
@@ -664,10 +582,10 @@ def add_gpu_passthrough(cmd, gpus, nvswitches):
         if func == 0:
             slot += 1
 
-    if nvswitches:
-        print(f'  Adding {len(nvswitches)} NVSwitch(es) to PCI topology...')
+    if nvswitches_for_vm:
+        print(f'  Adding {len(nvswitches_for_vm)} NVSwitch(es) to PCI topology...')
 
-    for j, nvsw in enumerate(nvswitches):
+    for j, nvsw in enumerate(nvswitches_for_vm):
         rp_id = f'rp_nvsw{j+1}'
         chassis = len(gpus) + j + 1
 
@@ -692,7 +610,7 @@ def add_gpu_passthrough(cmd, gpus, nvswitches):
         func = (func + 1) % 8
         if func == 0:
             slot += 1
-    print(f'  GPU passthrough configured: {len(gpus)} GPU(s), {len(nvswitches)} NVSwitch(es)')
+    print(f'  GPU passthrough configured: {len(gpus)} GPU(s), {len(nvswitches_for_vm)} NVSwitch(es)')
 
 
 def build_network(cmd, args):
@@ -724,9 +642,6 @@ def do_run(img_path, pass_gpus, config_volume, cache_volume, storage_volume,
 
     print(f'Launching TDX VM: {vcpus} vCPUs, {mem} RAM')
     print(f'Image: {img_path}')
-
-    gpus = detect_nvidia_gpus() if pass_gpus else []
-    nvswitches = detect_nvswitches() if pass_gpus else []
 
     cpu_args = 'host' if ubuntu_version == '24.04' else 'host,-avx10'
 
@@ -781,8 +696,8 @@ def do_run(img_path, pass_gpus, config_volume, cache_volume, storage_volume,
 
     add_vsock(qemu_cmds)
 
-    if pass_gpus and gpus:
-        add_gpu_passthrough(qemu_cmds, gpus, nvswitches)
+    if pass_gpus:
+        add_gpu_passthrough(qemu_cmds)
 
     print('Launching QEMU...')
     subprocess.run(qemu_cmds, stderr=subprocess.STDOUT)
