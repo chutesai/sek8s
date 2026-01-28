@@ -22,9 +22,9 @@ volumes:
     size: "5000G"
     path: ""  # Auto-generate: cache-chutes-miner-prod-0.qcow2
   
-  containerd:
+  storage:
     size: "500G"
-    path: ""  # Auto-generate: containerd-chutes-miner-prod-0.qcow2
+    path: ""  # Auto-generate: storage-chutes-miner-prod-0.qcow2
   
   config:
     path: ""  # Auto-generate: config-chutes-miner-prod-0.qcow2

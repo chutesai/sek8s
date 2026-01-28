@@ -20,8 +20,8 @@ VM_DNS="8.8.8.8"
 PUBLIC_IFACE="ens9f0np0"
 CACHE_SIZE="5000G"
 CACHE_VOLUME=""
-CONTAINERD_SIZE="500G"
-CONTAINERD_VOLUME=""
+STORAGE_SIZE="500G"
+STORAGE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
@@ -41,8 +41,8 @@ CLI_VM_DNS=""
 CLI_PUBLIC_IFACE=""
 CLI_CACHE_SIZE=""
 CLI_CACHE_VOLUME=""
-CLI_CONTAINERD_SIZE=""
-CLI_CONTAINERD_VOLUME=""
+CLI_STORAGE_SIZE=""
+CLI_STORAGE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
@@ -69,8 +69,8 @@ while [[ $# -gt 0 ]]; do
     --public-iface) CLI_PUBLIC_IFACE="$2"; shift 2 ;;
     --cache-size) CLI_CACHE_SIZE="$2"; shift 2 ;;
     --cache-volume) CLI_CACHE_VOLUME="$2"; shift 2 ;;
-    --containerd-size) CLI_CONTAINERD_SIZE="$2"; shift 2 ;;
-    --containerd-volume) CLI_CONTAINERD_VOLUME="$2"; shift 2 ;;
+    --storage-size) CLI_STORAGE_SIZE="$2"; shift 2 ;;
+    --storage-volume) CLI_STORAGE_VOLUME="$2"; shift 2 ;;
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
@@ -142,8 +142,9 @@ Network:
 Volumes:
   --cache-size SIZE
   --cache-volume PATH
-  --containerd-size SIZE
-  --containerd-volume PATH
+  --storage-size SIZE
+  --storage-volume PATH
+  --config-volume PATH
   --skip-bind
 
 Runtime:
@@ -230,8 +231,8 @@ fi
 
 [[ -n "$CLI_CACHE_SIZE" ]] && CACHE_SIZE="$CLI_CACHE_SIZE"
 [[ -n "$CLI_CACHE_VOLUME" ]] && CACHE_VOLUME="$CLI_CACHE_VOLUME"
-[[ -n "$CLI_CONTAINERD_SIZE" ]] && CONTAINERD_SIZE="$CLI_CONTAINERD_SIZE"
-[[ -n "$CLI_CONTAINERD_VOLUME" ]] && CONTAINERD_VOLUME="$CLI_CONTAINERD_VOLUME"
+[[ -n "$CLI_STORAGE_SIZE" ]] && STORAGE_SIZE="$CLI_STORAGE_SIZE"
+[[ -n "$CLI_STORAGE_VOLUME" ]] && STORAGE_VOLUME="$CLI_STORAGE_VOLUME"
 [[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
@@ -268,8 +269,8 @@ if [[ -z "$CACHE_VOLUME" ]]; then
   CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
 fi
 
-if [[ -z "$CONTAINERD_VOLUME" ]]; then
-  CONTAINERD_VOLUME="containerd-${HOSTNAME}.qcow2"
+if [[ -z "$STORAGE_VOLUME" ]]; then
+  STORAGE_VOLUME="storage-${HOSTNAME}.qcow2"
 fi
 
 echo ""
@@ -280,7 +281,7 @@ echo "Image: $VM_IMAGE"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
-echo "Containerd volume: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
+echo "Storage volume: $STORAGE_VOLUME ($STORAGE_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Network: $NETWORK_TYPE"
 echo ""
@@ -352,22 +353,23 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Containerd cache volume (required for encrypted containerd storage)
+# Storage volume (required for VM storage - used for containerd and kubelet-pods)
 # --------------------------------------------------------------------
-echo "Step 3: Preparing containerd cache volume..."
-if [[ -z "$CONTAINERD_VOLUME" ]]; then
-  echo "✗ Error: CONTAINERD_VOLUME is unset"
+echo "Step 3: Preparing storage volume..."
+if [[ -z "$STORAGE_VOLUME" ]]; then
+  echo "✗ Error: STORAGE_VOLUME is unset"
+  echo "  Storage volume is required for VM storage (containerd and kubelet-pods)"
   exit 1
 fi
 
-if [[ -f "$CONTAINERD_VOLUME" ]]; then
-  echo "✓ Using existing containerd volume: $CONTAINERD_VOLUME"
+if [[ -f "$STORAGE_VOLUME" ]]; then
+  echo "✓ Using existing storage volume: $STORAGE_VOLUME"
 else
-  echo "Creating containerd volume at: $CONTAINERD_VOLUME ($CONTAINERD_SIZE)"
-  if sudo ./create-cache.sh "$CONTAINERD_VOLUME" "$CONTAINERD_SIZE" "storage"; then
-    echo "✓ Containerd volume created"
+  echo "Creating storage volume at: $STORAGE_VOLUME ($STORAGE_SIZE)"
+  if sudo ./create-cache.sh "$STORAGE_VOLUME" "$STORAGE_SIZE" "storage"; then
+    echo "✓ Storage volume created"
   else
-    echo "✗ Error: Failed to create containerd volume at $CONTAINERD_VOLUME"
+    echo "✗ Error: Failed to create storage volume at $STORAGE_VOLUME"
     exit 1
   fi
 fi
@@ -446,7 +448,7 @@ fi
 
 # Additional args
 LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
-LAUNCH_ARGS+=(--containerd-volume "$CONTAINERD_VOLUME")
+LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner

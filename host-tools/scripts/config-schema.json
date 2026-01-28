@@ -82,7 +82,7 @@
     },
     "volumes": {
       "type": "object",
-      "required": ["cache", "containerd"],
+      "required": ["cache", "storage"],
       "additionalProperties": false,
       "properties": {
         "cache": {
@@ -102,19 +102,19 @@
             }
           }
         },
-        "containerd": {
+        "storage": {
           "type": "object",
           "required": ["size"],
           "additionalProperties": false,
           "properties": {
             "size": {
               "type": "string",
-              "description": "Containerd cache volume size (e.g., 500G, 1T)",
+              "description": "Storage volume size for VM storage (used for containerd and kubelet-pods) (e.g., 500G, 1T)",
               "pattern": "^[0-9]+(K|M|G|T)$"
             },
             "path": {
               "type": "string",
-              "description": "Path to containerd cache volume. Empty string means auto-generate as containerd-<hostname>.qcow2",
+              "description": "Path to storage volume. Empty string means auto-generate as storage-<hostname>.qcow2",
               "default": ""
             }
           }

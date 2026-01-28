@@ -28,9 +28,9 @@ volumes:
     path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/cache-volume.qcow2)
   
   # Storage volume settings (required for VM storage - used for containerd and kubelet-pods)
-  containerd:
+  storage:
     size: "500G"
-    path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/storage.qcow2)
+    path: ""  # Leave empty to auto-generate (storage-<hostname>.qcow2) or specify path (/data/storage.qcow2)
   
   # Config volume settings  
   config:

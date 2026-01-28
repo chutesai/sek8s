@@ -92,10 +92,10 @@ def main():
     cache_size = cache_cfg.get('size', '5000G')
     cache_volume = cache_cfg.get('path', '')
     
-    # Containerd cache configuration
-    containerd_cfg = volumes.get('containerd', {})
-    containerd_size = containerd_cfg.get('size', '500G')
-    containerd_volume = containerd_cfg.get('path', '')
+    # Storage volume configuration (required for VM storage)
+    storage_cfg = volumes.get('storage', {})
+    storage_size = storage_cfg.get('size', '500G')
+    storage_volume = storage_cfg.get('path', '')
     
     config_volume = volumes.get('config', {}).get('path', '')
     
@@ -118,8 +118,8 @@ def main():
     print(f"SSH_PORT={shlex.quote(str(ssh_port))}")
     print(f"CACHE_SIZE={shlex.quote(cache_size)}")
     print(f"CACHE_VOLUME={shlex.quote(cache_volume)}")
-    print(f"CONTAINERD_SIZE={shlex.quote(containerd_size)}")
-    print(f"CONTAINERD_VOLUME={shlex.quote(containerd_volume)}")
+    print(f"STORAGE_SIZE={shlex.quote(storage_size)}")
+    print(f"STORAGE_VOLUME={shlex.quote(storage_volume)}")
     print(f"CONFIG_VOLUME={shlex.quote(config_volume)}")
     print(f"SKIP_BIND={'true' if not bind_devices else 'false'}")
     print(f"FOREGROUND={'true' if foreground else 'false'}")

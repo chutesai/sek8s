@@ -22,11 +22,11 @@ volumes:
     size: "500G"  # Smaller for debug
     path: ""  # Auto-generate: cache-chutes-miner-debug-0.qcow2
   
-  containerd:
+  storage:
     size: "100G"  # Smaller for debug
-    path: ""  # Auto-generate: containerd-chutes-miner-debug-0.qcow2
-    # Note: Debug VMs use UNENCRYPTED containerd cache
-    # Do not mix debug and production containerd volumes!
+    path: ""  # Auto-generate: storage-chutes-miner-debug-0.qcow2
+    # Note: Debug VMs use UNENCRYPTED storage volume
+    # Do not mix debug and production storage volumes!
   
   config:
     path: ""  # Auto-generate: config-chutes-miner-debug-0.qcow2
