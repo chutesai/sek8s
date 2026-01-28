@@ -485,13 +485,19 @@ def bind_devices_to_vfio(devices: list[str]):
 
 def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
     """Prepare GPUs and NVSwitches for passthrough.
-    
+
+    Order must match tdx/gpu-cc/h100/setup-gpus.sh: configure mode (CC/PPCIe)
+    with nvidia_gpu_tools before binding to vfio-pci. There are no nvidia
+    drivers on the host; binding to vfio-pci first would prevent the tools
+    from configuring the devices and can cause NVSwitches to be missing in
+    the VM.
+
     Handles:
+    - Setting GPU/NVSwitch mode (CC vs PPCIe) via nvidia_gpu_tools (before vfio bind)
     - Binding devices to vfio-pci (IOMMU groups)
-    - Setting GPU mode (CC vs PPCIe) based on GPU type and system config
     - Virsh device detachment
     - Udev rules setup
-    
+
     Args:
         gpus: List of GPU BDF addresses
         nvswitches: List of NVSwitch BDF addresses  
@@ -501,22 +507,15 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
     print('  Ensuring GPU admin tools are available...')
     nvidia_tools_cmd = ensure_gpu_tools_available()
     cmd_base = ['sudo', nvidia_tools_cmd]
-    
-    # Step 2: Bind devices to vfio-pci (IOMMU groups)
-    print('  Binding devices to vfio-pci...')
-    all_devices = gpus + nvswitches
-    bind_devices_to_vfio(all_devices)
-    
-    # Step 3: Determine if we're in PPCIe mode (8 GPUs + 4 NVSwitches for H200)
+
     total_gpus = len(gpus)
     is_ppcie_mode = (total_gpus == 8 and len(nvswitches) == 4)
-    
-    # Step 4: Configure NVSwitches FIRST if in PPCIe mode (matches setup-gpus.sh behavior)
+
+    # Step 2: Configure NVSwitches FIRST before binding to vfio (matches setup-gpus.sh)
     if is_ppcie_mode and nvswitches:
         print('  Configuring NVSwitches for PPCIe mode...')
         for nvsw in nvswitches:
             print(f'  Preparing NVSwitch {nvsw} for PPCIe')
-            # PPCIe mode: disable CC mode, then enable PPCIe mode
             subprocess.check_call(
                 cmd_base + ['--set-cc-mode=off', '--reset-after-cc-mode-switch', f'--gpu-bdf={nvsw}'],
                 stderr=subprocess.STDOUT
@@ -525,45 +524,45 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
                 cmd_base + ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch', f'--gpu-bdf={nvsw}'],
                 stderr=subprocess.STDOUT
             )
-    
-    # Step 5: Configure each GPU
+
+    # Step 3: Configure each GPU before binding to vfio (matches setup-gpus.sh)
     print('  Configuring GPUs...')
     for gpu in gpus:
         device_id = gpu_device_ids.get(gpu, '')
         model = detect_gpu_model(device_id)
-        
-        # Validate GPU model - we only support B200 and H200
+
         if model not in ['B200', 'H200']:
             raise ValueError(
                 f"Unsupported GPU model detected for GPU {gpu} (device ID: {device_id}). "
                 "Only B200 and H200 GPUs are supported."
             )
-        
-        # Get appropriate tool arguments for this GPU
+
         tool_args_list = get_gpu_tool_args(gpu, gpu_device_ids, nvswitches, total_gpus)
-        
-        # Determine mode for logging
+
         if model == 'B200':
             mode_str = 'CC mode (B200)'
         elif is_ppcie_mode:
             mode_str = 'PPCIe mode'
         else:
             mode_str = 'CC mode'
-        
+
         print(f'  Preparing GPU {gpu} ({model}) for {mode_str}')
-        
-        # Run each command in the tool args list
+
         for tool_args in tool_args_list:
             subprocess.check_call(
                 cmd_base + tool_args + [f'--gpu-bdf={gpu}'],
                 stderr=subprocess.STDOUT
             )
-        
-        # Step 6: Virsh binding for each GPU (matches setup-gpus.sh behavior)
-        # Convert BDF format: 0000:18:00.0 -> pci_0000_18_00_0
+
+    # Step 4: Bind devices to vfio-pci after configuration (order matches setup-gpus.sh)
+    print('  Binding devices to vfio-pci...')
+    all_devices = gpus + nvswitches
+    bind_devices_to_vfio(all_devices)
+
+    # Step 5: Virsh binding for each GPU (matches setup-gpus.sh behavior)
+    for gpu in gpus:
         virsh_gpu_bdf = gpu.replace(':', '_').replace('.', '_')
         print(f'  Binding GPU {gpu} to vfio-pci via virsh')
-        # Reattach first, then detach (matches setup-gpus.sh lines 132-133)
         subprocess.check_call(
             ['sudo', 'virsh', 'nodedev-reattach', f'pci_{virsh_gpu_bdf}'],
             stderr=subprocess.DEVNULL
@@ -572,8 +571,8 @@ def prepare_gpus(gpus, nvswitches, gpu_device_ids: dict[str, str]):
             ['sudo', 'virsh', 'nodedev-detach', f'pci_{virsh_gpu_bdf}'],
             stderr=subprocess.STDOUT
         )
-    
-    # Step 7: Setup udev rules once
+
+    # Step 6: Setup udev rules once
     udev_rules = f'{file_path}/vfio-passthrough.rules'
     if not os.path.exists(udev_rules):
         raise FileNotFoundError(
