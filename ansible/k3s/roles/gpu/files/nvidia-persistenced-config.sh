@@ -68,10 +68,6 @@ if have_nvswitch; then
     else
         REASON="NVSwitch fabric detected"
     fi
-    # Ensure fabricmanager is running when NVSwitches are present
-    log "Ensuring nvidia-fabricmanager is started"
-    systemctl unmask --runtime nvidia-fabricmanager || true
-    systemctl start nvidia-fabricmanager || log "Warning: Failed to start nvidia-fabricmanager"
 else
     MODE="persistence"
     REASON="No NVSwitch/NVLink device nodes detected; using standard persistence mode"
