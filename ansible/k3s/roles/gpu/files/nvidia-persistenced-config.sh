@@ -14,25 +14,13 @@ log() {
     logger -t "${LOG_TAG}" "${msg}" >/dev/null 2>&1 || true
 }
 
+# Detect NVSwitch via lspci (PCI device visible even when /dev/nvidia-nvswitch* nodes
+# are not created). Matches guest lspci output e.g. "Bridge [0680]: ... H100 NVSwitch [10de:22a3]".
 have_nvswitch() {
-    shopt -s nullglob
-    local devices=(
-        /dev/nvidia-nvswitch
-        /dev/nvidia-nvswitch[0-9]*
-        /dev/nvidia-nvlink
-        /dev/nvidia-nvlink[0-9]*
-    )
-
-    for dev in "${devices[@]}"; do
-        # Avoid matching control-only devices like nvidia-nvswitchctl
-        if [[ -e "${dev}" && "${dev}" != *ctl ]]; then
-            DETECTION_SOURCE="device:${dev}"
-            shopt -u nullglob
-            return 0
-        fi
-    done
-
-    shopt -u nullglob
+    if lspci -nn 2>/dev/null | grep -i nvidia | grep -qi nvswitch; then
+        DETECTION_SOURCE="lspci"
+        return 0
+    fi
     return 1
 }
 
@@ -45,7 +33,7 @@ if have_nvswitch; then
     fi
 else
     MODE="persistence"
-    REASON="No NVSwitch/NVLink device nodes detected; using standard persistence mode"
+    REASON="No NVSwitch PCI devices detected (lspci); using standard persistence mode"
 fi
 
 if [[ "${MODE}" == "uvm" ]]; then
