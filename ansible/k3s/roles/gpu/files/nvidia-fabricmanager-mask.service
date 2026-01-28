@@ -1,0 +1,15 @@
+[Unit]
+Description=Mask nvidia-fabricmanager when no NVSwitch devices are present
+Documentation=man:nvidia-smi(1)
+After=nvidia-persistenced-config.service
+Before=nvidia-fabricmanager.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvidia-fabricmanager-mask.sh
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

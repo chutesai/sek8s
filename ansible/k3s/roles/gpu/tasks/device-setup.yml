@@ -203,18 +203,44 @@
             enabled: true
             state: stopped
 
+        - name: Install nvidia-fabricmanager-mask script
+          ansible.builtin.copy:
+            src: nvidia-fabricmanager-mask.sh
+            dest: /usr/local/sbin/nvidia-fabricmanager-mask.sh
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install nvidia-fabricmanager-mask service
+          ansible.builtin.copy:
+            src: nvidia-fabricmanager-mask.service
+            dest: /etc/systemd/system/nvidia-fabricmanager-mask.service
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Enable nvidia-fabricmanager-mask service
+          ansible.builtin.systemd:
+            name: nvidia-fabricmanager-mask.service
+            enabled: true
+            state: stopped
+
+        - name: Reload systemd after installing nvidia-fabricmanager-mask
+          ansible.builtin.systemd:
+            daemon_reload: true
+
         - name: Create nvidia-fabricmanager override directory
           ansible.builtin.file:
             path: /etc/systemd/system/nvidia-fabricmanager.service.d
             state: directory
             mode: '0755'
 
-        - name: Add dependency on nvidia-persistenced-config for fabricmanager
+        - name: Add dependency on nvidia-fabricmanager-mask for fabricmanager
           ansible.builtin.copy:
             dest: /etc/systemd/system/nvidia-fabricmanager.service.d/dependency.conf
             content: |
               [Unit]
-              After=nvidia-persistenced-config.service
+              After=nvidia-persistenced-config.service nvidia-fabricmanager-mask.service
             mode: '0644'
 
         - name: Enable nvidia-persistenced for next boot

@@ -14,31 +14,6 @@ log() {
     logger -t "${LOG_TAG}" "${msg}" >/dev/null 2>&1 || true
 }
 
-# Wait for nvidia device to appear (PCIe passthrough devices may appear after udev-settle)
-# Give up to 60 seconds for devices to be ready
-log "Waiting for NVIDIA devices to appear..."
-for i in {1..60}; do
-    if [ -c /dev/nvidia0 ] || [ -c /dev/nvidiactl ]; then
-        log "NVIDIA devices detected after ${i}s wait"
-        break
-    fi
-    if [ $i -eq 60 ]; then
-        log "ERROR: NVIDIA devices not found (/dev/nvidia0 or /dev/nvidiactl) after 60s wait"
-        log "This service requires NVIDIA devices to be present"
-        exit 1
-    fi
-    sleep 1
-done
-
-# Verify device is present (double-check)
-if [ ! -c /dev/nvidia0 ] && [ ! -c /dev/nvidiactl ]; then
-    log "ERROR: NVIDIA devices not found (/dev/nvidia0 or /dev/nvidiactl)"
-    log "This service requires NVIDIA devices to be present"
-    exit 1
-fi
-
-log "NVIDIA devices confirmed, proceeding with configuration"
-
 have_nvswitch() {
     shopt -s nullglob
     local devices=(
@@ -71,10 +46,6 @@ if have_nvswitch; then
 else
     MODE="persistence"
     REASON="No NVSwitch/NVLink device nodes detected; using standard persistence mode"
-    # Disable fabricmanager if no NVSwitches are present to avoid errors
-    log "Stopping and masking nvidia-fabricmanager (no NVSwitches detected)"
-    systemctl stop nvidia-fabricmanager || true
-    systemctl mask --runtime nvidia-fabricmanager || true
 fi
 
 if [[ "${MODE}" == "uvm" ]]; then
