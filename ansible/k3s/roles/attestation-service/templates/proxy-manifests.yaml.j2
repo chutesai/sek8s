@@ -50,6 +50,30 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
 
 ---
+# Miner can get/list/watch/patch all deployments and daemonsets in all namespaces.
+# OPA restricts PATCH outside chutes to only spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"].
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: miner-rollout-restart
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "daemonsets"]
+  verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: miner-rollout-restart
+subjects:
+- kind: User
+  name: miner
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: miner-rollout-restart
+  apiGroup: rbac.authorization.k8s.io
+---
 # Secret containing allowed validator hotkeys
 apiVersion: v1
 kind: Secret

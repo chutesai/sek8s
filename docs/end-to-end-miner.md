@@ -196,6 +196,7 @@ You can still use `kubectl` from your workstation to spot-check pods, but day-to
 - **Logs** – Host-side QEMU output lives in `/tmp/tdx-guest-td.log`; Kubernetes events stay inside the guest (`kubectl get events -n chutes`).
 - **GPU recovery** – If passthrough fails, run `host-tools/scripts/reset-gpus.sh` followed by another launch (or use NVIDIA GPU admin tools per host README).
 - **Upgrades** – Swap in new guest images by replacing `guest-tools/image/tdx-guest.qcow2` or pointing `TD_IMG` elsewhere, then rerun quick-launch.
+- **Restart workloads** – The miner kubeconfig has get/list/watch/patch on all deployments and daemonsets in all namespaces (ClusterRole `miner-rollout-restart`). Outside the chutes namespace, the admission controller OPA policy allows only patches to `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]` (rollout restart). Example: `kubectl rollout restart daemonset/attestation-proxy -n attestation-system`.
 - **Security** – Protect the config volume—it holds the plain-text miner seed. Rotate it by rerunning `create-config.sh` with new credentials.
 
 ---
