@@ -223,6 +223,13 @@ class AdmissionConfig(ServerConfig):
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")
 
+    # Chutes namespace: path to cosign public key used to enforce signed images in chutes namespace
+    chutes_cosign_public_key_path: Optional[Path] = Field(
+        default=Path("/etc/admission-controller/cosign/cosign.pub"),
+        alias="CHUTES_COSIGN_PUBLIC_KEY_PATH",
+        description="Path to cosign public key for chutes namespace image signing enforcement",
+    )
+
     @field_validator("namespace_policies", mode="before")
     @classmethod
     def parse_namespace_policies(cls, v: Any) -> Dict[str, NamespacePolicy]:

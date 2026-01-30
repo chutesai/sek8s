@@ -3,8 +3,9 @@ import json
 import logging
 import re
 import time
-from typing import Dict, Tuple
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from cachetools import TTLCache
 
@@ -17,6 +18,28 @@ logger = logging.getLogger(__name__)
 
 class RateLimitError(Exception):
     """Raised when upstream registry signals rate limiting."""
+
+
+@dataclass
+class ValidationContext:
+    """Context passed to validation rules: config, request, and pre-extracted data.
+
+    required_key_path is set in _get_rules_for_context when the rule set needs it
+    (e.g. chutes namespace). Rules are generic and only read context; they are
+    not aware of namespace or rule-set identity.
+    """
+
+    config: AdmissionConfig
+    request: dict
+    namespace: str
+    images: List[str]
+    cosign_config: CosignConfig
+    validator: "CosignValidator"
+    required_key_path: Optional[Path] = None
+
+
+# Rule type: async (validator, ctx) -> list of violation strings (empty if none)
+Rule = Callable[["CosignValidator", ValidationContext], Awaitable[List[str]]]
 
 
 class CosignValidator(ValidatorBase):
@@ -42,8 +65,42 @@ class CosignValidator(ValidatorBase):
             ]
         ]
 
+    # Rule sets: properties returning lists of generic rules (class methods)
+    @property
+    def _chutes_rules(self) -> List[Rule]:
+        """Rule set for chutes namespace: require config, key, and verify."""
+        return [
+            self._require_cosign_config,
+            self._reject_disabled,
+            self._require_key_verification,
+            self._require_ctx_key,
+            self._verify_cosign_config,
+        ]
+
+    @property
+    def _default_rules(self) -> List[Rule]:
+        """Rule set for other namespaces: verify when config exists and not disabled."""
+        return [self._verify_cosign_config]
+
+    def _get_rules_for_context(self, ctx: ValidationContext) -> List[Rule]:
+        """Return the rule set to run for the given validation context.
+
+        Builds the union of rule sets for the context and deduplicates so rule sets
+        can overlap without running the same rule twice. Order of rules does not
+        affect the outcome (allow/deny or which violations are found), only the
+        order of messages in the denial string.
+        """
+        rules: set = set()
+        if ctx.namespace == "chutes":
+            ctx.required_key_path = self.config.chutes_cosign_public_key_path
+            rules.update(self._chutes_rules)
+
+        rules.update(self._default_rules)
+
+        return list(rules)
+
     async def validate(self, admission_review: Dict) -> ValidationResult:
-        """Validate that all container images have valid cosign signatures."""
+        """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
 
         # Only check pods and pod-creating resources
@@ -63,64 +120,143 @@ class CosignValidator(ValidatorBase):
         if operation == "DELETE":
             return ValidationResult.allow()
 
-        # Extract images
         obj = request.get("object", {})
         images = self.extract_images(obj)
+        namespace = request.get("namespace", "default")
 
         logger.debug(f"Found {len(images)} images for pod {obj.get('metadata', {}).get('name', 'Unknown')}")
 
         if not images:
             return ValidationResult.allow()
 
-        # Check each image
-        violations = []
-        seen = set()
-        for image in images:
+        # 1. Create validation context (required_key_path set in _get_rules_for_context when chutes)
+        ctx = ValidationContext(
+            config=self.config,
+            request=request,
+            namespace=namespace,
+            images=images,
+            cosign_config=self.cosign_config,
+            validator=self,
+        )
+        # 2. Get validation rules (based on context)
+        rules = self._get_rules_for_context(ctx)
+        # 3. Run rule set
+        violations: List[str] = []
+        for rule in rules:
+            try:
+                violations.extend(await rule(ctx))
+            except RateLimitError as e:
+                logger.warning(f"Rate limited: {e}")
+                violations.append(str(e))
+                break
+            except Exception as e:
+                logger.exception("Rule %s failed", getattr(rule, "__name__", rule))
+                violations.append(f"Verification failed: {str(e)}")
+        # 4. Return validation result
+        if violations:
+            return ValidationResult.deny("; ".join(violations))
+        return ValidationResult.allow()
+
+    # -------------------------------------------------------------------------
+    # Generic rules: operate only on context; no namespace or rule-set awareness
+    # -------------------------------------------------------------------------
+
+    async def _require_cosign_config(self, ctx: ValidationContext) -> List[str]:
+        """Report any image that has no cosign configuration (used in rule sets that require config for all images)."""
+        violations: List[str] = []
+        seen: set = set()
+        for image in ctx.images:
             if image in seen:
                 continue
             seen.add(image)
+            registry, org, repo, _ = ctx.validator._parse_image_reference(image)
+            vc = ctx.cosign_config.get_verification_config(registry, org, repo)
+            if not vc:
+                violations.append(f"Image {image} has no cosign configuration")
+        return violations
+
+    async def _reject_disabled(self, ctx: ValidationContext) -> List[str]:
+        """Report any image that has verification disabled (used in rule sets that require verification)."""
+        violations: List[str] = []
+        seen: set = set()
+        for image in ctx.images:
+            if image in seen:
+                continue
+            seen.add(image)
+            registry, org, repo, _ = ctx.validator._parse_image_reference(image)
+            vc = ctx.cosign_config.get_verification_config(registry, org, repo)
+            if vc and (
+                vc.verification_method == "disabled" or not vc.require_signature
+            ):
+                violations.append(f"Image {image} has verification disabled")
+        return violations
+
+    async def _require_key_verification(self, ctx: ValidationContext) -> List[str]:
+        """Report any image not using key-based verification (used in rule sets that require a key)."""
+        violations: List[str] = []
+        seen: set = set()
+        for image in ctx.images:
+            if image in seen:
+                continue
+            seen.add(image)
+            registry, org, repo, _ = ctx.validator._parse_image_reference(image)
+            vc = ctx.cosign_config.get_verification_config(registry, org, repo)
+            if vc and (
+                vc.verification_method != "key" or vc.public_key is None
+            ):
+                violations.append(f"Image {image} must use key-based verification")
+        return violations
+
+    async def _require_ctx_key(self, ctx: ValidationContext) -> List[str]:
+        """Report any image whose cosign key path does not match ctx.required_key_path. Raises if required_key_path is not set."""
+        if not ctx.required_key_path:
+            raise RuntimeError(
+                f"You can not use the require context key rule without providing a key path.\n"
+                f"{ctx.namespace=} {ctx.required_key_path=} {ctx.images=}"
+            )
+        violations: List[str] = []
+        seen: set = set()
+        for image in ctx.images:
+            if image in seen:
+                continue
+            seen.add(image)
+            registry, org, repo, _ = ctx.validator._parse_image_reference(image)
+            vc = ctx.cosign_config.get_verification_config(registry, org, repo)
+            if vc and vc.public_key is not None and str(vc.public_key) != str(ctx.required_key_path):
+                violations.append(f"Image {image} uses a different cosign key")
+        return violations
+
+    async def _verify_cosign_config(self, ctx: ValidationContext) -> List[str]:
+        """Verify signatures for images that have verification config enabled; skip images with no config or verification disabled."""
+        violations: List[str] = []
+        seen: set = set()
+        for image in ctx.images:
+            if image in seen:
+                continue
+            seen.add(image)
+            registry, org, repo, _ = ctx.validator._parse_image_reference(image)
+            logger.debug(f"Parsed image {image} -> registry={registry}, org={org}, repo={repo}")
+            vc = ctx.cosign_config.get_verification_config(registry, org, repo)
+            if not vc:
+                logger.warning(
+                    f"No cosign configuration found for {registry}/{org}/{repo}, skipping verification"
+                )
+                continue
+            if vc.verification_method == "disabled" or not vc.require_signature:
+                logger.debug(f"Signature verification disabled for {registry}/{org}/{repo}")
+                continue
             try:
-                # Parse image reference into components
-                registry, org, repo, tag = self._parse_image_reference(image)
-                
-                logger.debug(f"Parsed image {image} -> registry={registry}, org={org}, repo={repo}, tag={tag}")
-
-                # Get the most specific cosign configuration
-                verification_config = self.cosign_config.get_verification_config(registry, org, repo)
-
-                if not verification_config:
-                    logger.warning(
-                        f"No cosign configuration found for {registry}/{org}/{repo}, skipping verification"
-                    )
-                    continue
-
-                # Skip verification if disabled
-                if (
-                    verification_config.verification_method == "disabled"
-                    or not verification_config.require_signature
-                ):
-                    logger.debug(f"Signature verification disabled for {registry}/{org}/{repo}")
-                    continue
-
-                # Verify the image signature
-                is_valid = await self._verify_image_signature(image, verification_config)
+                is_valid = await ctx.validator._verify_image_signature(image, vc)
                 if not is_valid:
                     violations.append(
                         f"Image {image} has invalid or missing signature (registry: {registry}, org: {org})"
                     )
-
-            except RateLimitError as e:
-                logger.warning(f"Rate limited while verifying {image}: {e}")
-                violations.append(str(e))
-                break  # Avoid hammering upstream during a known backoff window
+            except RateLimitError:
+                raise
             except Exception as e:
                 logger.error(f"Error verifying image {image}: {e}")
                 violations.append(f"Verification failed for {image}: {str(e)}")
-
-        if violations:
-            return ValidationResult.deny("; ".join(violations))
-        else:
-            return ValidationResult.allow()
+        return violations
 
     def _parse_image_reference(self, image: str) -> tuple[str, str, str, str]:
         """
@@ -319,7 +455,7 @@ class CosignValidator(ValidatorBase):
             return False
 
     async def _resolve_image_reference(self, image: str) -> str:
-        """Resolve image tag to digest if necessary."""
+        """Resolve image reference to digest if possible; return as-is if already a digest or if resolution fails."""
         # If image already has digest, return as-is
         if "@" in image:
             return image
@@ -370,7 +506,7 @@ class CosignValidator(ValidatorBase):
         return any(p.search(combined) for p in self._rate_limit_patterns)
 
     def _record_rate_limit(self):
-        """Back off for a configured period after a rate-limit signal."""
+        """Record rate-limit and set backoff until time so verification is paused for the configured period."""
         self._rate_limit_until = time.time() + self.cosign_config.rate_limit_backoff_seconds
 
     def _rate_limit_message(self) -> str:
@@ -385,7 +521,7 @@ class CosignValidator(ValidatorBase):
     def _make_cache_key(
         self, resolved_image: str, verification_config: CosignVerificationConfig
     ) -> tuple:
-        """Create a cache key that accounts for image digest and verification config."""
+        """Create a cache key from the resolved image reference and verification config."""
         return (
             resolved_image,
             verification_config.verification_method,
