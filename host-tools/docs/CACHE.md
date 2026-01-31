@@ -2,7 +2,7 @@
 
 This guide explains how to create and prepare an unencrypted cache volume for use with TDX VMs. The cache volume will be mounted at `/var/snap` in the guest VM to provide additional storage separate from the encrypted root volume.
 
-By default, the guest keeps only the k3s **containerd** data under `/var/snap/containerd` (bind-mounted into `/var/lib/rancher/k3s/agent/containerd`) and the **Chutes agent state** under `/var/snap/chutes-agent` (bind-mounted into `/var/lib/chutes/agent`). This keeps Kubernetes secrets and etcd data on the encrypted root disk while still offloading heavy image layers and miner cache data. Additional application caches can live under sibling paths (for example `/var/snap/cache` for model weights).
+By default, the guest uses two volumes: **main storage** (mounted at `/cache/storage`) and **HF cache** (mounted at `/var/snap`). Main storage holds k3s **containerd** data, **kubelet-pods**, and **Chutes agent state** under `/cache/storage/containerd`, `/cache/storage/kubelet-pods`, and `/cache/storage/chutes-agent`; these are bind-mounted into `/var/lib/rancher/k3s/agent/containerd`, `/var/lib/kubelet/pods`, and `/var/lib/chutes/agent` by `setup-storage-bind-mounts.service`. The HF cache at `/var/snap` is used for application caches (for example `/var/snap/cache` for model weights). The guest runs `setup-cache.service` after the HF cache is mounted; it creates `/var/snap/cache` with ownership `1000:1000` and mode `755` so pods can use it without running as root. Agent state and its bind mount are created and set to `1000:1000`/`755` by `setup-storage-bind-mounts` on main storage.
 
 ## Prerequisites
 

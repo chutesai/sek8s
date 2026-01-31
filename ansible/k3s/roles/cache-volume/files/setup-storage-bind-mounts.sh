@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-storage-bind-mounts.sh - Set up bind mounts for containerd and kubelet-pods on storage volume
+# setup-storage-bind-mounts.sh - Set up bind mounts for containerd, kubelet-pods, and Chutes agent on storage volume
 set -euo pipefail
 
 LOG_TAG="setup-storage-bind-mounts"
@@ -9,12 +9,17 @@ log() {
     logger -t "$LOG_TAG" "$1" 2>/dev/null || true
 }
 
+# UID:GID for pod/container access (must match runAsUser/runAsGroup in pod spec)
+STORAGE_OWNER="1000:1000"
+
 # Storage volume mount point (same for both production and debug VMs)
 STORAGE_BASE="/cache/storage"
 CONTAINERD_SOURCE="${STORAGE_BASE}/containerd"
 KUBELET_PODS_SOURCE="${STORAGE_BASE}/kubelet-pods"
+CHUTES_AGENT_SOURCE="${STORAGE_BASE}/chutes-agent"
 CONTAINERD_TARGET="/var/lib/rancher/k3s/agent/containerd"
 KUBELET_PODS_TARGET="/var/lib/kubelet/pods"
+CHUTES_AGENT_TARGET="/var/lib/chutes/agent"
 
 # Ensure storage volume is mounted
 if ! mountpoint -q "$STORAGE_BASE"; then
@@ -66,6 +71,28 @@ else
         log "Kubelet pods bind mount created successfully"
     else
         log "ERROR: Failed to create kubelet pods bind mount"
+        exit 1
+    fi
+fi
+
+# Chutes agent on storage: create dir with pod-friendly permissions, then bind mount
+mkdir -p "$CHUTES_AGENT_SOURCE"
+chown -R "$STORAGE_OWNER" "$CHUTES_AGENT_SOURCE"
+chmod -R 755 "$CHUTES_AGENT_SOURCE"
+mkdir -p /var/lib/chutes
+mkdir -p "$CHUTES_AGENT_TARGET"
+if mountpoint -q "$CHUTES_AGENT_TARGET"; then
+    if [ "$(stat -c %d "$CHUTES_AGENT_TARGET")" = "$(stat -c %d "$CHUTES_AGENT_SOURCE")" ]; then
+        log "Chutes agent bind mount already correctly configured"
+    else
+        log "WARNING: Chutes agent target is mounted but not our bind mount. Skipping."
+    fi
+else
+    log "Creating bind mount: $CHUTES_AGENT_SOURCE -> $CHUTES_AGENT_TARGET"
+    if mount --bind "$CHUTES_AGENT_SOURCE" "$CHUTES_AGENT_TARGET"; then
+        log "Chutes agent bind mount created successfully"
+    else
+        log "ERROR: Failed to create Chutes agent bind mount"
         exit 1
     fi
 fi
