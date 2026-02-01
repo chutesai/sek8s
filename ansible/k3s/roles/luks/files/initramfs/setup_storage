@@ -9,12 +9,17 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
+# Volume config: label is used for device detection and as API volume name; LUKS name defaults to label
 STORAGE_LABEL="${STORAGE_LABEL:-storage}"
-STORAGE_LUKS_NAME="storage"
+STORAGE_LUKS_NAME="${STORAGE_LUKS_NAME:-$STORAGE_LABEL}"
+CACHE_LABEL="${CACHE_LABEL:-tdx-cache}"
+CACHE_LUKS_NAME="${CACHE_LUKS_NAME:-$CACHE_LABEL}"
 
 # Global variables
 STORAGE_DEVICE=""
 STORAGE_KEY=""
+CACHE_DEVICE=""
+CACHE_KEY=""
 VM_NAME=""
 HOTKEY=""
 BOOT_TOKEN=""
@@ -28,13 +33,19 @@ clear_sensitive_data() {
         unset STORAGE_KEY
     fi
     
+    if [ -n "$CACHE_KEY" ]; then
+        CACHE_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        CACHE_KEY=""
+        unset CACHE_KEY
+    fi
+    
     if [ -n "$BOOT_TOKEN" ]; then
         BOOT_TOKEN="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
         BOOT_TOKEN=""
         unset BOOT_TOKEN
     fi
     
-    rm -f /tmp/storage_response
+    rm -f /tmp/storage_response /tmp/luks_response
     
     # If script exits without success flag, shutdown the VM
     if [ "$SUCCESS_FLAG" -ne 1 ]; then
@@ -127,11 +138,49 @@ detect_storage_device() {
     return 0
 }
 
-# Function to retrieve existing storage key (GET) for encrypted devices
-get_storage_key() {
-    local response_file="/tmp/storage_response"
+# Function to detect cache device by label (required for VM - power off if not found)
+detect_cache_device() {
+    log_begin_msg "Detecting cache device by label: $CACHE_LABEL"
     
-    # Validate required configuration
+    # Cache device is required; no extra wait (storage already waited)
+    CACHE_DEVICE=$(blkid -l -o device -t LABEL="$CACHE_LABEL" 2>/dev/null)
+    
+    if [ -z "$CACHE_DEVICE" ]; then
+        log_begin_msg "Filesystem label not found, checking for LUKS devices with cache label"
+        for dev in $(blkid -o device 2>/dev/null); do
+            [ -b "$dev" ] || continue
+            if cryptsetup isLuks "$dev" 2>/dev/null; then
+                luks_label=$(cryptsetup luksDump "$dev" 2>/dev/null | grep -E "^Label:" | sed 's/^Label:[[:space:]]*//')
+                if [ "$luks_label" = "$CACHE_LABEL" ]; then
+                    CACHE_DEVICE="$dev"
+                    log_success_msg "Found LUKS cache device: $CACHE_DEVICE"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    if [ -z "$CACHE_DEVICE" ]; then
+        log_failure_msg "No device found with label '$CACHE_LABEL' - cache is required for VM"
+        return 1
+    fi
+    
+    if [ ! -b "$CACHE_DEVICE" ]; then
+        log_failure_msg "Device $CACHE_DEVICE is not a block device"
+        return 1
+    fi
+    
+    log_success_msg "Found cache device: $CACHE_DEVICE"
+    return 0
+}
+
+# Function to sync LUKS keys (POST) - sync state; rekey = volume labels that need new passphrases (not LUKS)
+# Body: volumes and rekey use labels. Response: keys keyed by label.
+post_sync_keys() {
+    local response_file="/tmp/luks_response"
+    local rekey_json="$1"
+    local volumes_json="\"${STORAGE_LABEL}\",\"${CACHE_LABEL}\""
+    
     if [ -z "$TDX_LUKS_ENDPOINT" ]; then
         log_failure_msg "TDX_LUKS_ENDPOINT not configured in /etc/tdx-luks.conf"
         return 1
@@ -140,169 +189,144 @@ get_storage_key() {
     local luks_endpoint="$TDX_LUKS_ENDPOINT"
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
-    
-    # Substitute vm_name in endpoint URL
     local endpoint_url="$(echo "$luks_endpoint" | sed "s/vm_name/$VM_NAME/g")"
-    # Add query parameters for GET
     endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
-    log_begin_msg "Retrieving existing storage key from $endpoint_url"
+    log_begin_msg "POST LUKS sync (volumes=${STORAGE_LABEL},${CACHE_LABEL}, rekey=$rekey_json)"
     
-    # GET request with boot token in X-Boot-Token header
     http_code=$(curl -s -w "%{http_code}" \
-        -X GET \
+        -X POST \
         -H "X-Boot-Token: $BOOT_TOKEN" \
         -H "User-Agent: TDX-LUKS-Storage/1.0" \
+        -H "Content-Type: application/json" \
         --max-time "$timeout" \
         --retry 0 \
         --cacert "$ca_cert" \
+        -d "{\"volumes\":[${volumes_json}],\"sync\":true,\"rekey\":$rekey_json}" \
         -o "$response_file" \
         "$endpoint_url")
     
-    if [ "$http_code" = "200" ]; then
-        STORAGE_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
-        
-        if [ -n "$STORAGE_KEY" ]; then
-            rm -f "$response_file"
-            log_success_msg "Storage key retrieved"
-            return 0
-        fi
-    fi
-    
-    rm -f "$response_file"
-    log_failure_msg "Failed to get storage key (HTTP $http_code)"
-    return 1
-}
-
-# Function to store new storage key (PUT) for unencrypted devices (first boot)
-put_storage_key() {
-    local response_file="/tmp/storage_response"
-    
-    # Validate required configuration
-    if [ -z "$TDX_LUKS_ENDPOINT" ]; then
-        log_failure_msg "TDX_LUKS_ENDPOINT not configured in /etc/tdx-luks.conf"
+    if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
+        rm -f "$response_file"
+        log_failure_msg "POST LUKS sync failed (HTTP $http_code)"
         return 1
     fi
     
-    local luks_endpoint="$TDX_LUKS_ENDPOINT"
-    local timeout="${TDX_TIMEOUT:-30}"
-    local ca_cert="/etc/ssl/certs/ca-certificates.crt"
-    
-    # Substitute vm_name in endpoint URL
-    local endpoint_url="$(echo "$luks_endpoint" | sed "s/vm_name/$VM_NAME/g")"
-    # Add query parameters for PUT
-    endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
-    
-    log_begin_msg "Requesting new storage key from $endpoint_url"
-    
-    # PUT request - validator generates and returns new key, boot token in header
-    http_code=$(curl -s -w "%{http_code}" \
-        -X PUT \
-        -H "X-Boot-Token: $BOOT_TOKEN" \
-        -H "User-Agent: TDX-LUKS-Storage/1.0" \
-        --max-time "$timeout" \
-        --retry 0 \
-        --cacert "$ca_cert" \
-        -o "$response_file" \
-        "$endpoint_url")
-    
-    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-        STORAGE_KEY=$(grep -o '"passphrase":"[^"]*"' "$response_file" | cut -d'"' -f4)
-        
-        if [ -n "$STORAGE_KEY" ]; then
-            rm -f "$response_file"
-            log_success_msg "Received new storage key from validator"
-            return 0
-        fi
-    fi
+    # Parse response by label (API returns keys keyed by volume name = label)
+    STORAGE_KEY=$(grep -o "\"${STORAGE_LABEL}\":\"[^\"]*\"" "$response_file" 2>/dev/null | head -1 | cut -d'"' -f4)
+    CACHE_KEY=$(grep -o "\"${CACHE_LABEL}\":\"[^\"]*\"" "$response_file" 2>/dev/null | head -1 | cut -d'"' -f4)
     
     rm -f "$response_file"
-    log_failure_msg "Failed to get new storage key (HTTP $http_code)"
-    return 1
+    if [ -z "$STORAGE_KEY" ] || [ -z "$CACHE_KEY" ]; then
+        log_failure_msg "POST LUKS sync response missing key for ${STORAGE_LABEL} or ${CACHE_LABEL}"
+        return 1
+    fi
+    log_success_msg "POST LUKS sync completed"
+    return 0
 }
 
-# Function to setup storage device
+# Function to setup storage device (uses STORAGE_KEY from post_sync_keys)
 setup_storage() {
     local is_encrypted=false
     
-    # Check if device is LUKS encrypted
     if cryptsetup isLuks "$STORAGE_DEVICE" 2>/dev/null; then
         is_encrypted=true
         log_begin_msg "Storage device is LUKS encrypted"
     else
-        log_begin_msg "Storage device is NOT encrypted (first boot or debug mode)"
+        log_begin_msg "Storage device is NOT encrypted (first boot)"
     fi
     
-    # Validate boot token exists
     if [ -z "$BOOT_TOKEN" ]; then
         log_failure_msg "No boot token available"
         return 1
     fi
     
-    # Now encrypt or unlock the device
     if [ "$is_encrypted" = "true" ]; then
-        # GET existing key for encrypted device
-        if ! get_storage_key; then
-            log_failure_msg "Failed to retrieve existing storage key"
+        if [ -z "$STORAGE_KEY" ]; then
+            log_failure_msg "No storage key available for unlock"
             return 1
         fi
-        
-        # Unlock existing encrypted device
         log_begin_msg "Unlocking storage"
-        
         if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=-; then
             log_failure_msg "Failed to unlock storage"
             return 1
         fi
-        
         log_success_msg "Storage unlocked"
     else
-        # First boot: Request new key from validator, wipe, restore label, encrypt
         log_begin_msg "Encrypting storage (first boot)"
-        
-        # PUT request to validator to generate/return new key (create or overwrite if old storage was recreated)
-        if ! put_storage_key; then
-            log_failure_msg "Failed to get new storage key from validator"
-            return 1
-        fi
-        
         if [ -z "$STORAGE_KEY" ]; then
-            log_failure_msg "Validator returned empty storage key"
+            log_failure_msg "No storage key available for encryption"
             return 1
         fi
-        
-        # SECURITY: Wipe device
-        log_begin_msg "Wiping device..."
         wipefs -a "$STORAGE_DEVICE" 2>/dev/null || true
         dd if=/dev/zero of="$STORAGE_DEVICE" bs=1M count=10 2>/dev/null || true
-        
-        # SECURITY: Wipe any old LUKS header
-        log_begin_msg "Wiping old LUKS header if present..."
         cryptsetup erase "$STORAGE_DEVICE" 2>/dev/null || true
-        
-        # Create LUKS container with subsystem label for detection on subsequent boots
         log_begin_msg "Creating LUKS container with label..."
         if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksFormat --type luks2 --label "$STORAGE_LABEL" "$STORAGE_DEVICE" --key-file=-; then
             log_failure_msg "Failed to create LUKS container"
             return 1
         fi
-        
-        # Open encrypted device
         if ! printf '%s' "$STORAGE_KEY" | cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=-; then
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
-        
-        # Format with ext4 and label
         log_begin_msg "Formatting storage..."
         if ! mkfs.ext4 -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
             log_failure_msg "Failed to format storage"
             return 1
         fi
-        
         log_success_msg "Storage encrypted and formatted"
     fi
+    return 0
+}
+
+# Function to setup cache device (uses CACHE_KEY from post_sync_keys)
+setup_cache() {
+    local is_encrypted=false
     
+    if cryptsetup isLuks "$CACHE_DEVICE" 2>/dev/null; then
+        is_encrypted=true
+        log_begin_msg "Cache device is LUKS encrypted"
+    else
+        log_begin_msg "Cache device is NOT encrypted (first boot)"
+    fi
+    
+    if [ "$is_encrypted" = "true" ]; then
+        if [ -z "$CACHE_KEY" ]; then
+            log_failure_msg "No cache key available for unlock"
+            return 1
+        fi
+        log_begin_msg "Unlocking cache"
+        if ! printf '%s' "$CACHE_KEY" | cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" --key-file=-; then
+            log_failure_msg "Failed to unlock cache"
+            return 1
+        fi
+        log_success_msg "Cache unlocked"
+    else
+        log_begin_msg "Encrypting cache (first boot)"
+        if [ -z "$CACHE_KEY" ]; then
+            log_failure_msg "No cache key available for encryption"
+            return 1
+        fi
+        wipefs -a "$CACHE_DEVICE" 2>/dev/null || true
+        dd if=/dev/zero of="$CACHE_DEVICE" bs=1M count=10 2>/dev/null || true
+        cryptsetup erase "$CACHE_DEVICE" 2>/dev/null || true
+        log_begin_msg "Creating LUKS cache container with label..."
+        if ! printf '%s' "$CACHE_KEY" | cryptsetup luksFormat --type luks2 --label "$CACHE_LABEL" "$CACHE_DEVICE" --key-file=-; then
+            log_failure_msg "Failed to create LUKS cache container"
+            return 1
+        fi
+        if ! printf '%s' "$CACHE_KEY" | cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" --key-file=-; then
+            log_failure_msg "Failed to open LUKS cache container"
+            return 1
+        fi
+        log_begin_msg "Formatting cache..."
+        if ! mkfs.ext4 -L "$CACHE_LABEL" "/dev/mapper/$CACHE_LUKS_NAME"; then
+            log_failure_msg "Failed to format cache"
+            return 1
+        fi
+        log_success_msg "Cache encrypted and formatted"
+    fi
     return 0
 }
 
@@ -328,31 +352,55 @@ handle_failure() {
 
 # Main execution
 main() {
-    # Load VM ID and boot token from /run
     if ! load_vm_data; then
         handle_failure "Cannot proceed without VM ID"
         return 1
     fi
     
-    # Detect storage device
     if ! detect_storage_device; then
         handle_failure "No storage device found"
         return 1
     fi
     
-    # Setup (encrypt or unlock) storage
+    # Cache device is required for the VM - power off if not found
+    if ! detect_cache_device; then
+        handle_failure "Cache device not found (required for VM)"
+        return 1
+    fi
+    
+    # Build rekey list: volume labels whose device is not LUKS (first boot or recreated)
+    rekey_json="["
+    first=1
+    if ! cryptsetup isLuks "$STORAGE_DEVICE" 2>/dev/null; then
+        rekey_json="${rekey_json}\"${STORAGE_LABEL}\""
+        first=0
+    fi
+    if ! cryptsetup isLuks "$CACHE_DEVICE" 2>/dev/null; then
+        [ "$first" -eq 0 ] && rekey_json="${rekey_json},"
+        rekey_json="${rekey_json}\"${CACHE_LABEL}\""
+        first=0
+    fi
+    rekey_json="${rekey_json}]"
+    
+    # POST sync: always call; API returns passphrases for all volumes (new for rekey, existing for others)
+    if ! post_sync_keys "$rekey_json"; then
+        handle_failure "POST LUKS sync failed"
+        return 1
+    fi
+    
     if ! setup_storage; then
         handle_failure "Failed to setup storage"
         return 1
     fi
     
-    # Mark as successful before cleanup
+    if ! setup_cache; then
+        handle_failure "Failed to setup cache"
+        return 1
+    fi
+    
     SUCCESS_FLAG=1
-    
-    # Clear all sensitive data
     clear_sensitive_data
-    
-    log_success_msg "Storage setup completed successfully"
+    log_success_msg "Storage and cache setup completed successfully"
     return 0
 }
 

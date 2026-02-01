@@ -28,7 +28,25 @@
         owner: root
         group: root
 
-    - name: Copy cache volume verification script
+    - name: Copy cache device verification script (pre-mount: device exists)
+      copy:
+        src: "{{ files_dir }}/verify-cache-device.sh"
+        dest: /usr/local/bin/verify-cache-device.sh
+        mode: '0755'
+        owner: root
+        group: root
+      register: verify_cache_device_script
+
+    - name: Template verify cache device service
+      template:
+        src: verify-cache-device.service.j2
+        dest: /etc/systemd/system/verify-cache-device.service
+        mode: '0644'
+        owner: root
+        group: root
+      register: verify_cache_device_service
+
+    - name: Copy cache volume verification script (post-mount: encryption state)
       copy:
         src: "{{ files_dir }}/verify-cache-volume.sh"
         dest: /usr/local/bin/verify-cache-volume.sh
@@ -37,18 +55,18 @@
         group: root
       register: verify_script
 
-    - name: Copy verification service unit
-      copy:
-        src: "{{ files_dir }}/verify-cache-volume.service"
+    - name: Template verify cache volume service
+      template:
+        src: verify-cache-volume.service.j2
         dest: /etc/systemd/system/verify-cache-volume.service
         mode: '0644'
         owner: root
         group: root
       register: verify_service
 
-    - name: Copy mount unit
-      copy:
-        src: "{{ files_dir }}/var-snap.mount"
+    - name: Template var-snap mount unit
+      template:
+        src: var-snap.mount.j2
         dest: /etc/systemd/system/var-snap.mount
         mode: '0644'
         owner: root
@@ -192,6 +210,14 @@
 
     # setup-cache.service sets /var/snap/cache permissions at boot; setup-storage-bind-mounts creates agent dir and bind mount on main storage
 
+    - name: Enable verify-cache-device.service (but do not start)
+      systemd:
+        name: verify-cache-device.service
+        enabled: yes
+        state: stopped
+        daemon_reload: yes
+      failed_when: false
+
     - name: Enable verify-cache-volume.service (but do not start)
       systemd:
         name: verify-cache-volume.service
@@ -252,10 +278,10 @@
       failed_when: false
 
     - name: Verify installation
-      command: systemctl is-enabled verify-cache-volume.service
+      command: systemctl is-enabled verify-cache-device.service verify-cache-volume.service
       register: service_status
       changed_when: false
-      failed_when: service_status.stdout != "enabled"
+      failed_when: service_status.rc != 0
 
     - name: Verify mount unit installation
       command: systemctl is-enabled var-snap.mount

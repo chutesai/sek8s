@@ -1,0 +1,20 @@
+[Unit]
+Description=Verify cache device exists before mounting
+Documentation=man:systemd.service(5)
+After=local-fs-pre.target
+Before=var-snap.mount
+Before=k3s.service
+Before=k3s-agent.service
+OnFailure=poweroff.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+Environment="DEBUG_MODE={{ 'true' if debug_build | default(false) else 'false' }}"
+ExecStart=/usr/local/bin/verify-cache-device.sh
+
+[Install]
+WantedBy=local-fs.target

@@ -142,14 +142,10 @@ Once the cache volume is prepared, pass it to the TDX launch script:
 
 ## Verification at Boot
 
-The TDX VM will automatically verify the cache volume during boot:
+- **Production:** The initramfs script `setup_storage` detects the cache device by label `tdx-cache` (or LUKS label). If the cache device is **not found**, the VM **powers off** (cache is required). If found, it is unlocked (or on first boot encrypted) to `/dev/mapper/tdx-cache`. After boot, `var-snap.mount` mounts it at `/var/snap`, then `verify-cache-volume.service` runs and confirms the mount is from a LUKS dm-crypt device.
+- **Debug:** The cache volume is expected unencrypted with label `tdx-cache`. `var-snap.mount` mounts `/dev/disk/by-label/tdx-cache` at `/var/snap`. `verify-cache-volume.service` runs after mount and confirms the device is unencrypted with the correct label.
 
-1. **Device check**: Confirms `/dev/vdb` exists
-2. **Filesystem check**: Confirms the filesystem is ext4
-3. **Label check**: Confirms the label is exactly `tdx-cache`
-4. **Mount check**: Mounts to `/var/snap`
-
-**If any check fails, the VM will immediately shut down.** Check the serial log for error details:
+**If the cache device is missing or verification fails, the VM will shut down.** Check the serial log for error details:
 
 ```bash
 ./run-tdx.sh --status
@@ -226,8 +222,8 @@ sudo qemu-nbd --disconnect /dev/nbd0
 
 ## Security Considerations
 
-- **Unencrypted**: The cache volume is NOT encrypted. Only store non-sensitive data.
-- **Host access**: The host machine can read the cache volume contents.
+- **Production**: The cache volume is LUKS-encrypted; passphrases are managed by the same API as main storage (separate passphrases per volume). **Debug**: The cache is unencrypted; only store non-sensitive data.
+- **Host access**: The host can read unencrypted (debug) cache contents; production cache is encrypted.
 - **Integrity**: Consider storing checksums of critical data to detect tampering.
 - **Isolation**: Keep cache volumes separate per VM to prevent cross-contamination.
 
