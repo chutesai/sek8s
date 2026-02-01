@@ -190,13 +190,13 @@ post_sync_keys() {
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
     local endpoint_url="$(echo "$luks_endpoint" | sed "s/vm_name/$VM_NAME/g")"
-    endpoint_url="${endpoint_url}?hotkey=$(printf '%s' "$HOTKEY" | sed 's/ /%20/g')"
     
     log_begin_msg "POST LUKS sync (volumes=${STORAGE_LABEL},${CACHE_LABEL}, rekey=$rekey_json)"
     
     http_code=$(curl -s -w "%{http_code}" \
         -X POST \
         -H "X-Boot-Token: $BOOT_TOKEN" \
+        -H "X-Chutes-Hotkey: $HOTKEY" \
         -H "User-Agent: TDX-LUKS-Storage/1.0" \
         -H "Content-Type: application/json" \
         --max-time "$timeout" \
