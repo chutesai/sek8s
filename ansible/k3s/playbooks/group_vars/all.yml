@@ -28,7 +28,7 @@ cluster_cidr: 10.42.0.0/16
 service_cidr: 10.43.0.0/16
 
 # K3s Configuration
-k3s_version: v1.33.1+k3s1
+k3s_version: v1.33.7+k3s1
 
 # Ubuntu major/minor version.
 ubuntu_major: "24"
