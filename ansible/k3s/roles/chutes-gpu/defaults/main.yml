@@ -1,5 +1,10 @@
 monitoring_namespace: monitoring
-chutes_charts: "{{ playbook_dir }}/../../../charts/chutes-miner-gpu"
+
+# Chutes chart version from the chutes Helm repo (chutes/chutes-miner-gpu).
+# Leave unset to use the latest chart. Set to a specific version (e.g. 0.1.0-dev.1)
+# to test development charts before release, or when using a debug image.
+# chutes_chart_version: 0.1.0-dev.1
+chutes_chart_version: null
 
 # Chutes validator configuration
 # Provide the full validators YAML structure as shown in the chart documentation

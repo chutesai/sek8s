@@ -19,6 +19,9 @@
     helm upgrade --install chutes chutes/chutes-miner-gpu \
       --namespace chutes \
       --create-namespace \
+      {% if chutes_chart_version is defined and chutes_chart_version %}
+      --version {{ chutes_chart_version | quote }} \
+      {% endif %}
       --set-string minerCredentials.ss58Address="REPLACE_ME" \
       --set-string minerCredentials.secretSeed="REPLACE_ME" \
       {% if chutes_validators is defined and chutes_validators | length > 0 %}
