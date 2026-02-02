@@ -46,7 +46,7 @@
         group: root
       register: verify_cache_device_service
 
-    - name: Copy cache volume verification script (post-mount: encryption state)
+    - name: Copy cache volume verification script (post-mount encryption state)
       copy:
         src: "{{ files_dir }}/verify-cache-volume.sh"
         dest: /usr/local/bin/verify-cache-volume.sh
