@@ -28,7 +28,7 @@
         owner: root
         group: root
 
-    - name: Copy cache device verification script (pre-mount: device exists)
+    - name: Copy cache device verification script (pre-mount device exists)
       copy:
         src: "{{ files_dir }}/verify-cache-device.sh"
         dest: /usr/local/bin/verify-cache-device.sh
