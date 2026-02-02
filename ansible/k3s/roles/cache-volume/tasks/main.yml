@@ -28,24 +28,6 @@
         owner: root
         group: root
 
-    - name: Copy cache device verification script (pre-mount device exists)
-      copy:
-        src: "{{ files_dir }}/verify-cache-device.sh"
-        dest: /usr/local/bin/verify-cache-device.sh
-        mode: '0755'
-        owner: root
-        group: root
-      register: verify_cache_device_script
-
-    - name: Template verify cache device service
-      template:
-        src: verify-cache-device.service.j2
-        dest: /etc/systemd/system/verify-cache-device.service
-        mode: '0644'
-        owner: root
-        group: root
-      register: verify_cache_device_service
-
     - name: Copy cache volume verification script (post-mount encryption state)
       copy:
         src: "{{ files_dir }}/verify-cache-volume.sh"
@@ -210,14 +192,6 @@
 
     # setup-cache.service sets /var/snap/cache permissions at boot; setup-storage-bind-mounts creates agent dir and bind mount on main storage
 
-    - name: Enable verify-cache-device.service (but do not start)
-      systemd:
-        name: verify-cache-device.service
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
-      failed_when: false
-
     - name: Enable verify-cache-volume.service (but do not start)
       systemd:
         name: verify-cache-volume.service
@@ -278,7 +252,7 @@
       failed_when: false
 
     - name: Verify installation
-      command: systemctl is-enabled verify-cache-device.service verify-cache-volume.service
+      command: systemctl is-enabled verify-cache-volume.service
       register: service_status
       changed_when: false
       failed_when: service_status.rc != 0

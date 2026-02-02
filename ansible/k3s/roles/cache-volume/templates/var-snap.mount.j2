@@ -2,8 +2,6 @@
 Description=Cache storage for /var/snap
 Documentation=man:systemd.mount(5)
 After=local-fs-pre.target
-After=verify-cache-device.service
-Requires=verify-cache-device.service
 Before=setup-cache.service
 Before=cloud-final.service
 Before=k3s.service

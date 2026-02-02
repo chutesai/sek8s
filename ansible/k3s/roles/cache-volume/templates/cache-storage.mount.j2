@@ -1,8 +1,8 @@
 [Unit]
 Description=VM storage
 Documentation=man:systemd.mount(5)
-# This mount unit runs after device is available
-After=local-fs-pre.target systemd-udev-settle.service
+After=local-fs-pre.target
+After=systemd-udev-settle.service
 # Must be mounted before bind mounts, containerd and k3s
 Before=setup-storage-bind-mounts.service
 Before=containerd.service
