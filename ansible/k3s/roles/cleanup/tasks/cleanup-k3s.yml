@@ -92,14 +92,16 @@
         state: stopped
       ignore_errors: yes
 
+    - name: Remove entire k3s server directory (state lives on storage volume at runtime)
+      ansible.builtin.file:
+        path: /var/lib/rancher/k3s/server
+        state: absent
+
     - name: Clean k3s certificates and tokens
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       loop:
-        - /var/lib/rancher/k3s/server/tls
-        - /var/lib/rancher/k3s/server/node-token
-        - /var/lib/rancher/k3s/server/cred/node-passwd
         - /etc/rancher/k3s/k3s.yaml
         - /root/.kube/config
 
@@ -131,11 +133,6 @@
     - name: Clean CNI configs
       ansible.builtin.shell: |
         rm -f /var/lib/rancher/k3s/agent/etc/cni/net.d/*
-
-    - name: Clean etcd member identity (but keep data)
-      ansible.builtin.file:
-        path: /var/lib/rancher/k3s/server/db/etcd/member
-        state: absent
 
     - name: Find and remove all kubeconfig files
       ansible.builtin.shell: |

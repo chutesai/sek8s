@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-storage-bind-mounts.sh - Set up bind mounts for containerd, kubelet-pods, and Chutes agent on storage volume
+# setup-storage-bind-mounts.sh - Set up bind mounts for k3s server, containerd, kubelet-pods, and Chutes agent on storage volume
 set -euo pipefail
 
 LOG_TAG="setup-storage-bind-mounts"
@@ -14,6 +14,8 @@ STORAGE_OWNER="1000:1000"
 
 # Storage volume mount point (same for both production and debug VMs)
 STORAGE_BASE="/cache/storage"
+K3S_SERVER_SOURCE="${STORAGE_BASE}/k3s-server"
+K3S_SERVER_TARGET="/var/lib/rancher/k3s/server"
 CONTAINERD_SOURCE="${STORAGE_BASE}/containerd"
 KUBELET_PODS_SOURCE="${STORAGE_BASE}/kubelet-pods"
 CHUTES_AGENT_SOURCE="${STORAGE_BASE}/chutes-agent"
@@ -25,6 +27,27 @@ CHUTES_AGENT_TARGET="/var/lib/chutes/agent"
 if ! mountpoint -q "$STORAGE_BASE"; then
     log "ERROR: $STORAGE_BASE is not mounted, cannot create bind mounts"
     exit 1
+fi
+
+# Setup k3s server directory on storage (cluster state persists across VM upgrades)
+log "Ensuring k3s server directory on storage volume..."
+mkdir -p "$K3S_SERVER_SOURCE"
+mkdir -p "$K3S_SERVER_TARGET"
+if mountpoint -q "$K3S_SERVER_TARGET"; then
+    log "K3s server target already mounted, checking if it's the correct bind mount..."
+    if [ "$(stat -c %d "$K3S_SERVER_TARGET")" = "$(stat -c %d "$K3S_SERVER_SOURCE")" ]; then
+        log "K3s server bind mount already correctly configured"
+    else
+        log "WARNING: K3s server target is mounted but not our bind mount. Skipping."
+    fi
+else
+    log "Creating bind mount: $K3S_SERVER_SOURCE -> $K3S_SERVER_TARGET"
+    if mount --bind "$K3S_SERVER_SOURCE" "$K3S_SERVER_TARGET"; then
+        log "K3s server bind mount created successfully"
+    else
+        log "ERROR: Failed to create k3s server bind mount"
+        exit 1
+    fi
 fi
 
 # Create subdirectories on storage volume (init script handles containerd, we just ensure kubelet-pods exists)

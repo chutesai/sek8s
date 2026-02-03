@@ -50,10 +50,10 @@
         group: root
         mode: "0644"
 
-    - name: Copy containerd mount dependency drop-in
+    - name: Copy k3s mount dependency drop-in
       ansible.builtin.copy:
-        src: files/k3s.service.d/containerd-mount.conf
-        dest: /etc/systemd/system/k3s.service.d/containerd-mount.conf
+        src: files/k3s.service.d/k3s-mount.conf
+        dest: /etc/systemd/system/k3s.service.d/k3s-mount.conf
         owner: root
         group: root
         mode: "0644"
