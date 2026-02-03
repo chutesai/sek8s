@@ -9,8 +9,8 @@ import data.helpers
 # =============================================================================
 # CHUTES NAMESPACE: NO ROOT / NO SUDO
 # =============================================================================
-# In chutes namespace no pod may run as root (UID 0). Require runAsNonRoot and
-# reject explicit runAsUser: 0.
+# In chutes namespace no pod may run as root (UID 0). Require runAsNonRoot: true
+# and reject explicit runAsUser: 0.
 
 # Effective runAsUser for a container: container override or pod-level default
 chutes_effective_run_as_user(container, pod_spec) := uid if {
@@ -58,7 +58,7 @@ deny contains msg if {
 	msg := sprintf("Chutes namespace: ephemeral container '%s' must not run as root (runAsUser: 0)", [container.name])
 }
 
-# Require runAsNonRoot: true at pod level in chutes (reject image default root)
+# Require runAsNonRoot: true at pod level in chutes
 deny contains msg if {
 	input.request.namespace == "chutes"
 	input.request.kind.kind == "Pod"
