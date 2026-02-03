@@ -6,16 +6,19 @@ monitoring_namespace: monitoring
 # chutes_chart_version: 0.1.0-dev.1
 chutes_chart_version: null
 
-# Chutes validator configuration
-# Provide the full validators YAML structure as shown in the chart documentation
-# This can be overridden in group_vars or host_vars
-chutes_validators: {}
-# Example:
-# chutes_validators:
-#   defaultRegistry: registry.dev
-#   defaultApi: https://registry.dev
-#   supported:
-#     - hotkey: 5FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-#       registry: registry.dev
-#       api: https://regisitry.dev
-#       socket: wss://ws.registry.dev:6443
+# Additional values for the chutes-miner-gpu Helm chart.
+# Merged into a values file and passed with -f. Override in group_vars or host_vars.
+# Structure matches the chart's values.yaml (e.g. validators, image overrides, etc.).
+chutes_gpu_values: {}
+# Example (validators and other options):
+# chutes_gpu_values:
+#   validators:
+#     defaultRegistry: registry.dev
+#     defaultApi: https://registry.dev
+#     supported:
+#       - hotkey: 5FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+#         registry: registry.dev
+#         api: https://registry.dev
+#         socket: wss://ws.registry.dev:6443
+#   agent:
+#     image: dev
