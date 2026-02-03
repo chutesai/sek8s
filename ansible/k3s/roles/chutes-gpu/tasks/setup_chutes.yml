@@ -12,7 +12,7 @@
     src: chutes-values.yaml.j2
     dest: /tmp/chutes-values.yaml
     mode: '0644'
-  when: chutes_gpu_values is defined and chutes_gpu_values
+  when: (chutes_gpu_values | default({}) | length) > 0
 
 - name: Install or upgrade Chutes GPU charts
   ansible.builtin.shell: |
@@ -24,7 +24,7 @@
       {% endif %}
       --set-string minerCredentials.ss58Address="REPLACE_ME" \
       --set-string minerCredentials.secretSeed="REPLACE_ME" \
-      {% if chutes_gpu_values is defined and chutes_gpu_values %}
+      {% if (chutes_gpu_values | default({}) | length) > 0 %}
       -f /tmp/chutes-values.yaml \
       {% endif %}
       --kubeconfig=/etc/rancher/k3s/k3s.yaml
