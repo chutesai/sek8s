@@ -33,6 +33,21 @@ fi
 log "Ensuring k3s server directory on storage volume..."
 mkdir -p "$K3S_SERVER_SOURCE"
 mkdir -p "$K3S_SERVER_TARGET"
+
+# One-time sync: if storage has no server state but VM has (e.g. build with preinstalled charts), copy over
+k3s_server_file_count=$(find "$K3S_SERVER_SOURCE" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
+if [[ "$k3s_server_file_count" -eq 0 ]]; then
+    if [ -d "$K3S_SERVER_TARGET" ] && { [ -d "${K3S_SERVER_TARGET}/db" ] || [ -f "${K3S_SERVER_TARGET}/token" ]; }; then
+        log "K3s server on storage is empty, syncing initial state from build VM..."
+        if rsync -a --exclude='lost+found' "$K3S_SERVER_TARGET/" "$K3S_SERVER_SOURCE/"; then
+            log "K3s server state synced successfully ($(du -sh "$K3S_SERVER_SOURCE" 2>/dev/null | cut -f1))"
+        else
+            log "ERROR: Failed to sync k3s server state to storage"
+            exit 1
+        fi
+    fi
+fi
+
 if mountpoint -q "$K3S_SERVER_TARGET"; then
     log "K3s server target already mounted, checking if it's the correct bind mount..."
     if [ "$(stat -c %d "$K3S_SERVER_TARGET")" = "$(stat -c %d "$K3S_SERVER_SOURCE")" ]; then
