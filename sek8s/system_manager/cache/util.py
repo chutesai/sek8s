@@ -147,8 +147,20 @@ async def run_download(
     repo_id: str,
     revision: str,
 ) -> None:
-    """Run snapshot_download then verify; register with state manager and update on completion/failure."""
-    cache_dir = str(chute_cache_dir(chute_id))
+    """Run snapshot_download then verify; register with state manager and update on completion/failure.
+
+    Uses the same directory layout as the chute pod: hostPath /var/snap/cache/{chute_id} is
+    mounted at /cache in the pod with HF_HOME=/cache (so the hub lives at /cache/hub). We create
+    chute_dir/hub and pass that as cache_dir so the library writes there; no HF_HOME mutation
+    so concurrent downloads are safe. On failure we remove the chute cache dir to avoid leaving
+    partial or corrupted weights.
+    """
+    cache_dir_path = chute_cache_dir(chute_id)
+    cache_dir_path.mkdir(parents=True, exist_ok=True)
+    hub_dir = cache_dir_path / "hub"
+    hub_dir.mkdir(exist_ok=True)
+    hub_cache_dir = str(hub_dir)
+
     await download_state.remove_if_completed(chute_id)
     await download_state.start(chute_id, repo_id, revision)
     try:
@@ -158,7 +170,7 @@ async def run_download(
             return snapshot_download(
                 repo_id=repo_id,
                 revision=revision,
-                cache_dir=cache_dir,
+                cache_dir=hub_cache_dir,
                 local_dir_use_symlinks=True,
             )
 
@@ -169,13 +181,24 @@ async def run_download(
         await verify_cache(
             repo_id=repo_id,
             revision=revision,
-            cache_dir=cache_dir
+            cache_dir=str(cache_dir_path),
         )
 
         await download_state.set_completed(chute_id)
     except Exception as e:
         logger.exception("Download failed for chute_id={}", chute_id)
         await download_state.set_failed(chute_id, str(e))
+        # Remove chute cache dir so we don't leave partial/corrupted downloads;
+        try:
+            if cache_dir_path.exists():
+                shutil.rmtree(cache_dir_path)
+                logger.info("Cleaned up cache dir for chute_id={} after failure", chute_id)
+        except OSError as cleanup_err:
+            logger.warning(
+                "Failed to clean up cache dir for chute_id={} after failure: {}",
+                chute_id,
+                cleanup_err,
+            )
 
 
 async def run_cleanup(

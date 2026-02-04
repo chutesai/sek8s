@@ -154,22 +154,18 @@ async def download_status(
                                 if repos and repos[0].refs
                                 else None
                             )
-                        except Exception:
-                            repo_id = ""
-                            revision = None
-                            info = None
-                        result.append(
-                            CacheChuteStatus(
-                                chute_id=item.name,
-                                status=CacheChuteStatusEnum.PRESENT,
-                                repo_id=repo_id or None,
-                                revision=revision,
-                                size_bytes=(
-                                    getattr(info, "size_on_disk", None) if info else None
-                                ),
+                            result.append(
+                                CacheChuteStatus(
+                                    chute_id=item.name,
+                                    status=CacheChuteStatusEnum.PRESENT,
+                                    repo_id=repo_id or None,
+                                    revision=revision,
+                                    size_bytes=getattr(info, "size_on_disk", None),
+                                )
                             )
-                        )
-                        seen.add(item.name)
+                            seen.add(item.name)
+                        except Exception:
+                            pass
 
     return CacheDownloadStatusResponse(chutes=result)
 
