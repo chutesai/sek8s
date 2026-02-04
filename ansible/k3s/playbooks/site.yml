@@ -136,7 +136,7 @@
   tasks:
     - name: System manager
       ansible.builtin.include_role:
-        name: system-status
+        name: system-manager
         apply:
           tags: system-manager
 
