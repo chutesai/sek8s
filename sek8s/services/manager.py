@@ -4,7 +4,8 @@ from fastapi import FastAPI
 
 from sek8s.config import SystemManagerConfig
 from sek8s.server import WebServer
-from sek8s.system_manager import cache_router, status_router
+from sek8s.system_manager.cache.router import router as cache_router
+from sek8s.system_manager.status.router import router as status_router
 
 
 class SystemManagerServer(WebServer):

@@ -17,8 +17,11 @@ def _noop_cached(**kwargs):
 
 @pytest.fixture(scope="session", autouse=True)
 def disable_aiocache():
-    """Mock aiocache.cached for the test run so cached endpoints don't leak between tests.
-    Must run before the status router is imported (create_app is imported lazily in client fixtures).
+    """
+    Mock aiocache.cached for the test run so cached endpoints don't leak between tests.
+    Must run before the status router is imported. Therefore create_app() and the status
+    router must only be imported inside fixtures (e.g. status_client) or test bodies,
+    never at test module top level.
     """
     with patch("aiocache.cached", _noop_cached):
         yield
