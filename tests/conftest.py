@@ -27,6 +27,21 @@ def disable_aiocache():
         yield
 
 
+@pytest.fixture
+def manager_app_no_auth():
+    """Create the system-manager app with miner auth bypassed for testing."""
+    def _noop_authorize(*args, **kwargs):
+        def _dep():
+            return None
+
+        return _dep
+
+    with patch("sek8s.services.util.authorize", side_effect=_noop_authorize):
+        from sek8s.services.manager import create_app
+
+        yield create_app()
+
+
 def pytest_configure(config):
     """Set up environment variables before any modules are imported."""
     os.environ["MINER_SS58"] = "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ"

@@ -36,11 +36,9 @@ def fake_runner(monkeypatch):
 
 
 @pytest.fixture
-def status_client():
-    from sek8s.services.manager import create_app
-
-    app = create_app()
-    with TestClient(app) as client:
+def status_client(manager_app_no_auth):
+    """Test client for status endpoints (auth bypassed via manager_app_no_auth)."""
+    with TestClient(manager_app_no_auth) as client:
         yield client
 
 

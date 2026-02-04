@@ -7,7 +7,7 @@ The System Status service is a read-only FastAPI endpoint that runs inside the g
 
 | Capability | Description |
 | --- | --- |
-| Service inventory | Enumerate the fixed allowlist of managed systemd units (admission controller, attestation service, k3s server, `nvidia-persistenced`, and `nvidia-fabricmanager`). |
+| Service inventory | Enumerate the fixed allowlist of managed systemd units (admission controller, **system manager**, attestation service, k3s server, `nvidia-persistenced`, and `nvidia-fabricmanager`). |
 | Service status | Return summarized health derived from `systemctl show` for an allowlisted unit. |
 | Service logs | Tail the latest N log lines (`journalctl -u <unit>`) with optional time window filtering. |
 | GPU telemetry | Surface `nvidia-smi` output in either default (summary) or `-q` (detailed) modes with optional GPU index selection. |
@@ -51,7 +51,7 @@ All other paths return 404.
    - Each command has a strict timeout (default 10 seconds) and the stdout/stderr is size-limited before returning to the caller.
 
 2. **Allowlist enforcement**
-   - Service ids are resolved against a hard-coded dictionary mapping to systemd unit names (`admission-controller.service`, `attestation-service.service`, `k3s.service`). Requests for unknown ids fail with HTTP 404.
+   - Service ids are resolved against a hard-coded dictionary mapping to systemd unit names (`admission-controller.service`, `system-manager.service`, `attestation-service.service`, `k3s.service`, etc.). Requests for unknown ids fail with HTTP 404.
    - GPU command options are derived from boolean and integer query parameters; textual arguments are never concatenated into the command line.
 
 3. **Principle of least privilege**

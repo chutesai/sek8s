@@ -8,10 +8,11 @@ import shutil
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from huggingface_hub import scan_cache_dir
 
 from sek8s.config import cache_config
+from sek8s.services.util import authorize
 
 from .models import CacheChuteStatusEnum, CleanupRequest, DownloadRequest, download_state
 from .responses import (
@@ -42,6 +43,7 @@ router = APIRouter()
 async def download(
     request: DownloadRequest,
     force: bool = Query(False, description="Re-download if already present"),
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadResponse:
     chute_id = request.chute_id
     if not chute_id or len(chute_id) != 36:
@@ -83,6 +85,7 @@ def _chute_status_from_api_status(api_status: str) -> CacheChuteStatusEnum:
 )
 async def download_status(
     chute_id: Optional[str] = Query(None, description="Optional chute_id to filter"),
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadStatusResponse:
     cache_base = Path(cache_config.cache_base).resolve()
     result: List[CacheChuteStatus] = []
@@ -176,6 +179,7 @@ async def download_status(
 )
 async def delete_chute(
     chute_id: str,
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> dict:
     if len(chute_id) != 36:
         raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
@@ -201,6 +205,7 @@ async def cleanup(
     body: Optional[CleanupRequest] = None,
     max_age_days: int = Query(5, ge=0),
     max_size_gb: int = Query(100, ge=0),
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheCleanupResponse:
     max_age_days = body.max_age_days if body else max_age_days
     max_size_gb = body.max_size_gb if body else max_size_gb
@@ -222,7 +227,9 @@ async def cleanup(
     response_model=CacheOverviewResponse,
     summary="List cache contents and sizes",
 )
-async def overview() -> CacheOverviewResponse:
+async def overview(
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
+) -> CacheOverviewResponse:
     cache_base = Path(cache_config.cache_base).resolve()
     entries: List[CacheOverviewEntry] = []
     total = 0

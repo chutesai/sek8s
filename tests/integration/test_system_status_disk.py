@@ -104,12 +104,9 @@ def test_dir_structure():
 
 
 @pytest.fixture
-def status_client():
-    """Create a test client for the manager app (status router)."""
-    from sek8s.services.manager import create_app
-
-    app = create_app()
-    with TestClient(app) as client:
+def status_client(manager_app_no_auth):
+    """Test client for the manager app (status router; auth bypassed for tests)."""
+    with TestClient(manager_app_no_auth) as client:
         yield client
 
 
