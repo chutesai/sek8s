@@ -310,24 +310,6 @@ class ExternalProxyServer(BaseProxyServer):
     
     def _setup_routes(self):
         """Setup routes with validator authentication."""
-        
-        # Middleware to compute body SHA256 for signature verification
-        @self.app.middleware("http")
-        async def add_body_sha256(request: Request, call_next):
-            """Compute SHA256 of request body for signature verification"""
-            if request.method in ["POST", "PUT", "PATCH"]:
-                body = await request.body()
-                if body:
-                    import hashlib
-                    request.state.body_sha256 = hashlib.sha256(body).hexdigest()
-                else:
-                    request.state.body_sha256 = None
-            else:
-                request.state.body_sha256 = None
-            
-            response = await call_next(request)
-            return response
-        
         # Health check (no auth)
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
         
