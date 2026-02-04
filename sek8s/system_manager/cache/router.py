@@ -59,11 +59,12 @@ async def download(
             info = await fetch_hf_info(chute_id)
         except HTTPException:
             raise
-        repo_id = info.effective_repo_id
+        repo_id = info.repo_id
         if not repo_id:
             raise HTTPException(status_code=502, detail="Validator did not return repo_id")
+        revision = info.revision or "main"
         asyncio.create_task(
-            run_download(chute_id, repo_id, info.effective_revision)
+            run_download(chute_id, repo_id, revision)
         )
         response_status = CacheDownloadStatus.STARTED
 

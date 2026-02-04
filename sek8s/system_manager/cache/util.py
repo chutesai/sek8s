@@ -84,7 +84,8 @@ async def verify_cache(
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if hf_token:
         params["hf_token"] = hf_token
-    repo_info_url = cache_config.hf_repo_info_url
+    base = (cache_config.validator_base_url or "").strip().rstrip("/")
+    repo_info_url = f"{base}/misc/hf_repo_info"
 
     try:
         async with aiohttp.ClientSession() as session:

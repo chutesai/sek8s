@@ -554,22 +554,18 @@ class TestCacheConfig:
         """CacheConfig uses defaults when env is not set."""
         os.environ.pop("HF_CACHE_BASE", None)
         os.environ.pop("VALIDATOR_BASE_URL", None)
-        os.environ.pop("HF_REPO_INFO_URL", None)
         config = CacheConfig()
         assert config.cache_base == "/var/snap/cache"
         assert config.validator_base_url == "https://api.chutes.ai"
-        assert config.hf_repo_info_url == "https://api.chutes.ai/misc/hf_repo_info"
 
     def test_cache_config_from_env(self):
-        """CacheConfig reads HF_* and VALIDATOR_* env vars."""
+        """CacheConfig reads HF_CACHE_BASE and VALIDATOR_BASE_URL from env."""
         os.environ["HF_CACHE_BASE"] = "/tmp/test-cache"
         os.environ["VALIDATOR_BASE_URL"] = "https://validator.test"
-        os.environ["HF_REPO_INFO_URL"] = "https://validator.test/repo_info"
         try:
             config = CacheConfig()
             assert config.cache_base == "/tmp/test-cache"
             assert config.validator_base_url == "https://validator.test"
-            assert config.hf_repo_info_url == "https://validator.test/repo_info"
         finally:
-            for var in ["HF_CACHE_BASE", "VALIDATOR_BASE_URL", "HF_REPO_INFO_URL"]:
+            for var in ["HF_CACHE_BASE", "VALIDATOR_BASE_URL"]:
                 os.environ.pop(var, None)

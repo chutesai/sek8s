@@ -186,12 +186,7 @@ class CacheConfig(AuthConfig):
     validator_base_url: str = Field(
         default="https://api.chutes.ai",
         alias="VALIDATOR_BASE_URL",
-        description="Base URL for validator API (e.g. GET /chutes/hf_translate/{chute_id})",
-    )
-    hf_repo_info_url: str = Field(
-        default="https://api.chutes.ai/misc/hf_repo_info",
-        alias="HF_REPO_INFO_URL",
-        description="URL for HF repo file list (used for cache verification)",
+        description="Base URL for validator API (e.g. GET /chutes/{chute_id}/hf_info, GET /misc/hf_repo_info)",
     )
 
     model_config = SettingsConfigDict(
@@ -701,7 +696,7 @@ class MinerConfig(BaseSettings):
     @property
     def miner_keypair(self) -> Optional[Keypair]:
         """Keypair for signing; built from miner_seed when both ss58 and seed are set."""
-        if self._keypair is not None:
+        if self._keypair is None:
             self._keypair = Keypair.create_from_seed(self.miner_seed)
         return self._keypair
 
