@@ -13,7 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from huggingface_hub import scan_cache_dir
 
 from sek8s.config import CacheConfig
-from sek8s.responses import (
+
+from .models import CacheChuteStatusEnum, CleanupRequest, DownloadRequest, download_state
+from .responses import (
     CacheChuteStatus,
     CacheCleanupResponse,
     CacheDownloadResponse,
@@ -22,8 +24,6 @@ from sek8s.responses import (
     CacheOverviewEntry,
     CacheOverviewResponse,
 )
-
-from .models import CacheChuteStatusEnum, CleanupRequest, DownloadRequest, download_state
 from .util import (
     chute_cache_dir,
     fetch_hf_info,

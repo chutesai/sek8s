@@ -11,7 +11,11 @@ from fastapi import APIRouter, Depends, Query
 from loguru import logger
 
 from sek8s.config import SystemStatusConfig
-from sek8s.responses import (
+from sek8s.services.util import authorize
+
+from .models import SERVICE_ALLOWLIST
+from .responses import (
+    DiskSpaceResponse,
     HealthResponse,
     NvidiaSmiResponse,
     OverviewResponse,
@@ -21,9 +25,6 @@ from sek8s.responses import (
     ServicesListResponse,
     ShutdownResponse,
 )
-from sek8s.services.util import authorize
-
-from .models import SERVICE_ALLOWLIST
 from .util import (
     collect_service_status,
     get_disk_space_diagnostic,
@@ -185,7 +186,7 @@ async def overview(
 
 @router.get(
     "/disk/space",
-    response_model=__import__("sek8s.responses", fromlist=["DiskSpaceResponse"]).DiskSpaceResponse,
+    response_model=DiskSpaceResponse,
     summary="Get directory sizes",
     description="Returns sizes of immediate subdirectories within a given path",
 )
@@ -206,8 +207,6 @@ async def get_disk_space(
         description="Cross filesystem boundaries (include mounted volumes)",
     ),
 ):
-    from sek8s.responses import DiskSpaceResponse
-
     validated_path = validate_path(path)
 
     if diagnostic:

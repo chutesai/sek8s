@@ -11,7 +11,9 @@ from fastapi import HTTPException
 from loguru import logger
 
 from sek8s.config import SystemStatusConfig
-from sek8s.responses import (
+
+from .models import CommandResult, ServiceDefinition, SERVICE_ALLOWLIST
+from .responses import (
     DirectoryInfo,
     DiskSpaceResponse,
     NvidiaSmiResponse,
@@ -19,8 +21,6 @@ from sek8s.responses import (
     ServiceStatus,
     ServiceStatusResponse,
 )
-
-from .models import CommandResult, ServiceDefinition, SERVICE_ALLOWLIST
 
 
 def parse_key_value(output: str) -> Dict[str, str]:
