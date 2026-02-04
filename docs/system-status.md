@@ -55,7 +55,7 @@ All other paths return 404.
    - GPU command options are derived from boolean and integer query parameters; textual arguments are never concatenated into the command line.
 
 3. **Principle of least privilege**
-   - The systemd unit runs as a dedicated `status` user (or another non-privileged account) with membership in the `systemd-journal` and `video` groups. It does not require root and is fully confined via a drop-in (`ProtectSystem=strict`, `NoNewPrivileges=true`, etc.).
+   - The systemd unit runs as a dedicated `chutes` user (non-privileged account) with membership in the `systemd-journal` and `video` groups. It does not require root and is fully confined via a drop-in (`ProtectSystem=strict`, `NoNewPrivileges=true`, etc.).
   - Application directories live under `/opt/sek8s` with read-only permissions for service users. Device sandboxing is tightened via `DevicePolicy=closed` while explicitly allowing the NVIDIA control/uvm nodes plus `/dev/nvidia[0-9]*` and `/dev/nvidia-caps/nvidia-cap*` so `nvidia-smi` can talk to every GPU without exposing unrelated devices.
 
 4. **Transport security**

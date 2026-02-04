@@ -1,5 +1,5 @@
 ---
-- name: Ensure supplemental groups exist for system status
+- name: Ensure supplemental groups exist for system manager
   ansible.builtin.group:
     name: "{{ item }}"
     state: present
@@ -15,9 +15,9 @@
     state: present
     system: yes
 
-- name: Create system status user
+- name: Create chutes user (for system-manager service)
   ansible.builtin.user:
-    name: status
+    name: chutes
     system: yes
     shell: /usr/sbin/nologin
     create_home: no
@@ -25,7 +25,7 @@
     append: yes
     home: /opt/sek8s
 
-- name: Create directories for system status service
+- name: Create directories for system manager service
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: directory
@@ -33,28 +33,28 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: /etc/system-status, owner: root, group: status, mode: '0750' }
-    - { path: /var/log/system-status, owner: status, group: status, mode: '0750' }
+    - { path: /etc/system-manager, owner: root, group: chutes, mode: '0750' }
+    - { path: /var/log/system-manager, owner: chutes, group: chutes, mode: '0750' }
 
-- name: Deploy environment file
+- name: Deploy system manager environment file
   ansible.builtin.template:
-    src: system-status.env.j2
-    dest: /etc/system-status/system-status.env
+    src: system-manager.env.j2
+    dest: /etc/system-manager/system-manager.env
     owner: root
-    group: status
+    group: chutes
     mode: '0640'
 
-- name: Install system status service
+- name: Install system manager service
   ansible.builtin.copy:
-    src: system-status.service
-    dest: /etc/systemd/system/system-status.service
+    src: system-manager.service
+    dest: /etc/systemd/system/system-manager.service
     owner: root
     group: root
     mode: '0644'
 
-- name: Create system status drop-in directory
+- name: Create system manager drop-in directory
   ansible.builtin.file:
-    path: /etc/systemd/system/system-status.service.d
+    path: /etc/systemd/system/system-manager.service.d
     state: directory
     owner: root
     group: root
@@ -62,28 +62,28 @@
 
 - name: Deploy security drop-in
   ansible.builtin.copy:
-    src: system-status.conf
-    dest: /etc/systemd/system/system-status.service.d/10-security.conf
+    src: system-manager.conf
+    dest: /etc/systemd/system/system-manager.service.d/10-security.conf
     owner: root
     group: root
     mode: '0644'
 
-- name: Allow status user to execute shutdown and du without password
+- name: Allow chutes user to execute shutdown and du without password
   ansible.builtin.copy:
     content: |
-      # Allow system-status service to perform graceful shutdown
-      status ALL=(ALL) NOPASSWD: /sbin/shutdown
-      # Allow system-status service to read all directories for disk usage analysis
-      status ALL=(ALL) NOPASSWD: /usr/bin/du
-    dest: /etc/sudoers.d/system-status
+      # Allow system-manager service to perform graceful shutdown
+      chutes ALL=(ALL) NOPASSWD: /sbin/shutdown
+      # Allow system-manager service to read all directories for disk usage analysis
+      chutes ALL=(ALL) NOPASSWD: /usr/bin/du
+    dest: /etc/sudoers.d/system-manager
     owner: root
     group: root
     mode: '0440'
     validate: '/usr/sbin/visudo -cf %s'
 
-- name: Enable and start system status
+- name: Enable and start system manager
   ansible.builtin.systemd:
-    name: system-status.service
+    name: system-manager.service
     enabled: yes
     state: started
     daemon_reload: yes

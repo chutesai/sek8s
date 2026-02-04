@@ -1,7 +1,12 @@
-from functools import lru_cache
+import hashlib
+import json
 import time
-from typing import Optional
+from functools import lru_cache
+from typing import Any, Dict, Optional, Tuple
+
 from bittensor_wallet import Keypair
+
+from sek8s.config import MinerConfig
 from fastapi import HTTPException, Header, Request, status
 from loguru import logger
 from substrateinterface import KeypairType
@@ -195,3 +200,66 @@ def authorize(
             )
 
     return _authorize
+
+def _get_signing_message(
+    hotkey: str,
+    nonce: str,
+    payload_str: str | bytes | None,
+    purpose: str | None = None,
+    payload_hash: str | None = None,
+) -> str:
+    """
+    Get the signing message for a given hotkey, nonce, and payload.
+    """
+    if payload_str:
+        if isinstance(payload_str, str):
+            payload_str = payload_str.encode()
+        return f"{hotkey}:{nonce}:{hashlib.sha256(payload_str).hexdigest()}"
+    elif purpose:
+        return f"{hotkey}:{nonce}:{purpose}"
+    elif payload_hash:
+        return f"{hotkey}:{nonce}:{payload_hash}"
+    else:
+        raise ValueError("Either payload_str or purpose must be provided")
+
+
+def sign_request(
+    payload: Dict[str, Any] | str | None = None,
+    purpose: str = None,
+    management: bool = False,
+) -> Tuple[Dict[str, str], Optional[str]]:
+    """
+    Generate signed headers for miner requests to validators (e.g. GET /chutes/{id}/hf_info).
+    Uses purpose for GET (no body); uses payload for POST. Returns (headers, payload_str or None).
+    """
+    miner_settings = MinerConfig()
+    nonce = str(int(time.time()))
+    headers = {
+        HOTKEY_HEADER: miner_settings.miner_ss58,
+        NONCE_HEADER: nonce,
+    }
+    signature_string = None
+    payload_string = None
+    if payload is not None:
+        if isinstance(payload, (list, dict)):
+            headers["Content-Type"] = "application/json"
+            payload_string = json.dumps(payload)
+        else:
+            payload_string = payload
+        signature_string = _get_signing_message(
+            miner_settings.miner_ss58,
+            nonce,
+            payload_str=payload_string,
+            purpose=None,
+        )
+    else:
+        signature_string = _get_signing_message(
+            miner_settings.miner_ss58, nonce, payload_str=None, purpose=purpose
+        )
+    if management:
+        signature_string = miner_settings.miner_ss58 + ":" + signature_string
+        headers[MINER_HEADER] = headers.pop(HOTKEY_HEADER)
+        headers[VALIDATOR_HEADER] = headers[MINER_HEADER]
+    logger.debug(f"Signing message: {signature_string}")
+    headers[SIGNATURE_HEADER] = miner_settings.miner_keypair.sign(signature_string.encode()).hex()
+    return headers, payload_string

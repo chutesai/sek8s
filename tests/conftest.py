@@ -1,6 +1,27 @@
 import os
+from unittest.mock import patch
+
+import pytest
 
 from fixtures.env import *  # noqa
+
+
+def _noop_cached(**kwargs):
+    """No-op replacement for aiocache.cached so cached endpoints don't leak between tests."""
+
+    def decorator(f):
+        return f
+
+    return decorator
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disable_aiocache():
+    """Mock aiocache.cached for the test run so cached endpoints don't leak between tests.
+    Must run before the status router is imported (create_app is imported lazily in client fixtures).
+    """
+    with patch("aiocache.cached", _noop_cached):
+        yield
 
 
 def pytest_configure(config):

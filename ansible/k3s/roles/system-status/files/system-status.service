@@ -5,8 +5,8 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=status
-Group=status
+User=chutes
+Group=chutes
 WorkingDirectory=/opt/sek8s
 EnvironmentFile=/etc/system-status/system-status.env
 ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.system_status

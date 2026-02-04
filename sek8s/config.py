@@ -9,8 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator, PrivateAttr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from substrateinterface import Keypair
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,49 @@ class SystemStatusConfig(AuthConfig):
         case_sensitive=False,
         extra='ignore'
     )
+
+
+class SystemManagerConfig(ServerConfig):
+    """Configuration for the system manager process only (binding, TLS, debug).
+
+    Used by the system-manager entrypoint to run the server. Status and cache
+    routes use their own config classes (SystemStatusConfig, CacheConfig).
+    """
+
+    require_tls: bool = Field(default=False, alias="REQUIRE_TLS")
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra='ignore'
+    )
+
+
+class CacheConfig(AuthConfig):
+    """Configuration for the cache router (HF cache download, delete, cleanup, overview)."""
+
+    cache_base: str = Field(
+        default="/var/snap/cache",
+        alias="HF_CACHE_BASE",
+        description="Base directory for HF cache (per-chute dirs under this)",
+    )
+    validator_base_url: str = Field(
+        default="",
+        alias="VALIDATOR_BASE_URL",
+        description="Base URL for validator API (e.g. GET /chutes/hf_translate/{chute_id})",
+    )
+    hf_repo_info_url: str = Field(
+        default="https://api.chutes.ai/misc/hf_repo_info",
+        alias="HF_REPO_INFO_URL",
+        description="URL for HF repo file list (used for cache verification)",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra='ignore'
+    )
+
 
 class AttestationProxyConfig(AuthConfig):
     """Configuration for attestation proxy service.
@@ -627,7 +671,46 @@ class CosignConfig(BaseSettings):
         # For now, just do simple wildcard replacement
         import fnmatch
         return fnmatch.fnmatch(value, pattern)
+class Validator(BaseModel):
+    hotkey: str
+    registry: str
+    api: str
+    socket: str
+    
+class MinerConfig(BaseSettings):
+    """
+    Miner credentials for signing requests to validators (e.g. cache hf_info).
+    Optional: when MINER_SS58/MINER_SEED are not set, signing is unavailable.
+    """
 
+
+    miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
+    miner_seed: Optional[str] = Field(default=None, alias="MINER_SEED")
+    validators_json: Optional[str] = Field(default=None, alias="VALIDATORS")
+
+    _validators: List[Validator] = PrivateAttr(default=[])
+    _keypair: Optional[Keypair] = PrivateAttr(default=None)
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    @property
+    def miner_keypair(self) -> Optional[Keypair]:
+        """Keypair for signing; built from miner_seed when both ss58 and seed are set."""
+        if self._keypair is not None:
+            self._keypair = Keypair.create_from_seed(self.miner_seed)
+        return self._keypair
+
+    @property
+    def validators(self) -> List[Validator]:
+        if self._validators:
+            return self._validators
+        data = json.loads(self.validators_json)
+        self._validators = [Validator(**item) for item in data["supported"]]
+        return self._validators
 
 # For backward compatibility and convenience
 def load_config(**kwargs) -> AdmissionConfig:
