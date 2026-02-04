@@ -9,7 +9,15 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open
 
-from sek8s.config import AdmissionConfig, AttestationProxyConfig, NamespacePolicy, OPAConfig, CosignConfig, load_config
+from sek8s.config import (
+    AdmissionConfig,
+    AttestationProxyConfig,
+    CacheConfig,
+    NamespacePolicy,
+    OPAConfig,
+    CosignConfig,
+    load_config,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -537,3 +545,31 @@ class TestProxyConfig:
         config = AttestationProxyConfig()
 
         assert config.miner_ss58 == "abcd1234"
+
+
+class TestCacheConfig:
+    """Tests for CacheConfig; module-level cache_config uses env, so tests mock env vars."""
+
+    def test_cache_config_defaults(self):
+        """CacheConfig uses defaults when env is not set."""
+        os.environ.pop("HF_CACHE_BASE", None)
+        os.environ.pop("VALIDATOR_BASE_URL", None)
+        os.environ.pop("HF_REPO_INFO_URL", None)
+        config = CacheConfig()
+        assert config.cache_base == "/var/snap/cache"
+        assert config.validator_base_url == "https://api.chutes.ai"
+        assert config.hf_repo_info_url == "https://api.chutes.ai/misc/hf_repo_info"
+
+    def test_cache_config_from_env(self):
+        """CacheConfig reads HF_* and VALIDATOR_* env vars."""
+        os.environ["HF_CACHE_BASE"] = "/tmp/test-cache"
+        os.environ["VALIDATOR_BASE_URL"] = "https://validator.test"
+        os.environ["HF_REPO_INFO_URL"] = "https://validator.test/repo_info"
+        try:
+            config = CacheConfig()
+            assert config.cache_base == "/tmp/test-cache"
+            assert config.validator_base_url == "https://validator.test"
+            assert config.hf_repo_info_url == "https://validator.test/repo_info"
+        finally:
+            for var in ["HF_CACHE_BASE", "VALIDATOR_BASE_URL", "HF_REPO_INFO_URL"]:
+                os.environ.pop(var, None)

@@ -42,6 +42,11 @@ def pytest_configure(config):
     os.environ.setdefault("REGISTRY_URL", "localhost:5000")
     os.environ.setdefault("COSIGN_PASSWORD", "testpassword")
 
+    # Cache config (used by sek8s.config.cache_config); tests mock via env
+    os.environ.setdefault("HF_CACHE_BASE", os.path.join(os.getcwd(), "tests", "tmp", "cache"))
+    os.environ.setdefault("VALIDATOR_BASE_URL", "https://api.chutes.ai")
+    os.environ.setdefault("HF_REPO_INFO_URL", "https://api.chutes.ai/misc/hf_repo_info")
+
     # Print confirmation for debugging
     print("Environment variables set up for testing!")
 

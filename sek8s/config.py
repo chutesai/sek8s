@@ -184,7 +184,7 @@ class CacheConfig(AuthConfig):
         description="Base directory for HF cache (per-chute dirs under this)",
     )
     validator_base_url: str = Field(
-        default="",
+        default="https://api.chutes.ai",
         alias="VALIDATOR_BASE_URL",
         description="Base URL for validator API (e.g. GET /chutes/hf_translate/{chute_id})",
     )
@@ -200,6 +200,7 @@ class CacheConfig(AuthConfig):
         extra='ignore'
     )
 
+cache_config = CacheConfig()
 
 class AttestationProxyConfig(AuthConfig):
     """Configuration for attestation proxy service.

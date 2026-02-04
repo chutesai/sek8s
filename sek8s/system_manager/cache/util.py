@@ -13,30 +13,30 @@ import aiohttp
 from huggingface_hub import scan_cache_dir, snapshot_download
 from loguru import logger
 
-from sek8s.config import CacheConfig
+from sek8s.config import cache_config
 from sek8s.services.util import sign_request
 
 from .models import CleanupResult, HfInfoResponse, download_state
 
 
-def chute_cache_dir(config: CacheConfig, chute_id: str) -> Path:
-    return Path(config.cache_base).resolve() / chute_id
+def chute_cache_dir(chute_id: str) -> Path:
+    return Path(cache_config.cache_base).resolve() / chute_id
 
 
-def is_chute_present(config: CacheConfig, chute_id: str) -> bool:
-    hub = chute_cache_dir(config, chute_id) / "hub"
+def is_chute_present(chute_id: str) -> bool:
+    hub = chute_cache_dir(chute_id) / "hub"
     if not hub.exists():
         return False
     return any(hub.glob("models--*"))
 
 
-async def fetch_hf_info(config: CacheConfig, chute_id: str) -> HfInfoResponse:
+async def fetch_hf_info(chute_id: str) -> HfInfoResponse:
     """GET validator /chutes/{chute_id}/hf_info and return parsed HfInfoResponse.
     Request is signed with miner credentials when MINER_SS58/MINER_SEED are set.
     """
     from fastapi import HTTPException
 
-    base = (config.validator_base_url or "").strip().rstrip("/")
+    base = (cache_config.validator_base_url or "").strip().rstrip("/")
     if not base:
         raise HTTPException(
             status_code=503,
@@ -77,7 +77,6 @@ async def verify_cache(
     repo_id: str,
     revision: str,
     cache_dir: str,
-    repo_info_url: str,
 ) -> dict:
     """Verify cached HF model files; raises on failure."""
     cache_dir_path = Path(cache_dir)
@@ -85,6 +84,7 @@ async def verify_cache(
     hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
     if hf_token:
         params["hf_token"] = hf_token
+    repo_info_url = cache_config.hf_repo_info_url
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -145,10 +145,9 @@ async def run_download(
     chute_id: str,
     repo_id: str,
     revision: str,
-    config: CacheConfig,
 ) -> None:
     """Run snapshot_download then verify; register with state manager and update on completion/failure."""
-    cache_dir = str(chute_cache_dir(config, chute_id))
+    cache_dir = str(chute_cache_dir(chute_id))
     await download_state.remove_if_completed(chute_id)
     await download_state.start(chute_id, repo_id, revision)
     try:
@@ -169,8 +168,7 @@ async def run_download(
         await verify_cache(
             repo_id=repo_id,
             revision=revision,
-            cache_dir=cache_dir,
-            repo_info_url=config.hf_repo_info_url,
+            cache_dir=cache_dir
         )
 
         await download_state.set_completed(chute_id)
@@ -180,13 +178,12 @@ async def run_download(
 
 
 async def run_cleanup(
-    config: CacheConfig,
     max_age_days: int,
     max_size_gb: int,
     exclude_pattern: Optional[str] = None,
 ) -> CleanupResult:
     """Remove cache entries by age and enforce max size; skip in-progress downloads."""
-    cache_base = Path(config.cache_base).resolve()
+    cache_base = Path(cache_config.cache_base).resolve()
     freed = 0
     removed_list: List[str] = []
     if not cache_base.exists():

@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from huggingface_hub import scan_cache_dir
 
-from sek8s.config import CacheConfig
+from sek8s.config import cache_config
 
 from .models import CacheChuteStatusEnum, CleanupRequest, DownloadRequest, download_state
 from .responses import (
@@ -35,12 +34,6 @@ from .util import (
 router = APIRouter()
 
 
-@lru_cache(maxsize=1)
-def get_config() -> CacheConfig:
-    """Return cached CacheConfig (reads env once)."""
-    return CacheConfig()
-
-
 @router.post(
     "/download",
     response_model=CacheDownloadResponse,
@@ -48,7 +41,6 @@ def get_config() -> CacheConfig:
 )
 async def download(
     request: DownloadRequest,
-    config: CacheConfig = Depends(get_config),
     force: bool = Query(False, description="Re-download if already present"),
 ) -> CacheDownloadResponse:
     chute_id = request.chute_id
@@ -59,19 +51,19 @@ async def download(
     s = await download_state.get(chute_id)
     if s is not None and s.is_in_progress:
         response_status = CacheDownloadStatus.IN_PROGRESS
-    elif is_chute_present(config, chute_id) and not force:
+    elif is_chute_present(chute_id) and not force:
         response_status = CacheDownloadStatus.PRESENT
 
     if response_status is None:
         try:
-            info = await fetch_hf_info(config, chute_id)
+            info = await fetch_hf_info(chute_id)
         except HTTPException:
             raise
         repo_id = info.effective_repo_id
         if not repo_id:
             raise HTTPException(status_code=502, detail="Validator did not return repo_id")
         asyncio.create_task(
-            run_download(chute_id, repo_id, info.effective_revision, config)
+            run_download(chute_id, repo_id, info.effective_revision)
         )
         response_status = CacheDownloadStatus.STARTED
 
@@ -89,10 +81,9 @@ def _chute_status_from_api_status(api_status: str) -> CacheChuteStatusEnum:
     summary="Get download status by chute_id or all",
 )
 async def download_status(
-    config: CacheConfig = Depends(get_config),
     chute_id: Optional[str] = Query(None, description="Optional chute_id to filter"),
 ) -> CacheDownloadStatusResponse:
-    cache_base = Path(config.cache_base).resolve()
+    cache_base = Path(cache_config.cache_base).resolve()
     result: List[CacheChuteStatus] = []
 
     if chute_id:
@@ -107,7 +98,7 @@ async def download_status(
                     revision=s.revision,
                 )
             )
-        elif is_chute_present(config, chute_id):
+        elif is_chute_present(chute_id):
             hub = cache_base / chute_id / "hub"
             try:
                 info = scan_cache_dir(cache_dir=str(hub))
@@ -186,11 +177,10 @@ async def download_status(
 )
 async def delete_chute(
     chute_id: str,
-    config: CacheConfig = Depends(get_config),
 ) -> dict:
     if len(chute_id) != 36:
         raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
-    path = chute_cache_dir(config, chute_id)
+    path = chute_cache_dir(chute_id)
     message = "deleted"
     if path.exists():
         if await download_state.contains(chute_id):
@@ -209,7 +199,6 @@ async def delete_chute(
     summary="Cleanup cache by age and max size",
 )
 async def cleanup(
-    config: CacheConfig = Depends(get_config),
     body: Optional[CleanupRequest] = None,
     max_age_days: int = Query(5, ge=0),
     max_size_gb: int = Query(100, ge=0),
@@ -220,7 +209,7 @@ async def cleanup(
         "CLEANUP_EXCLUDE"
     )
     result = await run_cleanup(
-        config, max_age_days, max_size_gb, exclude_pattern
+        max_age_days, max_size_gb, exclude_pattern
     )
     return CacheCleanupResponse(
         status="completed",
@@ -234,10 +223,8 @@ async def cleanup(
     response_model=CacheOverviewResponse,
     summary="List cache contents and sizes",
 )
-async def overview(
-    config: CacheConfig = Depends(get_config),
-) -> CacheOverviewResponse:
-    cache_base = Path(config.cache_base).resolve()
+async def overview() -> CacheOverviewResponse:
+    cache_base = Path(cache_config.cache_base).resolve()
     entries: List[CacheOverviewEntry] = []
     total = 0
     if cache_base.exists():
