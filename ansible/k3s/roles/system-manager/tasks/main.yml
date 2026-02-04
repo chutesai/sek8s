@@ -15,13 +15,14 @@
     state: present
     system: yes
 
+# chutes in group tdx (GID 1000) so system-manager can write to /var/snap/cache (1000:1000, 2775)
 - name: Create chutes user (for system-manager service)
   ansible.builtin.user:
     name: chutes
     system: yes
     shell: /usr/sbin/nologin
     create_home: no
-    groups: "sek8s,systemd-journal,video,tdx-attest"
+    groups: "sek8s,systemd-journal,video,tdx-attest,tdx"
     append: yes
     home: /opt/sek8s
 

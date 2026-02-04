@@ -1,6 +1,7 @@
 #!/bin/bash
 # setup-cache.sh - Set up HF cache dir for pod use (e.g. model weights)
-# Creates /var/snap/cache with pod-friendly permissions so pods can use it without root.
+# Creates /var/snap/cache with 1000:1000 (tdx on VM; matches runAsUser/runAsGroup in pod specs).
+# system-manager (runs as chutes) gets write access by having chutes in group tdx (GID 1000); dir is 2775.
 # All operations are idempotent: safe to run on reboot with an existing cache (mkdir -p, chown, chmod).
 # On failure (e.g. /var/snap not mounted) the script shuts down the VM immediately; service also has OnFailure=poweroff.target.
 set -euo pipefail
@@ -17,7 +18,7 @@ log_error() {
     logger -t "$LOG_TAG" -p user.err "ERROR: $1" 2>/dev/null || true
 }
 
-# UID:GID for pod/container access (must match runAsUser/runAsGroup in pod spec)
+# UID:GID for pod/container access (must match runAsUser/runAsGroup in pod spec). On VM this is tdx.
 SNAP_OWNER="1000:1000"
 SNAP_CACHE="/var/snap/cache"
 
@@ -30,10 +31,10 @@ if ! mountpoint -q /var/snap; then
     exit 1
 fi
 
-# Create snap cache dir for pod use (e.g. model weights) with pod-friendly permissions (idempotent on reboot)
+# Create snap cache dir: 1000:1000 (tdx) so pods can use it; 2775 so group (tdx) can write; chutes is in group tdx so system-manager can write
 mkdir -p "$SNAP_CACHE"
 chown -R "$SNAP_OWNER" "$SNAP_CACHE"
-chmod -R 755 "$SNAP_CACHE"
+chmod -R 2775 "$SNAP_CACHE"
 
 log "Cache setup complete"
 exit 0
