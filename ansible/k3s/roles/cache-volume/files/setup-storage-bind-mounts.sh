@@ -16,6 +16,8 @@ STORAGE_OWNER="1000:1000"
 STORAGE_BASE="/cache/storage"
 K3S_SERVER_SOURCE="${STORAGE_BASE}/k3s-server"
 K3S_SERVER_TARGET="/var/lib/rancher/k3s/server"
+ADMISSION_CERTS_SOURCE="${STORAGE_BASE}/admission-controller-certs"
+ADMISSION_CERTS_TARGET="/etc/admission-controller/certs"
 CONTAINERD_SOURCE="${STORAGE_BASE}/containerd"
 KUBELET_PODS_SOURCE="${STORAGE_BASE}/kubelet-pods"
 CHUTES_AGENT_SOURCE="${STORAGE_BASE}/chutes-agent"
@@ -61,6 +63,39 @@ else
         log "K3s server bind mount created successfully"
     else
         log "ERROR: Failed to create k3s server bind mount"
+        exit 1
+    fi
+fi
+
+# Setup admission controller certs on storage (must match caBundle in cluster webhook config across VM replacements)
+log "Ensuring admission controller certs on storage volume..."
+mkdir -p "$ADMISSION_CERTS_SOURCE"
+mkdir -p "$ADMISSION_CERTS_TARGET"
+admission_certs_file_count=$(find "$ADMISSION_CERTS_SOURCE" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
+if [[ "$admission_certs_file_count" -eq 0 ]]; then
+    if [ -d "$ADMISSION_CERTS_TARGET" ] && [ -f "${ADMISSION_CERTS_TARGET}/server.crt" ]; then
+        log "Admission controller certs on storage are empty, syncing from build VM..."
+        if rsync -a --exclude='lost+found' "$ADMISSION_CERTS_TARGET/" "$ADMISSION_CERTS_SOURCE/"; then
+            log "Admission controller certs synced successfully"
+        else
+            log "ERROR: Failed to sync admission controller certs to storage"
+            exit 1
+        fi
+    fi
+fi
+if mountpoint -q "$ADMISSION_CERTS_TARGET"; then
+    log "Admission controller certs target already mounted, checking bind mount..."
+    if [ "$(stat -c %d "$ADMISSION_CERTS_TARGET")" = "$(stat -c %d "$ADMISSION_CERTS_SOURCE")" ]; then
+        log "Admission controller certs bind mount already correctly configured"
+    else
+        log "WARNING: Admission controller certs target is mounted but not our bind mount. Skipping."
+    fi
+else
+    log "Creating bind mount: $ADMISSION_CERTS_SOURCE -> $ADMISSION_CERTS_TARGET"
+    if mount --bind "$ADMISSION_CERTS_SOURCE" "$ADMISSION_CERTS_TARGET"; then
+        log "Admission controller certs bind mount created successfully"
+    else
+        log "ERROR: Failed to create admission controller certs bind mount"
         exit 1
     fi
 fi
