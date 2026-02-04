@@ -1,3 +1,8 @@
+- name: Remove build-time dummy miner.env (config-manager writes real one from config volume at boot)
+  ansible.builtin.file:
+    path: /etc/system-manager/miner.env
+    state: absent
+
 - name: Clean build artifacts
   ansible.builtin.file:
     path: "{{ item }}"

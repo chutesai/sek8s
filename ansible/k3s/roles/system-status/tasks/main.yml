@@ -68,6 +68,17 @@
     group: root
     mode: '0644'
 
+- name: Deploy dummy miner.env for build time (config volume not mounted; replaced by config-manager at runtime)
+  ansible.builtin.copy:
+    content: |
+      # Build-time placeholder; replaced by config-manager from config volume at first boot.
+      MINER_SS58=5DummyBuildTimeSS58Address0000000000000000000000
+      MINER_SEED=0000000000000000000000000000000000000000000000000000000000000000
+    dest: /etc/system-manager/miner.env
+    owner: root
+    group: chutes
+    mode: '0600'
+
 - name: Allow chutes user to execute shutdown and du without password
   ansible.builtin.copy:
     content: |
