@@ -31,7 +31,7 @@ class CacheChuteStatus(BaseModel):
     chute_id: str = Field(..., description="Chute ID")
     status: CacheChuteStatusEnum = Field(
         ...,
-        description="One of: in_progress, present, missing",
+        description="One of: in_progress, present, missing, failed",
     )
     percent_complete: Optional[float] = Field(
         None,
@@ -40,6 +40,7 @@ class CacheChuteStatus(BaseModel):
     repo_id: Optional[str] = Field(None, description="HF repo ID when present or in_progress")
     revision: Optional[str] = Field(None, description="Revision when present or in_progress")
     size_bytes: Optional[int] = Field(None, description="Size in bytes when present")
+    error: Optional[str] = Field(None, description="Error message when status is failed")
 
 
 class CacheDownloadStatusResponse(BaseModel):

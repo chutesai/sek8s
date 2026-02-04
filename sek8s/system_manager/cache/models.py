@@ -16,6 +16,7 @@ class CacheChuteStatusEnum(str, Enum):
     IN_PROGRESS = "in_progress"
     PRESENT = "present"
     MISSING = "missing"
+    FAILED = "failed"
 
 
 class DownloadProgressStatus(str, Enum):
@@ -61,11 +62,11 @@ class ChuteDownloadState:
 
     @property
     def api_status(self) -> CacheChuteStatusEnum:
-        """Status for API response: in_progress, present, or missing."""
+        """Status for API response: in_progress, present, missing, or failed."""
         if self.status in _IN_PROGRESS_STATUSES:
             return CacheChuteStatusEnum.IN_PROGRESS
         if self.status == DownloadProgressStatus.FAILED:
-            return CacheChuteStatusEnum.MISSING
+            return CacheChuteStatusEnum.FAILED
         return CacheChuteStatusEnum.PRESENT
 
 

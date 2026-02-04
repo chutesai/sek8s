@@ -97,6 +97,7 @@ async def download_status(
                     percent_complete=s.percent_complete,
                     repo_id=s.repo_id,
                     revision=s.revision,
+                    error=s.error,
                 )
             )
         elif is_chute_present(chute_id):
@@ -136,6 +137,7 @@ async def download_status(
                     repo_id=s.repo_id,
                     revision=s.revision,
                     size_bytes=None,
+                    error=s.error,
                 )
             )
         if cache_base.exists():
