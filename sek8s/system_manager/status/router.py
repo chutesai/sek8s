@@ -63,7 +63,7 @@ async def health() -> HealthResponse:
 )
 @aiocache_cached(ttl=30)
 async def list_services(
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> ServicesListResponse:
     return ServicesListResponse(
         services=[
@@ -87,7 +87,7 @@ async def list_services(
 async def get_service_status(
     service_id: str,
     config: SystemStatusConfig = Depends(get_config),
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> ServiceStatusResponse:
     service = resolve_service(service_id)
     return await collect_service_status(service, config)
@@ -105,7 +105,7 @@ async def get_service_logs(
     config: SystemStatusConfig = Depends(get_config),
     lines: int = Query(200, ge=1),
     since_minutes: int = Query(0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"),
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> ServiceLogsResponse:
     service = resolve_service(service_id)
 
@@ -154,7 +154,7 @@ async def get_service_logs(
 async def nvidia_smi(
     detail: bool = Query(False, description="Return detailed (-q) output"),
     gpu: str = Query("all", description="GPU index or 'all'"),
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> NvidiaSmiResponse:
     return await nvidia_smi_impl(detail, gpu, get_config)
 
@@ -168,7 +168,7 @@ async def nvidia_smi(
 @aiocache_cached(ttl=30)
 async def overview(
     config: SystemStatusConfig = Depends(get_config),
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> OverviewResponse:
     services = await asyncio.gather(
         *(
@@ -212,7 +212,7 @@ async def get_disk_space(
         False,
         description="Cross filesystem boundaries (include mounted volumes)",
     ),
-    _auth: bool = Depends(authorize(allow_miner=True, purpose="status")),
+    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ):
     validated_path = validate_path(path)
 
@@ -228,7 +228,7 @@ async def get_disk_space(
     response_model=ShutdownResponse,
     summary="Graceful system shutdown",
     description="Initiates a graceful system shutdown (requires miner authentication)",
-    dependencies=[Depends(authorize(allow_miner=True, purpose="status"))],
+    dependencies=[Depends(authorize(allow_miner=True, allow_validator=True, purpose="status"))],
 )
 async def shutdown_system() -> ShutdownResponse:
     timestamp = datetime.now(timezone.utc).isoformat()
