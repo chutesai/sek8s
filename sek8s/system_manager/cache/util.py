@@ -192,12 +192,10 @@ async def run_download(
         try:
             if cache_dir_path.exists():
                 shutil.rmtree(cache_dir_path)
-                logger.info("Cleaned up cache dir for chute_id={} after failure", chute_id)
+                logger.info(f"Cleaned up cache dir for {chute_id=} after failure")
         except OSError as cleanup_err:
             logger.warning(
-                "Failed to clean up cache dir for chute_id={} after failure: {}",
-                chute_id,
-                cleanup_err,
+                f"Failed to clean up cache dir for {chute_id=} after failure: {cleanup_err}"
             )
 
 
