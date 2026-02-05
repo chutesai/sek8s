@@ -190,7 +190,7 @@ async def delete_chute(
             raise HTTPException(
                 status_code=409, detail="Download in progress for this chute"
             )
-        shutil.rmtree(path, ignore_errors=True)
+        shutil.rmtree(path, ignore_errors=False)
     else:
         message = "not found"
     return {"status": "ok", "message": message}
