@@ -30,6 +30,19 @@ def is_chute_present(chute_id: str) -> bool:
     return any(hub.glob("models--*"))
 
 
+def _chmod_tree_for_group_write(path: Path, mode: int) -> None:
+    """Recursively chmod path and its contents so group (tdx 1000) can write; we own the files."""
+    try:
+        for p in path.rglob("*"):
+            try:
+                os.chmod(p, mode)
+            except OSError:
+                pass
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 async def fetch_hf_info(chute_id: str) -> HfInfoResponse:
     """GET validator /chutes/{chute_id}/hf_info and return parsed HfInfoResponse.
     Request is signed with miner credentials when MINER_SS58/MINER_SEED are set.
@@ -155,10 +168,13 @@ async def run_download(
     so concurrent downloads are safe. On failure we remove the chute cache dir to avoid leaving
     partial or corrupted weights.
     """
+    # system-manager runs with primary group tdx (1000); dirs we create are 10150:1000. chmod 2775 so pod (1000:1000) can write.
     cache_dir_path = chute_cache_dir(chute_id)
     cache_dir_path.mkdir(parents=True, exist_ok=True)
+    os.chmod(cache_dir_path, 0o2775)
     hub_dir = cache_dir_path / "hub"
     hub_dir.mkdir(exist_ok=True)
+    os.chmod(hub_dir, 0o2775)
     hub_cache_dir = str(hub_dir)
 
     await download_state.remove_if_completed(chute_id)
@@ -183,6 +199,9 @@ async def run_download(
             revision=revision,
             cache_dir=str(cache_dir_path),
         )
+
+        # Recursively chmod 2775 so pod (GID 1000) can write to all dirs/files created by snapshot_download
+        _chmod_tree_for_group_write(cache_dir_path, 0o2775)
 
         await download_state.set_completed(chute_id)
     except Exception as e:

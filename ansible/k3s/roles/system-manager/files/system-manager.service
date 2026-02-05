@@ -5,8 +5,8 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=chutes
-Group=chutes
+User=system-manager
+Group=tdx
 WorkingDirectory=/opt/sek8s
 EnvironmentFile=/etc/system-manager/system-manager.env
 # Miner credentials for cache pre-download; written at runtime by config-manager from config volume

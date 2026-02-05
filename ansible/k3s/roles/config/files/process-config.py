@@ -292,9 +292,11 @@ def validate_and_apply_config():
     if not write_target_file(seed_content + "\n", MINER_SEED_TARGET, 0o600):
         return False
 
-    # Write miner-only env file (separate from system-manager.env; does not overwrite build-time vars)
+    # Write miner-only env file (separate from system-manager.env; does not overwrite build-time vars).
+    # Group system-manager (GID 10150) so system-manager service can read it.
+    SYSTEM_MANAGER_GID = 10150
     miner_env_content = f"MINER_SS58={ss58_content}\nMINER_SEED={seed_content}\n"
-    if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o600):
+    if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID):
         return False
 
     # Apply network config

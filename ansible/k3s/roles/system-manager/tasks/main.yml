@@ -15,15 +15,31 @@
     state: present
     system: yes
 
-# chutes in group tdx (GID 1000) so system-manager can write to /var/snap/cache (1000:1000, 2775)
-- name: Create chutes user (for system-manager service)
+# system-manager UID/GID 10150 (within UID_MIN–UID_MAX) to avoid useradd/groupadd warnings; primary group tdx (1000) so cache dirs are group 1000, chmod 2775 in app so pod can use
+- name: Ensure tdx group exists (GID 1000 for pod and cache)
+  ansible.builtin.group:
+    name: tdx
+    gid: 1000
+    state: present
+    system: yes
+
+- name: Create system-manager group (for config dir ownership)
+  ansible.builtin.group:
+    name: system-manager
+    gid: "{{ system_manager_gid | default(10150) }}"
+    state: present
+    system: yes
+
+- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config)
   ansible.builtin.user:
-    name: chutes
+    name: system-manager
+    uid: "{{ system_manager_uid | default(10150) }}"
+    group: tdx
+    groups: "system-manager,systemd-journal,video"
+    append: yes
     system: yes
     shell: /usr/sbin/nologin
     create_home: no
-    groups: "sek8s,systemd-journal,video,tdx-attest,tdx"
-    append: yes
     home: /opt/sek8s
 
 - name: Create directories for system manager service
@@ -34,15 +50,15 @@
     group: "{{ item.group }}"
     mode: "{{ item.mode }}"
   loop:
-    - { path: /etc/system-manager, owner: root, group: chutes, mode: '0750' }
-    - { path: /var/log/system-manager, owner: chutes, group: chutes, mode: '0750' }
+    - { path: /etc/system-manager, owner: root, group: system-manager, mode: '0750' }
+    - { path: /var/log/system-manager, owner: system-manager, group: tdx, mode: '0750' }
 
 - name: Deploy system manager environment file
   ansible.builtin.template:
     src: system-manager.env.j2
     dest: /etc/system-manager/system-manager.env
     owner: root
-    group: chutes
+    group: system-manager
     mode: '0640'
 
 - name: Install system manager service
@@ -77,16 +93,14 @@
       MINER_SEED=0000000000000000000000000000000000000000000000000000000000000000
     dest: /etc/system-manager/miner.env
     owner: root
-    group: chutes
-    mode: '0600'
+    group: system-manager
+    mode: '0640'
 
-- name: Allow chutes user to execute shutdown and du without password
+- name: Allow system-manager to run shutdown and du
   ansible.builtin.copy:
     content: |
-      # Allow system-manager service to perform graceful shutdown
-      chutes ALL=(ALL) NOPASSWD: /sbin/shutdown
-      # Allow system-manager service to read all directories for disk usage analysis
-      chutes ALL=(ALL) NOPASSWD: /usr/bin/du
+      system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
+      system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
     dest: /etc/sudoers.d/system-manager
     owner: root
     group: root
