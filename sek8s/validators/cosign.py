@@ -54,6 +54,11 @@ class CosignValidator(ValidatorBase):
         self._negative_cache = TTLCache(
             maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.negative_cache_ttl
         )
+        self._admission_result_cache = TTLCache(
+            maxsize=self.cosign_config.admission_result_cache_maxsize,
+            ttl=self.cosign_config.admission_result_cache_ttl,
+        )
+        self._admission_cache_lock = asyncio.Lock()
         self._rate_limit_until = 0.0
         self._rate_limit_patterns = [
             re.compile(p, re.IGNORECASE)
@@ -99,6 +104,18 @@ class CosignValidator(ValidatorBase):
 
         return list(rules)
 
+    def _admission_cache_key(self, request: dict, images: List[str]) -> tuple:
+        """Build a cache key for admission result so all pods with same images reuse result.
+
+        Key is (namespace, kind, image_set) only—no name or UID. So when many new pods
+        are created with the same bad image (e.g. controller replacing crashlooping pods),
+        only the first admission runs cosign; the rest get a cache hit and avoid registry
+        rate limits. Result is valid for admission_result_cache_ttl (default 20 min).
+        """
+        namespace = request.get("namespace", "default")
+        kind = request.get("kind", {}).get("kind", "")
+        return (namespace, kind, tuple(sorted(images)))
+
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
@@ -129,6 +146,20 @@ class CosignValidator(ValidatorBase):
         if not images:
             return ValidationResult.allow()
 
+        # Admission-level cache: same pod/spec (same uid or same name+images) → return cached result to avoid repeated cosign calls
+        cache_key = self._admission_cache_key(request, images)
+        async with self._admission_cache_lock:
+            if cache_key in self._admission_result_cache:
+                cached = self._admission_result_cache[cache_key]
+                logger.debug(
+                    "Cosign admission cache hit for %s/%s (%s), allowed=%s",
+                    namespace,
+                    obj.get("metadata", {}).get("name", ""),
+                    kind,
+                    cached.allowed,
+                )
+                return cached
+
         # 1. Create validation context (required_key_path set in _get_rules_for_context when chutes)
         ctx = ValidationContext(
             config=self.config,
@@ -152,10 +183,14 @@ class CosignValidator(ValidatorBase):
             except Exception as e:
                 logger.exception("Rule %s failed", getattr(rule, "__name__", rule))
                 violations.append(f"Verification failed: {str(e)}")
-        # 4. Return validation result
+        # 4. Return validation result and cache it for this pod/spec
         if violations:
-            return ValidationResult.deny("; ".join(violations))
-        return ValidationResult.allow()
+            result = ValidationResult.deny("; ".join(violations))
+        else:
+            result = ValidationResult.allow()
+        async with self._admission_cache_lock:
+            self._admission_result_cache[cache_key] = result
+        return result
 
     # -------------------------------------------------------------------------
     # Generic rules: operate only on context; no namespace or rule-set awareness
