@@ -1,9 +1,16 @@
 .PHONY: install
 install: ##@development Instal development dependencies
 install: venv
-	mkdir bin
+	mkdir -p bin
 	curl -L -o bin/opa https://openpolicyagent.org/downloads/v1.3.0/opa_linux_amd64_static
 	chmod 755 ./bin/opa
+
+OPA_POLICIES_DIR ?= ansible/k3s/roles/admission-controller/files/policies
+OPA_TESTS_DIR ?= tests/opa
+
+.PHONY: test-opa-policies
+test-opa-policies: ##@development Run OPA policy tests locally (requires make install)
+	./bin/opa test $(OPA_POLICIES_DIR) $(OPA_TESTS_DIR) -v
 
 .PHONY: venv
 venv: ##@development Set up virtual environment
