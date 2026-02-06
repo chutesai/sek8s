@@ -20,6 +20,13 @@ class RateLimitError(Exception):
     """Raised when upstream registry signals rate limiting."""
 
 
+class CosignVerificationUnavailableError(Exception):
+    """Raised when cosign verification cannot be performed due to network or infra failure.
+
+    Callers should not cache the admission result so the next attempt can retry.
+    """
+
+
 @dataclass
 class ValidationContext:
     """Context passed to validation rules: config, request, and pre-extracted data.
@@ -116,6 +123,25 @@ class CosignValidator(ValidatorBase):
         kind = request.get("kind", {}).get("kind", "")
         return (namespace, kind, tuple(sorted(images)))
 
+    def _is_connection_or_infra_failure(self, stdout: str, stderr: str) -> bool:
+        """True if cosign subprocess output indicates registry/network unreachable.
+
+        Since cosign runs as a subprocess we cannot catch connection errors as Python
+        exceptions; this inspects stdout/stderr so we can raise CosignVerificationUnavailableError
+        and avoid caching the failure.
+        """
+        indicators = [
+            "connection refused",
+            "connection reset",
+            "dial tcp",
+            "i/o timeout",
+            "temporary failure",
+            "no such host",
+            "connection timed out",
+        ]
+        combined = f"{stdout}\n{stderr}".lower()
+        return any(ind in combined for ind in indicators)
+
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
@@ -176,6 +202,11 @@ class CosignValidator(ValidatorBase):
         for rule in rules:
             try:
                 violations.extend(await rule(ctx))
+            except CosignVerificationUnavailableError as e:
+                logger.warning("Cosign verification unavailable (network/infra), not caching: %s", e)
+                return ValidationResult.deny(
+                    f"Cosign verification unavailable (network/infra): {e}"
+                )
             except RateLimitError as e:
                 logger.warning(f"Rate limited: {e}")
                 violations.append(str(e))
@@ -286,6 +317,8 @@ class CosignValidator(ValidatorBase):
                     violations.append(
                         f"Image {image} has invalid or missing signature (registry: {registry}, org: {org})"
                     )
+            except CosignVerificationUnavailableError:
+                raise
             except RateLimitError:
                 raise
             except Exception as e:
@@ -384,6 +417,8 @@ class CosignValidator(ValidatorBase):
             else:
                 logger.error(f"Unknown verification method: {verification_config.verification_method}")
                 valid = False
+        except CosignVerificationUnavailableError:
+            raise
         except RateLimitError:
             # propagate so caller can stop hammering upstream
             raise
@@ -429,6 +464,9 @@ class CosignValidator(ValidatorBase):
                     self._record_rate_limit()
                     raise RateLimitError(self._rate_limit_message())
 
+                if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                    raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
                 if success:
                     try:
                         verification_result = json.loads(stdout)
@@ -439,6 +477,8 @@ class CosignValidator(ValidatorBase):
                 else:
                     logger.error(f"Cosign key verification failed for {image}: {stderr or stdout}")
             except RateLimitError:
+                raise
+            except CosignVerificationUnavailableError:
                 raise
             except Exception as e:
                 logger.error(f"Exception during key-based verification: {e}")
@@ -472,6 +512,9 @@ class CosignValidator(ValidatorBase):
                 self._record_rate_limit()
                 raise RateLimitError(self._rate_limit_message())
 
+            if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
             if success:
                 try:
                     verification_result = json.loads(stdout)
@@ -484,6 +527,8 @@ class CosignValidator(ValidatorBase):
                 return False
 
         except RateLimitError:
+            raise
+        except CosignVerificationUnavailableError:
             raise
         except Exception as e:
             logger.error(f"Exception during keyless verification: {e}")
