@@ -2,7 +2,7 @@
 
 This guide explains how to create and prepare an unencrypted cache volume for use with TDX VMs. The cache volume will be mounted at `/var/snap` in the guest VM to provide additional storage separate from the encrypted root volume.
 
-By default, the guest keeps only the k3s **containerd** data under `/var/snap/containerd` (bind-mounted into `/var/lib/rancher/k3s/agent/containerd`) and the **Chutes agent state** under `/var/snap/chutes-agent` (bind-mounted into `/var/lib/chutes/agent`). This keeps Kubernetes secrets and etcd data on the encrypted root disk while still offloading heavy image layers and miner cache data. Additional application caches can live under sibling paths (for example `/var/snap/cache` for model weights).
+By default, the guest uses two volumes: **main storage** (mounted at `/cache/storage`) and **HF cache** (mounted at `/var/snap`). Main storage holds **k3s server** state (cluster DB, token, TLS, manifests), **admission controller certs** (so the webhook caBundle stays in sync across VM replacements), k3s **containerd** data, **kubelet-pods**, and **Chutes agent state** under `/cache/storage/k3s-server`, `/cache/storage/admission-controller-certs`, `/cache/storage/containerd`, `/cache/storage/kubelet-pods`, and `/cache/storage/chutes-agent`; these are bind-mounted into `/var/lib/rancher/k3s/server`, `/etc/admission-controller/certs`, `/var/lib/rancher/k3s/agent/containerd`, `/var/lib/kubelet/pods`, and `/var/lib/chutes/agent` by `setup-storage-bind-mounts.service`. Keeping the k3s server and admission controller certs on the storage volume ensures cluster state, node identity, and webhook TLS verification persist across VM upgrades. The HF cache at `/var/snap` is used for application caches (for example `/var/snap/cache` for model weights). The guest runs `setup-cache.service` after the HF cache is mounted; it creates `/var/snap/cache` with ownership `1000:1000` and mode `755` so pods can use it without running as root. Agent state and its bind mount are created and set to `1000:1000`/`755` by `setup-storage-bind-mounts` on main storage.
 
 ## Prerequisites
 
@@ -142,14 +142,10 @@ Once the cache volume is prepared, pass it to the TDX launch script:
 
 ## Verification at Boot
 
-The TDX VM will automatically verify the cache volume during boot:
+- **Production:** The initramfs script `setup_storage` detects the cache device by label `tdx-cache` (or LUKS label). If the cache device is **not found**, the VM **powers off** (cache is required). If found, it is unlocked (or on first boot encrypted) to `/dev/mapper/tdx-cache`. After boot, `var-snap.mount` mounts it at `/var/snap`, then `verify-cache-volume.service` runs and confirms the mount is from a LUKS dm-crypt device.
+- **Debug:** The cache volume is expected unencrypted with label `tdx-cache`. `var-snap.mount` mounts `/dev/disk/by-label/tdx-cache` at `/var/snap`. `verify-cache-volume.service` runs after mount and confirms the device is unencrypted with the correct label.
 
-1. **Device check**: Confirms `/dev/vdb` exists
-2. **Filesystem check**: Confirms the filesystem is ext4
-3. **Label check**: Confirms the label is exactly `tdx-cache`
-4. **Mount check**: Mounts to `/var/snap`
-
-**If any check fails, the VM will immediately shut down.** Check the serial log for error details:
+**If the cache device is missing or verification fails, the VM will shut down.** Check the serial log for error details:
 
 ```bash
 ./run-tdx.sh --status
@@ -226,8 +222,8 @@ sudo qemu-nbd --disconnect /dev/nbd0
 
 ## Security Considerations
 
-- **Unencrypted**: The cache volume is NOT encrypted. Only store non-sensitive data.
-- **Host access**: The host machine can read the cache volume contents.
+- **Production**: The cache volume is LUKS-encrypted; passphrases are managed by the same API as main storage (separate passphrases per volume). **Debug**: The cache is unencrypted; only store non-sensitive data.
+- **Host access**: The host can read unencrypted (debug) cache contents; production cache is encrypted.
 - **Integrity**: Consider storing checksums of critical data to detect tampering.
 - **Isolation**: Keep cache volumes separate per VM to prevent cross-contamination.
 

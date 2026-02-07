@@ -369,3 +369,60 @@ class TestCosignValidator:
         assert org == 'parachutes'
         assert repo == 'app'
         assert tag == '@sha256:abcd1234'
+
+    def test_admission_cache_key(self, config):
+        """Test admission cache key is stable and shared by pods with same images (no name/uid)."""
+        validator = CosignValidator(config)
+        request = {
+            "namespace": "default",
+            "kind": {"kind": "Pod"},
+            "object": {"metadata": {"name": "my-pod", "uid": "pod-uid-123"}},
+        }
+        images = ["docker.io/nginx:latest", "gcr.io/pause:3.9"]
+        key1 = validator._admission_cache_key(request, images)
+        key2 = validator._admission_cache_key(request, images)
+        assert key1 == key2
+        # Key is (namespace, kind, images) only so new pods with same images get cache hit
+        assert key1 == ("default", "Pod", ("docker.io/nginx:latest", "gcr.io/pause:3.9"))
+
+    @pytest.mark.asyncio
+    async def test_admission_result_cache_returns_cached_on_same_pod(self, config, valid_admission_review):
+        """Second request with same images returns cached result without re-verifying."""
+        validator = CosignValidator(config)
+        call_count = 0
+
+        async def count_and_allow(ctx):
+            nonlocal call_count
+            call_count += 1
+            return []
+
+        with patch.object(validator, "_verify_cosign_config", side_effect=count_and_allow):
+            result1 = await validator.validate(valid_admission_review)
+            result2 = await validator.validate(valid_admission_review)
+        assert result1.allowed == result2.allowed
+        assert call_count == 1, "Second request should use admission cache and not run verification"
+
+    @pytest.mark.asyncio
+    async def test_admission_result_cache_shared_across_new_pods_same_images(self, config, valid_admission_review):
+        """Different pods (different name/uid) with same images share cache so only first runs cosign."""
+        validator = CosignValidator(config)
+        call_count = 0
+
+        async def count_and_allow(ctx):
+            nonlocal call_count
+            call_count += 1
+            return []
+
+        with patch.object(validator, "_verify_cosign_config", side_effect=count_and_allow):
+            result1 = await validator.validate(valid_admission_review)
+            # Second "pod": same namespace/kind/images, different name/uid (simulates new pod)
+            review2 = dict(valid_admission_review)
+            review2["request"] = dict(review2["request"])
+            review2["request"]["uid"] = "different-request-uid"
+            review2["request"]["object"] = dict(review2["request"]["object"])
+            review2["request"]["object"]["metadata"] = dict(review2["request"]["object"]["metadata"])
+            review2["request"]["object"]["metadata"]["name"] = "other-pod"
+            review2["request"]["object"]["metadata"]["uid"] = "different-pod-uid"
+            result2 = await validator.validate(review2)
+        assert result1.allowed == result2.allowed
+        assert call_count == 1, "New pod with same images should hit admission cache, not run verification"

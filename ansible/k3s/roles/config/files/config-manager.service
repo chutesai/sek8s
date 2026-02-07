@@ -31,8 +31,8 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 PrivateDevices=yes
 
-# Allow access to config directories
-ReadWritePaths=/var/config /var/lib/rancher/k3s/credentials /var/log /etc/hostname /etc/netplan /proc/sys/kernel/hostname
+# Allow access to config directories and system-manager miner env
+ReadWritePaths=/var/config /var/lib/rancher/k3s/credentials /var/log /etc/hostname /etc/netplan /etc/system-manager /proc/sys/kernel/hostname
 ReadOnlyPaths=/usr/local/bin
 
 # Failure handling - if validation fails, shut down the system

@@ -1,4 +1,5 @@
 from abc import abstractmethod
+import hashlib
 import os
 from typing import Callable, Optional
 from fastapi import FastAPI
@@ -7,9 +8,11 @@ from loguru import logger
 import uvicorn
 import ssl
 
+from starlette.requests import Request
 from starlette.types import Lifespan
 from fastapi.applications import AppType
 from sek8s.config import ServerConfig
+
 
 class WebServer:
     """Async web server for admission webhook using FastAPI."""
@@ -18,10 +21,24 @@ class WebServer:
         self.config = config
         self.app = FastAPI(
             debug=config.debug,
-            default_response_class=ORJSONResponse, 
+            default_response_class=ORJSONResponse,
             lifespan=lifespan
         )
+        self._add_body_sha256_middleware()
         self._setup_routes()
+
+    def _add_body_sha256_middleware(self) -> None:
+        """Set request.state.body_sha256 for POST/PUT/PATCH so authorize() can verify payload signatures."""
+        @self.app.middleware("http")
+        async def add_body_sha256(request: Request, call_next):
+            if request.method in ("POST", "PUT", "PATCH"):
+                body = await request.body()
+                request.state.body_sha256 = (
+                    hashlib.sha256(body).hexdigest() if body else None
+                )
+            else:
+                request.state.body_sha256 = None
+            return await call_next(request)
 
     @abstractmethod
     def _setup_routes(self):

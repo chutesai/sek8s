@@ -30,6 +30,10 @@ HOSTNAME_TARGET = "/etc/hostname"
 MINER_CREDS_DIR = "/var/lib/rancher/k3s/credentials"
 MINER_SS58_TARGET = os.path.join(MINER_CREDS_DIR, "miner-ss58")
 MINER_SEED_TARGET = os.path.join(MINER_CREDS_DIR, "miner-seed")
+# Separate env file for system-manager miner vars only (cache pre-download signing).
+# systemd loads this in addition to /etc/system-manager/system-manager.env (build-time);
+# we never modify system-manager.env.
+SYSTEM_MANAGER_MINER_ENV = "/etc/system-manager/miner.env"
 NETWORK_CONFIG_TARGET = "/etc/netplan/50-config-volume.yaml"
 
 def log(message, level="INFO"):
@@ -171,13 +175,6 @@ def write_target_file(content, target_path, mode=0o644, owner_uid=0, owner_gid=0
         target_dir = os.path.dirname(target_path)
         os.makedirs(target_dir, exist_ok=True)
         
-        # # Create backup if target exists
-        # if os.path.exists(target_path):
-        #     timestamp = int(datetime.now().timestamp())
-        #     backup_path = os.path.join(BACKUP_DIR, f"{os.path.basename(target_path)}.backup.{timestamp}")
-        #     shutil.copy2(target_path, backup_path)
-        #     log(f"Backup created: {backup_path}")
-        
         # Write new content
         with open(target_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -294,7 +291,14 @@ def validate_and_apply_config():
     
     if not write_target_file(seed_content + "\n", MINER_SEED_TARGET, 0o600):
         return False
-    
+
+    # Write miner-only env file (separate from system-manager.env; does not overwrite build-time vars).
+    # Group system-manager (GID 10150) so system-manager service can read it.
+    SYSTEM_MANAGER_GID = 10150
+    miner_env_content = f"MINER_SS58={ss58_content}\nMINER_SEED={seed_content}\n"
+    if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID):
+        return False
+
     # Apply network config
     if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o600):
         return False

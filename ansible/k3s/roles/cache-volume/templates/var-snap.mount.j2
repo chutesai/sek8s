@@ -1,0 +1,26 @@
+[Unit]
+Description=Cache storage for /var/snap
+Documentation=man:systemd.mount(5)
+After=local-fs-pre.target
+Before=setup-cache.service
+Before=cloud-final.service
+Before=k3s.service
+Before=k3s-agent.service
+Before=snapd.service
+OnFailure=poweroff.target
+
+[Mount]
+{% if debug_build | default(false) %}
+# Debug mode: Use unencrypted device by label
+What=/dev/disk/by-label/tdx-cache
+{% else %}
+# Production mode: Use the mapped LUKS device (unlocked by initramfs)
+What=/dev/mapper/tdx-cache
+{% endif %}
+Where=/var/snap
+Type=ext4
+Options=defaults,noatime
+TimeoutSec=30
+
+[Install]
+WantedBy=local-fs.target

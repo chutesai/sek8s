@@ -20,6 +20,13 @@ class RateLimitError(Exception):
     """Raised when upstream registry signals rate limiting."""
 
 
+class CosignVerificationUnavailableError(Exception):
+    """Raised when cosign verification cannot be performed due to network or infra failure.
+
+    Callers should not cache the admission result so the next attempt can retry.
+    """
+
+
 @dataclass
 class ValidationContext:
     """Context passed to validation rules: config, request, and pre-extracted data.
@@ -54,6 +61,11 @@ class CosignValidator(ValidatorBase):
         self._negative_cache = TTLCache(
             maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.negative_cache_ttl
         )
+        self._admission_result_cache = TTLCache(
+            maxsize=self.cosign_config.admission_result_cache_maxsize,
+            ttl=self.cosign_config.admission_result_cache_ttl,
+        )
+        self._admission_cache_lock = asyncio.Lock()
         self._rate_limit_until = 0.0
         self._rate_limit_patterns = [
             re.compile(p, re.IGNORECASE)
@@ -99,6 +111,37 @@ class CosignValidator(ValidatorBase):
 
         return list(rules)
 
+    def _admission_cache_key(self, request: dict, images: List[str]) -> tuple:
+        """Build a cache key for admission result so all pods with same images reuse result.
+
+        Key is (namespace, kind, image_set) only—no name or UID. So when many new pods
+        are created with the same bad image (e.g. controller replacing crashlooping pods),
+        only the first admission runs cosign; the rest get a cache hit and avoid registry
+        rate limits. Result is valid for admission_result_cache_ttl (default 20 min).
+        """
+        namespace = request.get("namespace", "default")
+        kind = request.get("kind", {}).get("kind", "")
+        return (namespace, kind, tuple(sorted(images)))
+
+    def _is_connection_or_infra_failure(self, stdout: str, stderr: str) -> bool:
+        """True if cosign subprocess output indicates registry/network unreachable.
+
+        Since cosign runs as a subprocess we cannot catch connection errors as Python
+        exceptions; this inspects stdout/stderr so we can raise CosignVerificationUnavailableError
+        and avoid caching the failure.
+        """
+        indicators = [
+            "connection refused",
+            "connection reset",
+            "dial tcp",
+            "i/o timeout",
+            "temporary failure",
+            "no such host",
+            "connection timed out",
+        ]
+        combined = f"{stdout}\n{stderr}".lower()
+        return any(ind in combined for ind in indicators)
+
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
@@ -129,6 +172,20 @@ class CosignValidator(ValidatorBase):
         if not images:
             return ValidationResult.allow()
 
+        # Admission-level cache: same pod/spec (same uid or same name+images) → return cached result to avoid repeated cosign calls
+        cache_key = self._admission_cache_key(request, images)
+        async with self._admission_cache_lock:
+            if cache_key in self._admission_result_cache:
+                cached = self._admission_result_cache[cache_key]
+                logger.debug(
+                    "Cosign admission cache hit for %s/%s (%s), allowed=%s",
+                    namespace,
+                    obj.get("metadata", {}).get("name", ""),
+                    kind,
+                    cached.allowed,
+                )
+                return cached
+
         # 1. Create validation context (required_key_path set in _get_rules_for_context when chutes)
         ctx = ValidationContext(
             config=self.config,
@@ -145,6 +202,11 @@ class CosignValidator(ValidatorBase):
         for rule in rules:
             try:
                 violations.extend(await rule(ctx))
+            except CosignVerificationUnavailableError as e:
+                logger.warning("Cosign verification unavailable (network/infra), not caching: %s", e)
+                return ValidationResult.deny(
+                    f"Cosign verification unavailable (network/infra): {e}"
+                )
             except RateLimitError as e:
                 logger.warning(f"Rate limited: {e}")
                 violations.append(str(e))
@@ -152,10 +214,14 @@ class CosignValidator(ValidatorBase):
             except Exception as e:
                 logger.exception("Rule %s failed", getattr(rule, "__name__", rule))
                 violations.append(f"Verification failed: {str(e)}")
-        # 4. Return validation result
+        # 4. Return validation result and cache it for this pod/spec
         if violations:
-            return ValidationResult.deny("; ".join(violations))
-        return ValidationResult.allow()
+            result = ValidationResult.deny("; ".join(violations))
+        else:
+            result = ValidationResult.allow()
+        async with self._admission_cache_lock:
+            self._admission_result_cache[cache_key] = result
+        return result
 
     # -------------------------------------------------------------------------
     # Generic rules: operate only on context; no namespace or rule-set awareness
@@ -251,6 +317,8 @@ class CosignValidator(ValidatorBase):
                     violations.append(
                         f"Image {image} has invalid or missing signature (registry: {registry}, org: {org})"
                     )
+            except CosignVerificationUnavailableError:
+                raise
             except RateLimitError:
                 raise
             except Exception as e:
@@ -349,6 +417,8 @@ class CosignValidator(ValidatorBase):
             else:
                 logger.error(f"Unknown verification method: {verification_config.verification_method}")
                 valid = False
+        except CosignVerificationUnavailableError:
+            raise
         except RateLimitError:
             # propagate so caller can stop hammering upstream
             raise
@@ -394,6 +464,9 @@ class CosignValidator(ValidatorBase):
                     self._record_rate_limit()
                     raise RateLimitError(self._rate_limit_message())
 
+                if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                    raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
                 if success:
                     try:
                         verification_result = json.loads(stdout)
@@ -404,6 +477,8 @@ class CosignValidator(ValidatorBase):
                 else:
                     logger.error(f"Cosign key verification failed for {image}: {stderr or stdout}")
             except RateLimitError:
+                raise
+            except CosignVerificationUnavailableError:
                 raise
             except Exception as e:
                 logger.error(f"Exception during key-based verification: {e}")
@@ -437,6 +512,9 @@ class CosignValidator(ValidatorBase):
                 self._record_rate_limit()
                 raise RateLimitError(self._rate_limit_message())
 
+            if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
             if success:
                 try:
                     verification_result = json.loads(stdout)
@@ -449,6 +527,8 @@ class CosignValidator(ValidatorBase):
                 return False
 
         except RateLimitError:
+            raise
+        except CosignVerificationUnavailableError:
             raise
         except Exception as e:
             logger.error(f"Exception during keyless verification: {e}")

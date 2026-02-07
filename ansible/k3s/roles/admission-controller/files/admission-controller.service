@@ -1,8 +1,10 @@
 [Unit]
 Description=Kubernetes Admission Controller
-After=network.target opa.service
+After=network.target opa.service setup-storage-bind-mounts.service
 Wants=opa.service
 Before=k3s.service
+# Certificates may be bind-mounted from storage volume; ensure they are in place before starting
+RequiresMountsFor=/etc/admission-controller/certs
 
 [Service]
 Type=simple

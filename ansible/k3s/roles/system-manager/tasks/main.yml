@@ -1,0 +1,115 @@
+---
+- name: Ensure supplemental groups exist for system manager
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+    system: yes
+  loop:
+    - systemd-journal
+    - video
+
+- name: Ensure tdx-attest group exists for TLS sharing
+  ansible.builtin.group:
+    name: tdx-attest
+    gid: 987
+    state: present
+    system: yes
+
+# system-manager UID/GID 10150 (within UID_MIN–UID_MAX) to avoid useradd/groupadd warnings; primary group tdx (1000) so cache dirs are group 1000, chmod 2775 in app so pod can use
+- name: Ensure tdx group exists (GID 1000 for pod and cache)
+  ansible.builtin.group:
+    name: tdx
+    gid: 1000
+    state: present
+    system: yes
+
+- name: Create system-manager group (for config dir ownership)
+  ansible.builtin.group:
+    name: system-manager
+    gid: "{{ system_manager_gid | default(10150) }}"
+    state: present
+    system: yes
+
+- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config)
+  ansible.builtin.user:
+    name: system-manager
+    uid: "{{ system_manager_uid | default(10150) }}"
+    group: tdx
+    groups: "system-manager,systemd-journal,video"
+    append: yes
+    system: yes
+    shell: /usr/sbin/nologin
+    create_home: no
+    home: /opt/sek8s
+
+- name: Create directories for system manager service
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/system-manager, owner: root, group: system-manager, mode: '0750' }
+    - { path: /var/log/system-manager, owner: system-manager, group: tdx, mode: '0750' }
+
+- name: Deploy system manager environment file
+  ansible.builtin.template:
+    src: system-manager.env.j2
+    dest: /etc/system-manager/system-manager.env
+    owner: root
+    group: system-manager
+    mode: '0640'
+
+- name: Install system manager service
+  ansible.builtin.copy:
+    src: system-manager.service
+    dest: /etc/systemd/system/system-manager.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create system manager drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/system-manager.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy security drop-in
+  ansible.builtin.copy:
+    src: system-manager.conf
+    dest: /etc/systemd/system/system-manager.service.d/10-security.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy dummy miner.env for build time (config volume not mounted; replaced by config-manager at runtime)
+  ansible.builtin.copy:
+    content: |
+      # Build-time placeholder; replaced by config-manager from config volume at first boot.
+      MINER_SS58=5DummyBuildTimeSS58Address0000000000000000000000
+      MINER_SEED=0000000000000000000000000000000000000000000000000000000000000000
+    dest: /etc/system-manager/miner.env
+    owner: root
+    group: system-manager
+    mode: '0640'
+
+- name: Allow system-manager to run shutdown and du
+  ansible.builtin.copy:
+    content: |
+      system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
+      system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
+    dest: /etc/sudoers.d/system-manager
+    owner: root
+    group: root
+    mode: '0440'
+    validate: '/usr/sbin/visudo -cf %s'
+
+- name: Enable and start system manager
+  ansible.builtin.systemd:
+    name: system-manager.service
+    enabled: yes
+    state: started
+    daemon_reload: yes

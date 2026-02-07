@@ -1,11 +1,11 @@
+import importlib
+
 import pytest
 from fastapi.testclient import TestClient
 
-from sek8s.config import SystemStatusConfig
-from sek8s.services.system_status import (
+from sek8s.system_manager.status.models import (
     CommandResult,
     SERVICE_ALLOWLIST,
-    SystemStatusServer,
 )
 
 
@@ -28,20 +28,22 @@ class FakeRunner:
 @pytest.fixture
 def fake_runner(monkeypatch):
     runner = FakeRunner()
-    monkeypatch.setattr("sek8s.services.system_status._run_command", runner)
+    util_mod = importlib.import_module("sek8s.system_manager.status.util")
+    router_mod = importlib.import_module("sek8s.system_manager.status.router")
+    monkeypatch.setattr(util_mod, "run_command", runner)
+    monkeypatch.setattr(router_mod, "run_command", runner)
     return runner
 
 
 @pytest.fixture
-def status_client():
-    config = SystemStatusConfig(uds_path="/tmp/system-status.sock")
-    server = SystemStatusServer(config)
-    with TestClient(server.app) as client:
+def status_client(manager_app_no_auth):
+    """Test client for status endpoints (auth bypassed via manager_app_no_auth)."""
+    with TestClient(manager_app_no_auth) as client:
         yield client
 
 
 def test_list_services(status_client):
-    response = status_client.get("/services")
+    response = status_client.get("/status/services")
     assert response.status_code == 200
     data = response.json()
     service_ids = {svc["id"] for svc in data["services"]}
@@ -51,6 +53,7 @@ def test_list_services(status_client):
         "k3s",
         "nvidia-persistenced",
         "nvidia-fabricmanager",
+        "system-manager",
     }
     assert expected.issubset(service_ids)
 
@@ -76,7 +79,7 @@ def test_service_status_parsing(status_client, fake_runner):
         ),
     )
 
-    response = status_client.get("/services/admission-controller/status")
+    response = status_client.get("/status/services/admission-controller/status")
     assert response.status_code == 200
     data = response.json()
     assert data["status"]["active_state"] == "active"
@@ -97,7 +100,7 @@ def test_logs_endpoint_respects_clamp(status_client, fake_runner):
         ),
     )
 
-    response = status_client.get("/services/k3s/logs?lines=5001")
+    response = status_client.get("/status/services/k3s/logs?lines=5001")
     assert response.status_code == 200
     data = response.json()
     assert data["returned_lines"] == 2
@@ -116,7 +119,7 @@ def test_nvidia_smi_command_building(status_client, fake_runner):
         ),
     )
 
-    response = status_client.get("/gpu/nvidia-smi?detail=true&gpu=0")
+    response = status_client.get("/status/gpu/nvidia-smi?detail=true&gpu=0")
     assert response.status_code == 200
     data = response.json()
     assert data["command"] == ["nvidia-smi", "-q", "-i", "0"]
@@ -125,7 +128,7 @@ def test_nvidia_smi_command_building(status_client, fake_runner):
 
 
 def test_unknown_service_returns_404(status_client):
-    response = status_client.get("/services/unknown/status")
+    response = status_client.get("/status/services/unknown/status")
     assert response.status_code == 404
 
 
@@ -160,7 +163,7 @@ def test_overview_success(status_client, fake_runner):
         ),
     )
 
-    response = status_client.get("/overview")
+    response = status_client.get("/status/overview")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
@@ -191,7 +194,7 @@ def test_overview_degraded_on_service_failure(status_client, fake_runner):
         ),
     )
 
-    response = status_client.get("/overview")
+    response = status_client.get("/status/overview")
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "degraded"
