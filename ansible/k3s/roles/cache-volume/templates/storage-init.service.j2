@@ -16,7 +16,7 @@ TimeoutStartSec=300
 
 # Run initialization scripts in sequence (verification already done by verify-storage.service)
 ExecStart=/usr/local/bin/init-k3s-storage.sh
-ExecStart=/usr/local/bin/init-kubelet-pods-storage.sh
+ExecStart=/usr/local/bin/init-kubelet-storage.sh
 
 [Install]
 WantedBy=local-fs.target

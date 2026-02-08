@@ -1,11 +1,12 @@
 #!/bin/bash
-# Initialize k3s storage on storage volume by copying entire k3s dir from root when volume is empty.
-# Runs AFTER storage verification and mount, BEFORE setup-storage-bind-mounts (so bind mount can overlay).
+# Initialize k3s storage on storage volume: create k3s dir and required subdirs on empty volume.
+# We do NOT sync from VM root so that a recreated (empty) volume gives a fresh cluster and
+# a new miner kubeconfig/certificate at first boot (03-k3s-miner-kubeconfig.sh).
+# Runs AFTER storage verification and mount, BEFORE setup-storage-bind-mounts.
 
 set -euo pipefail
 
 STORAGE_BASE="/cache/storage"
-K3S_SOURCE="/var/lib/rancher/k3s"
 K3S_STORAGE_TARGET="${STORAGE_BASE}/k3s"
 LOG_TAG="init-k3s-storage"
 
@@ -25,30 +26,28 @@ if ! mountpoint -q "$STORAGE_BASE"; then
     exit 1
 fi
 
-# Create k3s directory on storage (do not create subdirs yet so empty-check is accurate)
+# Create k3s directory and required subdirs; k3s and cluster-init will populate on first boot
 mkdir -p "$K3S_STORAGE_TARGET"
 
-# Check if storage k3s is empty (fresh volume - no server/agent state yet)
-file_count=$(find "$K3S_STORAGE_TARGET" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
-
-if [[ "$file_count" -eq 0 ]]; then
-    # Storage is empty; sync from VM root if it has existing k3s state (e.g. build with preinstalled k3s)
-    if [ -d "$K3S_SOURCE" ] && { [ -d "${K3S_SOURCE}/server/db" ] || [ -f "${K3S_SOURCE}/server/token" ] || [ -d "${K3S_SOURCE}/agent" ]; }; then
-        log_info "K3s on storage is empty, syncing from VM root ($K3S_SOURCE -> $K3S_STORAGE_TARGET)"
-        if rsync -a --exclude='lost+found' "$K3S_SOURCE/" "$K3S_STORAGE_TARGET/"; then
-            log_info "K3s state synced successfully ($(du -sh "$K3S_STORAGE_TARGET" 2>/dev/null | cut -f1))"
-        else
-            log_error "Failed to sync k3s state to storage"
-            exit 1
+# Optional: force a fresh cluster (new CA, new miner kubeconfig) when the volume was recreated.
+# If this marker exists on the storage volume, we remove existing server/, agent/, and init-markers
+# so k3s generates a new CA and cluster-init scripts (e.g. miner-kubeconfig) run again.
+# Create it when attaching a new/empty volume (e.g. touch /cache/storage/.k3s-fresh from host or
+# cloud-init), or leave absent to keep existing cluster state.
+if [[ -f "${STORAGE_BASE}/.k3s-fresh" ]]; then
+    for d in server agent; do
+        if [[ -d "${K3S_STORAGE_TARGET}/${d}" ]]; then
+            log_info "Removing existing ${d}/ (/.k3s-fresh present) so k3s starts with fresh cluster and new CA"
+            rm -rf "${K3S_STORAGE_TARGET:?}/${d}"
         fi
-    else
-        log_info "VM root has no k3s state to sync; storage will start fresh"
+    done
+    if [[ -d "${K3S_STORAGE_TARGET}/init-markers" ]]; then
+        log_info "Clearing init-markers so cluster-init scripts run again"
+        rm -rf "${K3S_STORAGE_TARGET}/init-markers"
     fi
-else
-    log_info "K3s storage already initialized ($file_count top-level items)"
+    rm -f "${STORAGE_BASE}/.k3s-fresh"
 fi
 
-# Ensure required subdirs exist (for fresh volume or if rsync did not create them)
 mkdir -p "$K3S_STORAGE_TARGET/init-markers"
 mkdir -p "$K3S_STORAGE_TARGET/credentials"
 

@@ -91,14 +91,14 @@
         group: root
       register: k3s_storage_init_script
 
-    - name: Copy kubelet pods storage init script
+    - name: Copy kubelet storage init script
       copy:
-        src: "{{ files_dir }}/init-kubelet-pods-storage.sh"
-        dest: /usr/local/bin/init-kubelet-pods-storage.sh
+        src: "{{ files_dir }}/init-kubelet-storage.sh"
+        dest: /usr/local/bin/init-kubelet-storage.sh
         mode: '0755'
         owner: root
         group: root
-      register: kubelet_pods_init_script
+      register: kubelet_storage_init_script
 
     - name: Template storage init service
       template:

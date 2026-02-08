@@ -1,5 +1,5 @@
 #!/bin/bash
-# setup-storage-bind-mounts.sh - Set up bind mounts: entire k3s dir, kubelet-pods, Chutes agent, admission certs on storage volume
+# setup-storage-bind-mounts.sh - Set up bind mounts: k3s, full kubelet, Chutes agent, admission certs on storage volume
 set -euo pipefail
 
 LOG_TAG="setup-storage-bind-mounts"
@@ -18,9 +18,9 @@ K3S_SOURCE="${STORAGE_BASE}/k3s"
 K3S_TARGET="/var/lib/rancher/k3s"
 ADMISSION_CERTS_SOURCE="${STORAGE_BASE}/admission-controller-certs"
 ADMISSION_CERTS_TARGET="/etc/admission-controller/certs"
-KUBELET_PODS_SOURCE="${STORAGE_BASE}/kubelet-pods"
+KUBELET_SOURCE="${STORAGE_BASE}/kubelet"
 CHUTES_AGENT_SOURCE="${STORAGE_BASE}/chutes-agent"
-KUBELET_PODS_TARGET="/var/lib/kubelet/pods"
+KUBELET_TARGET="/var/lib/kubelet"
 CHUTES_AGENT_TARGET="/var/lib/chutes/agent"
 
 # Ensure storage volume is mounted
@@ -86,26 +86,24 @@ else
     fi
 fi
 
-# Ensure kubelet-pods directory exists on storage and parent on root
-log "Ensuring kubelet-pods directory on storage volume..."
-mkdir -p "$KUBELET_PODS_SOURCE"
-mkdir -p "$(dirname "$KUBELET_PODS_TARGET")"
+# Setup full kubelet directory on storage (so node ephemeral-storage capacity reflects the large volume)
+log "Ensuring kubelet directory on storage volume..."
+mkdir -p "$KUBELET_SOURCE"
+mkdir -p "$KUBELET_TARGET"
 
-# Setup kubelet-pods bind mount
-if mountpoint -q "$KUBELET_PODS_TARGET"; then
-    log "Kubelet pods target already mounted, checking if it's the correct bind mount..."
-    if [ "$(stat -c %d "$KUBELET_PODS_TARGET")" = "$(stat -c %d "$KUBELET_PODS_SOURCE")" ]; then
-        log "Kubelet pods bind mount already correctly configured"
+if mountpoint -q "$KUBELET_TARGET"; then
+    log "Kubelet target already mounted, checking if it's the correct bind mount..."
+    if [ "$(stat -c %d "$KUBELET_TARGET")" = "$(stat -c %d "$KUBELET_SOURCE")" ]; then
+        log "Kubelet bind mount already correctly configured"
     else
-        log "WARNING: Kubelet pods target is mounted but not our bind mount. Skipping."
+        log "WARNING: Kubelet target is mounted but not our bind mount. Skipping."
     fi
 else
-    # Create bind mount (no migration needed - kubelet-pods starts empty)
-    log "Creating bind mount: $KUBELET_PODS_SOURCE -> $KUBELET_PODS_TARGET"
-    if mount --bind "$KUBELET_PODS_SOURCE" "$KUBELET_PODS_TARGET"; then
-        log "Kubelet pods bind mount created successfully"
+    log "Creating bind mount: $KUBELET_SOURCE -> $KUBELET_TARGET"
+    if mount --bind "$KUBELET_SOURCE" "$KUBELET_TARGET"; then
+        log "Kubelet bind mount created successfully"
     else
-        log "ERROR: Failed to create kubelet pods bind mount"
+        log "ERROR: Failed to create kubelet bind mount"
         exit 1
     fi
 fi
