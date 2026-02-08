@@ -15,7 +15,7 @@ RemainAfterExit=yes
 TimeoutStartSec=300
 
 # Run initialization scripts in sequence (verification already done by verify-storage.service)
-ExecStart=/usr/local/bin/init-containerd-storage.sh
+ExecStart=/usr/local/bin/init-k3s-storage.sh
 ExecStart=/usr/local/bin/init-kubelet-pods-storage.sh
 
 [Install]

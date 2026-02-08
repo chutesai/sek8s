@@ -82,14 +82,14 @@
         group: root
       register: verify_storage_service
 
-    - name: Copy containerd storage init script
+    - name: Copy k3s storage init script
       copy:
-        src: "{{ files_dir }}/init-containerd-storage.sh"
-        dest: /usr/local/bin/init-containerd-storage.sh
+        src: "{{ files_dir }}/init-k3s-storage.sh"
+        dest: /usr/local/bin/init-k3s-storage.sh
         mode: '0755'
         owner: root
         group: root
-      register: containerd_init_script
+      register: k3s_storage_init_script
 
     - name: Copy kubelet pods storage init script
       copy:
