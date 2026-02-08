@@ -1,12 +1,14 @@
 #!/bin/bash
-# Initialize k3s storage on storage volume: create k3s dir and required subdirs on empty volume.
-# We do NOT sync from VM root so that a recreated (empty) volume gives a fresh cluster and
-# a new miner kubeconfig/certificate at first boot (03-k3s-miner-kubeconfig.sh).
+# Initialize k3s storage on storage volume: create k3s dir, sync from VM root when storage is empty
+# (first boot from build), or ensure subdirs exist. Same sync condition as init-kubelet-storage:
+# when storage has no top-level items and root has k3s state, sync. Use .k3s-fresh marker to force
+# a fresh cluster (no sync, wipe server/agent) when the volume was recreated on purpose.
 # Runs AFTER storage verification and mount, BEFORE setup-storage-bind-mounts.
 
 set -euo pipefail
 
 STORAGE_BASE="/cache/storage"
+K3S_SOURCE="/var/lib/rancher/k3s"
 K3S_STORAGE_TARGET="${STORAGE_BASE}/k3s"
 LOG_TAG="init-k3s-storage"
 
@@ -26,14 +28,8 @@ if ! mountpoint -q "$STORAGE_BASE"; then
     exit 1
 fi
 
-# Create k3s directory and required subdirs; k3s and cluster-init will populate on first boot
-mkdir -p "$K3S_STORAGE_TARGET"
-
 # Optional: force a fresh cluster (new CA, new miner kubeconfig) when the volume was recreated.
-# If this marker exists on the storage volume, we remove existing server/, agent/, and init-markers
-# so k3s generates a new CA and cluster-init scripts (e.g. miner-kubeconfig) run again.
-# Create it when attaching a new/empty volume (e.g. touch /cache/storage/.k3s-fresh from host or
-# cloud-init), or leave absent to keep existing cluster state.
+# If this marker exists, we remove existing server/, agent/, and init-markers and skip syncing.
 if [[ -f "${STORAGE_BASE}/.k3s-fresh" ]]; then
     for d in server agent; do
         if [[ -d "${K3S_STORAGE_TARGET}/${d}" ]]; then
@@ -48,6 +44,25 @@ if [[ -f "${STORAGE_BASE}/.k3s-fresh" ]]; then
     rm -f "${STORAGE_BASE}/.k3s-fresh"
 fi
 
+# Create k3s directory on storage (do not create subdirs yet so empty-check matches kubelet logic)
+mkdir -p "$K3S_STORAGE_TARGET"
+
+# When storage k3s is empty and VM root has k3s dir (first boot from build), sync from root.
+# Same condition as init-kubelet-storage: file_count 0 and source dir exists.
+file_count=$(find "$K3S_STORAGE_TARGET" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
+if [[ "$file_count" -eq 0 ]] && [[ -d "$K3S_SOURCE" ]]; then
+    log_info "K3s on storage is empty, syncing from VM root ($K3S_SOURCE -> $K3S_STORAGE_TARGET)"
+    if rsync -a --exclude='lost+found' "$K3S_SOURCE/" "$K3S_STORAGE_TARGET/"; then
+        log_info "K3s synced successfully ($(du -sh "$K3S_STORAGE_TARGET" 2>/dev/null | cut -f1))"
+    else
+        log_error "Failed to sync k3s to storage"
+        exit 1
+    fi
+else
+    log_info "K3s storage already initialized ($file_count top-level items)"
+fi
+
+# Ensure required subdirs exist (for fresh volume or if rsync did not create them)
 mkdir -p "$K3S_STORAGE_TARGET/init-markers"
 mkdir -p "$K3S_STORAGE_TARGET/credentials"
 
