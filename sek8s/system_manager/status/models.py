@@ -43,6 +43,11 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
         unit="k3s.service",
         description="Lightweight Kubernetes control plane",
     ),
+    "storage-init": ServiceDefinition(
+        service_id="storage-init",
+        unit="storage-init.service",
+        description="Initialize k3s/kubelet storage on LUKS volume (sync from root on first boot)",
+    ),
     "nvidia-persistenced": ServiceDefinition(
         service_id="nvidia-persistenced",
         unit="nvidia-persistenced.service",
