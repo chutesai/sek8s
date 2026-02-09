@@ -31,10 +31,14 @@ fi
 # Create kubelet directory on storage
 mkdir -p "$KUBELET_STORAGE_TARGET"
 
-# When storage kubelet is empty, sync from VM root (seccomp profiles, etc.)
+# Ensure source exists so we can sync (create if missing, e.g. image never ran kubelet during build)
+mkdir -p "$KUBELET_SOURCE"
+
+# When storage kubelet is empty, sync from VM root (seccomp profiles, etc.).
 file_count=$(find "$KUBELET_STORAGE_TARGET" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
-if [[ "$file_count" -eq 0 ]] && [[ -d "$KUBELET_SOURCE" ]]; then
-    log_info "Kubelet on storage is empty, syncing from VM root ($KUBELET_SOURCE -> $KUBELET_STORAGE_TARGET)"
+log_info "Kubelet storage check: file_count=$file_count ($KUBELET_SOURCE -> $KUBELET_STORAGE_TARGET)"
+if [[ "$file_count" -eq 0 ]]; then
+    log_info "Kubelet on storage is empty, syncing from VM root"
     if rsync -a --exclude='lost+found' "$KUBELET_SOURCE/" "$KUBELET_STORAGE_TARGET/"; then
         log_info "Kubelet synced successfully ($(du -sh "$KUBELET_STORAGE_TARGET" 2>/dev/null | cut -f1))"
     else

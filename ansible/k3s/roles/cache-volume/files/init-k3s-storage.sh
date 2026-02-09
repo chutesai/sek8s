@@ -30,11 +30,14 @@ fi
 # Create k3s directory on storage (do not create subdirs yet so empty-check matches kubelet logic)
 mkdir -p "$K3S_STORAGE_TARGET"
 
-# When storage k3s is empty and VM root has k3s dir (first boot from build), sync from root.
-# Same condition as init-kubelet-storage: file_count 0 and source dir exists.
+# Ensure source exists so we can sync (create if missing, e.g. image never ran k3s during build)
+mkdir -p "$K3S_SOURCE"
+
+# When storage k3s is empty, sync from VM root (first boot from build or source was just created).
 file_count=$(find "$K3S_STORAGE_TARGET" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
-if [[ "$file_count" -eq 0 ]] && [[ -d "$K3S_SOURCE" ]]; then
-    log_info "K3s on storage is empty, syncing from VM root ($K3S_SOURCE -> $K3S_STORAGE_TARGET)"
+log_info "K3s storage check: file_count=$file_count ($K3S_SOURCE -> $K3S_STORAGE_TARGET)"
+if [[ "$file_count" -eq 0 ]]; then
+    log_info "K3s on storage is empty, syncing from VM root"
     if rsync -a --exclude='lost+found' "$K3S_SOURCE/" "$K3S_STORAGE_TARGET/"; then
         log_info "K3s synced successfully ($(du -sh "$K3S_STORAGE_TARGET" 2>/dev/null | cut -f1))"
     else
