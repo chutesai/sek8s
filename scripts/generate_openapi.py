@@ -1,4 +1,4 @@
-"""Generate the system manager OpenAPI spec and write it to sek8s/system_manager_openapi.json."""
+"""Generate the system manager OpenAPI spec and write it to docs/system_manager_openapi.json."""
 
 import json
 import os
@@ -22,7 +22,7 @@ def main() -> None:
     schema = app.openapi()
 
     root = _repo_root()
-    out_path = root / "sek8s" / "system_manager_openapi.json"
+    out_path = root / "docs" / "system_manager_openapi.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(out_path, "w") as f:

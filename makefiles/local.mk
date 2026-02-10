@@ -46,7 +46,7 @@ reformat: clean-imports
 	${POETRY} run black ${files}
 
 .PHONY: generate-openapi
-generate-openapi: ##@local Generate system manager OpenAPI spec to sek8s/system_manager_openapi.json
+generate-openapi: ##@local Generate system manager OpenAPI spec to docs/system_manager_openapi.json
 	${POETRY} run python scripts/generate_openapi.py
 
 PHONY: test-local

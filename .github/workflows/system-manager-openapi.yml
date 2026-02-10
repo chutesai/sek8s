@@ -7,7 +7,7 @@ on:
       - "sek8s/**"
       - "scripts/generate_openapi.py"
       - "tests/unit/test_openapi_spec.py"
-      - "sek8s/system_manager_openapi.json"
+      - "docs/system_manager_openapi.json"
       - "pyproject.toml"
       - "poetry.lock"
   pull_request:
@@ -16,7 +16,7 @@ on:
       - "sek8s/**"
       - "scripts/generate_openapi.py"
       - "tests/unit/test_openapi_spec.py"
-      - "sek8s/system_manager_openapi.json"
+      - "docs/system_manager_openapi.json"
       - "pyproject.toml"
       - "poetry.lock"
 
@@ -56,8 +56,8 @@ jobs:
 
       - name: Check spec in sync
         run: |
-          git diff --exit-code sek8s/system_manager_openapi.json || (
-            echo "::error::sek8s/system_manager_openapi.json is out of date. Run: poetry run python scripts/generate_openapi.py"
+          git diff --exit-code docs/system_manager_openapi.json || (
+            echo "::error::docs/system_manager_openapi.json is out of date. Run: make generate-openapi"
             exit 1
           )
 
@@ -65,4 +65,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: system-manager-openapi
-          path: sek8s/system_manager_openapi.json
+          path: docs/system_manager_openapi.json
