@@ -1,0 +1,2067 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FastAPI",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/status/health": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Health check",
+        "description": "Returns OK if service is running",
+        "operationId": "health_status_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/services": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "List available services",
+        "description": "Returns list of all services that can be monitored",
+        "operationId": "list_services_status_services_get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServicesListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/services/{service_id}/status": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get service status",
+        "description": "Returns systemd status for a specific service",
+        "operationId": "get_service_status_status_services__service_id__status_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/services/{service_id}/logs": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get service logs",
+        "description": "Returns recent journal logs for a specific service",
+        "operationId": "get_service_logs_status_services__service_id__logs_get",
+        "parameters": [
+          {
+            "name": "service_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Id"
+            }
+          },
+          {
+            "name": "lines",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 200,
+              "title": "Lines"
+            }
+          },
+          {
+            "name": "since_minutes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1440,
+              "minimum": 0,
+              "description": "Only logs from last N minutes (0 = no filter)",
+              "default": 0,
+              "title": "Since Minutes"
+            },
+            "description": "Only logs from last N minutes (0 = no filter)"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceLogsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/gpu/nvidia-smi": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get GPU status",
+        "description": "Returns nvidia-smi output for GPUs",
+        "operationId": "nvidia_smi_status_gpu_nvidia_smi_get",
+        "parameters": [
+          {
+            "name": "detail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Return detailed (-q) output",
+              "default": false,
+              "title": "Detail"
+            },
+            "description": "Return detailed (-q) output"
+          },
+          {
+            "name": "gpu",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "GPU index or 'all'",
+              "default": "all",
+              "title": "Gpu"
+            },
+            "description": "GPU index or 'all'"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NvidiaSmiResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/overview": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "System overview",
+        "description": "Returns combined status of all services and GPUs",
+        "operationId": "overview_status_overview_get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/disk/space": {
+      "get": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Get directory sizes",
+        "description": "Returns sizes of immediate subdirectories within a given path",
+        "operationId": "get_disk_space_status_disk_space_get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Directory path to analyze",
+              "default": "/",
+              "title": "Path"
+            },
+            "description": "Directory path to analyze"
+          },
+          {
+            "name": "diagnostic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Enable diagnostic mode for deep analysis",
+              "default": false,
+              "title": "Diagnostic"
+            },
+            "description": "Enable diagnostic mode for deep analysis"
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10,
+              "minimum": 1,
+              "description": "Maximum depth for diagnostic mode (default: 3)",
+              "default": 3,
+              "title": "Max Depth"
+            },
+            "description": "Maximum depth for diagnostic mode (default: 3)"
+          },
+          {
+            "name": "top_n",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Show top N directories per level (default: 10)",
+              "default": 10,
+              "title": "Top N"
+            },
+            "description": "Show top N directories per level (default: 10)"
+          },
+          {
+            "name": "cross_filesystems",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Cross filesystem boundaries (include mounted volumes)",
+              "default": false,
+              "title": "Cross Filesystems"
+            },
+            "description": "Cross filesystem boundaries (include mounted volumes)"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiskSpaceResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status/system/shutdown": {
+      "post": {
+        "tags": [
+          "status"
+        ],
+        "summary": "Graceful system shutdown",
+        "description": "Initiates a graceful system shutdown (requires miner authentication)",
+        "operationId": "shutdown_system_status_system_shutdown_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShutdownResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/download": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Start download for a chute",
+        "operationId": "download_cache_download_post",
+        "parameters": [
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Re-download if already present",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Re-download if already present"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DownloadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheDownloadResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/download/status": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Get download status by chute_id or all",
+        "operationId": "download_status_cache_download_status_get",
+        "parameters": [
+          {
+            "name": "chute_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional chute_id to filter",
+              "title": "Chute Id"
+            },
+            "description": "Optional chute_id to filter"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheDownloadStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/{chute_id}": {
+      "delete": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Remove cache for a chute",
+        "operationId": "delete_chute_cache__chute_id__delete",
+        "parameters": [
+          {
+            "name": "chute_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chute Id"
+            }
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Chute Cache  Chute Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/cleanup": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Cleanup cache by age and max size",
+        "operationId": "cleanup_cache_cleanup_post",
+        "parameters": [
+          {
+            "name": "max_age_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5,
+              "title": "Max Age Days"
+            }
+          },
+          {
+            "name": "max_size_gb",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 100,
+              "title": "Max Size Gb"
+            }
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CleanupRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheCleanupResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/overview": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "List cache contents and sizes",
+        "operationId": "overview_cache_overview_get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheOverviewResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CacheChuteStatus": {
+        "properties": {
+          "chute_id": {
+            "type": "string",
+            "title": "Chute Id",
+            "description": "Chute ID"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CacheChuteStatusEnum",
+            "description": "One of: in_progress, present, missing, failed"
+          },
+          "percent_complete": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percent Complete",
+            "description": "Download progress 0-100 when in_progress and total size is known; omitted otherwise"
+          },
+          "repo_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo Id",
+            "description": "HF repo ID when present or in_progress"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision when present or in_progress"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes",
+            "description": "Size in bytes when present"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message when status is failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chute_id",
+          "status"
+        ],
+        "title": "CacheChuteStatus"
+      },
+      "CacheChuteStatusEnum": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "present",
+          "missing",
+          "failed"
+        ],
+        "title": "CacheChuteStatusEnum",
+        "description": "Status for a chute in the download status (GET) and overview."
+      },
+      "CacheCleanupResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Cleanup status",
+            "example": "completed"
+          },
+          "freed_bytes": {
+            "type": "integer",
+            "title": "Freed Bytes",
+            "description": "Bytes freed",
+            "default": 0
+          },
+          "removed_chutes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removed Chutes",
+            "description": "Chute IDs removed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CacheCleanupResponse"
+      },
+      "CacheDownloadResponse": {
+        "properties": {
+          "chute_id": {
+            "type": "string",
+            "title": "Chute Id",
+            "description": "Chute ID"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CacheDownloadStatus",
+            "description": "One of: started, present, in_progress, failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chute_id",
+          "status"
+        ],
+        "title": "CacheDownloadResponse"
+      },
+      "CacheDownloadStatus": {
+        "type": "string",
+        "enum": [
+          "started",
+          "present",
+          "in_progress",
+          "failed"
+        ],
+        "title": "CacheDownloadStatus",
+        "description": "Status returned by the download (POST) endpoint."
+      },
+      "CacheDownloadStatusResponse": {
+        "properties": {
+          "chutes": {
+            "items": {
+              "$ref": "#/components/schemas/CacheChuteStatus"
+            },
+            "type": "array",
+            "title": "Chutes",
+            "description": "Status per chute"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chutes"
+        ],
+        "title": "CacheDownloadStatusResponse"
+      },
+      "CacheOverviewEntry": {
+        "properties": {
+          "chute_id": {
+            "type": "string",
+            "title": "Chute Id",
+            "description": "Chute ID"
+          },
+          "repo_id": {
+            "type": "string",
+            "title": "Repo Id",
+            "description": "HF repo ID"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "description": "Size in bytes"
+          },
+          "last_accessed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Accessed",
+            "description": "Last access time (Unix)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chute_id",
+          "repo_id",
+          "size_bytes"
+        ],
+        "title": "CacheOverviewEntry"
+      },
+      "CacheOverviewResponse": {
+        "properties": {
+          "total_size_bytes": {
+            "type": "integer",
+            "title": "Total Size Bytes",
+            "description": "Total cache size in bytes"
+          },
+          "chutes": {
+            "items": {
+              "$ref": "#/components/schemas/CacheOverviewEntry"
+            },
+            "type": "array",
+            "title": "Chutes",
+            "description": "Entries per chute"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_size_bytes",
+          "chutes"
+        ],
+        "title": "CacheOverviewResponse"
+      },
+      "CleanupRequest": {
+        "properties": {
+          "max_age_days": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Age Days",
+            "description": "Remove entries older than this many days",
+            "default": 5
+          },
+          "max_size_gb": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Size Gb",
+            "description": "Target max cache size in GB",
+            "default": 100
+          },
+          "exclude_pattern": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exclude Pattern",
+            "description": "Skip repos containing this string"
+          }
+        },
+        "type": "object",
+        "title": "CleanupRequest"
+      },
+      "DirectoryInfo": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Directory name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Full directory path"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes",
+            "description": "Total size in bytes"
+          },
+          "size_human": {
+            "type": "string",
+            "title": "Size Human",
+            "description": "Human-readable size"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth",
+            "description": "Depth level from root path"
+          },
+          "percentage": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Percentage",
+            "description": "Percentage of total disk usage"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "path",
+          "size_bytes",
+          "size_human",
+          "depth"
+        ],
+        "title": "DirectoryInfo"
+      },
+      "DiskSpaceResponse": {
+        "properties": {
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "description": "Parent directory path"
+          },
+          "directories": {
+            "items": {
+              "$ref": "#/components/schemas/DirectoryInfo"
+            },
+            "type": "array",
+            "title": "Directories",
+            "description": "List of immediate subdirectories with sizes"
+          },
+          "total_size_bytes": {
+            "type": "integer",
+            "title": "Total Size Bytes",
+            "description": "Total size of all directories in bytes"
+          },
+          "total_size_human": {
+            "type": "string",
+            "title": "Total Size Human",
+            "description": "Total size in human-readable format"
+          },
+          "stdout_truncated": {
+            "type": "boolean",
+            "title": "Stdout Truncated",
+            "description": "Whether output was truncated"
+          },
+          "diagnostic_mode": {
+            "type": "boolean",
+            "title": "Diagnostic Mode",
+            "description": "Whether diagnostic mode was enabled",
+            "default": false
+          },
+          "max_depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Depth",
+            "description": "Maximum depth analyzed in diagnostic mode"
+          },
+          "top_n": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top N",
+            "description": "Number of top offenders shown per level"
+          }
+        },
+        "type": "object",
+        "required": [
+          "path",
+          "directories",
+          "total_size_bytes",
+          "total_size_human",
+          "stdout_truncated"
+        ],
+        "title": "DiskSpaceResponse"
+      },
+      "DownloadRequest": {
+        "properties": {
+          "chute_id": {
+            "type": "string",
+            "title": "Chute Id",
+            "description": "Chute ID to download model for"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chute_id"
+        ],
+        "title": "DownloadRequest"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Health status",
+            "example": "ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "HealthResponse"
+      },
+      "NvidiaSmiResponse": {
+        "properties": {
+          "command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Command",
+            "description": "Command executed"
+          },
+          "exit_code": {
+            "type": "integer",
+            "title": "Exit Code",
+            "description": "Command exit code"
+          },
+          "stdout": {
+            "type": "string",
+            "title": "Stdout",
+            "description": "Standard output"
+          },
+          "stderr": {
+            "type": "string",
+            "title": "Stderr",
+            "description": "Standard error"
+          },
+          "stdout_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stdout Lines",
+            "description": "Standard output split into lines"
+          },
+          "stderr_lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Stderr Lines",
+            "description": "Standard error split into lines"
+          },
+          "stdout_truncated": {
+            "type": "boolean",
+            "title": "Stdout Truncated",
+            "description": "Whether stdout was truncated"
+          },
+          "stderr_truncated": {
+            "type": "boolean",
+            "title": "Stderr Truncated",
+            "description": "Whether stderr was truncated"
+          },
+          "detail": {
+            "type": "boolean",
+            "title": "Detail",
+            "description": "Whether detailed output was requested"
+          },
+          "gpu": {
+            "type": "string",
+            "title": "Gpu",
+            "description": "GPU index or 'all'"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Status of the command",
+            "example": "ok"
+          }
+        },
+        "type": "object",
+        "required": [
+          "command",
+          "exit_code",
+          "stdout",
+          "stderr",
+          "stdout_lines",
+          "stderr_lines",
+          "stdout_truncated",
+          "stderr_truncated",
+          "detail",
+          "gpu",
+          "status"
+        ],
+        "title": "NvidiaSmiResponse"
+      },
+      "OverviewResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Overall system status",
+            "example": "ok"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceStatusResponse"
+            },
+            "type": "array",
+            "title": "Services",
+            "description": "Status of all monitored services"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/NvidiaSmiResponse",
+            "description": "GPU status from nvidia-smi"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp",
+            "description": "ISO 8601 timestamp of the report"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "services",
+          "gpu",
+          "timestamp"
+        ],
+        "title": "OverviewResponse"
+      },
+      "ServiceInfo": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "Service identifier"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit",
+            "description": "Systemd unit name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "Service description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "unit",
+          "description"
+        ],
+        "title": "ServiceInfo"
+      },
+      "ServiceLogsResponse": {
+        "properties": {
+          "service": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Service",
+            "description": "Service identifier and unit"
+          },
+          "requested_lines": {
+            "type": "integer",
+            "title": "Requested Lines",
+            "description": "Number of log lines requested"
+          },
+          "returned_lines": {
+            "type": "integer",
+            "title": "Returned Lines",
+            "description": "Number of log lines returned"
+          },
+          "stdout_truncated": {
+            "type": "boolean",
+            "title": "Stdout Truncated",
+            "description": "Whether output was truncated"
+          },
+          "logs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Logs",
+            "description": "Log entries"
+          }
+        },
+        "type": "object",
+        "required": [
+          "service",
+          "requested_lines",
+          "returned_lines",
+          "stdout_truncated",
+          "logs"
+        ],
+        "title": "ServiceLogsResponse"
+      },
+      "ServiceStatus": {
+        "properties": {
+          "load_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Load State",
+            "description": "Systemd LoadState"
+          },
+          "active_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active State",
+            "description": "Systemd ActiveState"
+          },
+          "sub_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub State",
+            "description": "Systemd SubState"
+          },
+          "unit_file_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit File State",
+            "description": "Systemd UnitFileState"
+          },
+          "main_pid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Main Pid",
+            "description": "Main process PID"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code",
+            "description": "Exit code type"
+          },
+          "exit_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Status",
+            "description": "Exit status value"
+          }
+        },
+        "type": "object",
+        "title": "ServiceStatus"
+      },
+      "ServiceStatusResponse": {
+        "properties": {
+          "service": {
+            "$ref": "#/components/schemas/ServiceInfo"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ServiceStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Service status details"
+          },
+          "healthy": {
+            "type": "boolean",
+            "title": "Healthy",
+            "description": "Whether service is healthy"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error details if status check failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "service",
+          "healthy"
+        ],
+        "title": "ServiceStatusResponse"
+      },
+      "ServicesListResponse": {
+        "properties": {
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceInfo"
+            },
+            "type": "array",
+            "title": "Services",
+            "description": "List of available services"
+          }
+        },
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "title": "ServicesListResponse"
+      },
+      "ShutdownResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Shutdown status",
+            "example": "initiated"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "description": "Shutdown message"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp",
+            "description": "ISO 8601 timestamp of shutdown request"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "message",
+          "timestamp"
+        ],
+        "title": "ShutdownResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

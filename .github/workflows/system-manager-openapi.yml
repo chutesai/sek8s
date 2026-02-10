@@ -1,0 +1,68 @@
+name: System manager OpenAPI spec
+
+on:
+  push:
+    branches: [main, "release/**"]
+    paths:
+      - "sek8s/**"
+      - "scripts/generate_openapi.py"
+      - "tests/unit/test_openapi_spec.py"
+      - "sek8s/system_manager_openapi.json"
+      - "pyproject.toml"
+      - "poetry.lock"
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "sek8s/**"
+      - "scripts/generate_openapi.py"
+      - "tests/unit/test_openapi_spec.py"
+      - "sek8s/system_manager_openapi.json"
+      - "pyproject.toml"
+      - "poetry.lock"
+
+jobs:
+  openapi:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: latest
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Generate OpenAPI spec
+        run: poetry run python scripts/generate_openapi.py
+
+      - name: Validate spec
+        run: poetry run pytest tests/unit/test_openapi_spec.py -v
+
+      - name: Check spec in sync
+        run: |
+          git diff --exit-code sek8s/system_manager_openapi.json || (
+            echo "::error::sek8s/system_manager_openapi.json is out of date. Run: poetry run python scripts/generate_openapi.py"
+            exit 1
+          )
+
+      - name: Upload OpenAPI spec
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-manager-openapi
+          path: sek8s/system_manager_openapi.json
