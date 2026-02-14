@@ -27,6 +27,7 @@ from .responses import (
 from .util import (
     chute_cache_dir,
     fetch_hf_info,
+    is_cache_complete,
     is_chute_present,
     run_cleanup,
     run_download,
@@ -53,7 +54,7 @@ async def download(
     s = await download_state.get(chute_id)
     if s is not None and s.is_in_progress:
         response_status = CacheDownloadStatus.IN_PROGRESS
-    elif is_chute_present(chute_id) and not force:
+    elif is_cache_complete(chute_id) and not force:
         response_status = CacheDownloadStatus.PRESENT
 
     if response_status is None:
@@ -87,6 +88,7 @@ async def download_status(
     chute_id: Optional[str] = Query(None, description="Optional chute_id to filter"),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadStatusResponse:
+    await download_state.refresh_in_progress_from_disk()
     cache_base = Path(cache_config.cache_base).resolve()
     result: List[CacheChuteStatus] = []
 
@@ -115,10 +117,15 @@ async def download_status(
                 size = 0
                 repo_id = ""
                 revision = None
+            status = (
+                CacheChuteStatusEnum.PRESENT
+                if is_cache_complete(chute_id)
+                else CacheChuteStatusEnum.INCOMPLETE
+            )
             result.append(
                 CacheChuteStatus(
                     chute_id=chute_id,
-                    status=CacheChuteStatusEnum.PRESENT,
+                    status=status,
                     repo_id=repo_id or None,
                     revision=revision,
                     size_bytes=size,
@@ -157,10 +164,15 @@ async def download_status(
                                 if repos and repos[0].refs
                                 else None
                             )
+                            status = (
+                                CacheChuteStatusEnum.PRESENT
+                                if is_cache_complete(item.name)
+                                else CacheChuteStatusEnum.INCOMPLETE
+                            )
                             result.append(
                                 CacheChuteStatus(
                                     chute_id=item.name,
-                                    status=CacheChuteStatusEnum.PRESENT,
+                                    status=status,
                                     repo_id=repo_id or None,
                                     revision=revision,
                                     size_bytes=getattr(info, "size_on_disk", None),
@@ -262,6 +274,7 @@ async def overview(
                     revision=revision,
                     size_bytes=size,
                     last_accessed=last_acc,
+                    complete=is_cache_complete(item.name),
                 )
             )
     return CacheOverviewResponse(total_size_bytes=total, chutes=entries)

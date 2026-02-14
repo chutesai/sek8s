@@ -17,6 +17,7 @@ class CacheChuteStatusEnum(str, Enum):
     PRESENT = "present"
     MISSING = "missing"
     FAILED = "failed"
+    INCOMPLETE = "incomplete"  # Cache on disk but no completion marker and no active download
 
 
 class DownloadProgressStatus(str, Enum):
@@ -55,9 +56,16 @@ class ChuteDownloadState:
 
     @property
     def percent_complete(self) -> Optional[float]:
-        """Percent 0-100 only when both total_bytes and bytes_downloaded are known."""
-        if self.total_bytes is not None and self.total_bytes > 0 and self.bytes_downloaded is not None:
+        """Percent 0-100 from total_bytes and bytes_downloaded (or size on disk when in progress and not yet refreshed)."""
+        if self.total_bytes is None or self.total_bytes <= 0:
+            return None
+        if self.bytes_downloaded is not None:
             return min(100.0, max(0.0, 100.0 * self.bytes_downloaded / self.total_bytes))
+        if self.is_in_progress:
+            from .util import chute_cache_size_on_disk
+            size_on_disk = chute_cache_size_on_disk(self.chute_id)
+            if size_on_disk is not None:
+                return min(100.0, max(0.0, 100.0 * size_on_disk / self.total_bytes))
         return None
 
     @property
@@ -107,6 +115,21 @@ class DownloadStateManager:
             if s := self._state.get(chute_id):
                 s.bytes_downloaded = bytes_downloaded
                 s.total_bytes = total_bytes
+
+    async def refresh_in_progress_from_disk(self) -> None:
+        """Update bytes_downloaded from disk for all in-progress downloads. Call when serving status."""
+        from .util import chute_cache_size_on_disk
+        async with self._lock:
+            to_refresh = [
+                (cid, s)
+                for cid, s in self._state.items()
+                if s.is_in_progress and s.total_bytes is not None and s.total_bytes > 0
+            ]
+        sizes = [(cid, chute_cache_size_on_disk(cid)) for cid, _ in to_refresh]
+        async with self._lock:
+            for (cid, _), (_, size_on_disk) in zip(to_refresh, sizes):
+                if size_on_disk is not None and (s := self._state.get(cid)):
+                    s.bytes_downloaded = size_on_disk
 
     async def set_completed(self, chute_id: str) -> None:
         async with self._lock:

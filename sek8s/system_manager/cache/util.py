@@ -18,6 +18,40 @@ from sek8s.services.util import sign_request
 
 from .models import CleanupResult, HfInfoResponse, download_state
 
+# Marker file written after a successful download + verify; absence means incomplete/interrupted.
+CACHE_COMPLETE_MARKER = ".cache_complete"
+
+# In-memory cache for /misc/hf_repo_info responses keyed by (repo_id, revision).
+_repo_info_cache: dict[tuple[str, str], dict] = {}
+_repo_info_cache_lock = asyncio.Lock()
+
+
+async def fetch_repo_info(repo_id: str, revision: str) -> Optional[dict]:
+    """Fetch repo file list from validator /misc/hf_repo_info. Result is cached per (repo_id, revision)."""
+    rev = revision or "main"
+    key = (repo_id, rev)
+    async with _repo_info_cache_lock:
+        if key in _repo_info_cache:
+            return _repo_info_cache[key]
+        params = {"repo_id": repo_id, "repo_type": "model", "revision": rev}
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        if hf_token:
+            params["hf_token"] = hf_token
+        base = (cache_config.validator_base_url or "").strip().rstrip("/")
+        repo_info_url = f"{base}/misc/hf_repo_info"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    repo_info_url, params=params, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    repo_info = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError):
+            return None
+        _repo_info_cache[key] = repo_info
+        return repo_info
+
 
 def chute_cache_dir(chute_id: str) -> Path:
     return Path(cache_config.cache_base).resolve() / chute_id
@@ -28,6 +62,38 @@ def is_chute_present(chute_id: str) -> bool:
     if not hub.exists():
         return False
     return any(hub.glob("models--*"))
+
+
+def is_cache_complete(chute_id: str) -> bool:
+    """True if cache exists and has the completion marker (successful download + verify)."""
+    if not is_chute_present(chute_id):
+        return False
+    return (chute_cache_dir(chute_id) / CACHE_COMPLETE_MARKER).exists()
+
+
+async def fetch_repo_total_size(repo_id: str, revision: str) -> int:
+    """Return total byte size of repo from validator hf_repo_info; 0 on error. Uses cached repo info when available."""
+    repo_info = await fetch_repo_info(repo_id, revision)
+    if not repo_info:
+        return 0
+    total = 0
+    for item in repo_info.get("files", []):
+        if item.get("path", "").startswith("_"):
+            continue
+        total += item.get("size") or 0
+    return total
+
+
+def chute_cache_size_on_disk(chute_id: str) -> Optional[int]:
+    """Return size on disk for chute's hub cache, or None if not present/unreadable."""
+    hub = chute_cache_dir(chute_id) / "hub"
+    if not hub.exists():
+        return None
+    try:
+        info = scan_cache_dir(cache_dir=str(hub))
+        return getattr(info, "size_on_disk", None)
+    except Exception:
+        return None
 
 
 def _chmod_tree_for_group_write(path: Path, mode: int) -> None:
@@ -91,28 +157,13 @@ async def verify_cache(
     revision: str,
     cache_dir: str,
 ) -> dict:
-    """Verify cached HF model files; raises on failure."""
+    """Verify cached HF model files; raises on failure. Uses cached repo info when available."""
     cache_dir_path = Path(cache_dir)
-    params = {"repo_id": repo_id, "repo_type": "model", "revision": revision}
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
-    if hf_token:
-        params["hf_token"] = hf_token
-    base = (cache_config.validator_base_url or "").strip().rstrip("/")
-    repo_info_url = f"{base}/misc/hf_repo_info"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                repo_info_url, params=params, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.warning("Cache verification skipped - proxy returned {}: {}", resp.status, text)
-                    return {"verified": 0, "skipped": 0, "total": 0, "skipped_api_error": True}
-                repo_info = await resp.json()
-    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-        logger.warning("Cache verification skipped - request failed: {}", e)
-        return {"verified": 0, "skipped": 0, "total": 0, "skipped_api_error": True}
+    repo_info = await fetch_repo_info(repo_id, revision)
+    if not repo_info:
+        raise ValueError(
+            "Cache verification failed: could not fetch repo info from validator (required to verify cache integrity)"
+        )
 
     remote_files = {}
     for item in repo_info.get("files", []):
@@ -181,6 +232,9 @@ async def run_download(
     await download_state.start(chute_id, repo_id, revision)
     try:
         await download_state.set_downloading(chute_id)
+        total_bytes = await fetch_repo_total_size(repo_id, revision)
+        if total_bytes > 0:
+            await download_state.set_progress(chute_id, 0, total_bytes)
 
         def do_download() -> str:
             return snapshot_download(
@@ -203,6 +257,15 @@ async def run_download(
         # Recursively chmod 2775 so pod (GID 1000) can write to all dirs/files created by snapshot_download
         _chmod_tree_for_group_write(cache_dir_path, 0o2775)
 
+        # Marker so status/overview can distinguish completed vs interrupted downloads
+        (cache_dir_path / CACHE_COMPLETE_MARKER).write_text(
+            f"{repo_id}\n{revision or 'main'}", encoding="utf-8"
+        )
+
+        # Set bytes_downloaded to total so state reflects 100% before we remove it
+        s = await download_state.get(chute_id)
+        if s is not None and s.total_bytes is not None:
+            await download_state.set_progress(chute_id, s.total_bytes, s.total_bytes)
         await download_state.set_completed(chute_id)
     except Exception as e:
         logger.exception("Download failed for chute_id={}", chute_id)
