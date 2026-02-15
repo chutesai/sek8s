@@ -20,20 +20,18 @@ class CacheChuteStatusEnum(str, Enum):
     INCOMPLETE = "incomplete"  # Cache on disk but no completion marker and no active download
 
 
-class DownloadProgressStatus(str, Enum):
-    """Progress phase for a chute download. Used internally; API exposes in_progress/present/missing."""
+class DownloadPhase(str, Enum):
+    """Progress phase for a chute download. Used internally; final status derived from task."""
 
     STARTED = "started"
     DOWNLOADING = "downloading"
     VERIFYING = "verifying"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 
-_IN_PROGRESS_STATUSES = (
-    DownloadProgressStatus.STARTED,
-    DownloadProgressStatus.DOWNLOADING,
-    DownloadProgressStatus.VERIFYING,
+_IN_PROGRESS_PHASES = (
+    DownloadPhase.STARTED,
+    DownloadPhase.DOWNLOADING,
+    DownloadPhase.VERIFYING,
 )
 
 
@@ -42,17 +40,36 @@ class ChuteDownloadState:
     """State for a single chute's in-progress or recently completed download."""
 
     chute_id: str
-    status: DownloadProgressStatus
+    phase: DownloadPhase
     repo_id: Optional[str] = None
     revision: Optional[str] = None
-    error: Optional[str] = field(default=None, repr=False)
-    # Only set when we know total size and bytes so far (e.g. from snapshot_download progress)
+    task: Optional[asyncio.Task] = field(default=None, repr=False)
     bytes_downloaded: Optional[int] = None
     total_bytes: Optional[int] = None
 
     @property
     def is_in_progress(self) -> bool:
-        return self.status in _IN_PROGRESS_STATUSES
+        if self.task is not None:
+            return not self.task.done()
+        return self.phase in _IN_PROGRESS_PHASES
+
+    @property
+    def error(self) -> Optional[str]:
+        """Return error string from task exception, or None."""
+        if self.task is not None and self.task.done():
+            try:
+                exc = self.task.exception()
+                if exc is not None:
+                    return str(exc)
+            except asyncio.CancelledError:
+                return "Download was cancelled"
+        return None
+
+    @property
+    def is_cache_complete(self) -> bool:
+        from .util import is_cache_complete
+
+        return is_cache_complete(self.chute_id)
 
     @property
     def percent_complete(self) -> Optional[float]:
@@ -63,6 +80,7 @@ class ChuteDownloadState:
             return min(100.0, max(0.0, 100.0 * self.bytes_downloaded / self.total_bytes))
         if self.is_in_progress:
             from .util import chute_cache_size_on_disk
+
             size_on_disk = chute_cache_size_on_disk(self.chute_id)
             if size_on_disk is not None:
                 return min(100.0, max(0.0, 100.0 * size_on_disk / self.total_bytes))
@@ -70,17 +88,22 @@ class ChuteDownloadState:
 
     @property
     def api_status(self) -> CacheChuteStatusEnum:
-        """Status for API response: in_progress, present, missing, or failed."""
-        if self.status in _IN_PROGRESS_STATUSES:
-            return CacheChuteStatusEnum.IN_PROGRESS
-        if self.status == DownloadProgressStatus.FAILED:
-            return CacheChuteStatusEnum.FAILED
-        return CacheChuteStatusEnum.PRESENT
+        """Status for API response — derived from task state when available, else from phase."""
+        if self.task is not None:
+            if not self.task.done():
+                return CacheChuteStatusEnum.IN_PROGRESS
+            try:
+                if self.task.exception() is not None:
+                    return CacheChuteStatusEnum.FAILED
+            except asyncio.CancelledError:
+                return CacheChuteStatusEnum.FAILED
+            return CacheChuteStatusEnum.PRESENT
+        # Fallback: before task is assigned, phase is always in-progress
+        return CacheChuteStatusEnum.IN_PROGRESS
 
 
 class DownloadStateManager:
     """Thread-safe manager for in-progress download state keyed by chute_id."""
-
 
     def __init__(self) -> None:
         self._state: dict[str, ChuteDownloadState] = {}
@@ -94,7 +117,7 @@ class DownloadStateManager:
         async with self._lock:
             self._state[chute_id] = ChuteDownloadState(
                 chute_id=chute_id,
-                status=DownloadProgressStatus.STARTED,
+                phase=DownloadPhase.STARTED,
                 repo_id=repo_id,
                 revision=revision,
             )
@@ -102,23 +125,31 @@ class DownloadStateManager:
     async def set_downloading(self, chute_id: str) -> None:
         async with self._lock:
             if s := self._state.get(chute_id):
-                s.status = DownloadProgressStatus.DOWNLOADING
+                s.phase = DownloadPhase.DOWNLOADING
 
     async def set_verifying(self, chute_id: str) -> None:
         async with self._lock:
             if s := self._state.get(chute_id):
-                s.status = DownloadProgressStatus.VERIFYING
+                s.phase = DownloadPhase.VERIFYING
 
     async def set_progress(self, chute_id: str, bytes_downloaded: int, total_bytes: int) -> None:
-        """Update progress when we know bytes downloaded and total (e.g. from HF progress callback)."""
+        """Update progress when we know bytes downloaded and total."""
         async with self._lock:
             if s := self._state.get(chute_id):
                 s.bytes_downloaded = bytes_downloaded
                 s.total_bytes = total_bytes
 
+    async def set_task(self, chute_id: str, task: asyncio.Task) -> None:
+        """Store the asyncio.Task on the state and suppress 'exception never retrieved' warning."""
+        async with self._lock:
+            if s := self._state.get(chute_id):
+                s.task = task
+                task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
     async def refresh_in_progress_from_disk(self) -> None:
         """Update bytes_downloaded from disk for all in-progress downloads. Call when serving status."""
         from .util import chute_cache_size_on_disk
+
         async with self._lock:
             to_refresh = [
                 (cid, s)
@@ -135,21 +166,16 @@ class DownloadStateManager:
         async with self._lock:
             self._state.pop(chute_id, None)
 
-    async def set_failed(self, chute_id: str, error: str) -> None:
+    async def remove(self, chute_id: str) -> None:
+        """Pop state and cancel the task if still running."""
         async with self._lock:
-            if s := self._state.get(chute_id):
-                s.status = DownloadProgressStatus.FAILED
-                s.error = error
+            s = self._state.pop(chute_id, None)
+        if s is not None and s.task is not None and not s.task.done():
+            s.task.cancel()
 
     async def contains(self, chute_id: str) -> bool:
         async with self._lock:
             return chute_id in self._state
-
-    async def remove_if_completed(self, chute_id: str) -> None:
-        async with self._lock:
-            s = self._state.get(chute_id)
-            if s is not None and s.status == DownloadProgressStatus.COMPLETED:
-                self._state.pop(chute_id, None)
 
     async def all_entries(self) -> list[tuple[str, ChuteDownloadState]]:
         async with self._lock:
@@ -159,6 +185,7 @@ class DownloadStateManager:
 # Module-level singleton for download state
 download_state = DownloadStateManager()
 
+
 class HfInfoResponse(BaseModel):
     """Response from validator hf_info endpoint (repo_id/revision for HF snapshot_download)."""
 
@@ -166,6 +193,7 @@ class HfInfoResponse(BaseModel):
     revision: Optional[str] = Field(None, description="Repo revision; default 'main' if omitted")
 
     model_config = {"extra": "ignore"}
+
 
 class DownloadRequest(BaseModel):
     chute_id: str = Field(..., description="Chute ID to download model for")

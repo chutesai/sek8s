@@ -228,8 +228,6 @@ async def run_download(
     os.chmod(hub_dir, 0o2775)
     hub_cache_dir = str(hub_dir)
 
-    await download_state.remove_if_completed(chute_id)
-    await download_state.start(chute_id, repo_id, revision)
     try:
         await download_state.set_downloading(chute_id)
         total_bytes = await fetch_repo_total_size(repo_id, revision)
@@ -269,8 +267,6 @@ async def run_download(
         await download_state.set_completed(chute_id)
     except Exception as e:
         logger.exception("Download failed for chute_id={}", chute_id)
-        await download_state.set_failed(chute_id, str(e))
-        # Remove chute cache dir so we don't leave partial/corrupted downloads;
         try:
             if cache_dir_path.exists():
                 shutil.rmtree(cache_dir_path)
@@ -279,6 +275,7 @@ async def run_download(
             logger.warning(
                 f"Failed to clean up cache dir for {chute_id=} after failure: {cleanup_err}"
             )
+        raise
 
 
 async def run_cleanup(
@@ -316,8 +313,10 @@ async def run_cleanup(
 
     for path, size, last_acc in candidates:
         if last_acc < cutoff_time:
-            if await download_state.contains(path.name):
+            s = await download_state.get(path.name)
+            if s is not None and s.is_in_progress:
                 continue
+            await download_state.remove(path.name)
             shutil.rmtree(path, ignore_errors=True)
             removed_list.append(path.name)
             freed += size
@@ -329,8 +328,10 @@ async def run_cleanup(
         for path, size, _ in candidates:
             if total_now <= max_size_bytes:
                 break
-            if await download_state.contains(path.name):
+            s = await download_state.get(path.name)
+            if s is not None and s.is_in_progress:
                 continue
+            await download_state.remove(path.name)
             shutil.rmtree(path, ignore_errors=True)
             removed_list.append(path.name)
             freed += size

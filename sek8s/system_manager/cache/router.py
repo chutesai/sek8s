@@ -66,9 +66,10 @@ async def download(
         if not repo_id:
             raise HTTPException(status_code=502, detail="Validator did not return repo_id")
         revision = info.revision or "main"
-        asyncio.create_task(
-            run_download(chute_id, repo_id, revision)
-        )
+        await download_state.remove(chute_id)
+        await download_state.start(chute_id, repo_id, revision)
+        task = asyncio.create_task(run_download(chute_id, repo_id, revision))
+        await download_state.set_task(chute_id, task)
         response_status = CacheDownloadStatus.STARTED
 
     return CacheDownloadResponse(chute_id=chute_id, status=response_status)
@@ -191,6 +192,7 @@ async def download_status(
 )
 async def delete_chute(
     chute_id: str,
+    force: bool = Query(False, description="Force delete even if download is in progress"),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> dict:
     if len(chute_id) != 36:
@@ -198,10 +200,12 @@ async def delete_chute(
     path = chute_cache_dir(chute_id)
     message = "deleted"
     if path.exists():
-        if await download_state.contains(chute_id):
+        s = await download_state.get(chute_id)
+        if s is not None and s.is_in_progress and not force:
             raise HTTPException(
                 status_code=409, detail="Download in progress for this chute"
             )
+        await download_state.remove(chute_id)
         shutil.rmtree(path, ignore_errors=False)
     else:
         message = "not found"
