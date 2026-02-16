@@ -269,7 +269,7 @@ fetch_nonce() {
     # Check HTTP response code
     case "$http_code" in
         200)
-            NONCE=$(grep -o '"nonce":"[^"]*"' "$response_file" | cut -d'"' -f4)
+            NONCE=$(jq -r '.nonce // empty' "$response_file" 2>/dev/null)
             if [ -n "$NONCE" ]; then
                 rm -f "$response_file"
                 log_success_msg "Nonce retrieved successfully"
@@ -376,8 +376,8 @@ fetch_luks_key() {
         
         case "$http_code" in
             200)
-                LUKS_KEY=$(grep -o '"key":"[^"]*"' "$response_file" | cut -d'"' -f4)
-                BOOT_TOKEN=$(grep -o '"boot_token":"[^"]*"' "$response_file" | cut -d'"' -f4)
+                LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
+                BOOT_TOKEN=$(jq -r '.boot_token // empty' "$response_file" 2>/dev/null)
                 if [ -n "$LUKS_KEY" ]; then
                     rm -f "$response_file"
                     log_success_msg "LUKS key and boot token retrieved successfully"
@@ -432,7 +432,6 @@ unlock_device() {
         return 1
     fi
 }
-
 
 
 # Function to handle failure and shutdown

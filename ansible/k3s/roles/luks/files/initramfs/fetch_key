@@ -9,6 +9,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 # Copy essential binaries - copy_exec handles library dependencies automatically
 copy_exec /bin/ip
 copy_exec /usr/bin/curl
+copy_exec /usr/bin/jq
 copy_exec /sbin/dhcpcd
 copy_exec /usr/sbin/cryptsetup
 copy_exec /usr/bin/tdx-quote-generator

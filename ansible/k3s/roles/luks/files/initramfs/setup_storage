@@ -212,9 +212,17 @@ post_sync_keys() {
         return 1
     fi
     
-    # Parse response by label (API returns keys keyed by volume name = label)
-    STORAGE_KEY=$(grep -o "\"${STORAGE_LABEL}\":\"[^\"]*\"" "$response_file" 2>/dev/null | head -1 | cut -d'"' -f4)
-    CACHE_KEY=$(grep -o "\"${CACHE_LABEL}\":\"[^\"]*\"" "$response_file" 2>/dev/null | head -1 | cut -d'"' -f4)
+    # Parse response with jq (handles JSON escaping, whitespace, etc. correctly)
+    if ! STORAGE_KEY=$(jq -r --arg label "$STORAGE_LABEL" '.[$label] // empty' "$response_file" 2>/dev/null); then
+        rm -f "$response_file"
+        log_failure_msg "Failed to parse LUKS sync response (storage key)"
+        return 1
+    fi
+    if ! CACHE_KEY=$(jq -r --arg label "$CACHE_LABEL" '.[$label] // empty' "$response_file" 2>/dev/null); then
+        rm -f "$response_file"
+        log_failure_msg "Failed to parse LUKS sync response (cache key)"
+        return 1
+    fi
     
     rm -f "$response_file"
     if [ -z "$STORAGE_KEY" ] || [ -z "$CACHE_KEY" ]; then
@@ -381,6 +389,8 @@ main() {
         first=0
     fi
     rekey_json="${rekey_json}]"
+    
+    log_begin_msg "Rekey list: $rekey_json"
     
     # POST sync: always call; API returns passphrases for all volumes (new for rekey, existing for others)
     if ! post_sync_keys "$rekey_json"; then

@@ -277,7 +277,7 @@
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
       apt-get update &&
-      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl
+      apt-get install -y build-essential curl dhcpcd-base cryptsetup e2fsprogs ca-certificates openssl jq
     "
   register: chroot_deps_result
   changed_when: chroot_deps_result.rc == 0
