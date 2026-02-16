@@ -2,6 +2,7 @@
 Description=Initialize k3s Configuration
 After=network-online.target
 After=config-manager.service
+Requires=setup-storage-bind-mounts.service
 After=setup-storage-bind-mounts.service
 Wants=config-manager.service
 
