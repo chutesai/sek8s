@@ -1,5 +1,6 @@
 #!/bin/bash
-# setup-storage-bind-mounts.sh - Set up bind mounts: k3s, full kubelet, Chutes agent, admission certs on storage volume
+# setup-storage-bind-mounts.sh - Sync root filesystem data to storage volume and create bind mounts.
+# Runs AFTER verify-storage.service, BEFORE k3s/containerd.
 set -euo pipefail
 
 LOG_TAG="setup-storage-bind-mounts"
@@ -9,19 +10,7 @@ log() {
     logger -t "$LOG_TAG" "$1" 2>/dev/null || true
 }
 
-# UID:GID for pod/container access (must match runAsUser/runAsGroup in pod spec)
-STORAGE_OWNER="1000:1000"
-
-# Storage volume mount point (same for both production and debug VMs)
 STORAGE_BASE="/cache/storage"
-K3S_SOURCE="${STORAGE_BASE}/k3s"
-K3S_TARGET="/var/lib/rancher/k3s"
-ADMISSION_CERTS_SOURCE="${STORAGE_BASE}/admission-controller-certs"
-ADMISSION_CERTS_TARGET="/etc/admission-controller/certs"
-KUBELET_SOURCE="${STORAGE_BASE}/kubelet"
-CHUTES_AGENT_SOURCE="${STORAGE_BASE}/chutes-agent"
-KUBELET_TARGET="/var/lib/kubelet"
-CHUTES_AGENT_TARGET="/var/lib/chutes/agent"
 
 # Ensure storage volume is mounted
 if ! mountpoint -q "$STORAGE_BASE"; then
@@ -29,106 +18,88 @@ if ! mountpoint -q "$STORAGE_BASE"; then
     exit 1
 fi
 
-# Setup entire k3s directory on storage (sync from VM root is done by init-k3s-storage.sh before we run)
-log "Ensuring k3s directory on storage volume..."
-mkdir -p "$K3S_SOURCE"
-mkdir -p "$K3S_SOURCE/init-markers"
-mkdir -p "$K3S_SOURCE/credentials"
-mkdir -p "$K3S_TARGET"
+# --- Helpers ---
 
-if mountpoint -q "$K3S_TARGET"; then
-    log "K3s target already mounted, checking if it's the correct bind mount..."
-    if [ "$(stat -c %d "$K3S_TARGET")" = "$(stat -c %d "$K3S_SOURCE")" ]; then
-        log "K3s bind mount already correctly configured"
-    else
-        log "WARNING: K3s target is mounted but not our bind mount. Skipping."
-    fi
-else
-    log "Creating bind mount: $K3S_SOURCE -> $K3S_TARGET"
-    if mount --bind "$K3S_SOURCE" "$K3S_TARGET"; then
-        log "K3s bind mount created successfully"
-    else
-        log "ERROR: Failed to create k3s bind mount"
-        exit 1
-    fi
-fi
+# Sync root filesystem content to storage if the storage directory is empty.
+# Args: $1 = root fs path (source), $2 = storage path (destination)
+sync_if_empty() {
+    local root_path="$1"
+    local storage_path="$2"
 
-# Setup admission controller certs on storage (must match caBundle in cluster webhook config across VM replacements)
-log "Ensuring admission controller certs on storage volume..."
-mkdir -p "$ADMISSION_CERTS_SOURCE"
-mkdir -p "$ADMISSION_CERTS_TARGET"
-admission_certs_file_count=$(find "$ADMISSION_CERTS_SOURCE" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
-if [[ "$admission_certs_file_count" -eq 0 ]]; then
-    if [ -d "$ADMISSION_CERTS_TARGET" ] && [ -f "${ADMISSION_CERTS_TARGET}/server.crt" ]; then
-        log "Admission controller certs on storage are empty, syncing from build VM..."
-        if rsync -a --exclude='lost+found' "$ADMISSION_CERTS_TARGET/" "$ADMISSION_CERTS_SOURCE/"; then
-            log "Admission controller certs synced successfully"
+    mkdir -p "$storage_path"
+    mkdir -p "$root_path"
+
+    local file_count
+    file_count=$(find "$storage_path" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
+    if [[ "$file_count" -eq 0 ]]; then
+        log "Storage dir $storage_path is empty, syncing from $root_path"
+        if rsync -a --exclude='lost+found' "$root_path/" "$storage_path/"; then
+            log "Synced $root_path -> $storage_path ($(du -sh "$storage_path" 2>/dev/null | cut -f1))"
         else
-            log "ERROR: Failed to sync admission controller certs to storage"
+            log "ERROR: Failed to sync $root_path to $storage_path"
             exit 1
         fi
     fi
-fi
-if mountpoint -q "$ADMISSION_CERTS_TARGET"; then
-    log "Admission controller certs target already mounted, checking bind mount..."
-    if [ "$(stat -c %d "$ADMISSION_CERTS_TARGET")" = "$(stat -c %d "$ADMISSION_CERTS_SOURCE")" ]; then
-        log "Admission controller certs bind mount already correctly configured"
-    else
-        log "WARNING: Admission controller certs target is mounted but not our bind mount. Skipping."
-    fi
-else
-    log "Creating bind mount: $ADMISSION_CERTS_SOURCE -> $ADMISSION_CERTS_TARGET"
-    if mount --bind "$ADMISSION_CERTS_SOURCE" "$ADMISSION_CERTS_TARGET"; then
-        log "Admission controller certs bind mount created successfully"
-    else
-        log "ERROR: Failed to create admission controller certs bind mount"
-        exit 1
-    fi
-fi
+}
 
-# Setup full kubelet directory on storage (so node ephemeral-storage capacity reflects the large volume)
-log "Ensuring kubelet directory on storage volume..."
-mkdir -p "$KUBELET_SOURCE"
-mkdir -p "$KUBELET_TARGET"
+# Create a bind mount from storage to target, skipping if already mounted correctly.
+# Args: $1 = storage path (source), $2 = target mount path
+create_bind_mount() {
+    local source="$1"
+    local target="$2"
 
-if mountpoint -q "$KUBELET_TARGET"; then
-    log "Kubelet target already mounted, checking if it's the correct bind mount..."
-    if [ "$(stat -c %d "$KUBELET_TARGET")" = "$(stat -c %d "$KUBELET_SOURCE")" ]; then
-        log "Kubelet bind mount already correctly configured"
-    else
-        log "WARNING: Kubelet target is mounted but not our bind mount. Skipping."
-    fi
-else
-    log "Creating bind mount: $KUBELET_SOURCE -> $KUBELET_TARGET"
-    if mount --bind "$KUBELET_SOURCE" "$KUBELET_TARGET"; then
-        log "Kubelet bind mount created successfully"
-    else
-        log "ERROR: Failed to create kubelet bind mount"
-        exit 1
-    fi
-fi
+    mkdir -p "$source"
+    mkdir -p "$target"
 
-# Chutes agent on storage: create dir with pod-friendly permissions, then bind mount
-mkdir -p "$CHUTES_AGENT_SOURCE"
-chown -R "$STORAGE_OWNER" "$CHUTES_AGENT_SOURCE"
-chmod -R 755 "$CHUTES_AGENT_SOURCE"
-mkdir -p /var/lib/chutes
-mkdir -p "$CHUTES_AGENT_TARGET"
-if mountpoint -q "$CHUTES_AGENT_TARGET"; then
-    if [ "$(stat -c %d "$CHUTES_AGENT_TARGET")" = "$(stat -c %d "$CHUTES_AGENT_SOURCE")" ]; then
-        log "Chutes agent bind mount already correctly configured"
+    if mountpoint -q "$target"; then
+        if [ "$(stat -c %d "$target")" = "$(stat -c %d "$source")" ]; then
+            log "Bind mount already correct: $source -> $target"
+        else
+            log "ERROR: $target is mounted but not our bind mount (unexpected device). Cannot continue."
+            exit 1
+        fi
     else
-        log "WARNING: Chutes agent target is mounted but not our bind mount. Skipping."
+        log "Creating bind mount: $source -> $target"
+        if mount --bind "$source" "$target"; then
+            log "Bind mount created: $source -> $target"
+        else
+            log "ERROR: Failed to create bind mount: $source -> $target"
+            exit 1
+        fi
     fi
-else
-    log "Creating bind mount: $CHUTES_AGENT_SOURCE -> $CHUTES_AGENT_TARGET"
-    if mount --bind "$CHUTES_AGENT_SOURCE" "$CHUTES_AGENT_TARGET"; then
-        log "Chutes agent bind mount created successfully"
-    else
-        log "ERROR: Failed to create Chutes agent bind mount"
-        exit 1
-    fi
-fi
+}
+
+# --- Storage volume layout ---
+#
+# Each entry: storage_subdir root_fs_path
+#
+# On first boot (storage empty), root_fs_path is synced to storage_subdir.
+# Then storage_subdir is bind-mounted over root_fs_path so all runtime writes go to storage.
+
+MOUNTS=(
+    "k3s                        /var/lib/rancher/k3s"
+    "rancher-config             /etc/rancher/k3s"
+    "kubelet                    /var/lib/kubelet"
+    "admission-controller-certs /etc/admission-controller/certs"
+    "chutes-agent               /var/lib/chutes/agent"
+)
+
+for entry in "${MOUNTS[@]}"; do
+    read -r storage_subdir root_path <<< "$entry"
+    storage_path="${STORAGE_BASE}/${storage_subdir}"
+    sync_if_empty "$root_path" "$storage_path"
+    create_bind_mount "$storage_path" "$root_path"
+done
+
+# --- Post-mount fixups for specific volumes ---
+
+# k3s: ensure required subdirectories exist
+mkdir -p "${STORAGE_BASE}/k3s/init-markers"
+mkdir -p "${STORAGE_BASE}/k3s/credentials"
+
+# chutes-agent: pod-friendly ownership (must match runAsUser/runAsGroup in pod spec)
+chown -R 1000:1000 "${STORAGE_BASE}/chutes-agent"
+chmod -R 755 "${STORAGE_BASE}/chutes-agent"
 
 log "Bind mounts setup complete"
 exit 0

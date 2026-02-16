@@ -82,33 +82,6 @@
         group: root
       register: verify_storage_service
 
-    - name: Copy k3s storage init script
-      copy:
-        src: "{{ files_dir }}/init-k3s-storage.sh"
-        dest: /usr/local/bin/init-k3s-storage.sh
-        mode: '0755'
-        owner: root
-        group: root
-      register: k3s_storage_init_script
-
-    - name: Copy kubelet storage init script
-      copy:
-        src: "{{ files_dir }}/init-kubelet-storage.sh"
-        dest: /usr/local/bin/init-kubelet-storage.sh
-        mode: '0755'
-        owner: root
-        group: root
-      register: kubelet_storage_init_script
-
-    - name: Template storage init service
-      template:
-        src: storage-init.service.j2
-        dest: /etc/systemd/system/storage-init.service
-        mode: '0644'
-        owner: root
-        group: root
-      register: storage_init_service
-
     - name: Copy cache setup script
       copy:
         src: "{{ files_dir }}/setup-cache.sh"
@@ -148,7 +121,7 @@
     - name: Reload systemd daemon if units changed
       systemd:
         daemon_reload: yes
-      when: verify_service.changed or var_snap_mount_unit.changed or cache_storage_mount_unit.changed or verify_storage_service.changed or storage_init_service.changed or cache_service.changed or storage_bind_mounts_service.changed
+      when: verify_service.changed or var_snap_mount_unit.changed or cache_storage_mount_unit.changed or verify_storage_service.changed or cache_service.changed or storage_bind_mounts_service.changed
 
     - name: Create /var/snap mount point directory
       file:
@@ -227,14 +200,6 @@
         daemon_reload: yes
       failed_when: false
 
-    - name: Enable storage init service (but do not start)
-      systemd:
-        name: storage-init.service
-        enabled: yes
-        state: stopped
-        daemon_reload: yes
-      failed_when: false
-
     - name: Enable cache setup service (but do not start)
       systemd:
         name: setup-cache.service
@@ -274,12 +239,6 @@
       register: verify_storage_status
       changed_when: false
       failed_when: verify_storage_status.stdout != "disabled"
-
-    - name: Verify storage init service installation
-      command: systemctl is-enabled storage-init.service
-      register: storage_init_status
-      changed_when: false
-      failed_when: storage_init_status.stdout != "enabled"
 
     - name: Verify cache setup service installation
       command: systemctl is-enabled setup-cache.service

@@ -1,12 +1,10 @@
 [Unit]
-Description=Setup bind mounts for storage volume
+Description=Sync and bind-mount storage volume directories
 Documentation=man:systemd.service(5)
 Requires=cache-storage.mount
 Requires=verify-storage.service
-Requires=storage-init.service
 After=cache-storage.mount
 After=verify-storage.service
-After=storage-init.service
 Before=containerd.service
 Before=k3s.service
 Before=k3s-agent.service
@@ -15,6 +13,9 @@ Before=k3s-agent.service
 Type=oneshot
 ExecStart=/usr/local/bin/setup-storage-bind-mounts.sh
 RemainAfterExit=yes
+TimeoutStartSec=300
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
