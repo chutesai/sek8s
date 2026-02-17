@@ -309,6 +309,12 @@ class HuggingFaceSnapshot:
         complete_marker = self.path / CACHE_COMPLETE_MARKER
         stale_marker = self.path / CACHE_STALE_MARKER
 
+        # Clear any previous markers so we always start from a clean state.
+        if complete_marker.exists():
+            complete_marker.unlink()
+        if stale_marker.exists():
+            stale_marker.unlink()
+
         logger.info(
             "Verifying cache for {}: repo={}, rev={}, path={}",
             self.chute_id, repo_id, revision[:12], self.path,
@@ -316,8 +322,6 @@ class HuggingFaceSnapshot:
         try:
             result = await verify_cache(repo_id=repo_id, revision=revision, cache_dir=str(self.path))
             complete_marker.write_text(f"{repo_id}\n{revision}", encoding="utf-8")
-            if stale_marker.exists():
-                stale_marker.unlink()
             self._reconciled = True
             logger.info(
                 "Reconciled {}: PRESENT (repo={}, rev={}, verified={}, skipped={})",
@@ -337,8 +341,6 @@ class HuggingFaceSnapshot:
                     self.chute_id, repo_id, revision[:12], error_msg,
                 )
             else:
-                if complete_marker.exists():
-                    complete_marker.unlink()
                 stale_marker.write_text(f"{repo_id}\n{revision}\n{error_msg}", encoding="utf-8")
                 self._reconciled = True
                 logger.warning(
