@@ -13,7 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from sek8s.services.util import authorize
 
-from .models import CacheManager, CacheChuteStatusEnum, CleanupRequest, ChuteSnapshot, DownloadRequest
+from .manager import CacheManager
+from .models import CacheChuteStatusEnum, CleanupRequest, ChuteSnapshot, DownloadRequest
 from .responses import (
     CacheChuteStatus,
     CacheCleanupResponse,
@@ -48,7 +49,6 @@ def _snap_to_overview(snap: ChuteSnapshot) -> CacheOverviewEntry:
         size_bytes=snap.size_bytes,
         last_accessed=snap.last_accessed,
         status=snap.status,
-        complete=snap.complete,
     )
 
 
@@ -72,6 +72,7 @@ async def download(
     if not chute_id or len(chute_id) != 36:
         raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
 
+    await mgr.sync_from_disk()
     chute = await mgr.get_or_create(chute_id)
 
     if chute.is_in_progress:
@@ -103,6 +104,7 @@ async def download_status(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadStatusResponse:
+    await mgr.sync_from_disk()
     if chute_id:
         chute = await mgr.get(chute_id)
         if chute is None:
@@ -128,6 +130,7 @@ async def delete_chute(
     if len(chute_id) != 36:
         raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
 
+    await mgr.sync_from_disk()
     chute = await mgr.get(chute_id)
     if chute is None:
         return {"status": "ok", "message": "not found"}
@@ -150,6 +153,7 @@ async def cleanup(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheCleanupResponse:
+    await mgr.sync_from_disk()
     age = body.max_age_days if body else max_age_days
     size = body.max_size_gb if body else max_size_gb
     exclude = (body.exclude_pattern if body else None) or os.environ.get("CLEANUP_EXCLUDE")
@@ -171,6 +175,7 @@ async def overview(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheOverviewResponse:
+    await mgr.sync_from_disk()
     chutes = await mgr.all()
     entries = [_snap_to_overview(c.snapshot()) for c in chutes]
     total = sum(e.size_bytes for e in entries)

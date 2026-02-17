@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import aiohttp
+from fastapi import HTTPException
 from loguru import logger
 
 from sek8s.config import cache_config
@@ -52,8 +53,6 @@ async def fetch_hf_info(chute_id: str) -> HfInfoResponse:
 
     Request is signed with miner credentials when MINER_SS58/MINER_SEED are set.
     """
-    from fastapi import HTTPException
-
     base = (cache_config.validator_base_url or "").strip().rstrip("/")
     if not base:
         raise HTTPException(

@@ -7,7 +7,7 @@ from loguru import logger
 
 from sek8s.config import SystemManagerConfig
 from sek8s.server import WebServer
-from sek8s.system_manager.cache.models import CacheManager
+from sek8s.system_manager.cache.manager import CacheManager
 from sek8s.system_manager.cache.router import router as cache_router
 from sek8s.system_manager.status.router import router as status_router
 

@@ -57,10 +57,6 @@ class CacheOverviewEntry(BaseModel):
         CacheChuteStatusEnum.PRESENT,
         description="Status: present, in_progress, incomplete, stale, failed, etc.",
     )
-    complete: bool = Field(
-        True,
-        description="True if download completed successfully (has completion marker); False if interrupted/incomplete",
-    )
 
 
 class CacheOverviewResponse(BaseModel):
