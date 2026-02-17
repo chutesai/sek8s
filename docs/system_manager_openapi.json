@@ -952,6 +952,18 @@
             }
           },
           {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Force delete even if download is in progress",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Force delete even if download is in progress"
+          },
+          {
             "name": "X-Chutes-Hotkey",
             "in": "header",
             "required": false,
@@ -1239,7 +1251,7 @@
           },
           "status": {
             "$ref": "#/components/schemas/CacheChuteStatusEnum",
-            "description": "One of: in_progress, present, missing, failed"
+            "description": "One of: in_progress, present, missing, failed, incomplete, stale"
           },
           "percent_complete": {
             "anyOf": [
@@ -1315,7 +1327,9 @@
           "in_progress",
           "present",
           "missing",
-          "failed"
+          "failed",
+          "incomplete",
+          "stale"
         ],
         "title": "CacheChuteStatusEnum",
         "description": "Status for a chute in the download status (GET) and overview."
@@ -1436,6 +1450,11 @@
             ],
             "title": "Last Accessed",
             "description": "Last access time (Unix)"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CacheChuteStatusEnum",
+            "description": "Status: present, in_progress, incomplete, stale, failed, etc.",
+            "default": "present"
           }
         },
         "type": "object",
