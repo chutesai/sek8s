@@ -12,12 +12,12 @@ DEBUG_MODE="${DEBUG_MODE:-false}"
 LOG_TAG="verify-cache-volume"
 
 log_info() {
-    echo "[$LOG_TAG] $*" | systemd-cat -t "$LOG_TAG" -p info
+    echo "[$LOG_TAG] $*" | systemd-cat -t "$LOG_TAG" -p info 2>/dev/null || true
     echo "[$LOG_TAG] $*"
 }
 
 log_error() {
-    echo "[$LOG_TAG] ERROR: $*" | systemd-cat -t "$LOG_TAG" -p err
+    echo "[$LOG_TAG] ERROR: $*" | systemd-cat -t "$LOG_TAG" -p err 2>/dev/null || true
     echo "[$LOG_TAG] ERROR: $*" >&2
 }
 
