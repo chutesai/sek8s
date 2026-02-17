@@ -283,6 +283,7 @@ class HuggingFaceSnapshot:
         """
         if not self.is_present_on_disk:
             self._reconciled = True
+            logger.debug("Reconcile {}: nothing on disk, marking reconciled", self.chute_id)
             return
 
         try:
@@ -297,31 +298,58 @@ class HuggingFaceSnapshot:
             logger.warning("Skipping reconciliation for {}: validator returned no repo_id", self.chute_id)
             return
 
+        logger.debug(
+            "Reconcile {}: validator says repo={}, rev={} (was repo={}, rev={})",
+            self.chute_id, repo_id, revision[:12],
+            self.repo_id or "<unset>", (self.revision or "<unset>")[:12],
+        )
         self.repo_id = repo_id
         self.revision = revision
 
         complete_marker = self.path / CACHE_COMPLETE_MARKER
         stale_marker = self.path / CACHE_STALE_MARKER
 
+        logger.info(
+            "Verifying cache for {}: repo={}, rev={}, path={}",
+            self.chute_id, repo_id, revision[:12], self.path,
+        )
         try:
-            await verify_cache(repo_id=repo_id, revision=revision, cache_dir=str(self.path))
+            result = await verify_cache(repo_id=repo_id, revision=revision, cache_dir=str(self.path))
             complete_marker.write_text(f"{repo_id}\n{revision}", encoding="utf-8")
             if stale_marker.exists():
                 stale_marker.unlink()
             self._reconciled = True
-            logger.info("Reconciled {}: PRESENT (repo={}, rev={})", self.chute_id, repo_id, revision[:12])
+            logger.info(
+                "Reconciled {}: PRESENT (repo={}, rev={}, verified={}, skipped={})",
+                self.chute_id, repo_id, revision[:12],
+                result.get("verified", 0), result.get("skipped", 0),
+            )
         except ValueError as e:
             error_msg = str(e)
             if "Missing file" in error_msg or "not found" in error_msg:
-                logger.info("Reconciled {}: INCOMPLETE ({})", self.chute_id, e)
+                logger.info(
+                    "Reconciled {}: INCOMPLETE — repo={}, rev={}, reason={}",
+                    self.chute_id, repo_id, revision[:12], error_msg,
+                )
+            elif "verification failed" in error_msg:
+                logger.warning(
+                    "Reconciled {}: SKIPPED (could not fetch manifest) — repo={}, rev={}, reason={}",
+                    self.chute_id, repo_id, revision[:12], error_msg,
+                )
             else:
                 if complete_marker.exists():
                     complete_marker.unlink()
-                stale_marker.write_text(f"{repo_id}\n{revision}\n{e}", encoding="utf-8")
+                stale_marker.write_text(f"{repo_id}\n{revision}\n{error_msg}", encoding="utf-8")
                 self._reconciled = True
-                logger.warning("Reconciled {}: STALE ({})", self.chute_id, e)
+                logger.warning(
+                    "Reconciled {}: STALE — repo={}, rev={}, reason={}",
+                    self.chute_id, repo_id, revision[:12], error_msg,
+                )
         except Exception as e:
-            logger.warning("Reconciliation error for {}: {}", self.chute_id, e)
+            logger.warning(
+                "Reconciliation error for {}: repo={}, rev={}, error={}",
+                self.chute_id, repo_id, revision[:12], e,
+            )
 
     async def delete(self) -> None:
         self.cancel_download()

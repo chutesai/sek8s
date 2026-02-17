@@ -129,6 +129,10 @@ async def verify_cache(
     repo_folder_name = f"models--{repo_id.replace('/', '--')}"
     snapshot_dir = cache_dir_path / "hub" / repo_folder_name / "snapshots" / revision
     if not snapshot_dir.exists():
+        logger.warning(
+            "verify_cache: snapshot dir missing — repo={}, rev={}, expected={}",
+            repo_id, revision[:12], snapshot_dir,
+        )
         raise ValueError(f"Cache directory not found: {snapshot_dir}")
 
     local_files = {}
@@ -138,21 +142,38 @@ async def verify_cache(
             if not any(part.startswith("_") for part in Path(rel_path).parts):
                 local_files[rel_path] = path
 
+    logger.debug(
+        "verify_cache: repo={}, rev={}, remote_files={}, local_files={}",
+        repo_id, revision[:12], len(remote_files), len(local_files),
+    )
+
     verified = 0
     skipped = 0
     for remote_path, (remote_hash, remote_size) in remote_files.items():
         local_path = local_files.get(remote_path)
         if not local_path or (not local_path.exists() and not local_path.is_symlink()):
+            logger.info(
+                "verify_cache: missing file — repo={}, rev={}, file={}",
+                repo_id, revision[:12], remote_path,
+            )
             raise ValueError(f"Missing file: {remote_path}")
         if remote_hash is None or len(str(remote_hash)) == 40:
             skipped += 1
             continue
         resolved = local_path.resolve()
         if remote_size is not None and resolved.stat().st_size != remote_size:
-            raise ValueError(f"Size mismatch: {remote_path}")
+            logger.warning(
+                "verify_cache: size mismatch — repo={}, rev={}, file={}, expected={}, actual={}",
+                repo_id, revision[:12], remote_path, remote_size, resolved.stat().st_size,
+            )
+            raise ValueError(f"Size mismatch: {remote_path} (expected={remote_size}, actual={resolved.stat().st_size})")
         symlink_hash = get_symlink_hash(local_path)
         if symlink_hash and symlink_hash != remote_hash:
-            raise ValueError(f"Hash mismatch: {remote_path}")
+            logger.warning(
+                "verify_cache: hash mismatch — repo={}, rev={}, file={}, expected={}, actual={}",
+                repo_id, revision[:12], remote_path, remote_hash[:12], symlink_hash[:12],
+            )
+            raise ValueError(f"Hash mismatch: {remote_path} (expected={remote_hash[:12]}, actual={symlink_hash[:12]})")
         verified += 1
 
     return {"verified": verified, "skipped": skipped, "total": len(remote_files), "skipped_api_error": False}
