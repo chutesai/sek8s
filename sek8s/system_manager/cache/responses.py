@@ -31,7 +31,7 @@ class CacheChuteStatus(BaseModel):
     chute_id: str = Field(..., description="Chute ID")
     status: CacheChuteStatusEnum = Field(
         ...,
-        description="One of: in_progress, present, missing, failed, incomplete",
+        description="One of: in_progress, present, missing, failed, incomplete, stale",
     )
     percent_complete: Optional[float] = Field(
         None,
@@ -53,6 +53,10 @@ class CacheOverviewEntry(BaseModel):
     revision: Optional[str] = Field(None, description="Revision")
     size_bytes: int = Field(..., description="Size in bytes")
     last_accessed: Optional[float] = Field(None, description="Last access time (Unix)")
+    status: CacheChuteStatusEnum = Field(
+        CacheChuteStatusEnum.PRESENT,
+        description="Status: present, in_progress, incomplete, stale, failed, etc.",
+    )
     complete: bool = Field(
         True,
         description="True if download completed successfully (has completion marker); False if interrupted/incomplete",

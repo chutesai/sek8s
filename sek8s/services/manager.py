@@ -1,15 +1,35 @@
 """System manager service: composes system-status and cache routers on one app."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from loguru import logger
 
 from sek8s.config import SystemManagerConfig
 from sek8s.server import WebServer
+from sek8s.system_manager.cache.models import CacheManager
 from sek8s.system_manager.cache.router import router as cache_router
 from sek8s.system_manager.status.router import router as status_router
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup/shutdown lifecycle for the system manager."""
+    cache_mgr = CacheManager()
+    logger.info("Initializing cache manager...")
+    try:
+        await cache_mgr.initialize()
+    except Exception as e:
+        logger.error("Cache manager initialization failed (non-fatal): {}", e)
+    app.state.cache_manager = cache_mgr
+    yield
+
+
 class SystemManagerServer(WebServer):
     """Web server for the system manager (status + cache routes)."""
+
+    def __init__(self, config: SystemManagerConfig):
+        super().__init__(config, lifespan=lifespan)
 
     def _setup_routes(self) -> None:
         self.app.include_router(status_router, prefix="/status", tags=["status"])
