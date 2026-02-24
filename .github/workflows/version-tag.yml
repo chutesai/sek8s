@@ -1,0 +1,76 @@
+name: Version Tag
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base for PR diff
+        if: github.event_name == 'pull_request'
+        run: git fetch origin ${{ github.event.pull_request.base.sha }}
+
+      - name: Verify VERSION changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
+          if ! echo "$changed_files" | grep -qx "VERSION"; then
+            echo "::error::VERSION file must be updated when merging to main. Bump the version in VERSION before merging."
+            exit 1
+          fi
+          echo "VERSION file was updated"
+
+  tag-version:
+    needs: version-check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(cat VERSION | tr -d '\n' | tr -d ' ')
+          if [ -z "$version" ]; then
+            echo "::error::VERSION file is empty"
+            exit 1
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Check tag does not exist
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          tag="v$version"
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
+            echo "::error::Tag $tag already exists. Bump the version in VERSION before merging."
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          tag="v$version"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
