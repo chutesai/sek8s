@@ -1,7 +1,11 @@
 #!/bin/bash
 # setup-hugepages.sh — idempotent hugepage reservation for TDX VM
 #
-# Ensures enough hugepages are reserved and hugetlbfs is mounted.
+# Reserves hugepages in the kernel sysfs pool.
+# Used by memory-backend-memfd (hugetlb=on,hugetlbsize=1G) which draws
+# directly from the kernel hugepage pool via memfd_create() — no hugetlbfs
+# mount required.
+#
 # Safe to call repeatedly; exits 0 immediately if already configured.
 #
 # Usage:
@@ -53,9 +57,7 @@ else
   exit 1
 fi
 
-HUGETLBFS_MOUNT="/dev/hugepages"
-
-# Check if 1G hugepages are supported
+# Check if 1G hugepages are supported by this CPU
 if [[ "$PAGE_SIZE" == "1G" && ! -d "$HUGEPAGES_DIR" ]]; then
   echo "✗ Error: 1G hugepages not supported by this kernel/CPU."
   echo "  Check: grep pdpe1gb /proc/cpuinfo"
@@ -67,14 +69,11 @@ fi
 CURRENT_PAGES=$(cat "$HUGEPAGES_DIR/nr_hugepages" 2>/dev/null || echo 0)
 
 if [[ "$CURRENT_PAGES" -ge "$PAGES_NEEDED" ]]; then
-  # Check mount too before declaring done
-  if mount | grep -q "hugetlbfs on $HUGETLBFS_MOUNT"; then
-    echo "✓ Hugepages already configured: ${CURRENT_PAGES} x ${PAGE_SIZE} pages (need ${PAGES_NEEDED})"
-    exit 0
-  fi
+  echo "✓ Hugepages already configured: ${CURRENT_PAGES} x ${PAGE_SIZE} pages (need ${PAGES_NEEDED})"
+  exit 0
 fi
 
-echo "Configuring hugepages: ${PAGES_NEEDED} x ${PAGE_SIZE} pages for ${SIZE} VM..."
+echo "Reserving hugepages: ${PAGES_NEEDED} x ${PAGE_SIZE} pages for ${SIZE} VM..."
 
 # Reserve hugepages (requires root)
 if [[ "$EUID" -ne 0 ]]; then
@@ -89,20 +88,10 @@ ACTUAL_PAGES=$(cat "$HUGEPAGES_DIR/nr_hugepages")
 if [[ "$ACTUAL_PAGES" -lt "$PAGES_NEEDED" ]]; then
   echo "✗ Error: Only ${ACTUAL_PAGES} x ${PAGE_SIZE} hugepages allocated (need ${PAGES_NEEDED})."
   echo "  The system may lack sufficient contiguous memory."
-  echo "  Try: allocating hugepages earlier at boot via kernel cmdline:"
+  echo "  Allocate hugepages at boot via kernel cmdline for guaranteed availability:"
   echo "    hugepagesz=1G hugepages=${PAGES_NEEDED}"
   exit 1
 fi
 
 echo "✓ Reserved ${ACTUAL_PAGES} x ${PAGE_SIZE} hugepages"
-
-# Mount hugetlbfs if not already mounted
-if ! mount | grep -q "hugetlbfs on $HUGETLBFS_MOUNT"; then
-  mkdir -p "$HUGETLBFS_MOUNT"
-  mount -t hugetlbfs none "$HUGETLBFS_MOUNT"
-  echo "✓ Mounted hugetlbfs at $HUGETLBFS_MOUNT"
-else
-  echo "✓ hugetlbfs already mounted at $HUGETLBFS_MOUNT"
-fi
-
 echo "✓ Hugepage setup complete"
