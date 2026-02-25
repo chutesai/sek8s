@@ -322,6 +322,18 @@ echo "✓ TDX module initialized"
 echo "✓ Host TDX configuration verified"
 echo ""
 
+# Reserve hugepages (required for memory-backend-file)
+echo "Step 0b: Configuring hugepages..."
+if [[ ! -x "./setup-hugepages.sh" ]]; then
+  echo "✗ Error: setup-hugepages.sh not found or not executable"
+  exit 1
+fi
+if ! sudo ./setup-hugepages.sh --size 100G --page-size 1G; then
+  echo "✗ Error: Hugepage setup failed. VM cannot start without hugepages."
+  exit 1
+fi
+echo ""
+
 # --------------------------------------------------------------------
 # Device binding is now handled by run-td script
 # --------------------------------------------------------------------

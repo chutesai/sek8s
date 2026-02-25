@@ -86,7 +86,7 @@ def build_base_cmd(
         '-name', f'{process_name},process={process_name},debug-threads=on',
         '-cpu', cpu_args,
         '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
-        '-object', f'memory-backend-ram,id=mem0,size={mem}',
+        '-object', f'memory-backend-file,id=mem0,size={mem},mem-path=/dev/hugepages,share=off,prealloc=yes',
         '-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0',
         '-bios', firmware,
         '-nodefaults',
@@ -104,7 +104,7 @@ def build_base_cmd(
         ])
 
     cmd.extend([
-        '-drive', f'file={img_path},if=none,id=virtio-disk0',
+        '-drive', f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format=qcow2',
         '-device', 'virtio-blk-pci,drive=virtio-disk0',
     ])
 
@@ -140,15 +140,15 @@ def add_volumes(
     """Add config, cache, and storage volumes to QEMU command."""
     if config_volume:
         cmd.extend([
-            '-drive', f'file={config_volume},if=virtio,format=qcow2,readonly=on',
+            '-drive', f'file={config_volume},if=virtio,format=qcow2,readonly=on,cache=none',
         ])
     if cache_volume:
         cmd.extend([
-            '-drive', f'file={cache_volume},if=virtio,cache=none,format=qcow2',
+            '-drive', f'file={cache_volume},if=virtio,cache=none,aio=native,format=qcow2',
         ])
     if storage_volume:
         cmd.extend([
-            '-drive', f'file={storage_volume},if=virtio,cache=none,format=qcow2',
+            '-drive', f'file={storage_volume},if=virtio,cache=none,aio=native,format=qcow2',
         ])
 
 

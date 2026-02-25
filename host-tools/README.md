@@ -228,9 +228,9 @@ The script will automatically:
 # quick-launch does not expose --status; check the PID manually
 cat /tmp/tdx-td-pid.pid && ps -p $(cat /tmp/tdx-td-pid.pid)
 
-# If you launched with run-vm.sh instead:
+# Check via PID file:
 cd host-tools/scripts
-./run-vm.sh --status
+cat /tmp/tdx-td-pid.pid && ps -p $(cat /tmp/tdx-td-pid.pid)
 ```
 
 ### View VM Logs
@@ -301,10 +301,10 @@ sudo ./volumes/create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dn
                   --public-iface ens9f0np0
 
 # Manually launch VM
-./run-vm.sh --config-volume config.qcow2 \
-            --cache-volume cache.qcow2 \
-            --network-type tap \
-            --net-iface vmtap0
+python3 ./run-td --config-volume config.qcow2 \
+                 --cache-volume cache.qcow2 \
+                 --network-type tap \
+                 --net-iface vmtap0
 ```
 
 ---
@@ -345,7 +345,7 @@ ping -c 3 192.168.100.2
 ### Verify VM Operation
 ```bash
 # Check VM process
-./run-vm.sh --status
+cat /tmp/tdx-td-pid.pid && ps -p $(cat /tmp/tdx-td-pid.pid)
 
 # View GPU passthrough in logs
 grep -i nvidia /tmp/tdx-guest-td.log
@@ -412,7 +412,7 @@ Once the VM is running:
 
 - **VM Image (default target)**: `guest-tools/image/tdx-guest.qcow2` (or set `TD_IMG`)
 - **Alternate image shipped**: `guest-tools/image/tdx-guest-ubuntu-24.04.qcow2` (symlink or export `TD_IMG` to use)
-- **Firmware**: `/usr/share/ovmf/OVMF.fd` (run-td) or `firmware/TDVF.fd` (run-vm.sh)
+- **Firmware**: `firmware/TDVF.fd` (run-td)
 - **Cache Volumes**: `host-tools/scripts/cache-*.qcow2`
 - **Config Volumes**: `host-tools/scripts/config-*.qcow2`
 - **VM Logs**: `/tmp/tdx-guest-td.log`
