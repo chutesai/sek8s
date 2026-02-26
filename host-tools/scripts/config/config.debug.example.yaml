@@ -20,11 +20,11 @@ network:
 volumes:
   cache:
     size: "500G"  # Smaller for debug
-    path: ""  # Auto-generate: cache-chutes-miner-debug-0.qcow2
+    path: ""  # Auto-generate: cache-chutes-miner-debug-0.raw
   
   storage:
     size: "100G"  # Smaller for debug
-    path: ""  # Auto-generate: storage-chutes-miner-debug-0.qcow2
+    path: ""  # Auto-generate: storage-chutes-miner-debug-0.raw
     # Note: Debug VMs use UNENCRYPTED storage volume
     # Do not mix debug and production storage volumes!
   

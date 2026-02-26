@@ -141,9 +141,9 @@ Network:
 
 Volumes:
   --cache-size SIZE
-  --cache-volume PATH
+  --cache-volume PATH        Default: cache-<hostname>.raw (existing .qcow2 allowed at launch)
   --storage-size SIZE
-  --storage-volume PATH
+  --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
   --config-volume PATH
   --skip-bind
 
@@ -266,11 +266,11 @@ if [[ -z "$HOSTNAME" || -z "$VM_IMAGE" || -z "$MINER_SS58" || -z "$MINER_SEED" ]
 fi
 
 if [[ -z "$CACHE_VOLUME" ]]; then
-  CACHE_VOLUME="cache-${HOSTNAME}.qcow2"
+  CACHE_VOLUME="cache-${HOSTNAME}.raw"
 fi
 
 if [[ -z "$STORAGE_VOLUME" ]]; then
-  STORAGE_VOLUME="storage-${HOSTNAME}.qcow2"
+  STORAGE_VOLUME="storage-${HOSTNAME}.raw"
 fi
 
 echo ""
@@ -339,9 +339,14 @@ if [[ -z "$CACHE_VOLUME" ]]; then
   exit 1
 fi
 
-if [[ -f "$CACHE_VOLUME" ]]; then
+if [[ -f "$CACHE_VOLUME" ]] || [[ -b "$CACHE_VOLUME" ]]; then
   echo "✓ Using existing cache volume: $CACHE_VOLUME"
 else
+  if [[ "$CACHE_VOLUME" == *.qcow2 ]]; then
+    echo "✗ Error: qcow2 volumes cannot be created. Use .raw for new volumes (e.g. cache-${HOSTNAME}.raw)"
+    echo "  Existing qcow2 volumes can still be used if they already exist."
+    exit 1
+  fi
   echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
   if sudo ./volumes/create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" "tdx-cache"; then
     echo "✓ Cache volume created"
@@ -362,9 +367,14 @@ if [[ -z "$STORAGE_VOLUME" ]]; then
   exit 1
 fi
 
-if [[ -f "$STORAGE_VOLUME" ]]; then
+if [[ -f "$STORAGE_VOLUME" ]] || [[ -b "$STORAGE_VOLUME" ]]; then
   echo "✓ Using existing storage volume: $STORAGE_VOLUME"
 else
+  if [[ "$STORAGE_VOLUME" == *.qcow2 ]]; then
+    echo "✗ Error: qcow2 volumes cannot be created. Use .raw for new volumes (e.g. storage-${HOSTNAME}.raw)"
+    echo "  Existing qcow2 volumes can still be used if they already exist."
+    exit 1
+  fi
   echo "Creating storage volume at: $STORAGE_VOLUME ($STORAGE_SIZE)"
   if sudo ./volumes/create-cache.sh "$STORAGE_VOLUME" "$STORAGE_SIZE" "storage"; then
     echo "✓ Storage volume created"

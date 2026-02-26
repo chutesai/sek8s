@@ -25,12 +25,12 @@ volumes:
   # General cache volume settings (required)
   cache:
     size: "5000G"
-    path: ""  # Leave empty to auto-generate (cache-<hostname>.qcow2) or specify path (/data/cache-volume.qcow2)
+    path: ""  # Leave empty to auto-generate (cache-<hostname>.raw) or specify path (/data/cache-volume.raw)
   
   # Storage volume settings (required for VM storage - used for containerd and kubelet-pods)
   storage:
     size: "500G"
-    path: ""  # Leave empty to auto-generate (storage-<hostname>.qcow2) or specify path (/data/storage.qcow2)
+    path: ""  # Leave empty to auto-generate (storage-<hostname>.raw) or specify path (/data/storage.raw)
   
   # Config volume settings  
   config:
