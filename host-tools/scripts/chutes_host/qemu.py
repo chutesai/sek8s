@@ -19,7 +19,7 @@ def _block_format(path: str | None) -> str:
 class PciTopologyState:
     """Tracks PCIe root port allocation across GPUs, NVSwitches, and IB devices."""
 
-    def __init__(self, start_port: int = 16, start_slot: int = 0x5):
+    def __init__(self, start_port: int = 16, start_slot: int = 0x8):
         self.port = start_port
         self.slot = start_slot
         self.func = 0
