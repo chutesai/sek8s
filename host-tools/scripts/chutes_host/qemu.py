@@ -125,16 +125,26 @@ def build_base_cmd(
     return cmd
 
 
-def build_network(cmd: list[str], *, network_type: str, net_iface: str | None, ssh_port: int):
+def build_network(
+    cmd: list[str],
+    *,
+    network_type: str,
+    net_iface: str | None,
+    ssh_port: int,
+    net_queues: int = 16,
+):
     """Add networking configuration to QEMU command."""
     if network_type == "tap":
         if not net_iface:
             print("ERROR: --network-type tap requires --net-iface")
             sys.exit(1)
-        print(f"Networking: TAP mode (iface={net_iface})")
+        vectors = 2 * net_queues + 2
+        print(f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)")
         cmd.extend([
-            '-netdev', f'tap,id=n0,ifname={net_iface},script=no,downscript=no',
-            '-device', 'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56',
+            '-netdev',
+            f'tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}',
+            '-device',
+            f'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on',
         ])
     else:
         print("Networking: Canonical user-mode networking")
