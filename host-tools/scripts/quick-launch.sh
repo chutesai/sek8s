@@ -425,7 +425,8 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
     --bridge-ip "$BRIDGE_IP" \
     --vm-ip "${VM_IP}/24" \
     --vm-dns "$VM_DNS" \
-    --public-iface "$PUBLIC_IFACE" )
+    --public-iface "$PUBLIC_IFACE" \
+    --multi-queue )
 
   NET_IFACE=$(echo "$BRIDGE_OUTPUT" | grep "Network interface:" | awk '{print $3}')
   if [[ -z "$NET_IFACE" ]]; then
