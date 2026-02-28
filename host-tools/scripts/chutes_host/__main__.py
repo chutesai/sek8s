@@ -81,6 +81,7 @@ def launch_vm(args):
         network_type=args.network_type,
         net_iface=args.net_iface,
         ssh_port=args.ssh_port,
+        net_queues=args.net_queues,
     )
 
     add_volumes(
@@ -119,6 +120,12 @@ def main() -> int:
 
     parser.add_argument("--network-type", choices=["tap", "user"], default="user")
     parser.add_argument("--net-iface", type=str)
+    parser.add_argument(
+        "--net-queues",
+        type=int,
+        default=16,
+        help="Virtio-net multiqueue count for TAP mode (default: 16)",
+    )
 
     args = parser.parse_args()
 
