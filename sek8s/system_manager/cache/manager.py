@@ -280,7 +280,6 @@ class HuggingFaceSnapshot:
                     repo_id=self.repo_id,
                     revision=self.revision,
                     cache_dir=hub_cache_dir,
-                    local_dir_use_symlinks=True,
                 )
 
             await asyncio.to_thread(do_download)
