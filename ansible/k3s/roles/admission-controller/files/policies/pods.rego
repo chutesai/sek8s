@@ -234,6 +234,8 @@ allowed_env_vars := {
     "CHUTES_PORT_PRIMARY",
     "CHUTES_PORT_ATTESTATION",
     "HF_HOME",
+    "HF_HUB_DISABLE_XET",
+    "HF_HUB_ENABLE_HF_TRANSFER",
     "CIVITAI_HOME",
     "NCCL_DEBUG",
     "NCCL_IB_DISABLE",
@@ -242,7 +244,7 @@ allowed_env_vars := {
     "NCCL_SHM_DISABLE",
     "NCCL_SOCKET_FAMILY",
     "NCCL_SOCKET_IFNAME",
-    "VLLM_DISABLE_TELEMETRY"
+    "VLLM_DISABLE_TELEMETRY",
 }
 
 # =============================================================================
