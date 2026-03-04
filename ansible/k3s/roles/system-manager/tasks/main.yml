@@ -96,11 +96,12 @@
     group: system-manager
     mode: '0640'
 
-- name: Allow system-manager to run shutdown and du
+- name: Allow system-manager to run shutdown, du, and rm (for cache dirs owned by pod 1000:1000)
   ansible.builtin.copy:
     content: |
       system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
+      system-manager ALL=(ALL) NOPASSWD: /usr/bin/rm
     dest: /etc/sudoers.d/system-manager
     owner: root
     group: root

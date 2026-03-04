@@ -301,9 +301,7 @@ class HuggingFaceSnapshot:
         except Exception:
             logger.exception("Download failed for chute_id={}", self.chute_id)
             try:
-                if self.path.exists():
-                    shutil.rmtree(self.path)
-                    logger.info("Cleaned up cache dir for chute_id={} after failure", self.chute_id)
+                await self.delete()
             except OSError as cleanup_err:
                 logger.warning(
                     "Failed to clean up cache dir for chute_id={}: {}", self.chute_id, cleanup_err
@@ -421,8 +419,34 @@ class HuggingFaceSnapshot:
 
     async def delete(self) -> None:
         self.cancel_download()
-        if self.path.exists():
-            shutil.rmtree(self.path, ignore_errors=True)
+        if not self.path.exists():
+            return
+        path = self.path.resolve()
+        cache_base = Path(cache_config.cache_base).resolve()
+        try:
+            path.relative_to(cache_base)
+        except ValueError:
+            logger.error("Refusing to delete path outside cache_base: {}", path)
+            raise PermissionError(f"Path {path} is not under cache_base {cache_base}") from None
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            if e.errno != 1:  # EPERM
+                raise
+            logger.info(
+                "rmtree failed (likely dir owned by pod 1000:1000), trying sudo rm for chute_id={}",
+                self.chute_id,
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "rm", "-rf", str(path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="replace").strip()
+                logger.error("sudo rm -rf failed for {}: {}", path, err_msg)
+                raise OSError(e.errno, f"Failed to delete cache dir: {err_msg}", str(path)) from e
 
 
 # ======================================================================
