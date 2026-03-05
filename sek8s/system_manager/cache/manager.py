@@ -21,6 +21,20 @@ CACHE_COMPLETE_MARKER = ".cache_complete"
 CACHE_STALE_MARKER = ".cache_stale"
 
 
+def _chmod_if_owned(path: Path, mode: int) -> None:
+    """chmod path to mode only when we own it (we created it).
+
+    When the directory already exists, we skip chmod—we don't own it and can't change
+    it. This only works because external creators (cache-init, pod) are expected to
+    set 777 on the cache dir, so we can write without needing to chmod.
+    """
+    try:
+        if path.exists() and path.stat().st_uid == os.getuid():
+            os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 class HuggingFaceSnapshot:
     """A HuggingFace model snapshot cached on disk for a specific chute.
 
@@ -239,9 +253,10 @@ class HuggingFaceSnapshot:
         self._scan_cache = None
 
         self.path.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.path, 0o2775)
+        # Only chmod when we created it; externally-created dirs (cache-init, pod) use 777
+        _chmod_if_owned(self.path, 0o2775)
         self.hub_path.mkdir(exist_ok=True)
-        os.chmod(self.hub_path, 0o2775)
+        _chmod_if_owned(self.hub_path, 0o2775)
 
         total_bytes = await fetch_repo_total_size(repo_id, revision)
         if total_bytes > 0:
@@ -260,16 +275,12 @@ class HuggingFaceSnapshot:
 
     @staticmethod
     def _chmod_tree(path: Path, mode: int) -> None:
-        """Recursively chmod path and its contents so group can write."""
-        try:
-            for p in path.rglob("*"):
-                try:
-                    os.chmod(p, mode)
-                except OSError:
-                    pass
-            os.chmod(path, mode)
-        except OSError:
-            pass
+        """Recursively chmod path and contents so group can write. Only when we own them;
+        externally-created content (cache-init 777) is already writable.
+        """
+        for p in path.rglob("*"):
+            _chmod_if_owned(p, mode)
+        _chmod_if_owned(path, mode)
 
     async def _run_download(self) -> None:
         """Execute snapshot_download, verify, chmod, and write markers."""
