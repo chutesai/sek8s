@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import sys
 import time
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import scan_cache_dir
+from huggingface_hub import scan_cache_dir, snapshot_download
 from loguru import logger
 
 from sek8s.config import cache_config
@@ -57,7 +56,6 @@ class HuggingFaceSnapshot:
         self.revision = revision
         self.externally_managed = externally_managed
         self._task: Optional[asyncio.Task] = None
-        self._download_proc: Optional[asyncio.subprocess.Process] = None
         self._total_bytes: Optional[int] = None
         self._started_at: Optional[float] = None
         self._initial_bytes: Optional[int] = None
@@ -291,14 +289,9 @@ class HuggingFaceSnapshot:
         if total_bytes > 0:
             self._total_bytes = total_bytes
 
-        if self.hub_path.exists():
-            try:
-                info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
-                self._initial_bytes = info.size_on_disk
-            except Exception:
-                self._initial_bytes = 0
-        else:
-            self._initial_bytes = 0
+        self._initial_bytes = await self._du_size(self.hub_path) if self.hub_path.exists() else 0
+        if self._initial_bytes is None:
+            self._initial_bytes = self.size_bytes or 0
         self._started_at = time.monotonic()
         self._task = asyncio.create_task(self._run_download())
         self._task.add_done_callback(self._on_task_done)
@@ -319,44 +312,17 @@ class HuggingFaceSnapshot:
         _chmod_if_owned(path, mode)
 
     async def _run_download(self) -> None:
-        """Execute snapshot_download in a subprocess, then verify, chmod, write markers.
-
-        Running the download in a subprocess keeps the main process lightweight so it
-        can still fork for journalctl/systemctl (logs, status) during downloads.
-        A thread shares memory with the main process; a subprocess does not.
-        """
+        """Execute snapshot_download, verify, chmod, and write markers."""
         hub_cache_dir = str(self.hub_path)
         try:
-            env = os.environ.copy()
-            env["HF_DOWNLOAD_REPO_ID"] = self.repo_id
-            env["HF_DOWNLOAD_REVISION"] = self.revision or "main"
-            env["HF_DOWNLOAD_CACHE_DIR"] = hub_cache_dir
+            def do_download() -> str:
+                return snapshot_download(
+                    repo_id=self.repo_id,
+                    revision=self.revision or "main",
+                    cache_dir=hub_cache_dir,
+                )
 
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                """
-import os
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id=os.environ["HF_DOWNLOAD_REPO_ID"],
-    revision=os.environ["HF_DOWNLOAD_REVISION"],
-    cache_dir=os.environ["HF_DOWNLOAD_CACHE_DIR"],
-)
-""",
-                env=env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            self._download_proc = proc
-            try:
-                stdout, stderr = await proc.communicate()
-                if proc.returncode != 0:
-                    raise RuntimeError(
-                        stderr.decode("utf-8", errors="replace") or "Download failed"
-                    )
-            finally:
-                self._download_proc = None
+            await asyncio.to_thread(do_download)
 
             await verify_cache(
                 repo_id=self.repo_id,
@@ -383,11 +349,6 @@ snapshot_download(
             raise
 
     def cancel_download(self) -> None:
-        if self._download_proc is not None:
-            try:
-                self._download_proc.kill()
-            except ProcessLookupError:
-                pass
         if self._task is not None and not self._task.done():
             self._task.cancel()
 
@@ -643,14 +604,10 @@ class CacheManager:
             return list(self._chutes.values())
 
     async def all_snapshots(self) -> list[ChuteSnapshot]:
-        """Return snapshots for all tracked chutes.
-
-        Runs sequentially to avoid fork storm when system is under load
-        (in-progress chutes spawn du -sb for rate/ETA).
-        """
+        """Return snapshots for all tracked chutes, scanning concurrently."""
         async with self._lock:
             chutes = list(self._chutes.values())
-        return [await c.snapshot() for c in chutes]
+        return list(await asyncio.gather(*(c.snapshot() for c in chutes)))
 
     async def remove(self, chute_id: str) -> bool:
         async with self._lock:
