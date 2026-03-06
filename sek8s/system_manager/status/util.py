@@ -34,9 +34,9 @@ def parse_key_value(output: str) -> Dict[str, str]:
     return parsed
 
 
-def _log_subprocess_failure(command_name: str, exc: BaseException) -> None:
-    """Log process limits and usage when subprocess spawn fails (e.g. EAGAIN)."""
-    lines: list[str] = [f"Subprocess spawn failed for {command_name}: {type(exc).__name__}: {exc}"]
+def _gather_process_limits() -> list[str]:
+    """Gather process limits and usage from /proc. Returns list of log lines."""
+    lines: list[str] = []
     try:
         with open("/proc/self/limits") as f:
             for line in f:
@@ -72,6 +72,19 @@ def _log_subprocess_failure(command_name: str, exc: BaseException) -> None:
                     break
     except OSError:
         pass
+    return lines
+
+
+def log_process_limits(context: str = "Services request") -> None:
+    """Log process limits and usage at DEBUG level. Call on each services request to observe load."""
+    lines = [f"{context} — process limits:"] + _gather_process_limits()
+    if len(lines) > 1:
+        logger.debug("\n".join(lines))
+
+
+def _log_subprocess_failure(command_name: str, exc: BaseException) -> None:
+    """Log process limits and usage when subprocess spawn fails (e.g. EAGAIN)."""
+    lines = [f"Subprocess spawn failed for {command_name}: {type(exc).__name__}: {exc}"] + _gather_process_limits()
     logger.error("\n".join(lines))
 
 

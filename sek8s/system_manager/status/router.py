@@ -30,6 +30,7 @@ from .util import (
     collect_service_status,
     get_disk_space_diagnostic,
     get_disk_space_simple,
+    log_process_limits,
     nvidia_smi_impl,
     resolve_service,
     run_command,
@@ -90,6 +91,7 @@ async def get_service_status(
     config: SystemStatusConfig = Depends(get_config),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> ServiceStatusResponse:
+    log_process_limits("Service status")
     service = resolve_service(service_id)
     return await collect_service_status(service, config)
 
@@ -107,6 +109,7 @@ async def get_service_logs(
     since_minutes: int = Query(0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> ServiceLogsResponse:
+    log_process_limits("Service logs")
     service = resolve_service(service_id)
     clamped_lines = max(1, min(lines, config.log_tail_max))
 
@@ -220,6 +223,7 @@ async def overview(
     config: SystemStatusConfig = Depends(get_config),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> OverviewResponse:
+    log_process_limits("Overview")
     services = await asyncio.gather(
         *(
             collect_service_status(service, config, tolerate_errors=True)
