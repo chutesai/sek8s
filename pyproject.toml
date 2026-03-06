@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sek8s"
-version = "0.1.0"
+version = "0.2.2"
 description = ""
 authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"
