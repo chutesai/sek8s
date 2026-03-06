@@ -289,9 +289,14 @@ class HuggingFaceSnapshot:
         if total_bytes > 0:
             self._total_bytes = total_bytes
 
-        self._initial_bytes = await self._du_size(self.hub_path) if self.hub_path.exists() else 0
-        if self._initial_bytes is None:
-            self._initial_bytes = self.size_bytes or 0
+        if self.hub_path.exists():
+            try:
+                info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
+                self._initial_bytes = info.size_on_disk
+            except Exception:
+                self._initial_bytes = 0
+        else:
+            self._initial_bytes = 0
         self._started_at = time.monotonic()
         self._task = asyncio.create_task(self._run_download())
         self._task.add_done_callback(self._on_task_done)
