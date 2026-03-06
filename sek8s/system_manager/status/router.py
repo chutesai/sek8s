@@ -220,12 +220,13 @@ async def overview(
     config: SystemStatusConfig = Depends(get_config),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
 ) -> OverviewResponse:
-    services = await asyncio.gather(
-        *(
-            collect_service_status(service, config, tolerate_errors=True)
-            for service in SERVICE_ALLOWLIST.values()
-        )
-    )
+    # Run sequentially to avoid fork storm (BlockingIOError EAGAIN) when system
+    # is under load (e.g. during cache downloads). Parallel gather spawns many
+    # systemctl subprocesses at once; sequential keeps at most one fork at a time.
+    services = []
+    for service in SERVICE_ALLOWLIST.values():
+        entry = await collect_service_status(service, config, tolerate_errors=True)
+        services.append(entry)
 
     gpu_info = await nvidia_smi_impl(detail=False, gpu="all", get_config_fn=get_config)
     gpu_healthy = gpu_info.status == "ok"
