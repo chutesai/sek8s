@@ -34,6 +34,8 @@ def _snap_to_status(snap: ChuteSnapshot) -> CacheChuteStatus:
         chute_id=snap.chute_id,
         status=snap.status,
         percent_complete=snap.percent_complete,
+        download_rate=snap.download_rate,
+        eta_seconds=snap.eta_seconds,
         repo_id=snap.repo_id or None,
         revision=snap.revision,
         size_bytes=snap.size_bytes or None,
