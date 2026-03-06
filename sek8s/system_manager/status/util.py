@@ -13,11 +13,6 @@ from loguru import logger
 from sek8s.config import SystemStatusConfig
 
 from .models import CommandResult, ServiceDefinition, SERVICE_ALLOWLIST
-
-# Limit concurrent subprocess creation to avoid BlockingIOError [Errno 11] (EAGAIN)
-# when the system is under load (e.g. during downloads). Fork can fail when many
-# processes are spawned simultaneously or when the kernel is memory-constrained.
-_SUBPROCESS_SEMAPHORE = asyncio.Semaphore(4)
 from .responses import (
     DirectoryInfo,
     DiskSpaceResponse,
@@ -37,6 +32,47 @@ def parse_key_value(output: str) -> Dict[str, str]:
         key, value = line.split("=", 1)
         parsed[key] = value
     return parsed
+
+
+def _log_subprocess_failure(command_name: str, exc: BaseException) -> None:
+    """Log process limits and usage when subprocess spawn fails (e.g. EAGAIN)."""
+    lines: list[str] = [f"Subprocess spawn failed for {command_name}: {type(exc).__name__}: {exc}"]
+    try:
+        with open("/proc/self/limits") as f:
+            for line in f:
+                line = line.strip()
+                if line and ("process" in line.lower() or "nproc" in line.lower() or "nofile" in line.lower()):
+                    lines.append(f"  limits: {line}")
+    except OSError:
+        pass
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("Threads:") or line.startswith("VmRSS:") or line.startswith("VmSize:"):
+                    lines.append(f"  status: {line}")
+    except OSError:
+        pass
+    try:
+        with open("/proc/self/cgroup") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(":")
+                if len(parts) >= 3:
+                    base = Path(f"/sys/fs/cgroup{parts[2]}")
+                    for name, path in [("pids.current", base / "pids.current"), ("pids.max", base / "pids.max")]:
+                        if path.exists():
+                            try:
+                                val = path.read_text().strip()
+                                lines.append(f"  cgroup {name}: {val}")
+                            except OSError:
+                                pass
+                    break
+    except OSError:
+        pass
+    logger.error("\n".join(lines))
 
 
 def truncate(value: str, limit: int, *, keep_tail: bool = False) -> tuple[str, bool]:
@@ -63,30 +99,21 @@ async def run_command(
     logger.debug("Executing command: {}", command)
     command_name = command[1] if command[0] == "sudo" else command[0]
 
-    async with _SUBPROCESS_SEMAPHORE:
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except BlockingIOError as exc:
-            # EAGAIN: fork() failed due to resource pressure (e.g. during heavy I/O).
-            logger.error("Subprocess spawn failed (resource temporarily unavailable): {}", exc)
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "resource_unavailable",
-                    "command": command_name,
-                    "message": "System under load; try again shortly",
-                },
-            ) from exc
-        except FileNotFoundError as exc:
-            logger.error("Binary not found for {}", command)
-            raise HTTPException(
-                status_code=503,
-                detail={"error": "missing_binary", "binary": command_name},
-            ) from exc
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        logger.error("Binary not found for {}", command)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "missing_binary", "binary": command_name},
+        ) from exc
+    except (BlockingIOError, OSError) as exc:
+        _log_subprocess_failure(command_name, exc)
+        raise
 
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
