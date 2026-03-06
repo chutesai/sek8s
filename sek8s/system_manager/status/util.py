@@ -34,60 +34,6 @@ def parse_key_value(output: str) -> Dict[str, str]:
     return parsed
 
 
-def _gather_process_limits() -> list[str]:
-    """Gather process limits and usage from /proc. Returns list of log lines."""
-    lines: list[str] = []
-    try:
-        with open("/proc/self/limits") as f:
-            for line in f:
-                line = line.strip()
-                if line and ("process" in line.lower() or "nproc" in line.lower() or "nofile" in line.lower()):
-                    lines.append(f"  limits: {line}")
-    except OSError:
-        pass
-    try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("Threads:") or line.startswith("VmRSS:") or line.startswith("VmSize:"):
-                    lines.append(f"  status: {line}")
-    except OSError:
-        pass
-    try:
-        with open("/proc/self/cgroup") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                parts = line.split(":")
-                if len(parts) >= 3:
-                    base = Path(f"/sys/fs/cgroup{parts[2]}")
-                    for name, path in [("pids.current", base / "pids.current"), ("pids.max", base / "pids.max")]:
-                        if path.exists():
-                            try:
-                                val = path.read_text().strip()
-                                lines.append(f"  cgroup {name}: {val}")
-                            except OSError:
-                                pass
-                    break
-    except OSError:
-        pass
-    return lines
-
-
-def log_process_limits(context: str = "Services request") -> None:
-    """Log process limits and usage at DEBUG level. Call on each services request to observe load."""
-    lines = [f"{context} — process limits:"] + _gather_process_limits()
-    if len(lines) > 1:
-        logger.debug("\n".join(lines))
-
-
-def _log_subprocess_failure(command_name: str, exc: BaseException) -> None:
-    """Log process limits and usage when subprocess spawn fails (e.g. EAGAIN)."""
-    lines = [f"Subprocess spawn failed for {command_name}: {type(exc).__name__}: {exc}"] + _gather_process_limits()
-    logger.error("\n".join(lines))
-
-
 def truncate(value: str, limit: int, *, keep_tail: bool = False) -> tuple[str, bool]:
     if len(value) <= limit:
         return value, False
@@ -124,8 +70,7 @@ async def run_command(
             status_code=503,
             detail={"error": "missing_binary", "binary": command_name},
         ) from exc
-    except (BlockingIOError, OSError) as exc:
-        _log_subprocess_failure(command_name, exc)
+    except (BlockingIOError, OSError):
         raise
 
     try:
