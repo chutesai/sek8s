@@ -13,6 +13,11 @@ from loguru import logger
 from sek8s.config import SystemStatusConfig
 
 from .models import CommandResult, ServiceDefinition, SERVICE_ALLOWLIST
+
+# Limit concurrent subprocess creation to avoid BlockingIOError [Errno 11] (EAGAIN)
+# when the system is under load (e.g. during downloads). Fork can fail when many
+# processes are spawned simultaneously or when the kernel is memory-constrained.
+_SUBPROCESS_SEMAPHORE = asyncio.Semaphore(4)
 from .responses import (
     DirectoryInfo,
     DiskSpaceResponse,
@@ -58,24 +63,40 @@ async def run_command(
     logger.debug("Executing command: {}", command)
     command_name = command[1] if command[0] == "sudo" else command[0]
 
+    async with _SUBPROCESS_SEMAPHORE:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except BlockingIOError as exc:
+            # EAGAIN: fork() failed due to resource pressure (e.g. during heavy I/O).
+            logger.error("Subprocess spawn failed (resource temporarily unavailable): {}", exc)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "resource_unavailable",
+                    "command": command_name,
+                    "message": "System under load; try again shortly",
+                },
+            ) from exc
+        except FileNotFoundError as exc:
+            logger.error("Binary not found for {}", command)
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "missing_binary", "binary": command_name},
+            ) from exc
+
     try:
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(), timeout=timeout
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except asyncio.TimeoutError as exc:
         logger.error("Command timeout for {}", command)
         raise HTTPException(
             status_code=504,
             detail={"error": "timeout", "command": command_name},
-        ) from exc
-    except FileNotFoundError as exc:
-        logger.error("Binary not found for {}", command)
-        raise HTTPException(
-            status_code=503,
-            detail={"error": "missing_binary", "binary": command_name},
         ) from exc
 
     stdout, stdout_truncated = truncate(
