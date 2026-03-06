@@ -182,10 +182,12 @@ class HuggingFaceSnapshot:
         scan_cache_dir only sees files that have symlinks in the snapshot tree;
         HF creates symlinks when a file finishes downloading, so in-progress blobs
         are invisible to scan_cache_dir until each file completes.
+
+        Runs du without sudo; cache dir is 2775 and system-manager is in group tdx.
         """
         try:
             proc = await asyncio.create_subprocess_exec(
-                "sudo", "du", "-sb", str(path),
+                "du", "-sb", str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
