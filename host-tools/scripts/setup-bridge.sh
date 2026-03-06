@@ -23,6 +23,7 @@ echo
 
 # Parse arguments (parse all first so --clean sees e.g. --public-iface when given after)
 DO_CLEAN=""
+DO_MULTI_QUEUE=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --bridge-ip) BRIDGE_IP="$2"; VM_GATEWAY="${BRIDGE_IP%/*}"; shift 2 ;;
@@ -30,6 +31,7 @@ while [[ $# -gt 0 ]]; do
     --vm-dns) VM_DNS="$2"; shift 2 ;;
     --public-iface) PUBLIC_IFACE="$2"; shift 2 ;;
     --clean) DO_CLEAN=1; shift ;;
+    --multi-queue) DO_MULTI_QUEUE=1; shift ;;
     --help)
       echo "Usage: $0 [options]"
       echo "Simple bridge setup - reliable and well-tested"
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --vm-ip IP/MASK           VM IP (default: $VM_IP)"
       echo "  --vm-dns IP               VM DNS (default: $VM_DNS)"
       echo "  --public-iface IFACE      Public interface (default: $PUBLIC_IFACE)"
+      echo "  --multi-queue             Recreate TAP with multi_queue (for virtio-net multiqueue)"
       echo "  --clean                   Remove all bridge setup"
       echo "  --help                    Show this help"
       exit 0
@@ -87,6 +90,12 @@ else
 fi
 
 echo "2. Setting up TAP interface for VM..."
+# --multi-queue: delete existing tap so we recreate with multi_queue (idempotent upgrade)
+if [[ -n "$DO_MULTI_QUEUE" ]] && ip link show "$TAP_IFACE" >/dev/null 2>&1; then
+  sudo ip link set "$TAP_IFACE" nomaster 2>/dev/null || true
+  sudo ip link delete "$TAP_IFACE" 2>/dev/null || true
+  echo "   ✓ Recreated TAP for multi-queue"
+fi
 # Check if TAP interface already exists and is properly configured
 if ip link show "$TAP_IFACE" >/dev/null 2>&1; then
   echo "   ✓ TAP interface already exists: $TAP_IFACE"
@@ -102,8 +111,8 @@ if ip link show "$TAP_IFACE" >/dev/null 2>&1; then
     sudo ip link set "$TAP_IFACE" master "$BRIDGE_NAME"
   fi
 else
-  # Create new TAP interface
-  sudo ip tuntap add dev "$TAP_IFACE" mode tap
+  # Create new TAP interface (multi_queue for virtio-net multiqueue + vhost)
+  sudo ip tuntap add dev "$TAP_IFACE" mode tap multi_queue
   sudo ip link set "$TAP_IFACE" up
   sudo ip link set "$TAP_IFACE" master "$BRIDGE_NAME"
   echo "   ✓ TAP interface created and connected: $TAP_IFACE"

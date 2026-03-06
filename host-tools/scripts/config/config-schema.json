@@ -97,7 +97,7 @@
             },
             "path": {
               "type": "string",
-              "description": "Path to cache volume. Empty string means auto-generate as cache-<hostname>.qcow2",
+              "description": "Path to cache volume. Empty string means auto-generate as cache-<hostname>.raw",
               "default": ""
             }
           }
@@ -114,7 +114,7 @@
             },
             "path": {
               "type": "string",
-              "description": "Path to storage volume. Empty string means auto-generate as storage-<hostname>.qcow2",
+              "description": "Path to storage volume. Empty string means auto-generate as storage-<hostname>.raw",
               "default": ""
             }
           }

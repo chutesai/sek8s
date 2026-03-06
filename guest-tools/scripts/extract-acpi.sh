@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Extract ACPI tables for TDX measurement using the same
-# QEMU topology as the real run-vm.sh launch, but without
+# QEMU topology as the real run-td launch, but without
 # attaching the encrypted guest image. This script should
 # be run on the host *before* starting the real VM.
 
@@ -20,7 +20,7 @@ CONFIG_VOLUME="${CONFIG_VOLUME:-}"
 CACHE_VOLUME="${CACHE_VOLUME:-}"
 SSH_PORT="${SSH_PORT:-2222}"
 
-# Memory / MMIO config (copied from run-vm.sh)
+# Memory / MMIO config (copied from run-td)
 PCI_HOLE_BASE_GB=2048
 GPU_MMIO_MB=262144
 NVSWITCH_MMIO_MB=32768
@@ -51,11 +51,11 @@ if [[ "${NETWORK_TYPE}" == "tap" && -z "${NET_IFACE}" ]]; then
   exit 1
 fi
 
-# CPU options (copied from run-vm.sh)
+# CPU options (copied from run-td)
 CPU_OPTS=( -cpu host -smp "cores=${VCPUS},threads=2,sockets=2" )
 
 ##############################################################################
-# Device detection (copied from run-vm.sh)
+# Device detection (copied from run-td)
 ##############################################################################
 mapfile -t GPUS < <(
   lspci -Dn | awk '$2~/^(0300|0302):/ && $3~/^10de:/{print $1}' | sort
@@ -74,11 +74,11 @@ echo "  NVSwitches: ${NVSW[*]:-none} (count: $TOTAL_NVSW)"
 echo
 
 ##############################################################################
-# Build -device list to match run-vm.sh topology (minus guest root disk)
+# Build -device list to match run-td topology (minus guest root disk)
 ##############################################################################
 DEV_OPTS=()
 
-# Network configuration (copied from run-vm.sh logic)
+# Network configuration (copied from run-td logic)
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
   DEV_OPTS+=(
     -netdev tap,id=n0,ifname="$NET_IFACE",script=no,downscript=no
@@ -91,7 +91,7 @@ elif [[ "$NETWORK_TYPE" == "user" ]]; then
   )
 fi
 
-# vsock (same as run-vm.sh)
+# vsock (same as run-td)
 DEV_OPTS+=(
   -device vhost-vsock-pci,guest-cid=3
 )
@@ -125,7 +125,7 @@ bus=pcie.0,addr=$(printf 0x%x.0x%x "$slot" "$func")
   if ((func==8)); then func=0; ((slot++)); fi
 done
 
-# Add NVSwitch devices (same logic as run-vm.sh)
+# Add NVSwitch devices (same logic as run-td)
 for j in "${!NVSW[@]}"; do
   id="rp_nvsw$((j+1))" chassis=$(( TOTAL_GPUS + j + 1 ))
   if ((func==0)); then
@@ -170,7 +170,7 @@ echo
 echo "=== Launching QEMU for ACPI dump (no guest root disk) ==="
 echo
 
-# Use KVM and the same memory-backend topology as run-vm.sh,
+# Use KVM and the same memory-backend topology as run-td,
 # but do NOT attach the encrypted guest root disk. We also do
 # NOT need -object tdx-guest; ACPI comes from the machine model.
 timeout 20 qemu-system-x86_64 \

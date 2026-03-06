@@ -64,18 +64,24 @@ async def run_command(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as exc:
-        logger.error("Command timeout for {}", command)
-        raise HTTPException(
-            status_code=504,
-            detail={"error": "timeout", "command": command_name},
-        ) from exc
     except FileNotFoundError as exc:
         logger.error("Binary not found for {}", command)
         raise HTTPException(
             status_code=503,
             detail={"error": "missing_binary", "binary": command_name},
+        ) from exc
+    except (BlockingIOError, OSError):
+        raise
+
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(), timeout=timeout
+        )
+    except asyncio.TimeoutError as exc:
+        logger.error("Command timeout for {}", command)
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "timeout", "command": command_name},
         ) from exc
 
     stdout, stdout_truncated = truncate(

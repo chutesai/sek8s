@@ -21,6 +21,20 @@ CACHE_COMPLETE_MARKER = ".cache_complete"
 CACHE_STALE_MARKER = ".cache_stale"
 
 
+def _chmod_if_owned(path: Path, mode: int) -> None:
+    """chmod path to mode only when we own it (we created it).
+
+    When the directory already exists, we skip chmod—we don't own it and can't change
+    it. This only works because external creators (cache-init, pod) are expected to
+    set 777 on the cache dir, so we can write without needing to chmod.
+    """
+    try:
+        if path.exists() and path.stat().st_uid == os.getuid():
+            os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 class HuggingFaceSnapshot:
     """A HuggingFace model snapshot cached on disk for a specific chute.
 
@@ -162,11 +176,36 @@ class HuggingFaceSnapshot:
         """Shorter TTL while files are changing, longer once stable."""
         return 30.0 if self.is_in_progress else 60.0
 
+    async def _du_size(self, path: Path) -> Optional[int]:
+        """Get directory size in bytes via du -sb. Used for in-progress rate/ETA only.
+
+        scan_cache_dir only sees files that have symlinks in the snapshot tree;
+        HF creates symlinks when a file finishes downloading, so in-progress blobs
+        are invisible to scan_cache_dir until each file completes.
+
+        Runs du without sudo; cache dir is 2775 and system-manager is in group tdx.
+        """
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "du", "-sb", str(path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            if proc.returncode != 0:
+                return None
+            line = stdout.decode("utf-8", errors="replace").strip().split("\n")[0]
+            return int(line.split()[0])
+        except Exception:
+            return None
+
     async def _scan_hub(self) -> tuple[int, Optional[str], Optional[str], Optional[float]]:
         """Scan HF cache directory off the event loop.
 
         Returns ``(size_bytes, repo_id, revision, last_accessed)``
         derived from a single ``scan_cache_dir`` call run in a thread.
+        When in progress, size comes from ``du -sb`` because scan_cache_dir only
+        sees completed files (symlinks are created when each file finishes).
         Results are cached per-instance; TTL varies by download status.
         """
         now = time.monotonic()
@@ -188,6 +227,10 @@ class HuggingFaceSnapshot:
                 if revisions:
                     revision = revisions[0].commit_hash
                 last_acc = max((r.last_accessed for r in repos), default=None)
+            if self.is_in_progress:
+                du_size = await self._du_size(self.hub_path)
+                if du_size is not None:
+                    size = du_size
             result = (size, repo_id, revision, last_acc)
             self._scan_cache = result
             self._scan_cache_at = time.monotonic()
@@ -239,15 +282,23 @@ class HuggingFaceSnapshot:
         self._scan_cache = None
 
         self.path.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.path, 0o2775)
+        # Only chmod when we created it; externally-created dirs (cache-init, pod) use 777
+        _chmod_if_owned(self.path, 0o2775)
         self.hub_path.mkdir(exist_ok=True)
-        os.chmod(self.hub_path, 0o2775)
+        _chmod_if_owned(self.hub_path, 0o2775)
 
         total_bytes = await fetch_repo_total_size(repo_id, revision)
         if total_bytes > 0:
             self._total_bytes = total_bytes
 
-        self._initial_bytes = self.size_bytes or 0
+        if self.hub_path.exists():
+            try:
+                info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
+                self._initial_bytes = info.size_on_disk
+            except Exception:
+                self._initial_bytes = 0
+        else:
+            self._initial_bytes = 0
         self._started_at = time.monotonic()
         self._task = asyncio.create_task(self._run_download())
         self._task.add_done_callback(self._on_task_done)
@@ -260,16 +311,12 @@ class HuggingFaceSnapshot:
 
     @staticmethod
     def _chmod_tree(path: Path, mode: int) -> None:
-        """Recursively chmod path and its contents so group can write."""
-        try:
-            for p in path.rglob("*"):
-                try:
-                    os.chmod(p, mode)
-                except OSError:
-                    pass
-            os.chmod(path, mode)
-        except OSError:
-            pass
+        """Recursively chmod path and contents so group can write. Only when we own them;
+        externally-created content (cache-init 777) is already writable.
+        """
+        for p in path.rglob("*"):
+            _chmod_if_owned(p, mode)
+        _chmod_if_owned(path, mode)
 
     async def _run_download(self) -> None:
         """Execute snapshot_download, verify, chmod, and write markers."""
@@ -278,9 +325,8 @@ class HuggingFaceSnapshot:
             def do_download() -> str:
                 return snapshot_download(
                     repo_id=self.repo_id,
-                    revision=self.revision,
+                    revision=self.revision or "main",
                     cache_dir=hub_cache_dir,
-                    local_dir_use_symlinks=True,
                 )
 
             await asyncio.to_thread(do_download)
@@ -302,9 +348,7 @@ class HuggingFaceSnapshot:
         except Exception:
             logger.exception("Download failed for chute_id={}", self.chute_id)
             try:
-                if self.path.exists():
-                    shutil.rmtree(self.path)
-                    logger.info("Cleaned up cache dir for chute_id={} after failure", self.chute_id)
+                await self.delete()
             except OSError as cleanup_err:
                 logger.warning(
                     "Failed to clean up cache dir for chute_id={}: {}", self.chute_id, cleanup_err
@@ -422,8 +466,34 @@ class HuggingFaceSnapshot:
 
     async def delete(self) -> None:
         self.cancel_download()
-        if self.path.exists():
-            shutil.rmtree(self.path, ignore_errors=True)
+        if not self.path.exists():
+            return
+        path = self.path.resolve()
+        cache_base = Path(cache_config.cache_base).resolve()
+        try:
+            path.relative_to(cache_base)
+        except ValueError:
+            logger.error("Refusing to delete path outside cache_base: {}", path)
+            raise PermissionError(f"Path {path} is not under cache_base {cache_base}") from None
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            if e.errno != 1:  # EPERM
+                raise
+            logger.info(
+                "rmtree failed (likely dir owned by pod 1000:1000), trying sudo rm for chute_id={}",
+                self.chute_id,
+            )
+            proc = await asyncio.create_subprocess_exec(
+                "sudo", "rm", "-rf", str(path),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                err_msg = stderr.decode("utf-8", errors="replace").strip()
+                logger.error("sudo rm -rf failed for {}: {}", path, err_msg)
+                raise OSError(e.errno, f"Failed to delete cache dir: {err_msg}", str(path)) from e
 
 
 # ======================================================================

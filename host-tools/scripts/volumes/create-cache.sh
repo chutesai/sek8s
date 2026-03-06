@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# create-cache-volume.sh - Create and format a cache volume for TDX VMs
+# create-cache-volume.sh - Create and format a raw cache volume for TDX VMs
 # Usage: ./create-cache.sh <output-path> <size> <label>
-# Example: ./create-cache.sh cache-volume.qcow2 5000G storage
+# Example: ./create-cache.sh cache-volume.raw 5000G tdx-cache
+#
+# Only raw format is supported for new volumes. Existing qcow2 volumes can
+# still be used at VM launch but cannot be created by this script.
 
 set -euo pipefail
 
@@ -52,25 +55,28 @@ if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
 Usage: $0 <output-path> <size> <label>
 
-Create and format a cache volume for TDX VMs with the specified label.
+Create and format a raw cache volume for TDX VMs with the specified label.
+Only raw format is supported for new volumes. Existing qcow2 volumes can
+still be used at VM launch but cannot be created by this script.
 
 Arguments:
-  output-path    Path where the qcow2 file will be created
+  output-path    Path where the raw volume will be created (.raw or block device)
   size           Size of the volume (e.g., 5000G, 5T, 1000G)
   label          Filesystem label (required, max 16 chars)
 
 Examples:
-  $0 storage.qcow2 5000G storage
-  $0 /path/to/my-cache.qcow2 1T my-custom-label
-  $0 test-cache.qcow2 100G tdx-cache
+  $0 cache-volume.raw 5000G tdx-cache
+  $0 /path/to/my-cache.raw 1T my-custom-label
+  $0 /dev/vg0/tdx_cache 5000G tdx-cache
 
 The volume will be formatted with:
+  - Format: raw
   - Filesystem: ext4
   - Label: As specified
 
 Requirements:
-  - qemu-img (for creating qcow2 images)
-  - qemu-nbd (for mounting qcow2 as block device)
+  - qemu-img (for creating raw images)
+  - qemu-nbd (for exposing as block device)
   - mkfs.ext4 (for formatting)
   - Root/sudo access (for NBD operations)
   - NBD kernel module loaded
@@ -82,7 +88,7 @@ fi
 if [ $# -ne 3 ]; then
     print_error "Invalid number of arguments"
     echo "Usage: $0 <output-path> <size> <label>"
-    echo "Example: $0 cache-volume.qcow2 5000G storage"
+    echo "Example: $0 cache-volume.raw 5000G tdx-cache"
     echo "Run '$0 --help' for more information"
     exit 1
 fi
@@ -90,6 +96,14 @@ fi
 OUTPUT_PATH="$1"
 SIZE="$2"
 LABEL="$3"
+
+# Reject qcow2 paths - only raw is supported for new volumes
+if [[ "$OUTPUT_PATH" == *.qcow2 ]]; then
+    print_error "qcow2 format is not supported for new volumes. Use .raw extension."
+    echo "Example: $0 cache-volume.raw $SIZE $LABEL"
+    echo "Existing qcow2 volumes can still be used at VM launch."
+    exit 1
+fi
 
 # Validate label length (ext4 max is 16 chars)
 if [ ${#LABEL} -gt 16 ]; then
@@ -105,7 +119,7 @@ if ! [[ "$SIZE" =~ ^[0-9]+[KMGT]?$ ]]; then
     exit 1
 fi
 
-# Check if output file already exists
+# Check if output file already exists (skip for block devices - we format those in place)
 if [ -f "$OUTPUT_PATH" ]; then
     print_error "Output file already exists: $OUTPUT_PATH"
     echo "Please remove it first or choose a different path"
@@ -166,9 +180,9 @@ fi
 
 print_info "Using NBD device: $NBD_DEVICE"
 
-# Cleanup function
+# Cleanup function (only disconnects if we used NBD)
 cleanup() {
-    if [ -n "$NBD_DEVICE" ]; then
+    if [ "${USE_NBD:-true}" = true ] && [ -n "${NBD_DEVICE:-}" ]; then
         print_info "Cleaning up NBD connection..."
         qemu-nbd --disconnect "$NBD_DEVICE" &> /dev/null || true
     fi
@@ -176,45 +190,65 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Step 1: Create qcow2 image
-print_info ""
-print_info "Step 1/4: Creating qcow2 image..."
-print_info "  Path: $OUTPUT_PATH"
-print_info "  Size: $SIZE"
+USE_NBD=true
+FORMAT_DEVICE="$NBD_DEVICE"
 
-if ! qemu-img create -f qcow2 "$OUTPUT_PATH" "$SIZE"; then
-    print_error "Failed to create qcow2 image"
-    exit 1
+# Block device path (e.g. LVM LV): format directly, no NBD
+if [[ "$OUTPUT_PATH" == /dev/* ]]; then
+    if [ ! -b "$OUTPUT_PATH" ]; then
+        print_error "Block device does not exist: $OUTPUT_PATH"
+        exit 1
+    fi
+    USE_NBD=false
+    FORMAT_DEVICE="$OUTPUT_PATH"
+    print_info ""
+    print_info "Using block device directly (no NBD): $OUTPUT_PATH"
 fi
 
-print_success "qcow2 image created"
+if [ "$USE_NBD" = true ]; then
+    # Step 1: Create raw image file
+    print_info ""
+    print_info "Step 1/4: Creating raw image..."
+    print_info "  Path: $OUTPUT_PATH"
+    print_info "  Size: $SIZE"
 
-# Step 2: Connect to NBD
-print_info ""
-print_info "Step 2/4: Connecting to NBD device..."
+    if ! qemu-img create -f raw -o preallocation=falloc "$OUTPUT_PATH" "$SIZE" 2>/dev/null; then
+        # falloc may fail on some filesystems (e.g. NFS); try full
+        if ! qemu-img create -f raw -o preallocation=full "$OUTPUT_PATH" "$SIZE"; then
+            print_error "Failed to create raw image"
+            exit 1
+        fi
+    fi
 
-if ! qemu-nbd --connect="$NBD_DEVICE" "$OUTPUT_PATH"; then
-    print_error "Failed to connect qcow2 to NBD device"
-    rm -f "$OUTPUT_PATH"
-    exit 1
+    print_success "Raw image created"
+
+    # Step 2: Connect to NBD
+    print_info ""
+    print_info "Step 2/4: Connecting to NBD device..."
+
+    if ! qemu-nbd --connect="$NBD_DEVICE" --format=raw "$OUTPUT_PATH"; then
+        print_error "Failed to connect image to NBD device"
+        rm -f "$OUTPUT_PATH"
+        exit 1
+    fi
+
+    # Wait for device to be ready
+    sleep 1
+
+    if [ ! -b "$NBD_DEVICE" ]; then
+        print_error "NBD device not available after connection"
+        exit 1
+    fi
+
+    print_success "Connected to $NBD_DEVICE"
 fi
-
-# Wait for device to be ready
-sleep 1
-
-if [ ! -b "$NBD_DEVICE" ]; then
-    print_error "NBD device not available after connection"
-    exit 1
-fi
-
-print_success "Connected to $NBD_DEVICE"
 
 # Step 3: Format with ext4 and label
 print_info ""
 print_info "Step 3/4: Formatting with ext4..."
 print_info "  Label: $LABEL"
 
-if ! mkfs.ext4 -L "$LABEL" "$NBD_DEVICE"; then
+if ! mkfs.ext4 -L "$LABEL" "$FORMAT_DEVICE"; then
     print_error "Failed to format device"
     exit 1
 fi
@@ -225,7 +259,7 @@ print_success "Formatted with ext4"
 print_info ""
 print_info "Step 4/4: Verifying volume..."
 
-FS_INFO=$(blkid -o export "$NBD_DEVICE" 2>/dev/null || true)
+FS_INFO=$(blkid -o export "$FORMAT_DEVICE" 2>/dev/null || true)
 FS_TYPE=$(echo "$FS_INFO" | grep '^TYPE=' | cut -d= -f2 || echo "unknown")
 FS_LABEL=$(echo "$FS_INFO" | grep '^LABEL=' | cut -d= -f2 || echo "none")
 
@@ -241,14 +275,17 @@ fi
 
 print_success "Volume verified successfully"
 
-# Disconnect NBD (will also happen in cleanup trap)
-qemu-nbd --disconnect "$NBD_DEVICE" &> /dev/null
+# Disconnect NBD if we used it (cleanup trap also handles this)
+if [ "$USE_NBD" = true ]; then
+    qemu-nbd --disconnect "$NBD_DEVICE" &> /dev/null
+fi
 
 print_info ""
 print_success "Cache volume created successfully!"
 print_info ""
 print_info "Volume details:"
 print_info "  Path: $OUTPUT_PATH"
+print_info "  Format: raw"
 print_info "  Size: $SIZE"
 print_info "  Filesystem: ext4"
 print_info "  Label: $LABEL"
@@ -256,10 +293,12 @@ print_info ""
 if [ "$LABEL" = "storage" ]; then
     print_info "Note: This volume is configured for VM storage (auto-encrypted at boot in production mode)"
 fi
-print_info ""
-print_info "To verify the volume:"
-print_info "  sudo qemu-nbd --connect=/dev/nbd0 $OUTPUT_PATH"
-print_info "  sudo blkid /dev/nbd0"
-print_info "  sudo qemu-nbd --disconnect /dev/nbd0"
+if [ "$USE_NBD" = true ]; then
+    print_info ""
+    print_info "To verify the volume:"
+    print_info "  sudo qemu-nbd --connect=/dev/nbd0 --format=raw $OUTPUT_PATH"
+    print_info "  sudo blkid /dev/nbd0"
+    print_info "  sudo qemu-nbd --disconnect /dev/nbd0"
+fi
 
 exit 0

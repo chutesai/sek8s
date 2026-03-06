@@ -7,10 +7,19 @@ configuration, PCI device topology, networking, volumes, and vsock.
 import sys
 
 
+def _block_format(path: str | None) -> str:
+    """Infer block format from path. Returns 'raw' or 'qcow2'. Defaults to raw."""
+    if not path:
+        return "raw"
+    if path.lower().endswith(".qcow2"):
+        return "qcow2"
+    return "raw"
+
+
 class PciTopologyState:
     """Tracks PCIe root port allocation across GPUs, NVSwitches, and IB devices."""
 
-    def __init__(self, start_port: int = 16, start_slot: int = 0x5):
+    def __init__(self, start_port: int = 16, start_slot: int = 0x8):
         self.port = start_port
         self.slot = start_slot
         self.func = 0
@@ -86,7 +95,7 @@ def build_base_cmd(
         '-name', f'{process_name},process={process_name},debug-threads=on',
         '-cpu', cpu_args,
         '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
-        '-object', f'memory-backend-ram,id=mem0,size={mem}',
+        '-object', f'memory-backend-ram,id=mem0,size={mem},prealloc=yes',
         '-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0',
         '-bios', firmware,
         '-nodefaults',
@@ -103,24 +112,39 @@ def build_base_cmd(
             '-pidfile', pidfile,
         ])
 
-    cmd.extend([
-        '-drive', f'file={img_path},if=none,id=virtio-disk0',
-        '-device', 'virtio-blk-pci,drive=virtio-disk0',
-    ])
+    img_fmt = _block_format(img_path)
+    drive_opts = f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}'
+    if img_fmt == "raw":
+        drive_opts += ",discard=on,detect-zeroes=on"
+    cmd.extend(["-drive", drive_opts])
+    dev_opts = "virtio-blk-pci,drive=virtio-disk0"
+    if img_fmt == "raw":
+        dev_opts += ",num-queues=4"
+    cmd.extend(["-device", dev_opts])
 
     return cmd
 
 
-def build_network(cmd: list[str], *, network_type: str, net_iface: str | None, ssh_port: int):
+def build_network(
+    cmd: list[str],
+    *,
+    network_type: str,
+    net_iface: str | None,
+    ssh_port: int,
+    net_queues: int = 16,
+):
     """Add networking configuration to QEMU command."""
     if network_type == "tap":
         if not net_iface:
             print("ERROR: --network-type tap requires --net-iface")
             sys.exit(1)
-        print(f"Networking: TAP mode (iface={net_iface})")
+        vectors = 2 * net_queues + 2
+        print(f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)")
         cmd.extend([
-            '-netdev', f'tap,id=n0,ifname={net_iface},script=no,downscript=no',
-            '-device', 'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56',
+            '-netdev',
+            f'tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}',
+            '-device',
+            f'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on',
         ])
     else:
         print("Networking: Canonical user-mode networking")
@@ -140,16 +164,21 @@ def add_volumes(
     """Add config, cache, and storage volumes to QEMU command."""
     if config_volume:
         cmd.extend([
-            '-drive', f'file={config_volume},if=virtio,format=qcow2,readonly=on',
+            "-drive",
+            f"file={config_volume},if=virtio,format=qcow2,readonly=on,cache=none",
         ])
-    if cache_volume:
-        cmd.extend([
-            '-drive', f'file={cache_volume},if=virtio,cache=none,format=qcow2',
-        ])
-    if storage_volume:
-        cmd.extend([
-            '-drive', f'file={storage_volume},if=virtio,cache=none,format=qcow2',
-        ])
+    for vol_path, vol_id in [(cache_volume, "virtio-cache"), (storage_volume, "virtio-storage")]:
+        if not vol_path:
+            continue
+        vol_fmt = _block_format(vol_path)
+        drive_opts = f"file={vol_path},if=none,id={vol_id},cache=none,aio=native,format={vol_fmt}"
+        if vol_fmt == "raw":
+            drive_opts += ",discard=on,detect-zeroes=on"
+        cmd.extend(["-drive", drive_opts])
+        dev_opts = f"virtio-blk-pci,drive={vol_id}"
+        if vol_fmt == "raw":
+            dev_opts += ",num-queues=4"
+        cmd.extend(["-device", dev_opts])
 
 
 def add_vsock(cmd: list[str]):
