@@ -60,7 +60,7 @@ os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
 os.environ.setdefault("VLLM_DISABLE_TELEMETRY", "1")
 
 # Defer vLLM import until after env setup
-from vllm import LLM
+from vllm import LLM, SamplingParams
 from huggingface_hub import snapshot_download
 
 
@@ -396,7 +396,8 @@ def run_diagnostic(
 
     # --- Warmup inference ---
     t6 = time.perf_counter()
-    _ = llm.generate(["Hello, world!"], max_tokens=warmup_tokens)
+    sampling_params = SamplingParams(max_tokens=warmup_tokens)
+    _ = llm.generate(["Hello, world!"], sampling_params=sampling_params)
     torch.cuda.synchronize()
     t7 = time.perf_counter()
     timeline["warmup_inference"] = t7 - t6
