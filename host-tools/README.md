@@ -467,7 +467,7 @@ For debugging model load performance and GPU memory fragmentation (e.g. 10–15 
 
 ```bash
 cd util
-python vllm-load-diagnostic.py --model Qwen/Qwen2.5-32B-Instruct --tensor-parallel 4
+python vllm-load-diagnostic.py --model MiniMaxAI/MiniMax-M2.5 --tensor-parallel 8
 ```
 
 See [`util/VLLM-DIAGNOSTIC-README.md`](util/VLLM-DIAGNOSTIC-README.md) for full usage, including `--disable-cudagraph`, `--spawn-second-instance`, and cold vs warm load testing.

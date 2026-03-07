@@ -117,7 +117,7 @@ Compare disk read bytes and effective disk throughput. If the second run shows v
 
 ```bash
 python vllm-load-diagnostic.py \
-  --model Qwen/Qwen2.5-32B-Instruct \
+  --model MiniMaxAI/MiniMax-M2.5 \
   --revision main \
   --tensor-parallel 4
 ```
@@ -191,7 +191,7 @@ For deep debugging, run phases one at a time and inspect results:
    from huggingface_hub import snapshot_download
    import time
    t0 = time.perf_counter()
-   snapshot_download('Qwen/Qwen2.5-32B-Instruct')
+   snapshot_download('MiniMaxAI/MiniMax-M2.5')
    print('HF resolve:', time.perf_counter()-t0, 's')
    "
    ```

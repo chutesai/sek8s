@@ -21,7 +21,7 @@ Environment parity with Chutes:
 
 Usage:
   python vllm-load-diagnostic.py [options]
-  python vllm-load-diagnostic.py --model Qwen/Qwen2.5-32B-Instruct --tensor-parallel 4
+  python vllm-load-diagnostic.py --model MiniMaxAI/MiniMax-M2.5 --tensor-parallel 8
   python vllm-load-diagnostic.py --disable-cudagraph --spawn-second-instance
 """
 
@@ -43,7 +43,7 @@ import torch
 # -----------------------------------------------------------------------------
 # Chutes-compatible environment setup (must run before vLLM import)
 # -----------------------------------------------------------------------------
-DEFAULT_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
+DEFAULT_MODEL = "MiniMaxAI/MiniMax-M2.5"
 DEFAULT_HF_HOME = "/var/snap/cache"
 
 # Match Chutes template: https://github.com/chutesai/chutes/blob/main/chutes/chute/template/vllm.py
