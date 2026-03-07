@@ -460,6 +460,18 @@ Once the VM is running:
 # Watch serial console in real-time
 tail -f /tmp/tdx-guest-td.log
 ```
+
+### vLLM Load Diagnostics
+
+For debugging model load performance and GPU memory fragmentation (e.g. 10–15 min loads, OOM during CUDA graph capture):
+
+```bash
+cd util
+python vllm-load-diagnostic.py --model Qwen/Qwen2.5-32B-Instruct --tensor-parallel 4
+```
+
+See [`util/VLLM-DIAGNOSTIC-README.md`](util/VLLM-DIAGNOSTIC-README.md) for full usage, including `--disable-cudagraph`, `--spawn-second-instance`, and cold vs warm load testing.
+
 ---
 
 ## Support and Contribution
