@@ -15,7 +15,7 @@ Before=snapd.service
 # Use the label to identify the correct device
 What=/dev/disk/by-label/tdx-cache
 Where=/var/snap
-Type=ext4
+Type=xfs
 Options=defaults,noatime
 # Don't allow boot to continue if mount fails
 TimeoutSec=30

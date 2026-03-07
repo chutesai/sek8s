@@ -141,16 +141,14 @@ fi
 ### Manual Launch
 
 ```bash
-# Create unencrypted volumes with labels
-./host-tools/scripts/volumes/create-cache.sh cache.qcow2 50G tdx-cache
-./host-tools/scripts/volumes/create-cache.sh containerd-cache.qcow2 100G containerd-cache
+# Create unencrypted volumes with labels (raw format, XFS)
+./host-tools/scripts/volumes/create-cache.sh cache.raw 50G tdx-cache
 
-# Run VM with both volumes attached
+# Run VM with cache volume attached
 ./host-tools/scripts/run-td \
     --image debug-image.qcow2 \
     --config config.iso \
-    --cache-volume cache.qcow2 \
-    --containerd-volume containerd-cache.qcow2
+    --cache-volume cache.raw
 ```
 
 ## Benefits

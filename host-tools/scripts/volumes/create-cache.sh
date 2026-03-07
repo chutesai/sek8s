@@ -62,7 +62,7 @@ still be used at VM launch but cannot be created by this script.
 Arguments:
   output-path    Path where the raw volume will be created (.raw or block device)
   size           Size of the volume (e.g., 5000G, 5T, 1000G)
-  label          Filesystem label (required, max 16 chars)
+  label          Filesystem label (required, max 12 chars for XFS)
 
 Examples:
   $0 cache-volume.raw 5000G tdx-cache
@@ -71,13 +71,13 @@ Examples:
 
 The volume will be formatted with:
   - Format: raw
-  - Filesystem: ext4
+  - Filesystem: XFS
   - Label: As specified
 
 Requirements:
   - qemu-img (for creating raw images)
   - qemu-nbd (for exposing as block device)
-  - mkfs.ext4 (for formatting)
+  - mkfs.xfs (for formatting)
   - Root/sudo access (for NBD operations)
   - NBD kernel module loaded
 EOF
@@ -105,9 +105,9 @@ if [[ "$OUTPUT_PATH" == *.qcow2 ]]; then
     exit 1
 fi
 
-# Validate label length (ext4 max is 16 chars)
-if [ ${#LABEL} -gt 16 ]; then
-    print_error "Label too long: $LABEL (max 16 characters)"
+# Validate label length (XFS max is 12 chars)
+if [ ${#LABEL} -gt 12 ]; then
+    print_error "Label too long: $LABEL (max 12 characters for XFS)"
     exit 1
 fi
 
@@ -129,15 +129,15 @@ fi
 ensure_parent_directory "$OUTPUT_PATH"
 
 # Check for required commands
-for cmd in qemu-img qemu-nbd mkfs.ext4 blkid; do
+for cmd in qemu-img qemu-nbd mkfs.xfs blkid; do
     if ! command -v "$cmd" &> /dev/null; then
         print_error "Required command not found: $cmd"
         case "$cmd" in
             qemu-img|qemu-nbd)
                 echo "Install QEMU tools: sudo apt-get install qemu-utils"
                 ;;
-            mkfs.ext4|blkid)
-                echo "Install filesystem tools: sudo apt-get install e2fsprogs"
+            mkfs.xfs|blkid)
+                echo "Install filesystem tools: sudo apt-get install xfsprogs"
                 ;;
         esac
         exit 1
@@ -243,17 +243,17 @@ if [ "$USE_NBD" = true ]; then
     print_success "Connected to $NBD_DEVICE"
 fi
 
-# Step 3: Format with ext4 and label
+# Step 3: Format with XFS and label
 print_info ""
-print_info "Step 3/4: Formatting with ext4..."
+print_info "Step 3/4: Formatting with XFS..."
 print_info "  Label: $LABEL"
 
-if ! mkfs.ext4 -L "$LABEL" "$FORMAT_DEVICE"; then
+if ! mkfs.xfs -L "$LABEL" "$FORMAT_DEVICE"; then
     print_error "Failed to format device"
     exit 1
 fi
 
-print_success "Formatted with ext4"
+print_success "Formatted with XFS"
 
 # Step 4: Verify
 print_info ""
@@ -263,8 +263,8 @@ FS_INFO=$(blkid -o export "$FORMAT_DEVICE" 2>/dev/null || true)
 FS_TYPE=$(echo "$FS_INFO" | grep '^TYPE=' | cut -d= -f2 || echo "unknown")
 FS_LABEL=$(echo "$FS_INFO" | grep '^LABEL=' | cut -d= -f2 || echo "none")
 
-if [ "$FS_TYPE" != "ext4" ]; then
-    print_error "Filesystem type verification failed: expected ext4, got $FS_TYPE"
+if [ "$FS_TYPE" != "xfs" ]; then
+    print_error "Filesystem type verification failed: expected xfs, got $FS_TYPE"
     exit 1
 fi
 
@@ -287,7 +287,7 @@ print_info "Volume details:"
 print_info "  Path: $OUTPUT_PATH"
 print_info "  Format: raw"
 print_info "  Size: $SIZE"
-print_info "  Filesystem: ext4"
+print_info "  Filesystem: XFS"
 print_info "  Label: $LABEL"
 print_info ""
 if [ "$LABEL" = "storage" ]; then

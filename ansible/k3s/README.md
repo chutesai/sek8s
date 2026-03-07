@@ -103,7 +103,7 @@ Production VMs require two attached volumes (created by host tools):
 
 #### Cache Volume (`tdx-cache`)
 - **Created by**: `host-tools/scripts/volumes/create-cache.sh`
-- **Filesystem**: ext4 with label `tdx-cache`
+- **Filesystem**: XFS with label `tdx-cache`
 - **Mount point**: `/var/snap`
 - **Purpose**: Persistent storage for model caches, container images
 - **K3s data**: entire `/var/lib/rancher/k3s` (server, agent, containerd, init-markers, credentials) is bind-mounted from the storage volume so cluster and node state survive volume replacement.

@@ -8,37 +8,37 @@ By default, the guest uses two volumes: **main storage** (mounted at `/cache/sto
 
 - `qemu-img` (part of QEMU, usually already installed)
 - `qemu-nbd` (Network Block Device utility for QEMU)
-- `mkfs.ext4` (standard Linux filesystem utilities)
+- `mkfs.xfs` (from xfsprogs package)
 - Root/sudo access on the host
 - NBD kernel module (standard on most Linux distributions)
 
 ## Quick Start
 
 ```bash
-# Create a 5TB cache volume
-./scripts/volumes/create-cache.sh cache-volume.qcow2 5000G
+# Create a 5TB cache volume (raw format, XFS filesystem)
+./scripts/volumes/create-cache.sh cache-volume.raw 5000G tdx-cache
 ```
 
 ## Manual Setup (Step-by-Step)
 
 If you prefer to create the volume manually or the script is not available, follow these steps:
 
-### 1. Create the qcow2 Image
+### 1. Create the Raw Image
 
-Create an empty qcow2 image file. Adjust the size as needed for your use case:
+Create an empty raw image file. Adjust the size as needed for your use case:
 
 ```bash
-qemu-img create -f qcow2 cache-volume.qcow2 5000G
+qemu-img create -f raw -o preallocation=falloc cache-volume.raw 5000G
 ```
 
 **Size recommendations:**
 - Minimum: 100G
 - Recommended: 5T (5000G) or larger for production miners
-- Maximum: Limited by host disk space
+- Maximum: XFS supports volumes over 16TB (ext4 is limited to ~16TB)
 
 ### 2. Load the NBD Kernel Module
 
-The NBD (Network Block Device) module allows us to expose the qcow2 file as a block device:
+The NBD (Network Block Device) module allows us to expose the raw file as a block device:
 
 ```bash
 sudo modprobe nbd max_part=8
@@ -50,27 +50,27 @@ sudo modprobe nbd max_part=8
 echo "nbd" | sudo tee -a /etc/modules
 ```
 
-### 3. Connect the qcow2 to an NBD Device
+### 3. Connect the Raw Image to an NBD Device
 
-Expose the qcow2 file as a block device:
+Expose the raw file as a block device:
 
 ```bash
-sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw cache-volume.raw
 ```
 
 **Troubleshooting:**
 - If `/dev/nbd0` is busy, try `/dev/nbd1`, `/dev/nbd2`, etc.
 - Verify connection: `ls -l /dev/nbd0` should show a block device
 
-### 4. Format with ext4 and Label
+### 4. Format with XFS and Label
 
-Format the device with an ext4 filesystem and the required label:
+Format the device with an XFS filesystem and the required label:
 
 ```bash
-sudo mkfs.ext4 -L tdx-cache /dev/nbd0
+sudo mkfs.xfs -L tdx-cache /dev/nbd0
 ```
 
-**Important:** The label `tdx-cache` is required. The TDX VM will verify this label at boot time and refuse to start if it's incorrect.
+**Important:** The label `tdx-cache` is required. The TDX VM will verify this label at boot time and refuse to start if it's incorrect. XFS labels are limited to 12 characters.
 
 ### 5. Disconnect the NBD Device
 
@@ -86,13 +86,13 @@ Reconnect and verify the filesystem and label:
 
 ```bash
 # Reconnect
-sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw cache-volume.raw
 
 # Verify filesystem and label
 sudo blkid /dev/nbd0
 
 # Expected output should include:
-# TYPE="ext4" LABEL="tdx-cache"
+# TYPE="xfs" LABEL="tdx-cache"
 
 # Disconnect
 sudo qemu-nbd --disconnect /dev/nbd0
@@ -104,16 +104,16 @@ Here's a complete example creating a 5TB cache volume:
 
 ```bash
 # Create the volume
-qemu-img create -f qcow2 /path/to/cache-volume.qcow2 5000G
+qemu-img create -f raw -o preallocation=falloc /path/to/cache-volume.raw 5000G
 
 # Load NBD module (if not already loaded)
 sudo modprobe nbd max_part=8
 
 # Connect to NBD
-sudo qemu-nbd --connect=/dev/nbd0 /path/to/cache-volume.qcow2
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw /path/to/cache-volume.raw
 
 # Format with label
-sudo mkfs.ext4 -L tdx-cache /dev/nbd0
+sudo mkfs.xfs -L tdx-cache /dev/nbd0
 
 # Verify (optional)
 sudo blkid /dev/nbd0
@@ -121,7 +121,7 @@ sudo blkid /dev/nbd0
 # Disconnect
 sudo qemu-nbd --disconnect /dev/nbd0
 
-echo "Cache volume ready: /path/to/cache-volume.qcow2"
+echo "Cache volume ready: /path/to/cache-volume.raw"
 ```
 
 ## Using the Cache Volume with run-tdx.sh
@@ -167,7 +167,7 @@ Another process is using the NBD device. Try:
 sudo qemu-nbd --list
 
 # Try a different NBD device
-sudo qemu-nbd --connect=/dev/nbd1 cache-volume.qcow2
+sudo qemu-nbd --connect=/dev/nbd1 --format=raw cache-volume.raw
 ```
 
 ### "No such device" - NBD module not loaded
@@ -177,28 +177,28 @@ Load the kernel module:
 sudo modprobe nbd max_part=8
 ```
 
-### mkfs.ext4 command not found
+### mkfs.xfs command not found
 
-Install filesystem utilities:
+Install XFS utilities:
 ```bash
 # Ubuntu/Debian
-sudo apt-get install e2fsprogs
+sudo apt-get install xfsprogs
 
 # RHEL/CentOS
-sudo yum install e2fsprogs
+sudo yum install xfsprogs
 ```
 
 ### Changing the volume size later
 
-You can resize a qcow2 volume, but it requires additional steps:
+You can grow a raw volume (XFS can only be grown, not shrunk):
 
 ```bash
-# Increase qcow2 size
-qemu-img resize cache-volume.qcow2 +200G
+# Increase raw image size
+qemu-img resize cache-volume.raw +200G
 
-# Connect and resize filesystem
-sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
-sudo resize2fs /dev/nbd0
+# Connect and grow filesystem
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw cache-volume.raw
+sudo xfs_growfs /dev/nbd0
 sudo qemu-nbd --disconnect /dev/nbd0
 ```
 
@@ -207,16 +207,16 @@ sudo qemu-nbd --disconnect /dev/nbd0
 If you're unsure if a volume has the correct label:
 
 ```bash
-sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw cache-volume.raw
 sudo blkid /dev/nbd0 | grep LABEL
 sudo qemu-nbd --disconnect /dev/nbd0
 ```
 
-To change a label on an existing formatted volume:
+To change a label on an existing XFS volume:
 
 ```bash
-sudo qemu-nbd --connect=/dev/nbd0 cache-volume.qcow2
-sudo e2label /dev/nbd0 tdx-cache
+sudo qemu-nbd --connect=/dev/nbd0 --format=raw cache-volume.raw
+sudo xfs_admin -L tdx-cache /dev/nbd0
 sudo qemu-nbd --disconnect /dev/nbd0
 ```
 
@@ -231,8 +231,8 @@ sudo qemu-nbd --disconnect /dev/nbd0
 
 - **Location**: Store cache volumes on fast storage (SSD/NVMe) for best performance
 - **Backups**: The cache is meant for temporary/reproducible data, but back up if needed
-- **Thin provisioning**: qcow2 uses thin provisioning - the file grows as data is written
-- **Monitoring**: Check actual disk usage with `qemu-img info cache-volume.qcow2`
+- **Raw format**: Raw images allocate full size upfront; use `qemu-img info` to verify
+- **Monitoring**: Check actual disk usage with `qemu-img info cache-volume.raw`
 
 ## File Locations
 
@@ -252,4 +252,4 @@ After creating the cache volume:
 
 - [QEMU NBD documentation](https://qemu.readthedocs.io/en/latest/tools/qemu-nbd.html)
 - [qemu-img documentation](https://qemu.readthedocs.io/en/latest/tools/qemu-img.html)
-- [ext4 filesystem documentation](https://www.kernel.org/doc/html/latest/filesystems/ext4/index.html)
+- [XFS filesystem documentation](https://www.kernel.org/doc/html/latest/admin-guide/xfs.html)
