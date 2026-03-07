@@ -119,7 +119,7 @@ Compare disk read bytes and effective disk throughput. If the second run shows v
 python vllm-load-diagnostic.py \
   --model MiniMaxAI/MiniMax-M2.5 \
   --revision main \
-  --tensor-parallel 4
+  --tensor-parallel 8
 ```
 
 Use `--revision` to lock to a specific HuggingFace commit (Chutes requires this for reproducibility).
