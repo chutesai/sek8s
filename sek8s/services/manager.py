@@ -1,14 +1,16 @@
-"""System manager service: composes system-status and cache routers on one app."""
+"""System manager service: composes system-status, cache, and images routers on one app."""
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from loguru import logger
 
-from sek8s.config import SystemManagerConfig
+from sek8s.config import SystemManagerConfig, image_config
 from sek8s.server import WebServer
 from sek8s.system_manager.cache.manager import CacheManager
 from sek8s.system_manager.cache.router import router as cache_router
+from sek8s.system_manager.images.manager import ImageManager
+from sek8s.system_manager.images.router import router as images_router
 from sek8s.system_manager.status.router import router as status_router
 
 
@@ -22,11 +24,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Cache manager initialization failed (non-fatal): {}", e)
     app.state.cache_manager = cache_mgr
+
+    image_mgr = ImageManager(
+        allowed_registries=image_config.image_pull_allowed_registries,
+        cosign_key_path=image_config.cosign_public_key_path,
+        pull_timeout=image_config.image_pull_timeout_seconds,
+    )
+    app.state.image_manager = image_mgr
+
     yield
 
 
 class SystemManagerServer(WebServer):
-    """Web server for the system manager (status + cache routes)."""
+    """Web server for the system manager (status + cache + images routes)."""
 
     def __init__(self, config: SystemManagerConfig):
         super().__init__(config, lifespan=lifespan)
@@ -34,6 +44,7 @@ class SystemManagerServer(WebServer):
     def _setup_routes(self) -> None:
         self.app.include_router(status_router, prefix="/status", tags=["status"])
         self.app.include_router(cache_router, prefix="/cache", tags=["cache"])
+        self.app.include_router(images_router, prefix="/images", tags=["images"])
 
 
 def create_app() -> FastAPI:

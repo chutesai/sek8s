@@ -2,7 +2,7 @@ import logging
 from typing import Dict
 
 from sek8s.validators.base import ValidatorBase, ValidationResult
-
+from sek8s.image_utils import extract_registry
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class RegistryValidator(ValidatorBase):
         # Check each image
         violations = []
         for image in images:
-            registry = self._extract_registry(image)
+            registry = extract_registry(image)
             if not self._is_registry_allowed(registry):
                 violations.append(f"Image {image} uses disallowed registry {registry}")
 
@@ -68,23 +68,6 @@ class RegistryValidator(ValidatorBase):
                 return ValidationResult.deny("; ".join(violations))
 
         return ValidationResult.allow()
-
-    def _extract_registry(self, image: str) -> str:
-        """Extract registry from image name."""
-        # Handle different image formats
-        if "/" not in image:
-            # No slash means Docker Hub official image
-            return "docker.io"
-
-        parts = image.split("/")
-        first_part = parts[0]
-
-        # Check if first part is a registry (contains . or :)
-        if "." in first_part or ":" in first_part or first_part == "localhost":
-            return first_part
-
-        # Otherwise it's Docker Hub
-        return "docker.io"
 
     def _is_registry_allowed(self, registry: str) -> bool:
         """Check if registry is in allowlist."""

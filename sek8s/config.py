@@ -197,6 +197,57 @@ class CacheConfig(AuthConfig):
 
 cache_config = CacheConfig()
 
+
+class ImageConfig(AuthConfig):
+    """Configuration for the images router (k3s/containerd image management)."""
+
+    image_pull_allowed_registries: List[str] = Field(
+        default_factory=lambda: [
+            "localhost:30500",
+            "127.0.0.1:30500",
+        ],
+        alias="IMAGE_PULL_ALLOWED_REGISTRIES",
+        description="Comma-separated or JSON array of allowed registries for pull (validator registry only)",
+    )
+    cosign_public_key_path: Path = Field(
+        default=Path("/etc/admission-controller/cosign/cosign.pub"),
+        alias="COSIGN_PUBLIC_KEY_PATH",
+        description="Path to cosign public key for image verification",
+    )
+    image_pull_timeout_seconds: float = Field(
+        default=1200.0,
+        alias="IMAGE_PULL_TIMEOUT_SECONDS",
+        gt=0,
+        le=3600,
+        description="Timeout for image pull in seconds",
+    )
+
+    model_config = SettingsConfigDict(
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
+
+    @field_validator("image_pull_allowed_registries", mode="before")
+    @classmethod
+    def parse_allowed_registries(cls, v: Any) -> List[str]:
+        """Parse from JSON array or comma-separated string."""
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if x]
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(x).strip() for x in parsed if x]
+            except json.JSONDecodeError:
+                pass
+            return [x.strip() for x in v.split(",") if x.strip()]
+        return []
+
+
+image_config = ImageConfig()
+
+
 class AttestationProxyConfig(AuthConfig):
     """Configuration for attestation proxy service.
     

@@ -7,6 +7,7 @@
   loop:
     - systemd-journal
     - video
+    - admission
 
 - name: Ensure tdx-attest group exists for TLS sharing
   ansible.builtin.group:
@@ -30,12 +31,12 @@
     state: present
     system: yes
 
-- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config)
+- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config; admission for cosign key read)
   ansible.builtin.user:
     name: system-manager
     uid: "{{ system_manager_uid | default(10150) }}"
     group: tdx
-    groups: "system-manager,systemd-journal,video"
+    groups: "system-manager,systemd-journal,video,admission"
     append: yes
     system: yes
     shell: /usr/sbin/nologin
@@ -85,6 +86,14 @@
     group: root
     mode: '0644'
 
+- name: Install k3s-images-helper wrapper (restricts system-manager to safe ctr images subcommands only)
+  ansible.builtin.copy:
+    src: k3s-images-helper
+    dest: /usr/local/bin/k3s-images-helper
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Deploy dummy miner.env for build time (config volume not mounted; replaced by config-manager at runtime)
   ansible.builtin.copy:
     content: |
@@ -96,12 +105,13 @@
     group: system-manager
     mode: '0640'
 
-- name: Allow system-manager to run shutdown, du, and rm (for cache dirs owned by pod 1000:1000)
+- name: Allow system-manager to run shutdown, du, rm, and k3s-images-helper (restricted image ops only)
   ansible.builtin.copy:
     content: |
       system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/rm
+      system-manager ALL=(ALL) NOPASSWD: /usr/local/bin/k3s-images-helper
     dest: /etc/sudoers.d/system-manager
     owner: root
     group: root
