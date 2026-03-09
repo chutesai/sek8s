@@ -123,6 +123,20 @@
       register: prime_verify
       failed_when: prime_verify.rc != 0
 
+    - name: Compute sha256 of primed image
+      ansible.builtin.shell: sha256sum "{{ final_img_path }}" | awk '{print $1}'
+      register: primed_image_sha256
+      changed_when: false
+
+    - name: Output primed image SHA256 for quick-launch.sh
+      ansible.builtin.debug:
+        msg:
+          - "Prime succeeded. Update EXPECTED_BASE_SHA256 in host-tools/scripts/quick-launch.sh:"
+          - "  EXPECTED_BASE_SHA256=\"{{ primed_image_sha256.stdout }}\""
+          - ""
+          - "Image: {{ final_img_path }}"
+          - "SHA256: {{ primed_image_sha256.stdout }}"
+
   rescue:
     - name: Prime failed - debug output
       ansible.builtin.debug:
