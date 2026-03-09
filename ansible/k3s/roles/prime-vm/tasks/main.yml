@@ -36,6 +36,15 @@
       changed_when: false
       failed_when: false
 
+    - name: Brief pause after cleanup to avoid transient race
+      ansible.builtin.shell: sleep 3
+      changed_when: false
+
+    - name: Clear QEMU log from previous runs
+      ansible.builtin.file:
+        path: /tmp/tdx-guest-td.log
+        state: absent
+
     - name: Launch VM for prime
       ansible.builtin.shell: |
         cd {{ host_tools_scripts }}
@@ -95,8 +104,27 @@
       ansible.builtin.debug:
         msg: "{{ qemu_log_dump.stdout_lines }}"
 
+    - name: Verify prime succeeded (VM completed boot cycle)
+      ansible.builtin.shell: |
+        if [ ! -f /tmp/tdx-guest-td.log ]; then
+          echo "Log file missing - VM may not have started"
+          exit 1
+        fi
+        if [ ! -s /tmp/tdx-guest-td.log ]; then
+          echo "Log file is empty - VM may not have produced output"
+          exit 1
+        fi
+        if ! grep -q "Power down" /tmp/tdx-guest-td.log; then
+          echo "Log does not contain 'Power down' - VM may not have completed boot cycle"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      register: prime_verify
+      failed_when: prime_verify.rc != 0
+
   rescue:
-    - name: Debug run-td launch output on failure
+    - name: Prime failed - debug output
       ansible.builtin.debug:
         msg:
           - "run-td exit code: {{ launch_result.rc | default('N/A') }}"
@@ -121,11 +149,18 @@
       ansible.builtin.debug:
         msg: "{{ rescue_log.stdout_lines }}"
 
-    - name: Force stop VM on prime failure
-      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
-      failed_when: false
+    - name: Fail with verbose message for investigation
+      ansible.builtin.fail:
+        msg: |
+          Prime VM failed. Check run-td output and /tmp/tdx-guest-td.log above.
+          Re-run with --tags prime-vm after resolving the root cause.
 
   always:
+    - name: Ensure VM is stopped before cleanup
+      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
+      changed_when: false
+      failed_when: false
+
     - name: Remove prime volumes and directory
       ansible.builtin.file:
         path: "{{ prime_dir }}"

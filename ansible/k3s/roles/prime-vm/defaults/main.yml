@@ -4,6 +4,8 @@ prime_wait_timeout: 300
 # Dummy credentials for initramfs attestation request (never accepted by API)
 prime_dummy_hostname: build-prime
 prime_dummy_ss58: "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ"
+# Intentionally invalid (22 chars, expected 64 hex): triggers config-manager failure and
+# quick shutdown for debug builds; avoids wasting time on attestation API for LUKS builds
 prime_dummy_seed: "prime-build-dummy-seed"
 # User-mode networking: VM gets 10.0.2.15, gateway 10.0.2.2
 prime_vm_ip: "10.0.2.15"
