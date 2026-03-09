@@ -17,7 +17,7 @@ class FakeRunner:
     def set_response(self, binary: str, result: CommandResult) -> None:
         self.responses[binary] = result
 
-    async def __call__(self, command, timeout, limit):  # pragma: no cover - interface shim
+    async def __call__(self, command, timeout, limit, *, keep_tail=False):  # pragma: no cover - interface shim
         self.commands.append(command)
         binary = command[0]
         if binary not in self.responses:

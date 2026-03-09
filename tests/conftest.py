@@ -30,6 +30,8 @@ def disable_aiocache():
 @pytest.fixture
 def manager_app_no_auth():
     """Create the system-manager app with miner auth bypassed for testing."""
+    import sys
+
     def _noop_authorize(*args, **kwargs):
         def _dep():
             return None
@@ -37,6 +39,11 @@ def manager_app_no_auth():
         return _dep
 
     with patch("sek8s.services.util.authorize", side_effect=_noop_authorize):
+        # Force re-import so status router gets patched authorize (other tests
+        # like test_openapi_spec may have loaded the manager first).
+        for mod in list(sys.modules.keys()):
+            if mod in ("sek8s.services.manager", "sek8s.system_manager.status.router"):
+                del sys.modules[mod]
         from sek8s.services.manager import create_app
 
         yield create_app()
