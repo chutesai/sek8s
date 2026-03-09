@@ -131,7 +131,7 @@ def build_network(
     network_type: str,
     net_iface: str | None,
     ssh_port: int,
-    net_queues: int = 16,
+    net_queues: int = 4,
 ):
     """Add networking configuration to QEMU command."""
     if network_type == "tap":
