@@ -32,6 +32,11 @@ if [[ -f "$OVERLAY_IMAGE" ]]; then
   echo "Using existing overlay: $OVERLAY_IMAGE" >&2
 else
   echo "Creating overlay: $OVERLAY_IMAGE" >&2
-  qemu-img create -f qcow2 -b "$BASE_IMAGE" -F qcow2 "$OVERLAY_IMAGE"
+  # Redirect qemu-img create stderr to avoid "Formatting '...'" output being captured
+  # when script output is used as the image path (e.g. OVERLAY=$(./prepare-vm-image.sh ...))
+  if ! qemu-img create -f qcow2 -b "$BASE_IMAGE" -F qcow2 "$OVERLAY_IMAGE" 2>/dev/null; then
+    echo "ERROR: failed to create overlay image" >&2
+    exit 1
+  fi
 fi
 echo "$OVERLAY_IMAGE"
