@@ -49,6 +49,13 @@
         executable: /bin/bash
       register: launch_result
 
+    - name: Debug run-td launch output
+      ansible.builtin.debug:
+        msg:
+          - "run-td exit code: {{ launch_result.rc }}"
+          - "run-td stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "run-td stderr: {{ launch_result.stderr | default('') | trim }}"
+
     - name: Wait for QEMU to exit or timeout
       ansible.builtin.shell: |
         set -e
@@ -71,7 +78,49 @@
       args:
         executable: /bin/bash
 
+    - name: Dump QEMU log for debugging
+      ansible.builtin.shell: |
+        if [ -f /tmp/tdx-guest-td.log ]; then
+          echo "=== Last 100 lines of /tmp/tdx-guest-td.log ==="
+          tail -100 /tmp/tdx-guest-td.log
+        else
+          echo "Log file /tmp/tdx-guest-td.log does not exist"
+        fi
+      args:
+        executable: /bin/bash
+      register: qemu_log_dump
+      changed_when: false
+
+    - name: Debug QEMU log contents
+      ansible.builtin.debug:
+        msg: "{{ qemu_log_dump.stdout_lines }}"
+
   rescue:
+    - name: Debug run-td launch output on failure
+      ansible.builtin.debug:
+        msg:
+          - "run-td exit code: {{ launch_result.rc | default('N/A') }}"
+          - "run-td stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "run-td stderr: {{ launch_result.stderr | default('') | trim }}"
+      when: launch_result is defined
+
+    - name: Dump QEMU log on failure
+      ansible.builtin.shell: |
+        if [ -f /tmp/tdx-guest-td.log ]; then
+          echo "=== /tmp/tdx-guest-td.log ==="
+          tail -100 /tmp/tdx-guest-td.log
+        else
+          echo "Log file does not exist"
+        fi
+      args:
+        executable: /bin/bash
+      register: rescue_log
+      changed_when: false
+
+    - name: Debug QEMU log on failure
+      ansible.builtin.debug:
+        msg: "{{ rescue_log.stdout_lines }}"
+
     - name: Force stop VM on prime failure
       ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
       failed_when: false
