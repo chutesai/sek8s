@@ -1,0 +1,83 @@
+---
+- name: Set host tools scripts path
+  ansible.builtin.set_fact:
+    host_tools_scripts: "{{ repo_root }}/host-tools/scripts"
+
+- name: Prime VM for stable TDX measurements
+  block:
+    - name: Create prime directory
+      ansible.builtin.file:
+        path: "{{ prime_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create prime config volume
+      ansible.builtin.command:
+        cmd: >
+          {{ host_tools_scripts }}/volumes/create-config.sh
+          {{ prime_dir }}/config.qcow2
+          {{ prime_dummy_hostname }}
+          {{ prime_dummy_ss58 }}
+          {{ prime_dummy_seed }}
+          {{ prime_vm_ip }}
+          {{ prime_vm_gateway }}
+          {{ prime_vm_dns }}
+
+    - name: Create prime cache volume
+      ansible.builtin.command:
+        cmd: "{{ host_tools_scripts }}/volumes/create-cache.sh {{ prime_dir }}/cache.raw 1G tdx-cache"
+
+    - name: Create prime storage volume
+      ansible.builtin.command:
+        cmd: "{{ host_tools_scripts }}/volumes/create-cache.sh {{ prime_dir }}/storage.raw 1G storage"
+
+    - name: Stop any existing TDX VM
+      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
+      changed_when: false
+      failed_when: false
+
+    - name: Launch VM for prime
+      ansible.builtin.shell: |
+        cd {{ host_tools_scripts }}
+        python3 ./run-td \
+          --image {{ final_img_path }} \
+          --config-volume {{ prime_dir }}/config.qcow2 \
+          --cache-volume {{ prime_dir }}/cache.raw \
+          --storage-volume {{ prime_dir }}/storage.raw \
+          --network-type user
+      args:
+        executable: /bin/bash
+      register: launch_result
+
+    - name: Wait for QEMU to exit or timeout
+      ansible.builtin.shell: |
+        set -e
+        PIDFILE=/tmp/tdx-td-pid.pid
+        TIMEOUT={{ prime_wait_timeout }}
+        if [ -f "$PIDFILE" ]; then
+          PID=$(cat "$PIDFILE")
+          ELAPSED=0
+          while kill -0 "$PID" 2>/dev/null && [ $ELAPSED -lt $TIMEOUT ]; do
+            sleep 5
+            ELAPSED=$((ELAPSED + 5))
+          done
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "Timeout reached ({{ prime_wait_timeout }}s), sending SIGTERM to QEMU"
+            kill -TERM "$PID" 2>/dev/null || true
+            sleep 5
+            kill -KILL "$PID" 2>/dev/null || true
+          fi
+        fi
+      args:
+        executable: /bin/bash
+
+  rescue:
+    - name: Force stop VM on prime failure
+      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
+      failed_when: false
+
+  always:
+    - name: Remove prime volumes and directory
+      ansible.builtin.file:
+        path: "{{ prime_dir }}"
+        state: absent

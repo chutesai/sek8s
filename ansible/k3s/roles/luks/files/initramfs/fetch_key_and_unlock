@@ -388,7 +388,8 @@ fetch_luks_key() {
                 ;;
             401|403)
                 log_failure_msg "Authentication failed (HTTP $http_code)"
-                # Don't break - might be a transient issue, try with fresh nonce
+                # No point retrying - measurement rejection won't change
+                break
                 ;;
             404)
                 log_failure_msg "API endpoint not found (HTTP $http_code)"
