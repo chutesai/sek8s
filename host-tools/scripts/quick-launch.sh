@@ -32,6 +32,7 @@ STORAGE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
+SKIP_CHECKSUM="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
 EPHEMERAL="false"
@@ -55,6 +56,7 @@ CLI_STORAGE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
+CLI_SKIP_CHECKSUM=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 CLI_EPHEMERAL=""
@@ -86,6 +88,7 @@ while [[ $# -gt 0 ]]; do
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
+    --skip-checksum) CLI_SKIP_CHECKSUM="true"; shift ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
@@ -165,6 +168,7 @@ Volumes:
   --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
   --config-volume PATH
   --skip-bind
+  --skip-checksum         Skip base image SHA256 verification (for debug with custom images)
 
 Runtime:
   --foreground
@@ -262,6 +266,7 @@ fi
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
 [[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
+[[ -n "$CLI_SKIP_CHECKSUM" ]] && SKIP_CHECKSUM="true"
 
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
 [[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
@@ -455,7 +460,9 @@ echo ""
 echo "Step 4b: Preparing VM image (verify + overlay)..."
 # Use tail -1 to extract only the path; qemu-img create may write "Formatting '...'" to stderr
 # which can be captured when streams are merged (e.g. in some environments)
-OVERLAY_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$OVERLAY_DIR" | tail -1)
+SKIP_ARG=""
+[[ "$SKIP_CHECKSUM" == "true" ]] && SKIP_ARG="1"
+OVERLAY_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$OVERLAY_DIR" $SKIP_ARG | tail -1)
 # Pipeline masks exit status; PIPESTATUS[0] is prepare-vm-image's exit code
 [[ ${PIPESTATUS[0]} -ne 0 ]] && { echo "Error: VM image preparation failed (see output above)"; exit 1; }
 [[ -z "$OVERLAY_IMAGE" ]] && { echo "Error: Failed to get overlay image path"; exit 1; }
