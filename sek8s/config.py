@@ -221,6 +221,11 @@ class ImageConfig(AuthConfig):
         le=3600,
         description="Timeout for image pull in seconds",
     )
+    image_pull_default_org: str = Field(
+        default="chutes",
+        alias="IMAGE_PULL_DEFAULT_ORG",
+        description="Default org when using short form (repo:tag)",
+    )
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8",

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class PullStatusEnum(str, Enum):
@@ -21,7 +21,11 @@ class PullStatusEnum(str, Enum):
 class PullRequest(BaseModel):
     """Request body for starting an image pull."""
 
-    image_ref: str = Field(..., description="Image reference (e.g. localhost:30500/org/image:tag)")
+    image: str = Field(
+        ...,
+        validation_alias=AliasChoices("image", "image_ref"),
+        description="Image: short form (sglang:tag or chutes/sglang:tag) or full (registry/org/repo:tag)",
+    )
 
 
 @dataclass

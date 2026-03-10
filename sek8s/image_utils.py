@@ -7,6 +7,14 @@ Used by validators (registry, cosign) and system-manager images module.
 from __future__ import annotations
 
 
+def normalize_registry_hostname(image_ref: str) -> str:
+    """Lowercase registry hostname so ctr matches registries.yaml (case-sensitive lookup)."""
+    if "/" not in image_ref:
+        return image_ref
+    registry, rest = image_ref.split("/", 1)
+    return f"{registry.lower()}/{rest}"
+
+
 def extract_registry(image_ref: str) -> str:
     """Extract registry host:port from image reference.
 

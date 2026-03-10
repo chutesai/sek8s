@@ -324,6 +324,67 @@ class TestValidationResult:
 class TestCosignValidator:
     """Tests for CosignValidator."""
 
+    def test_resolve_to_full_ref_short_form(self):
+        """Test resolve_to_full_ref for short form inputs."""
+        from sek8s.system_manager.images.util import resolve_to_full_ref
+
+        allowed = ["5fgap.localregistry.chutes.ai:30500", "localhost:30500"]
+        assert (
+            resolve_to_full_ref("sglang:nightly-123", allowed)
+            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:nightly-123"
+        )
+        assert (
+            resolve_to_full_ref("chutes/sglang:tag", allowed)
+            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:tag"
+        )
+        # Full ref returned as-is
+        full = "localhost:30500/chutes/sglang:tag"
+        assert resolve_to_full_ref(full, allowed) == full
+
+    def test_resolve_to_full_ref_prefers_validator_over_localhost(self):
+        """When localhost is first, still prefer validator hostname so ref matches pods."""
+        from sek8s.system_manager.images.util import resolve_to_full_ref
+
+        # localhost first - we should still use validator so ref matches k8s deployments
+        allowed = ["localhost:30500", "5fgap.localregistry.chutes.ai:30500"]
+        assert (
+            resolve_to_full_ref("sglang:tag", allowed)
+            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:tag"
+        )
+
+    def test_resolve_to_full_ref_requires_validator_hostname(self):
+        """Short form resolution fails when no validator hostname in allowed_registries."""
+        from fastapi import HTTPException
+
+        from sek8s.system_manager.images.util import resolve_to_full_ref
+
+        # Only localhost - no validator hostname, must fail
+        with pytest.raises(HTTPException) as exc:
+            resolve_to_full_ref("sglang:tag", ["localhost:30500", "127.0.0.1:30500"])
+        assert exc.value.status_code == 500
+        assert ".localregistry.chutes.ai" in exc.value.detail
+
+        # Empty list
+        with pytest.raises(HTTPException) as exc:
+            resolve_to_full_ref("sglang:tag", [])
+        assert exc.value.status_code == 500
+
+    def test_normalize_registry_hostname(self):
+        """Test registry hostname lowercasing for ctr/registries.yaml match."""
+        from sek8s.image_utils import normalize_registry_hostname
+
+        assert (
+            normalize_registry_hostname(
+                "5FgapRUrM21n1HrHPa1uaGjywA3ayiZvG4RH2dvi3yHnt53M.localregistry.chutes.ai:30500/chutes/sglang:tag"
+            )
+            == "5fgaprurm21n1hrhpa1uagjywa3ayizvg4rh2dvi3yhnt53m.localregistry.chutes.ai:30500/chutes/sglang:tag"
+        )
+        assert normalize_registry_hostname("nginx:latest") == "nginx:latest"
+        assert (
+            normalize_registry_hostname("localhost:30500/org/image:tag")
+            == "localhost:30500/org/image:tag"
+        )
+
     def test_parse_image_reference_docker_hub_with_org(self):
         """Test parsing Docker Hub image with organization."""
         from sek8s.image_utils import parse_image_reference

@@ -12,6 +12,52 @@ from sek8s.image_utils import extract_registry
 from .models import ImageEntry
 
 
+def resolve_to_full_ref(
+    image: str,
+    allowed_registries: List[str],
+    default_org: str = "chutes",
+) -> str:
+    """Resolve short form (repo:tag or org/repo:tag) to full registry ref.
+
+    Since pulls are restricted to the validator registry, the registry can be inferred.
+    - repo:tag -> {registry}/{default_org}/repo:tag
+    - org/repo:tag -> {registry}/org/repo:tag
+    - Full ref (registry/org/repo:tag) -> returned as-is (validated against allowed)
+
+    Chute workloads always use the validator URL (configured at build time). We must
+    use that same hostname so the ref matches what k8s pods expect. localhost is never
+    used for resolution.
+    """
+    image = image.strip()
+    if not image:
+        raise HTTPException(status_code=400, detail="image is required")
+
+    # Full ref: has registry (host with . or : or localhost) before first /
+    if "/" in image:
+        first = image.split("/")[0]
+        if "." in first or ":" in first or first == "localhost":
+            return image  # Already full ref
+
+    # Short form: org/repo:tag or repo:tag
+    # Require validator hostname - chute workloads always use it, localhost never
+    registry = None
+    for r in allowed_registries:
+        if ".localregistry.chutes.ai" in r.lower():
+            registry = r
+            break
+    if registry is None:
+        raise HTTPException(
+            status_code=500,
+            detail="allowed_registries must include validator hostname (.localregistry.chutes.ai); "
+            "chute workloads resolve to that URL at build time",
+        )
+    if "/" in image:
+        # org/repo:tag
+        return f"{registry}/{image}"
+    # repo:tag
+    return f"{registry}/{default_org}/{image}"
+
+
 def is_registry_allowed(registry: str, allowed: List[str]) -> bool:
     """Check if registry is in the allowed list (case-insensitive)."""
     reg_lower = registry.lower()
