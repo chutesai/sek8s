@@ -3,7 +3,8 @@
 
 vm:
   hostname: chutes-miner-debug-0
-  image: "../../guest-tools/image/tdx-guest-debug.qcow2"  # Debug image (no encryption, SSH enabled)
+  base_image: "/var/lib/chutes/base-images/tdx-guest-debug.qcow2"  # Debug image (no encryption, SSH enabled)
+  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
   
 miner:
   ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"

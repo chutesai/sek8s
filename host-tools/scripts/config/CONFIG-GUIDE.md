@@ -67,22 +67,21 @@ pip3 install jsonschema
 
 Values are resolved in this order (highest to lowest):
 
-1. **CLI arguments** (`--hostname`, `--image`, etc.)
+1. **CLI arguments** (`--hostname`, `--base-image`, `--overlay-dir`, etc.)
 2. **YAML config file** (your config.yaml)
-3. **Environment variables** (CHUTES_IMAGE for image path)
-4. **Hard-coded defaults** (in quick-launch.sh)
+3. **Hard-coded defaults** (in quick-launch.sh)
 
 Example:
 ```bash
-# Image precedence:
-CHUTES_IMAGE=old.qcow2 ./quick-launch.sh config.yaml --image new.qcow2
-# Uses: new.qcow2 (CLI wins)
+# Base image precedence:
+./quick-launch.sh config.yaml --base-image /path/to/custom.qcow2
+# Uses: /path/to/custom.qcow2 (CLI wins)
 
-./quick-launch.sh config.yaml  # config.yaml has vm.image: "prod.qcow2"
-# Uses: prod.qcow2 (YAML wins over env/defaults)
+./quick-launch.sh config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"
+# Uses: value from YAML
 
-CHUTES_IMAGE=env.qcow2 ./quick-launch.sh config.yaml  # config.yaml has vm.image: ""
-# Uses: env.qcow2 (env var wins over defaults)
+./quick-launch.sh config.yaml  # config.yaml has vm.base_image: ""
+# Uses: default /var/lib/chutes/base-images/tdx-guest.qcow2
 ```
 
 ## Production vs Debug Configs
@@ -92,7 +91,8 @@ CHUTES_IMAGE=env.qcow2 ./quick-launch.sh config.yaml  # config.yaml has vm.image
 ```yaml
 vm:
   hostname: chutes-miner-prod-0
-  image: "tdx-guest.qcow2"  # Encrypted image
+  base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"  # Encrypted image
+  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
 
 volumes:
   cache:
@@ -112,7 +112,8 @@ volumes:
 ```yaml
 vm:
   hostname: chutes-miner-debug-0
-  image: "tdx-guest-debug.qcow2"  # Debug image
+  base_image: "/var/lib/chutes/base-images/tdx-guest-debug.qcow2"  # Debug image
+  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
 
 volumes:
   cache:
@@ -131,28 +132,23 @@ volumes:
 
 Debug VMs expect unencrypted containerd cache. If you attach a production encrypted volume, the init script will detect this and fail with a clear error.
 
-## Image Path Configuration
+## Base Image and Overlay Configuration
 
 ### In Config File
 
 ```yaml
 vm:
-  image: "path/to/image.qcow2"
+  base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"
+  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
 ```
 
-Leave empty (`image: ""`) to use environment variable or run-td default.
-
-### Via Environment Variable
-
-```bash
-export CHUTES_IMAGE=/path/to/tdx-guest.qcow2
-./quick-launch.sh config.yaml
-```
+Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest.qcow2`.
 
 ### Via CLI Override
 
 ```bash
-./quick-launch.sh config.yaml --image /path/to/image.qcow2
+./quick-launch.sh config.yaml --base-image /path/to/tdx-guest.qcow2
+./quick-launch.sh config.yaml --overlay-dir /custom/overlay/path
 ```
 
 ## Volume Auto-Generation
@@ -291,7 +287,7 @@ Remove deprecated fields from your config. Check `config.tmpl.yaml` for current 
 
 See `config-schema.json` for the complete schema definition. Key sections:
 
-- **vm**: hostname (required), image (optional)
+- **vm**: hostname (required), base_image (optional), overlay_directory (optional)
 - **miner**: ss58, seed (both required)
 - **network**: vm_ip, bridge_ip, dns, public_interface (all required), type, ssh_port (optional)
 - **volumes**: cache, containerd (both required), config (optional)
@@ -305,6 +301,8 @@ See `config-schema.json` for the complete schema definition. Key sections:
 ```yaml
 vm:
   hostname: my-miner
+  base_image: ""  # Optional: default /var/lib/chutes/base-images/tdx-guest.qcow2
+  overlay_directory: ""  # Optional: default /var/lib/chutes/vm-overlays/
 
 miner:
   ss58: "5Grw..."

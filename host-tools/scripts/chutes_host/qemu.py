@@ -114,7 +114,9 @@ def build_base_cmd(
 
     img_fmt = _block_format(img_path)
     drive_opts = f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}'
-    if img_fmt == "raw":
+    if img_fmt == "qcow2":
+        drive_opts += ",discard=unmap"
+    elif img_fmt == "raw":
         drive_opts += ",discard=on,detect-zeroes=on"
     cmd.extend(["-drive", drive_opts])
     dev_opts = "virtio-blk-pci,drive=virtio-disk0"
