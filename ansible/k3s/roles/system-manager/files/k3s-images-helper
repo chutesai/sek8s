@@ -44,7 +44,7 @@ case "${1:-}" in
         exec "$K3S_BIN" ctr -n "$CTR_NS" images rm "$2"
         ;;
     prune)
-        exec "$K3S_BIN" ctr -n "$CTR_NS" images prune -f
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images prune
         ;;
     *)
         echo "error: unknown subcommand (allowed: list, pull, rm, prune)" >&2
