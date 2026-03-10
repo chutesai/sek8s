@@ -53,8 +53,10 @@ class ImageManager:
         image_ref: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> tuple[int, str, str]:
-        """Run k3s-images-helper (restricted wrapper). Returns (exit_code, stdout, stderr)."""
-        cmd = ["sudo", K3S_IMAGES_HELPER, subcommand]
+        """Run k3s-images-helper (restricted wrapper). Returns (exit_code, stdout, stderr).
+        Runs without sudo; system-manager must be in containerd group for socket access.
+        """
+        cmd = [K3S_IMAGES_HELPER, subcommand]
         if image_ref is not None:
             cmd.append(image_ref)
         to = timeout or self.pull_timeout

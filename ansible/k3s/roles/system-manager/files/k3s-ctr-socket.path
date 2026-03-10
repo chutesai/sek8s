@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for k3s containerd socket
+After=k3s.service
+
+[Path]
+PathExists=/run/k3s/containerd/containerd.sock
+
+[Install]
+WantedBy=multi-user.target

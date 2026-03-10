@@ -9,12 +9,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from pathlib import Path
 
 from sek8s.config import CosignVerificationConfig
 
 logger = logging.getLogger(__name__)
+
+# Avoid cosign writing to $HOME/.sigstore (rekor/TUF cache); system-manager runs
+# as unprivileged user with no writable home. In-memory cache works for both
+# admission controller and image pull verification.
+_COSIGN_ENV = {**os.environ, "SIGSTORE_NO_CACHE": "1"}
 
 
 class CosignRateLimitError(Exception):
@@ -140,6 +146,7 @@ class CosignClient:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=_COSIGN_ENV,
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(), timeout=timeout
