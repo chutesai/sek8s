@@ -231,3 +231,19 @@
         apply:
           tags: luks
       when: not debug_build | default(false)
+
+- name: Prime VM for stable TDX measurements
+  hosts: host
+  become: true
+  tags:
+    - prime-vm
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include prime VM role
+      ansible.builtin.include_role:
+        name: prime-vm
+        apply:
+          tags: prime-vm
+      when: prime_vm_after_build | default(true)
