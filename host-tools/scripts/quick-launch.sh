@@ -72,7 +72,6 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
     --base-image) CLI_BASE_IMAGE="$2"; shift 2 ;;
-    --image) CLI_BASE_IMAGE="$2"; shift 2 ;;
     --overlay-dir) CLI_OVERLAY_DIR="$2"; shift 2 ;;
     --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
     --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
@@ -149,7 +148,6 @@ Config File:
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
   --base-image PATH         Path to base VM image (qcow2). Default: /var/lib/chutes/base-images/tdx-guest.qcow2
-  --image PATH              Alias for --base-image
   --overlay-dir PATH        Directory for overlay files. Default: /var/lib/chutes/vm-overlays/
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)

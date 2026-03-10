@@ -131,7 +131,7 @@ fi
 ```bash
 # Create cache and containerd volumes (unencrypted for debug)
 ./host-tools/scripts/quick-launch.sh \
-    --image debug-image.qcow2 \
+    --base-image debug-image.qcow2 \
     --config config.yaml \
     --cache-size 50G \
     --containerd-size 100G \
