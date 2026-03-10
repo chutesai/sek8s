@@ -453,7 +453,12 @@ echo ""
 # Step 4b: Prepare VM image (verify base SHA256, create/reuse overlay)
 # --------------------------------------------------------------------
 echo "Step 4b: Preparing VM image (verify + overlay)..."
-OVERLAY_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$OVERLAY_DIR")
+# Use tail -1 to extract only the path; qemu-img create may write "Formatting '...'" to stderr
+# which can be captured when streams are merged (e.g. in some environments)
+OVERLAY_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$OVERLAY_DIR" | tail -1)
+# Pipeline masks exit status; PIPESTATUS[0] is prepare-vm-image's exit code
+[[ ${PIPESTATUS[0]} -ne 0 ]] && { echo "Error: VM image preparation failed (see output above)"; exit 1; }
+[[ -z "$OVERLAY_IMAGE" ]] && { echo "Error: Failed to get overlay image path"; exit 1; }
 echo ""
 
 # --------------------------------------------------------------------
