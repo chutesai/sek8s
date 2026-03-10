@@ -123,8 +123,8 @@ def main() -> int:
     parser.add_argument(
         "--net-queues",
         type=int,
-        default=16,
-        help="Virtio-net multiqueue count for TAP mode (default: 16)",
+        default=4,
+        help="Virtio-net multiqueue count for TAP mode (default: 4)",
     )
 
     args = parser.parse_args()
