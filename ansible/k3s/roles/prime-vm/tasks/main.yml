@@ -3,8 +3,28 @@
   ansible.builtin.set_fact:
     host_tools_scripts: "{{ repo_root }}/host-tools/scripts"
 
+- name: Check no TDX VM is running
+  block:
+    - name: Fail if TDX VM is running
+      ansible.builtin.shell: |
+        if [ -f /tmp/tdx-td-pid.pid ]; then
+          PID=$(cat /tmp/tdx-td-pid.pid)
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "A TDX VM is already running (PID $PID)."
+            echo "run-td uses shared paths (/tmp/tdx-td-pid.pid, /tmp/tdx-guest-td.log) so prime cannot run alongside it."
+            echo "Stop the VM first, then re-run the build or use --tags prime-vm to prime the image."
+            exit 1
+          fi
+        fi
+      args:
+        executable: /bin/bash
+
 - name: Prime VM for stable TDX measurements
   block:
+    - name: Set prime launched flag
+      ansible.builtin.set_fact:
+        prime_launched: false
+
     - name: Create prime directory
       ansible.builtin.file:
         path: "{{ prime_dir }}"
@@ -57,6 +77,10 @@
       args:
         executable: /bin/bash
       register: launch_result
+
+    - name: Mark that we launched a VM
+      ansible.builtin.set_fact:
+        prime_launched: true
 
     - name: Debug run-td launch output
       ansible.builtin.debug:
@@ -174,6 +198,7 @@
       ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
       changed_when: false
       failed_when: false
+      when: prime_launched | default(false) | bool
 
     - name: Remove prime volumes and directory
       ansible.builtin.file:
