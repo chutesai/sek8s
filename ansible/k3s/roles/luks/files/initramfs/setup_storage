@@ -279,7 +279,7 @@ setup_storage() {
             return 1
         fi
         log_begin_msg "Formatting storage..."
-        if ! mkfs.ext4 -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
+        if ! mkfs.xfs -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
             log_failure_msg "Failed to format storage"
             return 1
         fi
@@ -329,7 +329,7 @@ setup_cache() {
             return 1
         fi
         log_begin_msg "Formatting cache..."
-        if ! mkfs.ext4 -L "$CACHE_LABEL" "/dev/mapper/$CACHE_LUKS_NAME"; then
+        if ! mkfs.xfs -L "$CACHE_LABEL" "/dev/mapper/$CACHE_LUKS_NAME"; then
             log_failure_msg "Failed to format cache"
             return 1
         fi

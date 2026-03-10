@@ -19,7 +19,7 @@ copy_exec /usr/bin/sha256sum
 
 # Tools for storage setup (init-bottom script)
 copy_exec /sbin/blkid
-copy_exec /sbin/mkfs.ext4
+copy_exec /usr/sbin/mkfs.xfs
 copy_exec /sbin/wipefs
 
 # Network configuration
@@ -64,3 +64,6 @@ manual_add_modules isofs
 manual_add_modules vsock
 manual_add_modules vmw_vsock_virtio_transport
 manual_add_modules vmw_vsock_virtio_transport_common
+
+# XFS module for cache/storage volume mounts
+manual_add_modules xfs

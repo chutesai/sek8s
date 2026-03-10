@@ -289,8 +289,8 @@ For advanced users who want to manage components separately:
 # Manually bind devices
 ./bind.sh
 
-# Manually create cache volume
-sudo ./volumes/create-cache.sh cache.qcow2 5000G
+# Manually create cache volume (raw format, XFS)
+sudo ./volumes/create-cache.sh cache.raw 5000G tdx-cache
 
 # Manually create config volume
 sudo ./volumes/create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dns
@@ -302,7 +302,7 @@ sudo ./volumes/create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dn
 
 # Manually launch VM
 python3 ./run-td --config-volume config.qcow2 \
-                 --cache-volume cache.qcow2 \
+                 --cache-volume cache.raw \
                  --network-type tap \
                  --net-iface vmtap0
 ```
