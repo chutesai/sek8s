@@ -36,7 +36,8 @@ case "${1:-}" in
         ;;
     pull)
         validate_ref "${2:-}"
-        exec "$K3S_BIN" ctr -n "$CTR_NS" images pull "$2"
+        # ctr does not use registries.yaml mirrors (only CRI does). Validator registry is HTTP.
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images pull --plain-http "$2"
         ;;
     rm)
         validate_ref "${2:-}"
