@@ -1,0 +1,9 @@
+[Unit]
+Description=Set containerd socket group for k3s ctr access
+After=k3s.service
+Requires=k3s-ctr-socket.path
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'chgrp containerd /run/k3s/containerd/containerd.sock && chmod g+rw /run/k3s/containerd/containerd.sock'

@@ -27,33 +27,43 @@ WRONG_KEY_PATH = Path("tests/integration/keys/wrong.pub")
 NONEXISTENT_KEY_PATH = Path("tests/integration/keys/nonexistent.pub")
 
 
+CURL_TIMEOUT = 5  # seconds - prevent hanging when services aren't running
+
+
 def check_prerequisites():
     """Check that required services and test images are available."""
     # Check registry
     try:
-        result = subprocess.run(
-            ["curl", "-f", f"http://{REGISTRY_URL}/v2/"], check=True, capture_output=True
+        subprocess.run(
+            ["curl", "-f", "--connect-timeout", str(CURL_TIMEOUT), f"http://{REGISTRY_URL}/v2/"],
+            check=True,
+            capture_output=True,
+            timeout=CURL_TIMEOUT + 2,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pytest.skip(
             f"Registry not available at {REGISTRY_URL}. Run 'make integration-setup' first."
         )
 
     # Check OPA
     try:
-        result = subprocess.run(
-            ["curl", "-f", "http://localhost:8181/health"], check=True, capture_output=True
+        subprocess.run(
+            ["curl", "-f", "--connect-timeout", str(CURL_TIMEOUT), "http://localhost:8181/health"],
+            check=True,
+            capture_output=True,
+            timeout=CURL_TIMEOUT + 2,
         )
-    except subprocess.CalledProcessError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         pytest.skip("OPA not available at localhost:8181. Run 'make integration-setup' first.")
 
     # Check test images exist
     try:
         result = subprocess.run(
-            ["curl", "-s", f"http://{REGISTRY_URL}/v2/test-app/tags/list"],
+            ["curl", "-s", "--connect-timeout", str(CURL_TIMEOUT), f"http://{REGISTRY_URL}/v2/test-app/tags/list"],
             check=True,
             capture_output=True,
             text=True,
+            timeout=CURL_TIMEOUT + 2,
         )
 
         tags_info = json.loads(result.stdout)
@@ -219,7 +229,7 @@ def create_admission_review(image_name: str, namespace: str = "default") -> dict
 # Registry extraction tests
 def test_registry_extraction():
     """Test registry extraction from various image formats."""
-    validator = CosignValidator(AdmissionConfig())
+    from sek8s.image_utils import extract_registry
 
     test_cases = [
         ("nginx", "docker.io"),
@@ -236,7 +246,7 @@ def test_registry_extraction():
     ]
 
     for image, expected_registry in test_cases:
-        actual_registry = validator._extract_registry(image)
+        actual_registry = extract_registry(image)
         assert actual_registry == expected_registry, (
             f"Expected {expected_registry} for image {image}, got {actual_registry}"
         )

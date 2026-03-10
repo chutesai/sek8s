@@ -1343,6 +1343,467 @@
           }
         }
       }
+    },
+    "/images/": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "List images in containerd",
+        "description": "List all images in containerd. Validator can access (read-only).",
+        "operationId": "list_images_images__get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageListResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/pull": {
+      "post": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Start image pull",
+        "description": "Start image pull (validator registry only, cosign-verified). Miner only.",
+        "operationId": "pull_image_images_pull_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PullRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullStartResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/pull/status": {
+      "get": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Get pull status",
+        "description": "Get pull status by image or all. Miner only.",
+        "operationId": "pull_status_images_pull_status_get",
+        "parameters": [
+          {
+            "name": "image",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional image to filter (short or full form)",
+              "title": "Image"
+            },
+            "description": "Optional image to filter (short or full form)"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/{image}": {
+      "delete": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Remove image",
+        "description": "Remove image by reference or ID. Miner only. Accepts short or full form.",
+        "operationId": "delete_image_images__image__delete",
+        "parameters": [
+          {
+            "name": "image",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image"
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Force delete even if in use",
+              "default": false,
+              "title": "Force"
+            },
+            "description": "Force delete even if in use"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Image Images  Image  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/images/prune": {
+      "post": {
+        "tags": [
+          "images"
+        ],
+        "summary": "Prune unused images",
+        "description": "Prune unused/dangling images. Miner only.",
+        "operationId": "prune_images_images_prune_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruneResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1889,6 +2350,63 @@
         ],
         "title": "HealthResponse"
       },
+      "ImageListEntry": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref",
+            "description": "Image reference"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest",
+            "description": "Image digest (sha256:...)"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes",
+            "description": "Image size in bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ref"
+        ],
+        "title": "ImageListEntry",
+        "description": "Single image in the list response."
+      },
+      "ImageListResponse": {
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/ImageListEntry"
+            },
+            "type": "array",
+            "title": "Images",
+            "description": "List of images in containerd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "images"
+        ],
+        "title": "ImageListResponse",
+        "description": "Response for GET /images."
+      },
       "NvidiaSmiResponse": {
         "properties": {
           "command": {
@@ -2007,6 +2525,140 @@
           "timestamp"
         ],
         "title": "OverviewResponse"
+      },
+      "PruneResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Prune status",
+            "example": "completed"
+          },
+          "removed_count": {
+            "type": "integer",
+            "title": "Removed Count",
+            "description": "Number of images removed",
+            "default": 0
+          },
+          "freed_bytes": {
+            "type": "integer",
+            "title": "Freed Bytes",
+            "description": "Bytes freed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "PruneResponse",
+        "description": "Response for POST /images/prune."
+      },
+      "PullRequest": {
+        "properties": {
+          "image": {
+            "type": "string",
+            "title": "Image",
+            "description": "Image: short form (sglang:tag or chutes/sglang:tag) or full (registry/org/repo:tag)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image"
+        ],
+        "title": "PullRequest",
+        "description": "Request body for starting an image pull."
+      },
+      "PullStartResponse": {
+        "properties": {
+          "image_ref": {
+            "type": "string",
+            "title": "Image Ref",
+            "description": "Image reference"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PullStartStatus",
+            "description": "One of: started, in_progress, present"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_ref",
+          "status"
+        ],
+        "title": "PullStartResponse",
+        "description": "Response for POST /images/pull."
+      },
+      "PullStartStatus": {
+        "type": "string",
+        "enum": [
+          "started",
+          "in_progress",
+          "present"
+        ],
+        "title": "PullStartStatus",
+        "description": "Status returned by POST /images/pull."
+      },
+      "PullStatusEntry": {
+        "properties": {
+          "image_ref": {
+            "type": "string",
+            "title": "Image Ref",
+            "description": "Image reference"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PullStatusEnum",
+            "description": "One of: pending, in_progress, completed, failed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message when status is failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "image_ref",
+          "status"
+        ],
+        "title": "PullStatusEntry",
+        "description": "Status for a single image pull."
+      },
+      "PullStatusEnum": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "in_progress",
+          "completed",
+          "failed"
+        ],
+        "title": "PullStatusEnum",
+        "description": "Status for an image pull operation."
+      },
+      "PullStatusResponse": {
+        "properties": {
+          "pulls": {
+            "items": {
+              "$ref": "#/components/schemas/PullStatusEntry"
+            },
+            "type": "array",
+            "title": "Pulls",
+            "description": "Status per image pull"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pulls"
+        ],
+        "title": "PullStatusResponse",
+        "description": "Response for GET /images/pull/status."
       },
       "ServiceInfo": {
         "properties": {

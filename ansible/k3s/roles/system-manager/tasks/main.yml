@@ -7,6 +7,7 @@
   loop:
     - systemd-journal
     - video
+    - admission
 
 - name: Ensure tdx-attest group exists for TLS sharing
   ansible.builtin.group:
@@ -30,12 +31,18 @@
     state: present
     system: yes
 
-- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config)
+- name: Ensure containerd group exists (for k3s ctr socket access without sudo)
+  ansible.builtin.group:
+    name: containerd
+    state: present
+    system: yes
+
+- name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config; admission for cosign key read; containerd for k3s ctr)
   ansible.builtin.user:
     name: system-manager
     uid: "{{ system_manager_uid | default(10150) }}"
     group: tdx
-    groups: "system-manager,systemd-journal,video"
+    groups: "system-manager,systemd-journal,video,admission,containerd"
     append: yes
     system: yes
     shell: /usr/sbin/nologin
@@ -85,6 +92,54 @@
     group: root
     mode: '0644'
 
+- name: Install k3s-images-helper wrapper (restricts system-manager to safe ctr images subcommands only)
+  ansible.builtin.copy:
+    src: k3s-images-helper
+    dest: /usr/local/bin/k3s-images-helper
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Ensure k3s systemd drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/k3s.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deploy k3s drop-in to start path watcher for containerd socket
+  ansible.builtin.copy:
+    src: k3s-ctr-socket-group.conf
+    dest: /etc/systemd/system/k3s.service.d/ctr-socket-group.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart k3s
+
+- name: Deploy k3s containerd socket path unit (triggers when socket appears)
+  ansible.builtin.copy:
+    src: k3s-ctr-socket.path
+    dest: /etc/systemd/system/k3s-ctr-socket.path
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Deploy k3s containerd socket setup service (chgrp when path unit triggers)
+  ansible.builtin.copy:
+    src: k3s-ctr-socket.service
+    dest: /etc/systemd/system/k3s-ctr-socket.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start k3s containerd socket path unit
+  ansible.builtin.systemd:
+    name: k3s-ctr-socket.path
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
 - name: Deploy dummy miner.env for build time (config volume not mounted; replaced by config-manager at runtime)
   ansible.builtin.copy:
     content: |
@@ -96,7 +151,7 @@
     group: system-manager
     mode: '0640'
 
-- name: Allow system-manager to run shutdown, du, and rm (for cache dirs owned by pod 1000:1000)
+- name: Allow system-manager to run shutdown, du, and rm (k3s-images-helper runs without sudo via containerd group)
   ansible.builtin.copy:
     content: |
       system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown

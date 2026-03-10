@@ -1,0 +1,53 @@
+#!/bin/bash
+# k3s-images-helper: Restricted wrapper for k3s ctr images operations.
+# Only allows: list, pull, rm, prune. Prevents arbitrary k3s/kubectl/etcd access.
+# Used by system-manager for image management API.
+
+set -e
+
+K3S_BIN="/usr/local/bin/k3s"
+CTR_NS="k8s.io"
+
+# OCI image ref: registry/repo/image:tag or registry/repo/image@sha256:digest
+# Allow only: alphanumeric, hyphen, underscore, dot, colon, slash, @. Reject -- and control chars.
+validate_ref() {
+    local ref="$1"
+    if [[ -z "$ref" ]]; then
+        echo "error: image reference required" >&2
+        exit 1
+    fi
+    if [[ ${#ref} -gt 2048 ]]; then
+        echo "error: image reference too long" >&2
+        exit 1
+    fi
+    if [[ "$ref" =~ [^a-zA-Z0-9._/:@-] ]]; then
+        echo "error: invalid characters in image reference" >&2
+        exit 1
+    fi
+    if [[ "$ref" == *"--"* ]]; then
+        echo "error: invalid image reference" >&2
+        exit 1
+    fi
+}
+
+case "${1:-}" in
+    list)
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images list
+        ;;
+    pull)
+        validate_ref "${2:-}"
+        # ctr does not use registries.yaml mirrors (only CRI does). Validator registry is HTTP.
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images pull --plain-http "$2"
+        ;;
+    rm)
+        validate_ref "${2:-}"
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images rm "$2"
+        ;;
+    prune)
+        exec "$K3S_BIN" ctr -n "$CTR_NS" images prune
+        ;;
+    *)
+        echo "error: unknown subcommand (allowed: list, pull, rm, prune)" >&2
+        exit 1
+        ;;
+esac
