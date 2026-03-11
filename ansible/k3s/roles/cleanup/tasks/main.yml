@@ -11,6 +11,10 @@
   ansible.builtin.include_tasks: system-manager-drop-ins.yml
   when: inventory_hostname in groups['vm']
 
+- name: Include admission-controller drop-ins
+  ansible.builtin.include_tasks: admission-controller-drop-ins.yml
+  when: inventory_hostname in groups['vm']
+
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
   when: inventory_hostname in groups['vm']

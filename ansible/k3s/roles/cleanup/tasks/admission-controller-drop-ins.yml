@@ -1,0 +1,18 @@
+---
+# Add admission-controller runtime dependencies at cleanup; omitted from base unit because
+# setup-storage-bind-mounts does not exist during build VM (storage volume not attached).
+- name: Create systemd drop-in directory for admission-controller
+  ansible.builtin.file:
+    path: /etc/systemd/system/admission-controller.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy admission-controller runtime dependencies drop-in
+  ansible.builtin.copy:
+    src: files/admission-controller.service.d/runtime-dependencies.conf
+    dest: /etc/systemd/system/admission-controller.service.d/runtime-dependencies.conf
+    owner: root
+    group: root
+    mode: "0644"
