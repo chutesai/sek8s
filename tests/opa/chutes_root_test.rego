@@ -267,3 +267,37 @@ test_deny_deployment_with_chute_label_without_run_as_non_root if {
 	}
 	deny["Chutes namespace: pod spec must set securityContext.runAsNonRoot: true (chute workloads excepted)"] with input as {"request": req}
 }
+
+# Miner rollout restart in attestation-system: only restartedAt annotation change must be allowed
+test_allow_miner_rollout_restart_attestation_proxy if {
+	req := {
+		"namespace": "attestation-system",
+		"operation": "UPDATE",
+		"kind": {"group": "apps", "kind": "DaemonSet", "version": "v1"},
+		"name": "attestation-proxy",
+		"object": {
+			"spec": {
+				"selector": {"matchLabels": {"app": "attestation-proxy"}},
+				"template": {
+					"metadata": {
+						"annotations": {"kubectl.kubernetes.io/restartedAt": "2026-03-10T22:27:18-04:00"},
+						"labels": {"app": "attestation-proxy"}
+					}
+				}
+			}
+		},
+		"oldObject": {
+			"spec": {
+				"selector": {"matchLabels": {"app": "attestation-proxy"}},
+				"template": {
+					"metadata": {
+						"creationTimestamp": null,
+						"labels": {"app": "attestation-proxy"}
+					}
+				}
+			}
+		},
+		"userInfo": {"username": "miner"}
+	}
+	count(effective_deny) == 0 with input as {"request": req}
+}

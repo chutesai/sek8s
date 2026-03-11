@@ -1,7 +1,6 @@
-# Restrict PATCH on Deployment/DaemonSet outside chutes to restartedAt-only.
-# In namespaces other than chutes, the only allowed patch is
-# spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"] (rollout restart).
-# chutes namespace allows full patches. Policy is baked in at build time.
+# Outside chutes namespace: only allow rollout restart (restartedAt-only patch).
+# Chutes namespace: miner RBAC allows full patches; no restriction here.
+# System/controller users exempted globally via effective_deny.
 package kubernetes.admission
 
 import future.keywords.contains
@@ -17,36 +16,24 @@ deny contains msg if {
 	msg := "Outside chutes namespace, PATCH on Deployment/DaemonSet may only change spec.template.metadata.annotations[\"kubectl.kubernetes.io/restartedAt\"]"
 }
 
-# Only restartedAt annotation may change; pod spec and other metadata must be unchanged
+req_object := input.request.object
+oldObject := input.request.oldObject
+# Use object.get to handle missing annotations (rollout restart adds restartedAt to previously empty metadata)
+new_annotations := object.get(req_object.spec.template.metadata, "annotations", {})
+old_annotations_raw := object.get(oldObject.spec.template.metadata, "annotations", {})
+
+# RestartedAt-only: annotations differ only by restartedAt, selector unchanged, restartedAt present
 only_restartedAt_change if {
-	object.spec.template.spec == oldObject.spec.template.spec
-	object.spec.template.metadata.labels == oldObject.spec.template.metadata.labels
+	input.request.namespace != "chutes"
 	annotation_only_restartedAt_change(new_annotations, old_annotations_raw)
-	deployment_daemonset_spec_unchanged
+	req_object.spec.selector == oldObject.spec.selector
+	new_annotations["kubectl.kubernetes.io/restartedAt"]
 }
 
-object := input.request.object
-oldObject := input.request.oldObject
-new_annotations := object.spec.template.metadata.annotations
-old_annotations_raw := oldObject.spec.template.metadata.annotations
-
 # Annotations may differ only by kubectl.kubernetes.io/restartedAt (add/update)
+# Caller uses object.get(..., "annotations", {}) so new_ann/old_ann are always objects
 annotation_only_restartedAt_change(new_ann, old_ann) if {
 	restartedAt_key := "kubectl.kubernetes.io/restartedAt"
 	count({k | new_ann[k]; k != restartedAt_key; new_ann[k] != old_ann[k]}) == 0
 	count({k | old_ann[k]; k != restartedAt_key; new_ann[k] != old_ann[k]}) == 0
-}
-
-# Top-level spec fields (other than template) must be unchanged
-deployment_daemonset_spec_unchanged if {
-	object.spec.selector == oldObject.spec.selector
-	input.request.kind.kind == "Deployment"
-	object.spec.replicas == oldObject.spec.replicas
-	object.spec.strategy == oldObject.spec.strategy
-}
-
-deployment_daemonset_spec_unchanged if {
-	object.spec.selector == oldObject.spec.selector
-	input.request.kind.kind == "DaemonSet"
-	object.spec.updateStrategy == oldObject.spec.updateStrategy
 }

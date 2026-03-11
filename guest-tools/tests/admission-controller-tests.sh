@@ -1041,7 +1041,7 @@ OPA_TEST_INPUT=$(cat <<EOF
 EOF
 )
 
-OPA_RESULT=$(echo "$OPA_TEST_INPUT" | curl -s -X POST http://localhost:8181/v1/data/kubernetes/admission/deny -H "Content-Type: application/json" -d @- 2>/dev/null || echo "{}")
+OPA_RESULT=$(echo "$OPA_TEST_INPUT" | curl -s -X POST http://localhost:8181/v1/data/kubernetes/admission/effective_deny -H "Content-Type: application/json" -d @- 2>/dev/null || echo "{}")
 if echo "$OPA_RESULT" | grep -q "result"; then
     log_pass "OPA is responding to policy queries"
     if echo "$OPA_RESULT" | grep -q "hostPath.*not allowed"; then

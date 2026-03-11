@@ -309,6 +309,8 @@ class AdmissionConfig(ServerConfig):
             "kube-public": NamespacePolicy(mode="warn", exempt=False),
             "kube-node-lease": NamespacePolicy(mode="warn", exempt=False),
             "gpu-operator": NamespacePolicy(mode="warn", exempt=False),
+            "attestation-system": NamespacePolicy(mode="warn", exempt=False),
+            "monitoring": NamespacePolicy(mode="warn", exempt=False),
             "chutes": NamespacePolicy(mode="enforce", exempt=False),
             "default": NamespacePolicy(mode="enforce", exempt=False),
         },

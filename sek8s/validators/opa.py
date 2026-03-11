@@ -87,8 +87,8 @@ class OPAValidator(ValidatorBase):
         """Query OPA and return list of violations."""
         violations = []
 
-        # Query the main deny endpoint
-        url = f"{self.opa_url}/v1/data/kubernetes/admission/deny"
+        # Query effective_deny (filters deny for system/controller users)
+        url = f"{self.opa_url}/v1/data/kubernetes/admission/effective_deny"
 
         async with self.session.post(url, json={"input": opa_input}) as response:
             if response.status != 200:

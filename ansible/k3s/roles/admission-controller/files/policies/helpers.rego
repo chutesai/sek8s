@@ -62,3 +62,30 @@ is_system_namespace if {
 is_pod_resource if {
     input.request.kind.kind in ["Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet"]
 }
+
+# True when the request is from a system/controller that manages cluster resources.
+# These are exempt from miner_restart restriction so addon sync, operators, etc. can update Deployments/DaemonSets.
+is_system_or_controller_user if {
+    input.request.userInfo.username in [
+        "system:k3s-supervisor",
+        "system:k3s-controller",
+        "system:k3s",
+        "system:apiserver"
+    ]
+}
+
+is_system_or_controller_user if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:kube-system:")
+}
+
+is_system_or_controller_user if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
+}
+
+is_system_or_controller_user if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:attestation-system:")
+}
+
+is_system_or_controller_user if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:monitoring:")
+}
