@@ -94,11 +94,13 @@ while [[ $# -gt 0 ]]; do
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
     --download)
       echo "=== Downloading VM Base Image ==="
-      BASE_DOWNLOAD_PATH="/var/lib/chutes/base-images/tdx-guest.qcow2"
-      sudo mkdir -p "$(dirname "$BASE_DOWNLOAD_PATH")"
+      BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
+      BASE_DOWNLOAD_PATH="$BASE_DOWNLOAD_DIR/tdx-guest.qcow2"
+      sudo mkdir -p "$BASE_DOWNLOAD_DIR"
       if command -v aria2c >/dev/null 2>&1; then
         echo "Downloading to $BASE_DOWNLOAD_PATH..."
-        aria2c -x 16 -s 16 -k 1M -o "$BASE_DOWNLOAD_PATH" "https://vm.chutes.ai/tdx-guest.qcow2" || {
+        # aria2c -o treats paths as relative to -d; use -d for dir and -o for filename only
+        aria2c -x 16 -s 16 -k 1M -d "$BASE_DOWNLOAD_DIR" -o "tdx-guest.qcow2" "https://vm.chutes.ai/tdx-guest.qcow2" || {
           echo "Download failed. Ensure aria2c is installed and the URL is accessible."
           exit 1
         }
