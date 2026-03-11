@@ -1,5 +1,7 @@
 [Unit]
 Description=Watch for k3s containerd socket
+# Omit default Before=paths.target to avoid ordering cycles with opa/multi-user
+DefaultDependencies=no
 After=k3s.service
 
 [Path]
