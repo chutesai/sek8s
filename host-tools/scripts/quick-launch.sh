@@ -93,7 +93,7 @@ while [[ $# -gt 0 ]]; do
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
     --download)
-      echo "=== Downloading VM Base Image ==="
+      echo "=== Downloading VM Base Image (production) ==="
       BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
       BASE_DOWNLOAD_PATH="$BASE_DOWNLOAD_DIR/tdx-guest.qcow2"
       sudo mkdir -p "$BASE_DOWNLOAD_DIR"
@@ -101,6 +101,25 @@ while [[ $# -gt 0 ]]; do
         echo "Downloading to $BASE_DOWNLOAD_PATH..."
         # aria2c -o treats paths as relative to -d; use -d for dir and -o for filename only
         aria2c -x 16 -s 16 -k 1M -d "$BASE_DOWNLOAD_DIR" -o "tdx-guest.qcow2" "https://vm.chutes.ai/tdx-guest.qcow2" || {
+          echo "Download failed. Ensure aria2c is installed and the URL is accessible."
+          exit 1
+        }
+        echo "✓ Download complete: $BASE_DOWNLOAD_PATH"
+      else
+        echo "Error: aria2c not found. Install with: sudo apt install aria2"
+        exit 1
+      fi
+      exit 0
+      ;;
+
+    --download-debug)
+      echo "=== Downloading VM Base Image (debug) ==="
+      BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
+      BASE_DOWNLOAD_PATH="$BASE_DOWNLOAD_DIR/tdx-guest-debug.qcow2"
+      sudo mkdir -p "$BASE_DOWNLOAD_DIR"
+      if command -v aria2c >/dev/null 2>&1; then
+        echo "Downloading to $BASE_DOWNLOAD_PATH..."
+        aria2c -x 16 -s 16 -k 1M -d "$BASE_DOWNLOAD_DIR" -o "tdx-guest-debug.qcow2" "https://vm.chutes.ai/tdx-guest-debug.qcow2" || {
           echo "Download failed. Ensure aria2c is installed and the URL is accessible."
           exit 1
         }
@@ -181,7 +200,8 @@ Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
 Management:
   --clean                   Clean up VM and bridge
-  --download                Download VM base image to /var/lib/chutes/base-images/
+  --download                Download VM base image (production) to /var/lib/chutes/base-images/
+  --download-debug          Download VM debug image to /var/lib/chutes/base-images/
 
 Examples:
   # Create template config
@@ -195,6 +215,7 @@ Examples:
 
   # Download VM base image (before first run)
   $0 --download
+  $0 --download-debug        # Debug image (SSH, no encryption)
 
   # Command line only
   $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
