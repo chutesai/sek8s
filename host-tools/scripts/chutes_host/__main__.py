@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+from chutes_host.detection import detect_nvidia_gpus, get_gpu_bdfs, get_gpu_models_from_lspci
+from chutes_host.gpu.profiles import resolve_profile
 from chutes_host.passthrough import setup_passthrough
 from chutes_host.qemu import add_volumes, add_vsock, build_base_cmd, build_network
 
@@ -57,6 +59,18 @@ def stop_existing_vm():
 def launch_vm(args):
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
+
+    # When passing GPUs, size RAM to match total VRAM (e.g. 8x H200 = 8*141G)
+    if args.pass_gpus:
+        gpus = get_gpu_bdfs()
+        if not gpus:
+            gpus = detect_nvidia_gpus()
+        if gpus:
+            gpu_models = get_gpu_models_from_lspci(gpus)
+            profile = resolve_profile(gpu_models)
+            total_gpus = len(gpus)
+            mem = f"{total_gpus * profile.vram_gb}G"
+            print(f'  GPU passthrough: {total_gpus}x {profile.name} ({profile.vram_gb}GB VRAM each) → {mem} RAM')
 
     print(f'Launching TDX VM: {vcpus} vCPUs, {mem} RAM')
     print(f'Image: {args.image}')

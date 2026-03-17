@@ -31,6 +31,12 @@ class GpuProfile(ABC):
         """MMIO BAR size in MB for QEMU fw_cfg hint."""
         ...
 
+    @property
+    @abstractmethod
+    def vram_gb(self) -> int:
+        """VRAM per GPU in GB. Used to size VM RAM as gpu_count * vram_gb."""
+        ...
+
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         """Return nvidia-gpu-tools argument lists for CC/PPCIe mode configuration.
@@ -65,6 +71,10 @@ class B200Profile(GpuProfile):
     def bar_size_mb(self) -> int:
         return 524288  # 512GB recommended
 
+    @property
+    def vram_gb(self) -> int:
+        return 192  # B200 HBM3e
+
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
 
@@ -89,6 +99,10 @@ class H200Profile(GpuProfile):
     @property
     def bar_size_mb(self) -> int:
         return 262144  # 256GB
+
+    @property
+    def vram_gb(self) -> int:
+        return 141  # H200 HBM3e
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         if total_gpus == 8:
