@@ -22,6 +22,7 @@
   - `tdx/setup-tdx-host.sh` -- TDX host setup (wrapped by host provisioning playbook)
   - `tdx/attestation/setup-attestation-host.sh` -- installs PCCS, QGSD, QPL packages
   - `sek8s/services/attestation_proxy.py` -- TEE-only service, excluded from non-TEE executor
+  - `sek8s/services/util.py` -- validator SR25519 signature auth (`authorize()`, `verify_validator_signature()`) -- reused by host update service
 - **Dependencies**: Companion changes in chutes-miner (chutes-executor chart with gepetto-lite, confirmed available before this work begins), optional chutes-api `cluster_name` parameter
 
 ---
@@ -46,7 +47,9 @@
     - **TEE host** (`ansible/host/playbooks/tee-host.yml`): TDX setup (wraps `setup-tdx-host.sh`), PCCS package installation, QEMU/KVM, host-tools, guest qcow2.
     - **Non-TEE host** (`ansible/host/playbooks/host.yml`): QEMU/KVM, host-tools, guest qcow2. No TDX, no PCCS.
     
-    For iPXE: the playbook output is baked into a host OS image. Cloud-init delivers per-machine config (miner credentials, network, Intel PCCS API key for TEE hosts). A first-boot systemd service templates `config.yaml` from cloud-init data and runs `quick-launch.sh`.
+    Both host variants install required host-level dependencies (e.g., `aria2c` for VM image downloads used by `quick-launch.sh`, Python + PyYAML for orchestration scripts).
+    
+    For iPXE: the playbook output is baked into a host OS image. Cloud-init delivers a complete `config.yaml` (the same format as `config.tmpl.yaml`) per machine -- the DC provisioning server templates it with all machine-specific values: miner credentials, network (NIC name, IPs, DNS), volume paths and sizes (based on the machine's storage topology), port assignments, and Intel PCCS API key (TEE hosts). A first-boot systemd service writes the cloud-init-provided config to disk and runs `quick-launch.sh` with it. No auto-detection of any kind -- the DC provisioning server is the source of truth for all per-machine configuration.
 
 9. **PCCS auto-configuration via cloud-init**: Currently `pccs-configure` is interactive and `PCKIDRetrievalTool` is manual (host README step 2). For automated/iPXE deployments, the Intel PCCS API key is delivered via cloud-init user-data alongside miner credentials (hostname, miner-ss58, miner-seed). The host provisioning playbook pre-installs PCCS packages; at deploy time, a first-boot service reads the API key from cloud-init, runs non-interactive PCCS configuration, and completes `PCKIDRetrievalTool` registration. Without PCCS properly configured, QGSD cannot fetch PCK certificates and TDX attestation fails at VM boot. TEE-host-only; non-TEE hosts skip PCCS entirely.
 
@@ -59,7 +62,17 @@
     
     If registration races ahead of port configuration, it advertises wrong ports to the validator. The `k3s-cluster-init` service (which already waits for k3s API) is the right place for this, but the executor port init script must run before any registration init script, and must verify the upgraded services are healthy before proceeding. Needs confirmation that `helm upgrade` with changed NodePort values actually restarts the affected pods (or whether an explicit rollout restart is needed).
 
-11. **Future: native bare metal image**: A longer-term goal is a separate image type that runs directly on bare metal with native GPU drivers, no VM/hypervisor overhead. This requires different Ansible roles for GPU, networking, boot, and config delivery. Out of scope for this spec but noted as the ideal end state for data center deployments.
+11. **Host update service for remote VM lifecycle management**: A lightweight FastAPI service running on the host (not inside the guest VM) that allows the validator to remotely trigger updates. Reuses the existing validator SR25519 signature authentication from `sek8s/services/util.py` (`authorize(allow_validator=True)` + `ALLOWED_VALIDATORS`). Only requests signed by an allowed validator are accepted. On receiving an update command, the service:
+    1. Pulls the latest `main` branch of the sek8s repo (updated launch scripts, host-tools)
+    2. Checks for a new VM image (compares SHA256 of remote image against current)
+    3. If new image available: downloads it from R2/CDN (atomic -- old VM keeps running until download completes and verifies)
+    4. Gracefully shuts down the running VM by calling the system-manager `/shutdown` endpoint inside the VM, signed with the miner credentials (ss58 + seed from the cloud-init config on the host). This allows k3s to drain workloads and pods to terminate cleanly.
+    5. Waits for the VM to power off (with timeout, falls back to QEMU process kill if shutdown hangs)
+    6. Relaunches with `quick-launch.sh` using the existing `config.yaml`. No `--clean` needed -- bridge, TAP, iptables rules, and config volume persist across VM restarts and don't change between updates.
+    
+    If the download fails, the old VM continues running. The service reports update status (idle, downloading, restarting, success, failed) so the validator can track progress. Installed by the host provisioning playbook as a systemd service, exposed on a configurable port on the host's public interface (not a k3s NodePort -- this runs directly on the host, outside the VM).
+
+12. **Future: native bare metal image**: A longer-term goal is a separate image type that runs directly on bare metal with native GPU drivers, no VM/hypervisor overhead. This requires different Ansible roles for GPU, networking, boot, and config delivery. Out of scope for this spec but noted as the ideal end state for data center deployments.
 
 ---
 
@@ -87,6 +100,7 @@ Success criteria:
 8. Data center iPXE path: cloud-init delivers miner credentials and Intel PCCS API key, first-boot service templates config.yaml and runs `quick-launch.sh` to auto-launch the VM
 9. Renaming `site.yml` to `tee-gpu-vm.yml` produces byte-identical images (no behavioral change)
 10. System manager accessible for monitoring on all variants
+11. Host update service accepts validator-signed update commands, atomically downloads new VM images, and restarts the VM without manual data center intervention
 
 ---
 
@@ -118,9 +132,11 @@ Success criteria:
 11. **PCCS auto-configuration role**: `ansible/host/roles/pccs/` -- installs PCCS packages at build time. At deploy time, first-boot service reads Intel API key from cloud-init user-data, runs non-interactive `pccs-configure`, and completes `PCKIDRetrievalTool` registration. TEE-host-only.
 12. **iPXE host image builder**: `host-tools/scripts/build-host-image.sh` -- runs host playbook against a vanilla Ubuntu 25.04 image, produces an iPXE-bootable host image with everything pre-installed.
 13. **iPXE boot script**: `host-tools/ipxe/boot.ipxe` -- chain-loads host image for data center provisioning.
-14. **First-boot host service**: systemd service that (a) templates `config.yaml` from cloud-init user-data (miner creds, network, ports), (b) on TEE hosts, reads Intel PCCS API key from cloud-init and runs non-interactive PCCS configuration + `PCKIDRetrievalTool`, (c) runs `quick-launch.sh` with the templated config.
+14. **First-boot host service**: systemd service that (a) writes the complete `config.yaml` from cloud-init user-data to disk (same format as `config.tmpl.yaml` -- miner creds, network, volumes, ports, all provided by the DC provisioning server), (b) on TEE hosts, reads Intel PCCS API key from cloud-init and runs non-interactive PCCS configuration + `PCKIDRetrievalTool`, (c) runs `quick-launch.sh` with the config. The DC provisioning server is the source of truth for all per-machine configuration -- no auto-detection.
 15. **Executor inventory template**: `ansible/guest/playbooks/inventory/executor.yml` (no TDX base image references)
-16. **Group name cleanup**: Rename `tdx` group (GID 1000) to a purpose-descriptive name (e.g., `chutes-data`) across `ansible/guest/roles/system-manager/`, `ansible/guest/roles/cache-volume/`, `sek8s/system_manager/cache/manager.py`, and any chart values. `tdx-attest` (GID 987) stays as-is since it is legitimately TEE-specific, and is only created in TEE playbook variants.
+16. **Host update service**: `host-tools/scripts/chutes_host/update_service.py` -- FastAPI service running on the host. Exposes `/update` endpoint authenticated via validator SR25519 signatures (reuses `sek8s/services/util.py` auth pattern with `ALLOWED_VALIDATORS`). Handles: repo pull, image download + SHA256 verification, atomic VM restart via `quick-launch.sh`. Reports status via `/status` endpoint. Installed as a systemd service by the host provisioning playbook.
+17. **Host update service Ansible role**: `ansible/host/roles/update-service/` -- installs the update service as a systemd unit on the host (not in k3s), configures `ALLOWED_VALIDATORS` from cloud-init or Ansible vars, opens a dedicated port on the host's public interface via iptables.
+18. **Group name cleanup**: Rename `tdx` group (GID 1000) to a purpose-descriptive name (e.g., `chutes-data`) across `ansible/guest/roles/system-manager/`, `ansible/guest/roles/cache-volume/`, `sek8s/system_manager/cache/manager.py`, and any chart values. `tdx-attest` (GID 987) stays as-is since it is legitimately TEE-specific, and is only created in TEE playbook variants.
 
 ---
 
@@ -135,13 +151,21 @@ Success criteria:
 - Non-TEE executor qcow2 fails to launch via `quick-launch.sh` on a standard (non-TDX) miner host
 - iPXE host image fails to boot or auto-provision the executor VM
 - iPXE first-boot service fails to template config.yaml from cloud-init or pass it to quick-launch.sh
+- Cloud-init user-data missing required config.yaml fields (network, volumes, miner creds), causing quick-launch.sh to fail or use wrong configuration
 - PCCS not auto-configured on TEE host, causing QGSD to fail and TDX attestation to break at VM boot
 - Host provisioning playbook fails to install TDX or PCCS non-interactively
+- Host image missing required dependencies (aria2c, Python, PyYAML) causing quick-launch.sh or update service to fail
 - First-boot helm upgrade fails silently, leaving services on wrong ports
 - Gepetto-lite self-registration races ahead of port configuration, advertising default ports instead of configured ones to the validator
 - Helm upgrade changes NodePort values but does not restart pods, leaving services bound to old ports
 - System manager fails on non-TEE because group rename was incomplete (references to old `tdx` group name remain in some roles or Python code)
 - Cache volume setup fails because GID 1000 group name changed but pods still reference the old name
+- Host update service accepts unsigned or incorrectly signed requests, allowing unauthorized VM restarts
+- Host update service stops the old VM before the new image is fully downloaded/verified, causing downtime
+- Host update service fails to restart the VM after a successful image update, leaving the host with no running VM
+- Host update service uses `quick-launch.sh --clean` (QEMU kill) instead of graceful system-manager shutdown, causing workload disruption
+- Graceful shutdown hangs indefinitely because timeout/fallback to QEMU kill is missing
+- Host update service not reachable from the validator due to missing host firewall rules (this is a host-level port, not a k3s NodePort)
 
 ---
 
@@ -150,6 +174,7 @@ Success criteria:
 - **Phase 1**: Rename `ansible/k3s/` -> `ansible/guest/`. Rename `site.yml` -> `tee-gpu-vm.yml`. Create `executor-vm.yml` + `tee-executor-vm.yml` + chutes-executor role. Group name cleanup (`tdx` -> `chutes-data`). Update AGENT.md references. Build and test all three image types.
 - **Phase 2**: Config volume port extensions + first-boot helm upgrade + node label update. Test end-to-end with chutes-miner gepetto-lite self-registration.
 - **Phase 3**: Host provisioning playbooks (`ansible/host/`). `tee-host.yml` wraps TDX setup + PCCS package installation. `host.yml` for non-TEE. Both install KVM, host-tools, and bake in the guest qcow2. Build iPXE-bootable host images from playbook output. Cloud-init templates `config.yaml` with miner creds and Intel PCCS API key (TEE). First-boot service runs `quick-launch.sh`. Test with target data center hardware (DHCP + iPXE chain boot).
+- **Phase 4**: Host update service. Validator-authenticated remote update endpoint on the host. Atomic image download + VM restart. Test update cycle end-to-end: validator triggers update, service pulls new image, stops old VM, relaunches.
 - **Future**: Native bare metal image type (no VM layer, native GPU drivers). Separate spec when executor VM is proven.
 - **Backward compatibility**: Renaming `site.yml` to `tee-gpu-vm.yml` is the only change to existing flow. All config volume extensions are optional fields with sensible defaults. Existing TEE deployments are unaffected.
 - **No feature flags**: Image type determined by which playbook runs. No runtime detection.
