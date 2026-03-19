@@ -111,7 +111,7 @@ def launch_vm(args):
         setup_passthrough(qemu_cmds)
 
     print('Launching QEMU...')
-    subprocess.run(qemu_cmds, stderr=subprocess.STDOUT)
+    subprocess.run(['numactl', '--interleave=all'] + qemu_cmds, stderr=subprocess.STDOUT)
 
     if not args.foreground:
         print(f'Log file: {LOGFILE}')

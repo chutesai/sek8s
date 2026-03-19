@@ -381,7 +381,18 @@ if ! grep -q tdx /proc/cpuinfo 2>/dev/null; then
 fi
 
 echo "✓ TDX module initialized"
-echo "✓ Host TDX configuration verified"
+
+# Ensure NUMA zone reclaim is disabled (allows cross-node allocation for QEMU/KVM)
+ZONE_RECLAIM=$(sysctl -n vm.zone_reclaim_mode 2>/dev/null || echo "unknown")
+if [[ "$ZONE_RECLAIM" != "0" ]]; then
+  echo "⚠ vm.zone_reclaim_mode=$ZONE_RECLAIM (should be 0 for TDX VM workloads)"
+  echo "  Fixing: sysctl -w vm.zone_reclaim_mode=0"
+  sudo sysctl -w vm.zone_reclaim_mode=0
+  echo "  To make persistent: echo 'vm.zone_reclaim_mode=0' >> /etc/sysctl.d/99-numa.conf"
+fi
+echo "✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)"
+
+echo "✓ Host configuration verified"
 echo ""
 
 # --------------------------------------------------------------------
