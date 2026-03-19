@@ -4,12 +4,13 @@ Unit tests for individual validators
 """
 
 import asyncio
+import time
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 import aiohttp
 
 from sek8s.validators.base import ValidationResult
-from sek8s.validators.cosign import CosignValidator
+from sek8s.validators.cosign import CosignValidator, CosignVerificationUnavailableError
 from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
@@ -487,3 +488,109 @@ class TestCosignValidator:
             result2 = await validator.validate(review2)
         assert result1.allowed == result2.allowed
         assert call_count == 1, "New pod with same images should hit admission cache, not run verification"
+
+    def test_is_connection_or_infra_failure_unauthorized(self, config):
+        """401/UNAUTHORIZED from a registry whose auth backend is down should be treated as infra failure."""
+        validator = CosignValidator(config)
+
+        assert validator._is_connection_or_infra_failure(
+            "", "Error: GET https://reg.example.com/v2/: UNAUTHORIZED: authentication required"
+        )
+        assert validator._is_connection_or_infra_failure(
+            "", "UNAUTHORIZED"
+        )
+        assert validator._is_connection_or_infra_failure(
+            "", "error: authentication required; unable to get token"
+        )
+
+    def test_is_connection_or_infra_failure_connection_refused(self, config):
+        """connection refused is still detected as infra failure."""
+        validator = CosignValidator(config)
+
+        assert validator._is_connection_or_infra_failure(
+            "", "dial tcp 127.0.0.1:30500: connect: connection refused"
+        )
+
+    def test_is_connection_or_infra_failure_normal_failure_not_matched(self, config):
+        """Normal signature verification failure should NOT be treated as infra failure."""
+        validator = CosignValidator(config)
+
+        assert not validator._is_connection_or_infra_failure(
+            "", "no matching signatures: no matching signatures"
+        )
+        assert not validator._is_connection_or_infra_failure(
+            "", "Error: cosign verification failed: invalid signature"
+        )
+
+    def test_extract_registry_local_registry(self, config):
+        """Extract registry from a local registry image reference."""
+        validator = CosignValidator(config)
+
+        assert validator._extract_registry(
+            "abc123.localregistry.chutes.ai:30500/chutes/sglang:nightly"
+        ) == "abc123.localregistry.chutes.ai:30500"
+
+    def test_extract_registry_docker_hub_org(self, config):
+        """Docker Hub images without explicit registry should return docker.io."""
+        validator = CosignValidator(config)
+
+        assert validator._extract_registry("parachutes/cache-cleaner:latest") == "docker.io"
+
+    def test_extract_registry_explicit_docker_hub(self, config):
+        """Docker Hub images with explicit registry should return docker.io."""
+        validator = CosignValidator(config)
+
+        assert validator._extract_registry("docker.io/parachutes/cache-cleaner:latest") == "docker.io"
+
+    def test_mark_registry_unavailable_and_check(self, config):
+        """After marking a registry unavailable, _check_registry_available raises."""
+        validator = CosignValidator(config)
+        registry = "abc123.localregistry.chutes.ai:30500"
+
+        validator._mark_registry_unavailable(registry)
+
+        with pytest.raises(CosignVerificationUnavailableError, match="recently unavailable"):
+            validator._check_registry_available(
+                f"{registry}/chutes/sglang:nightly"
+            )
+
+    def test_registry_unavailable_backoff_expires(self, config):
+        """After the backoff period, _check_registry_available should not raise."""
+        validator = CosignValidator(config)
+        registry = "abc123.localregistry.chutes.ai:30500"
+
+        validator._registry_unavailable_until[registry] = time.time() - 1
+
+        validator._check_registry_available(f"{registry}/chutes/sglang:nightly")
+
+    def test_registry_unavailable_cleared_on_success(self, config):
+        """A successful verification should clear the unavailable state for that registry."""
+        validator = CosignValidator(config)
+        registry = "abc123.localregistry.chutes.ai:30500"
+
+        validator._mark_registry_unavailable(registry)
+        assert registry in validator._registry_unavailable_until
+
+        validator._registry_unavailable_until.pop(registry, None)
+        assert registry not in validator._registry_unavailable_until
+
+    @pytest.mark.asyncio
+    async def test_unavailable_error_not_cached_in_admission_result(self, config, valid_admission_review):
+        """CosignVerificationUnavailableError should NOT be cached in admission result cache."""
+        validator = CosignValidator(config)
+        call_count = 0
+
+        async def raise_unavailable(ctx):
+            nonlocal call_count
+            call_count += 1
+            raise CosignVerificationUnavailableError("registry down")
+
+        with patch.object(validator, "_verify_cosign_config", side_effect=raise_unavailable):
+            result1 = await validator.validate(valid_admission_review)
+            assert not result1.allowed
+            assert "unavailable" in result1.messages[0].lower()
+
+            result2 = await validator.validate(valid_admission_review)
+            assert not result2.allowed
+
+        assert call_count == 2, "Unavailable results must NOT be admission-cached; both calls should run verification"

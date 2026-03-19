@@ -43,6 +43,8 @@ Rule = Callable[["CosignValidator", ValidationContext], Awaitable[List[str]]]
 class CosignValidator(ValidatorBase):
     """Validator that verifies container image signatures using cosign."""
 
+    REGISTRY_UNAVAILABLE_BACKOFF_SECONDS = 30
+
     def __init__(self, config: AdmissionConfig):
         super().__init__(config)
         self.cosign_config = CosignConfig()
@@ -59,6 +61,7 @@ class CosignValidator(ValidatorBase):
         )
         self._admission_cache_lock = asyncio.Lock()
         self._rate_limit_until = 0.0
+        self._registry_unavailable_until: Dict[str, float] = {}
 
     # Rule sets: properties returning lists of generic rules (class methods)
     @property
@@ -105,6 +108,33 @@ class CosignValidator(ValidatorBase):
         namespace = request.get("namespace", "default")
         kind = request.get("kind", {}).get("kind", "")
         return (namespace, kind, tuple(sorted(images)))
+
+    def _is_connection_or_infra_failure(self, stdout: str, stderr: str) -> bool:
+        """True if cosign subprocess output indicates registry/network unreachable.
+
+        Since cosign runs as a subprocess we cannot catch connection errors as Python
+        exceptions; this inspects stdout/stderr so we can raise CosignVerificationUnavailableError
+        and avoid caching the failure.
+
+        Also detects HTTP 401/UNAUTHORIZED responses which commonly occur when
+        a registry's auth backend is not yet ready (e.g. during boot when nginx
+        is up but the auth sidecar hasn't started). Without this, cosign failures
+        from a temporarily-unavailable auth layer get negatively cached, blocking
+        admission for minutes after the registry recovers.
+        """
+        indicators = [
+            "connection refused",
+            "connection reset",
+            "dial tcp",
+            "i/o timeout",
+            "temporary failure",
+            "no such host",
+            "connection timed out",
+            "unauthorized",
+            "authentication required",
+        ]
+        combined = f"{stdout}\n{stderr}".lower()
+        return any(ind in combined for ind in indicators)
 
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
@@ -333,6 +363,114 @@ class CosignValidator(ValidatorBase):
 
         return valid
 
+    async def _verify_with_key(self, image: str, verification_config: CosignVerificationConfig) -> bool:
+        """Verify image signature using a public key."""
+        valid = False
+        if not verification_config.public_key or not verification_config.public_key.exists():
+            logger.error(f"Public key not found: {verification_config.public_key}")
+        else:
+            try:
+                self._check_registry_available(image)
+
+                cmd = [
+                    "cosign", 
+                    "verify",
+                    "--key", 
+                    str(verification_config.public_key)
+                ]
+
+                if verification_config.allow_http:
+                    cmd.append("--allow-http-registry")
+
+                if verification_config.allow_insecure:
+                    cmd.append("--allow-insecure-registry")
+
+                if verification_config.rekor_url:
+                    cmd.extend(["--rekor-url", verification_config.rekor_url])
+
+                cmd.append(image)
+
+                success, stdout, stderr, rate_limited = await self._run_cosign(cmd)
+                if rate_limited:
+                    self._record_rate_limit()
+                    raise RateLimitError(self._rate_limit_message())
+
+                if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                    self._mark_registry_unavailable(self._extract_registry(image))
+                    raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
+                if success:
+                    self._registry_unavailable_until.pop(self._extract_registry(image), None)
+                    try:
+                        verification_result = json.loads(stdout)
+                        logger.debug(f"Verification result: {verification_result}")
+                        valid = True
+                    except json.JSONDecodeError:
+                        logger.warning(f"Invalid JSON output from cosign verify: {stdout}")
+                else:
+                    logger.error(f"Cosign key verification failed for {image}: {stderr or stdout}")
+            except RateLimitError:
+                raise
+            except CosignVerificationUnavailableError:
+                raise
+            except Exception as e:
+                logger.error(f"Exception during key-based verification: {e}")
+
+        return valid
+
+    async def _verify_keyless(self, image: str, verification_config: CosignVerificationConfig) -> bool:
+        """Verify image signature using keyless verification (OIDC)."""
+        if not verification_config.keyless_identity_regex or not verification_config.keyless_issuer:
+            logger.error("Keyless verification requires identity regex and issuer")
+            return False
+
+        try:
+            self._check_registry_available(image)
+
+            cmd = [
+                "cosign",
+                "verify",
+                "--certificate-identity-regexp",
+                verification_config.keyless_identity_regex,
+                "--certificate-oidc-issuer",
+                verification_config.keyless_issuer,
+                image,
+            ]
+
+            if verification_config.rekor_url:
+                cmd.extend(["--rekor-url", verification_config.rekor_url])
+            if verification_config.fulcio_url:
+                cmd.extend(["--fulcio-url", verification_config.fulcio_url])
+
+            success, stdout, stderr, rate_limited = await self._run_cosign(cmd)
+            if rate_limited:
+                self._record_rate_limit()
+                raise RateLimitError(self._rate_limit_message())
+
+            if not success and self._is_connection_or_infra_failure(stdout, stderr):
+                self._mark_registry_unavailable(self._extract_registry(image))
+                raise CosignVerificationUnavailableError(stderr or stdout or "Registry/network unavailable")
+
+            if success:
+                self._registry_unavailable_until.pop(self._extract_registry(image), None)
+                try:
+                    verification_result = json.loads(stdout)
+                    return isinstance(verification_result, list) and len(verification_result) > 0
+                except json.JSONDecodeError:
+                    logger.error(f"Invalid JSON output from cosign verify: {stdout}")
+                    return False
+            else:
+                logger.debug(f"Cosign keyless verification failed for {image}: {stderr or stdout}")
+                return False
+
+        except RateLimitError:
+            raise
+        except CosignVerificationUnavailableError:
+            raise
+        except Exception as e:
+            logger.error(f"Exception during keyless verification: {e}")
+            return False
+
     async def _resolve_image_reference(self, image: str) -> str:
         """Resolve image reference to digest if possible; return as-is if already a digest or if resolution fails."""
         # If image already has digest, return as-is
@@ -370,6 +508,41 @@ class CosignValidator(ValidatorBase):
     def _record_rate_limit(self):
         """Record rate-limit and set backoff until time so verification is paused for the configured period."""
         self._rate_limit_until = time.time() + self.cosign_config.rate_limit_backoff_seconds
+
+    def _extract_registry(self, image: str) -> str:
+        """Extract the registry hostname from an image reference.
+
+        Uses the same heuristic as _parse_image_reference: the first path component
+        is a registry when it contains '.' or ':'; otherwise it's a Docker Hub
+        org/user and the registry is docker.io.
+        """
+        first = image.split("/")[0] if "/" in image else image
+        if "." in first or ":" in first:
+            return first
+        return "docker.io"
+
+    def _mark_registry_unavailable(self, registry: str) -> None:
+        """Mark a registry as temporarily unavailable so subsequent verifications
+        against it raise CosignVerificationUnavailableError immediately instead of
+        spawning a cosign subprocess that will fail the same way."""
+        until = time.time() + self.REGISTRY_UNAVAILABLE_BACKOFF_SECONDS
+        self._registry_unavailable_until[registry] = until
+        logger.warning(
+            "Registry %s marked unavailable until %s",
+            registry,
+            time.strftime("%H:%M:%S", time.localtime(until)),
+        )
+
+    def _check_registry_available(self, image: str) -> None:
+        """Raise CosignVerificationUnavailableError if the registry for *image*
+        was recently marked unavailable and the backoff has not yet expired."""
+        registry = self._extract_registry(image)
+        backoff_until = self._registry_unavailable_until.get(registry, 0.0)
+        if backoff_until and time.time() < backoff_until:
+            raise CosignVerificationUnavailableError(
+                f"Registry {registry} recently unavailable, backing off until "
+                f"{time.strftime('%H:%M:%S', time.localtime(backoff_until))}"
+            )
 
     def _rate_limit_message(self) -> str:
         """Human-friendly rate limit message."""
