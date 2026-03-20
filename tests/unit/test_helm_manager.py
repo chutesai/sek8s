@@ -9,7 +9,7 @@ import pytest
 
 from fixtures.helm import HELM_LIST_EMPTY, HELM_LIST_ONE_RELEASE, HELM_STATUS_DEPLOYED
 from fixtures.process import make_mock_process
-from sek8s.system_manager.helm.models import UpgradeStatusEnum
+from sek8s.system_manager.helm.models import UpgradeStartStatus, UpgradeStatusEnum
 
 
 @pytest.mark.asyncio
@@ -47,15 +47,16 @@ async def test_list_releases_failure(helm_manager, mock_create_subprocess_exec):
 
 @pytest.mark.asyncio
 async def test_get_release_status_success(helm_manager, mock_create_subprocess_exec):
-    """get_release_status returns parsed helm status JSON."""
+    """get_release_status returns ReleaseStatusDetail."""
     mock_create_subprocess_exec.return_value = make_mock_process(
         0, HELM_STATUS_DEPLOYED, ""
     )
     result = await helm_manager.get_release_status("chutes")
 
-    assert result["status"] == "deployed"
-    assert result["chart"] == "chutes-miner-gpu-0.2.1"
-    assert result["app_version"] == "1.0.0"
+    assert result.status == "deployed"
+    assert result.chart == "chutes-miner-gpu-0.2.1"
+    assert result.app_version == "1.0.0"
+    assert result.revision == 3
 
 
 @pytest.mark.asyncio
@@ -65,10 +66,9 @@ async def test_start_upgrade_returns_started(helm_manager, mock_create_subproces
         make_mock_process(0, HELM_LIST_EMPTY, ""),
         make_mock_process(0, "", ""),
     ]
-    status, up_to_date = await helm_manager.start_upgrade("chutes", "0.2.1")
+    status = await helm_manager.start_upgrade("chutes", "0.2.1")
 
-    assert status == "started"
-    assert up_to_date is False
+    assert status == UpgradeStartStatus.STARTED
     assert helm_manager.get_upgrade_status() is not None
     assert helm_manager.get_upgrade_status().status == UpgradeStatusEnum.IN_PROGRESS
 
@@ -109,8 +109,8 @@ async def test_start_upgrade_returns_in_progress_when_running(
     ):
         await helm_manager.start_upgrade("chutes")
         await asyncio.sleep(0)
-        status, _ = await helm_manager.start_upgrade("chutes", "0.2.1")
-        assert status == "in_progress"
+        status = await helm_manager.start_upgrade("chutes", "0.2.1")
+        assert status == UpgradeStartStatus.IN_PROGRESS
     blocker.set_result(None)
     await asyncio.sleep(0)
 
@@ -123,10 +123,9 @@ async def test_start_upgrade_returns_up_to_date_when_version_matches(
     mock_create_subprocess_exec.return_value = make_mock_process(
         0, HELM_LIST_ONE_RELEASE, ""
     )
-    status, up_to_date = await helm_manager.start_upgrade("chutes", "0.2.1")
+    status = await helm_manager.start_upgrade("chutes", "0.2.1")
 
-    assert status == "up_to_date"
-    assert up_to_date is True
+    assert status == UpgradeStartStatus.UP_TO_DATE
     assert helm_manager.get_upgrade_status() is None
 
 

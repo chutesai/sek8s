@@ -38,6 +38,9 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 ## Patterns
 
+- **Single return per method** — Use one return at the end of each method with a clear path. Compute values first, then build the return. Avoid multiple early returns that scatter logic and make debugging harder.
+- **Typed models over dicts** — Do not use arbitrary dictionaries to represent data. Use classes (dataclasses, Pydantic models) that define the structure. Dicts make changes hard to track and hide data contracts.
+- **Classmethods for construction from other types** — Define conversion from one data type to another as classmethods on the target type. Keeps conversion logic in one place, clarifies input/output contracts, and documents the expected input format.
 - **Async-first**: Use `async def`, `aiohttp`, etc. for FastAPI services. Avoid blocking calls in request handlers
 - **Pydantic models** for request/response schemas (in `sek8s/models.py`, `sek8s/responses.py`, per-module `models.py`)
 - **Provider pattern** for hardware abstraction (`sek8s/providers/tdx.py`, `gpu.py`, `nvtrust.py`)

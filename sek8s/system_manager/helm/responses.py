@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field
 
-from .models import UpgradeStatusEnum
-
-
-class UpgradeStartStatus(str, Enum):
-    """Status returned by POST /helm/upgrade."""
-
-    STARTED = "started"
-    IN_PROGRESS = "in_progress"
-    UP_TO_DATE = "up_to_date"
+from .models import ReleaseStatusDetail, UpgradeStartStatus, UpgradeStatusEnum
 
 
 class UpgradeStartResponse(BaseModel):
@@ -57,11 +48,42 @@ class ReleaseListResponse(BaseModel):
     releases: List[ReleaseListEntry] = Field(..., description="List of helm releases")
 
 
-class ReleaseStatusResponse(BaseModel):
-    """Response for GET /helm/releases/{name}/status."""
+class ReleaseStatusInfo(BaseModel):
+    """Structured release status from helm status (nested under info)."""
 
-    info: Any = Field(..., description="Detailed release info from helm status")
     status: Optional[str] = Field(None, description="Release status")
     revision: Optional[int] = Field(None, description="Revision number")
     chart: Optional[str] = Field(None, description="Chart name and version")
     app_version: Optional[str] = Field(None, description="App version")
+
+    @classmethod
+    def from_detail(cls, detail: ReleaseStatusDetail) -> ReleaseStatusInfo:
+        """Build ReleaseStatusInfo from ReleaseStatusDetail."""
+        return cls(
+            status=detail.status,
+            revision=detail.revision,
+            chart=detail.chart,
+            app_version=detail.app_version,
+        )
+
+
+class ReleaseStatusResponse(BaseModel):
+    """Response for GET /helm/releases/{name}/status."""
+
+    info: ReleaseStatusInfo = Field(..., description="Structured release status from helm")
+    status: Optional[str] = Field(None, description="Release status")
+    revision: Optional[int] = Field(None, description="Revision number")
+    chart: Optional[str] = Field(None, description="Chart name and version")
+    app_version: Optional[str] = Field(None, description="App version")
+
+    @classmethod
+    def from_detail(cls, detail: ReleaseStatusDetail) -> ReleaseStatusResponse:
+        """Build ReleaseStatusResponse from ReleaseStatusDetail."""
+        info = ReleaseStatusInfo.from_detail(detail)
+        return cls(
+            info=info,
+            status=detail.status,
+            revision=detail.revision,
+            chart=detail.chart,
+            app_version=detail.app_version,
+        )

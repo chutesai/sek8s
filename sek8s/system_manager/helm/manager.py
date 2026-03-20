@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from fastapi import HTTPException
 from loguru import logger
 
-from .models import ReleaseEntry, UpgradeSnapshot, UpgradeStatusEnum
+from .models import (
+    ReleaseEntry,
+    ReleaseStatusDetail,
+    UpgradeSnapshot,
+    UpgradeStartStatus,
+    UpgradeStatusEnum,
+)
 
 K3S_HELM_HELPER = "/usr/local/bin/k3s-helm-helper"
 UPGRADE_TIMEOUT = 600.0  # 10 minutes
@@ -47,45 +53,6 @@ class HelmManager:
             stderr_bytes.decode("utf-8", errors="replace"),
         )
 
-    def _parse_list_output(self, stdout: str) -> List[ReleaseEntry]:
-        """Parse helm list -o json output into ReleaseEntry list."""
-        try:
-            data = json.loads(stdout)
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse helm list output: {}", e)
-            raise HTTPException(
-                status_code=502,
-                detail={"error": "helm_list_parse_failed", "message": str(e)},
-            )
-        if not isinstance(data, list):
-            raise HTTPException(
-                status_code=502,
-                detail={"error": "helm_list_unexpected_format", "message": "Expected array"},
-            )
-        entries: List[ReleaseEntry] = []
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name") or ""
-            namespace = item.get("namespace") or ""
-            chart = item.get("chart") or ""
-            status = item.get("status") or ""
-            revision = int(item.get("revision", 0))
-            updated = item.get("updated", "")
-            app_version = item.get("app_version")
-            entries.append(
-                ReleaseEntry(
-                    name=name,
-                    namespace=namespace,
-                    chart=chart,
-                    status=status,
-                    revision=revision,
-                    updated=updated,
-                    app_version=app_version,
-                )
-            )
-        return entries
-
     async def list_releases(self) -> List[ReleaseEntry]:
         """List all helm releases via k3s-helm-helper list."""
         code, stdout, stderr = await self._run("list", timeout=30.0)
@@ -95,9 +62,22 @@ class HelmManager:
                 status_code=502,
                 detail={"error": "helm_list_failed", "stderr": stderr},
             )
-        return self._parse_list_output(stdout)
+        try:
+            return ReleaseEntry.from_list_json(stdout)
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse helm list output: {}", e)
+            raise HTTPException(
+                status_code=502,
+                detail={"error": "helm_list_parse_failed", "message": str(e)},
+            ) from e
+        except ValueError as e:
+            logger.error("Invalid helm list format: {}", e)
+            raise HTTPException(
+                status_code=502,
+                detail={"error": "helm_list_unexpected_format", "message": str(e)},
+            ) from e
 
-    async def get_release_status(self, name: str) -> Dict:
+    async def get_release_status(self, name: str) -> ReleaseStatusDetail:
         """Get detailed status for a release via k3s-helm-helper status."""
         code, stdout, stderr = await self._run("status", name, timeout=30.0)
         if code != 0:
@@ -107,13 +87,19 @@ class HelmManager:
                 detail={"error": "helm_status_failed", "stderr": stderr},
             )
         try:
-            return json.loads(stdout)
+            return ReleaseStatusDetail.from_json(stdout)
         except json.JSONDecodeError as e:
             logger.error("Failed to parse helm status output: {}", e)
             raise HTTPException(
                 status_code=502,
                 detail={"error": "helm_status_parse_failed", "message": str(e)},
-            )
+            ) from e
+        except ValueError as e:
+            logger.error("Invalid helm status format: {}", e)
+            raise HTTPException(
+                status_code=502,
+                detail={"error": "helm_status_unexpected_format", "message": str(e)},
+            ) from e
 
     async def _run_upgrade(self, release: str, version: Optional[str]) -> None:
         """Run helm upgrade in background. Updates _upgrade_result on completion."""
@@ -144,29 +130,32 @@ class HelmManager:
 
     async def start_upgrade(
         self, release: str, version: Optional[str] = None
-    ) -> Tuple[str, bool]:
-        """Start helm upgrade. Returns (status, up_to_date).
-        Status: started, in_progress, up_to_date.
-        """
+    ) -> UpgradeStartStatus:
+        """Start helm upgrade. Returns started, in_progress, or up_to_date."""
+        status = UpgradeStartStatus.STARTED
+
         if self._upgrade_task is not None and not self._upgrade_task.done():
-            return ("in_progress", False)
+            status = UpgradeStartStatus.IN_PROGRESS
+        else:
+            if self._upgrade_result is not None:
+                status_enum, _ = self._upgrade_result
+                if status_enum == UpgradeStatusEnum.COMPLETED:
+                    self._upgrade_result = None
 
-        if self._upgrade_result is not None:
-            status_enum, _ = self._upgrade_result
-            if status_enum == UpgradeStatusEnum.COMPLETED:
-                self._upgrade_result = None
+            if version:
+                releases = await self.list_releases()
+                for r in releases:
+                    if r.name == release and r.chart.endswith(f"-{version}"):
+                        status = UpgradeStartStatus.UP_TO_DATE
+                        break
 
-        if version:
-            releases = await self.list_releases()
-            for r in releases:
-                if r.name == release and r.chart.endswith(f"-{version}"):
-                    return ("up_to_date", True)
+            if status == UpgradeStartStatus.STARTED:
+                self._upgrade_release = release
+                self._upgrade_task = asyncio.create_task(
+                    self._run_upgrade(release, version)
+                )
 
-        self._upgrade_release = release
-        self._upgrade_task = asyncio.create_task(
-            self._run_upgrade(release, version)
-        )
-        return ("started", False)
+        return status
 
     def get_upgrade_status(self) -> Optional[UpgradeSnapshot]:
         """Get current async upgrade status."""

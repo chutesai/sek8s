@@ -9,6 +9,8 @@ from sek8s.config import SystemManagerConfig, image_config
 from sek8s.server import WebServer
 from sek8s.system_manager.cache.manager import CacheManager
 from sek8s.system_manager.cache.router import router as cache_router
+from sek8s.system_manager.helm.manager import HelmManager
+from sek8s.system_manager.helm.router import router as helm_router
 from sek8s.system_manager.images.manager import ImageManager
 from sek8s.system_manager.images.router import router as images_router
 from sek8s.system_manager.status.router import router as status_router
@@ -33,6 +35,9 @@ async def lifespan(app: FastAPI):
     )
     app.state.image_manager = image_mgr
 
+    helm_mgr = HelmManager()
+    app.state.helm_manager = helm_mgr
+
     yield
 
 
@@ -46,6 +51,7 @@ class SystemManagerServer(WebServer):
         self.app.include_router(status_router, prefix="/status", tags=["status"])
         self.app.include_router(cache_router, prefix="/cache", tags=["cache"])
         self.app.include_router(images_router, prefix="/images", tags=["images"])
+        self.app.include_router(helm_router, prefix="/helm", tags=["helm"])
 
 
 def create_app() -> FastAPI:
