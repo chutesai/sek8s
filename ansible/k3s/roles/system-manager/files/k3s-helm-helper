@@ -1,0 +1,81 @@
+#!/bin/bash
+# k3s-helm-helper: Restricted wrapper for helm operations.
+# Only allows: repo-update, upgrade, list, status. Prevents arbitrary helm commands,
+# chart repos, or value injection. Used by system-manager for remote chart upgrades.
+# Version validation: caller version is only compared against helm search output;
+# the version passed to helm upgrade always comes from parsed output, never from input.
+
+set -euo pipefail
+
+HELM_BIN="/usr/bin/helm"
+KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+CHART="chutes/chutes-miner-gpu"
+RELEASE="chutes"
+NAMESPACE="chutes"
+
+helm_cmd() {
+    "$HELM_BIN" --kubeconfig="$KUBECONFIG" "$@"
+}
+
+case "${1:-}" in
+    repo-update)
+        helm_cmd repo update
+        ;;
+    upgrade)
+        release="${2:-}"
+        requested_version="${3:-}"
+        if [[ "$release" != "$RELEASE" ]]; then
+            echo "error: release not allowed (allowed: $RELEASE)" >&2
+            exit 1
+        fi
+        helm_cmd repo update
+        search_out=$(helm_cmd search repo "$CHART" --versions 2>/dev/null) || {
+            echo "error: helm search failed" >&2
+            exit 1
+        }
+        versions=()
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            ver=$(echo "$line" | awk '{print $2}')
+            [[ -n "$ver" && "$ver" =~ ^[0-9] ]] && versions+=("$ver")
+        done < <(echo "$search_out" | tail -n +2)
+        if [[ ${#versions[@]} -eq 0 ]]; then
+            echo "error: no chart versions found" >&2
+            exit 1
+        fi
+        resolved_version=""
+        if [[ -n "$requested_version" ]]; then
+            for v in "${versions[@]}"; do
+                if [[ "$v" == "$requested_version" ]]; then
+                    resolved_version="$v"
+                    break
+                fi
+            done
+            if [[ -z "$resolved_version" ]]; then
+                echo "error: version not found (requested: $requested_version)" >&2
+                exit 1
+            fi
+        else
+            resolved_version="${versions[0]}"
+        fi
+        helm_cmd upgrade --install "$RELEASE" "$CHART" \
+            --namespace "$NAMESPACE" \
+            --reuse-values \
+            --version "$resolved_version"
+        ;;
+    list)
+        helm_cmd list -A -o json
+        ;;
+    status)
+        release="${2:-}"
+        if [[ "$release" != "$RELEASE" ]]; then
+            echo "error: release not allowed (allowed: $RELEASE)" >&2
+            exit 1
+        fi
+        helm_cmd status "$release" -o json
+        ;;
+    *)
+        echo "error: unknown subcommand (allowed: repo-update, upgrade, list, status)" >&2
+        exit 1
+        ;;
+esac

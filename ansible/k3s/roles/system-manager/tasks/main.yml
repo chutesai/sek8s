@@ -100,6 +100,14 @@
     group: root
     mode: '0755'
 
+- name: Install k3s-helm-helper wrapper (restricts system-manager to safe helm subcommands only)
+  ansible.builtin.copy:
+    src: k3s-helm-helper
+    dest: /usr/local/bin/k3s-helm-helper
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Ensure k3s systemd drop-in directory exists
   ansible.builtin.file:
     path: /etc/systemd/system/k3s.service.d
@@ -151,12 +159,13 @@
     group: system-manager
     mode: '0640'
 
-- name: Allow system-manager to run shutdown, du, and rm (k3s-images-helper runs without sudo via containerd group)
+- name: Allow system-manager to run shutdown, du, rm, and k3s-helm-helper (k3s-images-helper runs without sudo via containerd group)
   ansible.builtin.copy:
     content: |
       system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/rm
+      system-manager ALL=(ALL) NOPASSWD: /usr/local/bin/k3s-helm-helper
     dest: /etc/sudoers.d/system-manager
     owner: root
     group: root
