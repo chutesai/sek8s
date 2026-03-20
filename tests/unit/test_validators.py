@@ -10,6 +10,7 @@ import aiohttp
 
 from sek8s.validators.base import ValidationResult
 from sek8s.validators.cosign import CosignValidator
+from sek8s.cosign.client import CosignVerificationUnavailableError
 from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
@@ -487,3 +488,24 @@ class TestCosignValidator:
             result2 = await validator.validate(review2)
         assert result1.allowed == result2.allowed
         assert call_count == 1, "New pod with same images should hit admission cache, not run verification"
+
+    @pytest.mark.asyncio
+    async def test_unavailable_error_not_cached_in_admission_result(self, config, valid_admission_review):
+        """CosignVerificationUnavailableError should NOT be cached in admission result cache."""
+        validator = CosignValidator(config)
+        call_count = 0
+
+        async def raise_unavailable(ctx):
+            nonlocal call_count
+            call_count += 1
+            raise CosignVerificationUnavailableError("registry down")
+
+        with patch.object(validator, "_verify_cosign_config", side_effect=raise_unavailable):
+            result1 = await validator.validate(valid_admission_review)
+            assert not result1.allowed
+            assert "unavailable" in result1.messages[0].lower()
+
+            result2 = await validator.validate(valid_admission_review)
+            assert not result2.allowed
+
+        assert call_count == 2, "Unavailable results must NOT be admission-cached; both calls should run verification"

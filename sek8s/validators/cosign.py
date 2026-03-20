@@ -3,12 +3,12 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from cachetools import TTLCache
 
 from sek8s.validators.base import ValidatorBase, ValidationResult
-from sek8s.config import AdmissionConfig, CosignConfig, CosignRegistryConfig, CosignVerificationConfig
+from sek8s.config import AdmissionConfig, CosignConfig, CosignVerificationConfig
 from sek8s.cosign.client import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
 from sek8s.image_utils import parse_image_reference
 
@@ -370,15 +370,6 @@ class CosignValidator(ValidatorBase):
     def _record_rate_limit(self):
         """Record rate-limit and set backoff until time so verification is paused for the configured period."""
         self._rate_limit_until = time.time() + self.cosign_config.rate_limit_backoff_seconds
-
-    def _rate_limit_message(self) -> str:
-        """Human-friendly rate limit message."""
-        if not self._rate_limit_until:
-            return "Cosign verification rate limited by upstream registry"
-        return (
-            "Cosign verification rate limited by upstream registry; retry after "
-            f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until))}"
-        )
 
     def _make_cache_key(
         self, resolved_image: str, verification_config: CosignVerificationConfig
