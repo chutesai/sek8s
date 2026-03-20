@@ -42,11 +42,32 @@ def manager_app_no_auth():
         # Force re-import so status router gets patched authorize (other tests
         # like test_openapi_spec may have loaded the manager first).
         for mod in list(sys.modules.keys()):
-            if mod in ("sek8s.services.manager", "sek8s.system_manager.status.router"):
+            if mod in (
+                "sek8s.services.manager",
+                "sek8s.system_manager.status.router",
+                "sek8s.system_manager.helm.router",
+            ):
                 del sys.modules[mod]
         from sek8s.services.manager import create_app
 
         yield create_app()
+
+
+@pytest.fixture
+def manager_app_with_auth():
+    """Create the system-manager app with real auth (no bypass)."""
+    import sys
+
+    for mod in list(sys.modules.keys()):
+        if mod in (
+            "sek8s.services.manager",
+            "sek8s.system_manager.status.router",
+            "sek8s.system_manager.helm.router",
+        ):
+            del sys.modules[mod]
+    from sek8s.services.manager import create_app
+
+    return create_app()
 
 
 def pytest_configure(config):

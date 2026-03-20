@@ -10,6 +10,7 @@ from sek8s.server import WebServer
 from sek8s.system_manager.cache.manager import CacheManager
 from sek8s.system_manager.cache.router import router as cache_router
 from sek8s.system_manager.helm.manager import HelmManager
+from sek8s.system_manager.helm.rate_limit import HelmRateLimiter
 from sek8s.system_manager.helm.router import router as helm_router
 from sek8s.system_manager.images.manager import ImageManager
 from sek8s.system_manager.images.router import router as images_router
@@ -37,6 +38,11 @@ async def lifespan(app: FastAPI):
 
     helm_mgr = HelmManager()
     app.state.helm_manager = helm_mgr
+
+    config = SystemManagerConfig()
+    app.state.helm_rate_limiter = HelmRateLimiter(
+        requests_per_minute=config.helm_rate_limit_per_minute,
+    )
 
     yield
 

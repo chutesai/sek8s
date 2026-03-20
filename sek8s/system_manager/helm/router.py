@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sek8s.services.util import authorize
 
 from .manager import HelmManager
+from .rate_limit import require_rate_limit
 from .models import UpgradeRequest
 from .responses import (
     ReleaseListEntry,
@@ -33,11 +34,13 @@ def get_helm_manager(request: Request) -> HelmManager:
         200: {"description": "Upgrade started, in progress, or already up to date"},
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
+        429: {"description": "Rate limit exceeded"},
         502: {"description": "Helm helper failed"},
     },
 )
 async def start_upgrade(
     body: UpgradeRequest,
+    _limit: None = Depends(require_rate_limit),
     mgr: HelmManager = Depends(get_helm_manager),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="helm")),
 ) -> UpgradeStartResponse:
@@ -54,10 +57,12 @@ async def start_upgrade(
         200: {"description": "List of helm releases"},
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
+        429: {"description": "Rate limit exceeded"},
         502: {"description": "Helm list failed"},
     },
 )
 async def list_releases(
+    _limit: None = Depends(require_rate_limit),
     mgr: HelmManager = Depends(get_helm_manager),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="helm")),
 ) -> ReleaseListResponse:
@@ -87,11 +92,13 @@ async def list_releases(
         200: {"description": "Release status details"},
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
+        429: {"description": "Rate limit exceeded"},
         502: {"description": "Helm status failed"},
     },
 )
 async def get_release_status(
     name: str,
+    _limit: None = Depends(require_rate_limit),
     mgr: HelmManager = Depends(get_helm_manager),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="helm")),
 ) -> ReleaseStatusResponse:
@@ -109,9 +116,11 @@ async def get_release_status(
         401: {"description": "Unauthorized"},
         403: {"description": "Forbidden"},
         404: {"description": "No upgrade in progress"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
 async def get_upgrade_status(
+    _limit: None = Depends(require_rate_limit),
     mgr: HelmManager = Depends(get_helm_manager),
     _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="helm")),
 ) -> UpgradeStatusResponse:

@@ -11,12 +11,20 @@ from fixtures.helm import (
     HELM_STATUS_DEPLOYED,
 )
 from fixtures.process import make_mock_process
+from sek8s.services._shared import HOTKEY_HEADER, NONCE_HEADER, SIGNATURE_HEADER
 
 
 @pytest.fixture
 def helm_client(manager_app_no_auth):
     """Test client for helm endpoints (auth bypassed via manager_app_no_auth)."""
     with TestClient(manager_app_no_auth) as client:
+        yield client
+
+
+@pytest.fixture
+def helm_client_with_auth(manager_app_with_auth):
+    """Test client for helm endpoints with real auth (for 401/403 tests)."""
+    with TestClient(manager_app_with_auth) as client:
         yield client
 
 
@@ -124,3 +132,93 @@ def test_upgrade_status_404_when_no_upgrade(helm_client):
     data = response.json()
     assert "detail" in data
     assert "No upgrade" in str(data["detail"])
+
+
+def test_list_releases_401_without_auth(helm_client_with_auth):
+    """GET /helm/releases returns 401 when no auth headers provided."""
+    response = helm_client_with_auth.get("/helm/releases")
+    assert response.status_code == 401
+
+
+def test_list_releases_401_with_invalid_hotkey(helm_client_with_auth):
+    """GET /helm/releases returns 401 when hotkey not in allowed signers."""
+    import time
+
+    response = helm_client_with_auth.get(
+        "/helm/releases",
+        headers={
+            HOTKEY_HEADER: "5SomeUnknownHotkeyNotInAllowedList12345678901234567890",
+            NONCE_HEADER: str(int(time.time())),
+            SIGNATURE_HEADER: "00" * 32,
+        },
+    )
+    assert response.status_code == 401
+
+
+def test_start_upgrade_401_without_auth(helm_client_with_auth):
+    """POST /helm/upgrade returns 401 when no auth headers provided."""
+    response = helm_client_with_auth.post(
+        "/helm/upgrade",
+        json={"release": "chutes", "version": "0.2.1"},
+    )
+    assert response.status_code == 401
+
+
+def test_get_release_status_401_without_auth(helm_client_with_auth):
+    """GET /helm/releases/{name}/status returns 401 when no auth headers provided."""
+    response = helm_client_with_auth.get("/helm/releases/chutes/status")
+    assert response.status_code == 401
+
+
+def test_get_upgrade_status_401_without_auth(helm_client_with_auth):
+    """GET /helm/upgrade/status returns 401 when no auth headers provided."""
+    response = helm_client_with_auth.get("/helm/upgrade/status")
+    assert response.status_code == 401
+
+
+@pytest.fixture
+def helm_app_rate_limit_2():
+    """App with auth bypassed and rate limit 2 for rate limit testing."""
+    import os
+    import sys
+    from unittest.mock import patch
+
+    os.environ["HELM_RATE_LIMIT_PER_MINUTE"] = "2"
+
+    def _noop_authorize(*args, **kwargs):
+        def _dep():
+            return None
+
+        return _dep
+
+    try:
+        with patch("sek8s.services.util.authorize", side_effect=_noop_authorize):
+            for mod in list(sys.modules.keys()):
+                if mod in (
+                    "sek8s.services.manager",
+                    "sek8s.system_manager.status.router",
+                    "sek8s.system_manager.helm.router",
+                ):
+                    del sys.modules[mod]
+            from sek8s.services.manager import create_app
+
+            yield create_app()
+    finally:
+        os.environ.pop("HELM_RATE_LIMIT_PER_MINUTE", None)
+
+
+def test_helm_rate_limit_returns_429(
+    helm_app_rate_limit_2, mock_create_subprocess_exec
+):
+    """Helm endpoints return 429 when rate limit exceeded."""
+    mock_create_subprocess_exec.return_value = make_mock_process(
+        0, HELM_LIST_ONE_RELEASE, ""
+    )
+    with TestClient(helm_app_rate_limit_2) as client:
+        r1 = client.get("/helm/releases")
+        r2 = client.get("/helm/releases")
+        r3 = client.get("/helm/releases")
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert r3.status_code == 429
+    assert "Too many requests" in str(r3.json().get("detail", ""))
