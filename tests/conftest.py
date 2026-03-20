@@ -76,3 +76,5 @@ pytest_configure(None)
 
 from fixtures.k8s import *  # noqa
 from fixtures.http import *  # noqa
+from fixtures.process import *  # noqa
+from fixtures.helm import *  # noqa
