@@ -95,7 +95,7 @@ def build_base_cmd(
         '-name', f'{process_name},process={process_name},debug-threads=on',
         '-cpu', cpu_args,
         '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
-        '-object', f'memory-backend-ram,id=mem0,size={mem},prealloc=yes',
+        '-object', f'memory-backend-ram,id=mem0,size={mem}',
         '-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0',
         '-bios', firmware,
         '-nodefaults',
