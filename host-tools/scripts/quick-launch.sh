@@ -8,7 +8,7 @@ set -e
 # VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
 # Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
 # --------------------------------------------------------------------
-EXPECTED_BASE_SHA256="ecc1d58a4f870ff11bad5f6e309d436bd6d0a66d7a69f68cfd443ed101d81cae"
+EXPECTED_BASE_SHA256="9effb14b0e0177691f556f867bd75c07b3f088fcdc59aa8c8adc26c8c0f3de94"
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
