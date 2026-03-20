@@ -31,6 +31,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **Environment variables** go in config files (pydantic-settings, Ansible vars) — never hardcoded
 - **90% test coverage target** — if you change code, add tests for it
 - **Run `make lint-local` and `make reformat`** before committing
+- **Use Make commands for tooling** — never run `python`, `pytest`, or lint tools directly. The global Python interpreter does not have project dependencies installed. Use `make test-local`, `make lint-local`, `make reformat` instead.
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
 - **Version bumps** — `VERSION` file at root tracks the release version; update when releasing
@@ -64,6 +65,8 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 ## Development Commands
 
+**Always use Make commands** — they run tools via the project's Poetry venv. Do not invoke `python`, `pytest`, or lint tools directly; the global interpreter lacks project dependencies.
+
 ```bash
 make help              # List all targets
 make venv              # Create virtual environment (poetry install)
@@ -75,3 +78,5 @@ make test-opa-policies # Run OPA policy tests
 make build             # Build Docker images
 make ci                # Full CI: clean, build, infrastructure, lint, test, clean
 ```
+
+For manual debugging, activate the venv first (e.g. `poetry run pytest ...` or `poetry shell`).
