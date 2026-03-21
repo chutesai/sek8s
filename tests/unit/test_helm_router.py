@@ -178,12 +178,12 @@ def test_get_upgrade_status_401_without_auth(helm_client_with_auth):
 
 @pytest.fixture
 def helm_app_rate_limit_2():
-    """App with auth bypassed and rate limit 2 for rate limit testing."""
+    """App with auth bypassed and global rate limit 2/sec for rate limit testing."""
     import os
     import sys
     from unittest.mock import patch
 
-    os.environ["HELM_RATE_LIMIT_PER_MINUTE"] = "2"
+    os.environ["HELM_RATE_LIMIT_PER_SECOND"] = "2"
 
     def _noop_authorize(*args, **kwargs):
         def _dep():
@@ -204,7 +204,7 @@ def helm_app_rate_limit_2():
 
             yield create_app()
     finally:
-        os.environ.pop("HELM_RATE_LIMIT_PER_MINUTE", None)
+        os.environ.pop("HELM_RATE_LIMIT_PER_SECOND", None)
 
 
 def test_helm_rate_limit_returns_429(

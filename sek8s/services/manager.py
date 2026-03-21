@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
 
     config = SystemManagerConfig()
     app.state.helm_rate_limiter = HelmRateLimiter(
-        requests_per_minute=config.helm_rate_limit_per_minute,
+        requests_per_second=config.helm_rate_limit_per_second,
     )
 
     yield

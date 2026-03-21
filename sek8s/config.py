@@ -168,12 +168,12 @@ class SystemManagerConfig(ServerConfig):
 
     require_tls: bool = Field(default=False, alias="REQUIRE_TLS")
 
-    helm_rate_limit_per_minute: int = Field(
-        default=60,
-        alias="HELM_RATE_LIMIT_PER_MINUTE",
+    helm_rate_limit_per_second: int = Field(
+        default=30,
+        alias="HELM_RATE_LIMIT_PER_SECOND",
         ge=1,
-        le=1000,
-        description="Max helm API requests per client IP per minute (DoS mitigation)",
+        le=100,
+        description="Max helm API requests per second globally (DoS mitigation)",
     )
 
     model_config = SettingsConfigDict(

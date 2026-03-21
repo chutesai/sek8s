@@ -4,39 +4,35 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import defaultdict
-from typing import Dict, List
+from typing import List
 
 from fastapi import Depends, HTTPException, Request
 
-WINDOW_SECONDS = 60.0
+WINDOW_SECONDS = 1.0
 
 
 class HelmRateLimiter:
-    """Per-IP rate limiter for helm API (sliding window)."""
+    """Global rate limiter for helm API (sliding 1s window)."""
 
-    def __init__(self, requests_per_minute: int = 60):
-        self._limit = requests_per_minute
-        self._windows: Dict[str, List[float]] = defaultdict(list)
+    def __init__(self, requests_per_second: int = 30):
+        self._limit = requests_per_second
+        self._timestamps: List[float] = []
         self._lock = asyncio.Lock()
 
     async def check(self, request: Request) -> None:
-        """Raise 429 if client has exceeded the rate limit."""
-        client = request.client
-        ip = client.host if client else "unknown"
-
+        """Raise 429 if global rate limit exceeded."""
         async with self._lock:
             now = time.monotonic()
             cutoff = now - WINDOW_SECONDS
-            self._windows[ip] = [t for t in self._windows[ip] if t > cutoff]
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
 
-            if len(self._windows[ip]) >= self._limit:
+            if len(self._timestamps) >= self._limit:
                 raise HTTPException(
                     status_code=429,
                     detail="Too many requests; try again later",
                 )
 
-            self._windows[ip].append(now)
+            self._timestamps.append(now)
 
 
 def get_helm_rate_limiter(request: Request) -> HelmRateLimiter:
