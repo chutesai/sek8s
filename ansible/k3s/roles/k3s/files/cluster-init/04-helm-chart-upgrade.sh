@@ -7,9 +7,10 @@ LOG_FILE="/var/log/helm-chart-upgrade.log"
 MARKER_FILE="/etc/chutes/chart-versions/chutes-miner-gpu"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 HELM_REPO_URL="https://chutesai.github.io/chutes-miner"
-# k3s-cluster-init runs with ProtectHome=true and cannot read /root/.config/helm.
-# Use a path under ReadWritePaths so helm can store repo config.
+# k3s-cluster-init runs with ProtectHome=true; /root is not writable.
+# Use paths under ReadWritePaths for both config and cache (repo indices).
 export HELM_CONFIG_HOME="/var/lib/rancher/k3s/helm-config"
+export HELM_CACHE_HOME="/var/lib/rancher/k3s/helm-cache"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
