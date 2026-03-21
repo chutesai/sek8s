@@ -36,6 +36,30 @@
   ansible.builtin.debug:
     msg: "Miner GPU deployment on {{ inventory_hostname }}: {{ 'SUCCESS' if miner_deployment.rc == 0 else 'FAILED' }}"
 
+- name: Ensure chart version marker directory exists
+  ansible.builtin.file:
+    path: /etc/chutes/chart-versions
+    state: directory
+    mode: '0755'
+  when: miner_deployment.rc == 0
+
+- name: Get installed chart version
+  ansible.builtin.shell: |
+    chart_full=$(helm list -n chutes -o json --kubeconfig=/etc/rancher/k3s/k3s.yaml | jq -r '.[0].chart')
+    echo "${chart_full#chutes-miner-gpu-}"
+  args:
+    executable: /bin/bash
+  register: chart_version_output
+  changed_when: false
+  when: miner_deployment.rc == 0
+
+- name: Write chart version marker
+  ansible.builtin.copy:
+    content: "{{ chart_version_output.stdout }}"
+    dest: /etc/chutes/chart-versions/chutes-miner-gpu
+    mode: '0644'
+  when: miner_deployment.rc == 0
+
 - name: Delete dummy miner credentials
   kubernetes.core.k8s:
     name: miner-credentials

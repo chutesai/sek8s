@@ -8,6 +8,7 @@ SCRIPT_DIR="${SCRIPT_DIR:-/usr/local/bin/k3s-init-scripts}"
 MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
 LOG_FILE="${LOG_FILE:-/var/log/k3s-cluster-init.log}"
 MAX_SCRIPT_TIMEOUT="${MAX_SCRIPT_TIMEOUT:-300}"  # 5 minutes per script
+export MARKER_DIR  # Scripts may use this for run-once behavior
 
 # Ensure directories exist
 mkdir -p "$MARKER_DIR"
@@ -31,27 +32,6 @@ send_watchdog() {
     fi
 }
 
-# Function to check if a script has already completed successfully
-is_script_completed() {
-    local script_name="$1"
-    local marker_file="$MARKER_DIR/${script_name}.completed"
-    
-    if [ -f "$marker_file" ]; then
-        return 0  # Already completed
-    fi
-    
-    return 1  # Not completed
-}
-
-# Function to mark a script as completed
-mark_script_completed() {
-    local script_name="$1"
-    local marker_file="$MARKER_DIR/${script_name}.completed"
-    
-    touch "$marker_file"
-    log "Marked script $script_name as completed"
-}
-
 # Function to mark a script as failed
 mark_script_failed() {
     local script_name="$1"
@@ -71,12 +51,6 @@ run_script() {
     log "Starting execution of script: $script_name"
     notify_systemd "Running $script_name"
     
-    # Check if already completed
-    if is_script_completed "$script_name"; then
-        log "Script $script_name already completed successfully, skipping"
-        return 0
-    fi
-    
     # Remove any old failure markers
     rm -f "$MARKER_DIR/${script_name}.failed"
     
@@ -94,7 +68,6 @@ run_script() {
         local duration=$((end_time - start_time))
         
         log "Script $script_name completed successfully in ${duration}s"
-        mark_script_completed "$script_name"
         
         # Show last few lines of output for context
         if [ -s "$script_log" ]; then
