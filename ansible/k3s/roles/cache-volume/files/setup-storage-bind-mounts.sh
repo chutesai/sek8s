@@ -42,6 +42,37 @@ sync_if_empty() {
     fi
 }
 
+# Always sync static files from image to storage so new VM images refresh manifests/registries
+# without deleting the storage volume. Only overwrites these static image paths; runtime-generated
+# files (config.yaml, k3s.yaml) are left untouched.
+always_sync_manifests() {
+    local src="/var/lib/rancher/k3s/server/manifests"
+    local dest="${STORAGE_BASE}/k3s/server/manifests"
+    if [[ -d "$src" ]]; then
+        mkdir -p "$dest"
+        if rsync -a --delete "$src/" "$dest/"; then
+            log "Synced manifests: $src -> $dest"
+        else
+            log "ERROR: Failed to sync manifests"
+            exit 1
+        fi
+    fi
+}
+
+always_sync_registries() {
+    local src="/etc/rancher/k3s/registries.yaml"
+    local dest="${STORAGE_BASE}/rancher-config/registries.yaml"
+    if [[ -f "$src" ]]; then
+        mkdir -p "${STORAGE_BASE}/rancher-config"
+        if cp -a "$src" "$dest"; then
+            log "Synced registries.yaml: $src -> $dest"
+        else
+            log "ERROR: Failed to sync registries.yaml"
+            exit 1
+        fi
+    fi
+}
+
 # Create a bind mount from storage to target, skipping if already mounted correctly.
 # Args: $1 = storage path (source), $2 = target mount path
 create_bind_mount() {
@@ -86,9 +117,16 @@ MOUNTS=(
 
 for entry in "${MOUNTS[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
-    storage_path="${STORAGE_BASE}/${storage_subdir}"
-    sync_if_empty "$root_path" "$storage_path"
-    create_bind_mount "$storage_path" "$root_path"
+    sync_if_empty "$root_path" "${STORAGE_BASE}/${storage_subdir}"
+done
+
+# Refresh static image files on every boot so new VM images update manifests/registries
+always_sync_manifests
+always_sync_registries
+
+for entry in "${MOUNTS[@]}"; do
+    read -r storage_subdir root_path <<< "$entry"
+    create_bind_mount "${STORAGE_BASE}/${storage_subdir}" "$root_path"
 done
 
 # --- Post-mount fixups for specific volumes ---
