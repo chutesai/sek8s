@@ -24,6 +24,14 @@ else
     installed_version="${chart_full#chutes-miner-gpu-}"
 fi
 
+# No existing release: cannot upgrade. --reuse-values requires a release to reuse.
+# Per the build process, the release is always pre-installed before this script runs.
+# Missing release indicates a broken or unexpected cluster state.
+if [ -z "$installed_version" ]; then
+    log "ERROR: No chutes release found in namespace chutes. Refusing to run helm upgrade --install with --reuse-values (nothing to reuse). Check that setup-storage-bind-mounts ran and the cluster state was synced."
+    exit 1
+fi
+
 # Versions match - no action needed
 if [ "$installed_version" = "$expected_version" ]; then
     log "Versions match (installed: $installed_version), no upgrade needed"

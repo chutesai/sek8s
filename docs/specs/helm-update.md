@@ -70,6 +70,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 1. **New file: `ansible/k3s/roles/k3s/files/cluster-init/04-helm-chart-upgrade.sh`**
    - Reads expected version from `/etc/chutes/chart-versions/chutes-miner-gpu`
    - Queries installed version via `helm list -n chutes -o json | jq`
+   - If no release found: exits 1 with error (refuses to run upgrade — `--reuse-values` with no prior release would do a fresh install with chart defaults)
    - If versions differ: runs `helm repo update` then `helm upgrade --install chutes chutes/chutes-miner-gpu --namespace chutes --version <marker_version> --reuse-values --kubeconfig=/etc/rancher/k3s/k3s.yaml`
    - Logs all actions to `/var/log/helm-chart-upgrade.log`
    - Exits 0 on success or when versions already match
@@ -97,6 +98,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - The marker file ends up on the persistent storage volume instead of the root FS (defeats the purpose).
 - The upgrade blows away runtime values (miner credentials, custom values) — must use `--reuse-values`.
 - The script blocks boot indefinitely (must respect timeout, must not retry forever).
+- **No existing release**: If `helm list -n chutes` returns no release, the script exits 1. Running `helm upgrade --install --reuse-values` with no prior release would perform a fresh install using chart defaults (nothing to reuse), which could overwrite or miss runtime configuration. The build process guarantees the release exists; missing release indicates broken cluster state (e.g. setup-storage-bind-mounts did not run).
 
 ---
 
