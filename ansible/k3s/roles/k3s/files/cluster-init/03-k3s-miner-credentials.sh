@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
+MARKER_FILE="${MARKER_DIR}/03-k3s-miner-credentials.sh.completed"
+
+# Run-once: skip if already completed
+if [ -f "$MARKER_FILE" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Already completed, skipping" | tee -a /var/log/first-boot-miner-credentials.log
+    exit 0
+fi
+
 # Log function
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/first-boot-miner-credentials.log
@@ -24,4 +33,5 @@ kubectl create secret generic miner-credentials \
   --from-literal=ss58=$MINER_SS58 \
   -n attestation-system
 
+touch "$MARKER_FILE"
 log "Successfully created miner credentials."

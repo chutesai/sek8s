@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
+MARKER_FILE="${MARKER_DIR}/02-k3s-label.sh.completed"
+
+# Run-once: skip if already completed
+if [ -f "$MARKER_FILE" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Already completed, skipping" | tee -a /var/log/first-boot-k3s-label.log
+    exit 0
+fi
+
 # Configuration
 PUBLIC_IP_TIMEOUT=5
 INCLUDE_PUBLIC_IP="true"
@@ -97,4 +106,5 @@ timeout 60 bash -c "until kubectl get nodes \"$NODE_NAME\" >/dev/null 2>&1; do s
 apply_and_verify_label "$NODE_NAME" "chutes/external-ip" "$NODE_IP" || exit 1
 apply_and_verify_label "$NODE_NAME" "chutes/tee" "true" || exit 1
 
+touch "$MARKER_FILE"
 log "k3s node labeling completed."

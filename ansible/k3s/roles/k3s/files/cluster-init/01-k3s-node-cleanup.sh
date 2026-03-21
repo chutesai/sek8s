@@ -4,6 +4,15 @@
 # Assumes build nodes were pre-drained before image creation
 set -e
 
+MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
+MARKER_FILE="${MARKER_DIR}/01-k3s-node-cleanup.sh.completed"
+
+# Run-once: skip if already completed
+if [ -f "$MARKER_FILE" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Already completed, skipping" | tee -a /var/log/k3s-node-cleanup.log
+    exit 0
+fi
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-node-cleanup.log
 }
@@ -167,6 +176,6 @@ else
 fi
 
 # Create completion marker
-touch /var/lib/rancher/k3s/.cleanup-completed
+touch "$MARKER_FILE"
 
 log "k3s node cleanup completed successfully"
