@@ -31,7 +31,7 @@ The boot-time cluster init system (`k3s-cluster-init.service`) runs numbered scr
 - **Only upgrade `chutes-miner-gpu` initially**: The gpu-operator and prometheus charts are pinned to stable versions and change rarely. This feature targets `chutes-miner-gpu` only. The pattern is extensible to other charts by adding additional marker files under `/etc/chutes/chart-versions/`.
 - **Ansible writes the marker at build time**: The `chutes-gpu` role records the installed chart version into the marker file after a successful `helm upgrade --install`. This ensures the marker always reflects what was actually installed in the image.
 - **Chart version is pinned for reproducibility**: `chutes_chart_version` in `chutes-gpu/defaults/main.yml` is pinned (e.g. `"0.1.0"`) rather than `null`. This makes builds reproducible and ensures the marker file has a well-defined value from one release to the next.
-- **Helm repo exists at build time**: Ansible adds the `chutes` helm repo during the build phase. The boot script only runs `helm repo update` to refresh the index; no `helm repo add` is needed.
+- **Helm repo must be added at runtime**: The `k3s-cluster-init` service runs with `ProtectHome=true`, so it cannot read `/root/.config/helm` where Ansible added the repo at build time. The boot script sets `HELM_CONFIG_HOME=/var/lib/rancher/k3s/helm-config` (under the service's ReadWritePaths) and runs `helm repo add chutes <url>` before `helm repo update`.
 
 ---
 
@@ -71,7 +71,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
    - Reads expected version from `/etc/chutes/chart-versions/chutes-miner-gpu`
    - Queries installed version via `helm list -n chutes -o json | jq`
    - If no release found: exits 1 with error (refuses to run upgrade — `--reuse-values` with no prior release would do a fresh install with chart defaults)
-   - If versions differ: runs `helm repo update` then `helm upgrade --install chutes chutes/chutes-miner-gpu --namespace chutes --version <marker_version> --reuse-values --kubeconfig=/etc/rancher/k3s/k3s.yaml`
+   - If versions differ: sets `HELM_CONFIG_HOME=/var/lib/rancher/k3s/helm-config`, runs `helm repo add chutes <url>`, `helm repo update`, then `helm upgrade --install`
    - Logs all actions to `/var/log/helm-chart-upgrade.log`
    - Exits 0 on success or when versions already match
 
@@ -86,7 +86,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
    - Do NOT clear `/etc/chutes/chart-versions/` during cleanup (it lives on root FS, not persistent storage). Verify no existing cleanup task removes `/etc/chutes/`.
    - (No changes needed — existing cleanup does not touch `/etc/chutes/`.)
 
-5. **Helm repo**: Ansible adds the `chutes` repo at build time. The boot script runs `helm repo update` before upgrade to refresh the chart index.
+5. **Helm repo**: The boot script adds the `chutes` repo at runtime (the service cannot read build-time helm config due to `ProtectHome=true`), using `HELM_CONFIG_HOME=/var/lib/rancher/k3s/helm-config`, then runs `helm repo update`.
 
 ---
 

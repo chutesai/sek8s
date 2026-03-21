@@ -6,6 +6,10 @@ set -euo pipefail
 LOG_FILE="/var/log/helm-chart-upgrade.log"
 MARKER_FILE="/etc/chutes/chart-versions/chutes-miner-gpu"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+HELM_REPO_URL="https://chutesai.github.io/chutes-miner"
+# k3s-cluster-init runs with ProtectHome=true and cannot read /root/.config/helm.
+# Use a path under ReadWritePaths so helm can store repo config.
+export HELM_CONFIG_HOME="/var/lib/rancher/k3s/helm-config"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -40,6 +44,9 @@ fi
 
 log "Version mismatch: installed=$installed_version expected=$expected_version, performing upgrade"
 
+# k3s-cluster-init runs with ProtectHome=true and cannot read /root/.config/helm where
+# Ansible added the repo at build time. HELM_CONFIG_HOME points to a writable path.
+helm repo add chutes "$HELM_REPO_URL"
 helm repo update
 
 log "Running helm upgrade --install..."
