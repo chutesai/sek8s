@@ -1,7 +1,7 @@
 # Feature Spec: Helm Chart Auto-Upgrade on VM Boot
 
 **Date**: 2026-03-21  
-**Status**: draft
+**Status**: implemented
 
 ---
 
@@ -9,7 +9,7 @@
 
 Currently, helm charts (chutes-miner-gpu, gpu-operator, monitoring) are installed during the Ansible image build phase via `chutes-gpu` role tasks. The k3s cluster state (including installed helm releases) is persisted on the storage volume at `/var/lib/rancher/k3s`. When a new VM image ships with updated charts, miners must delete their storage volume to pick up the changes — forcing a full cluster re-initialization.
 
-The boot-time cluster init system (`k3s-cluster-init.service`) already runs numbered scripts from `/usr/local/bin/k3s-init-scripts/` with marker-based idempotency via `/var/lib/rancher/k3s/init-markers/`. This feature adds a new init script that compares a baked-in chart version marker against the version deployed in the cluster and runs `helm repo update` + `helm upgrade` when they differ.
+The boot-time cluster init system (`k3s-cluster-init.service`) runs numbered scripts from `/usr/local/bin/k3s-init-scripts/`. Scripts handle their own idempotency (run-once scripts use markers in `/var/lib/rancher/k3s/init-markers/`; run-every-boot scripts skip markers). This feature adds a new init script that compares a baked-in chart version marker against the version deployed in the cluster and runs `helm repo update` + `helm upgrade` when they differ.
 
 - **Packages affected**: `ansible/k3s/roles/chutes-gpu`, `ansible/k3s/roles/k3s`, `ansible/k3s/roles/cleanup`
 - **Key files**:
@@ -30,6 +30,7 @@ The boot-time cluster init system (`k3s-cluster-init.service`) already runs numb
 - **Script ordering: `04-helm-chart-upgrade.sh`**: Runs after miner credentials (03) are created, since the chutes-miner-gpu chart may depend on the `miner-credentials` secret existing in the `chutes` namespace.
 - **Only upgrade `chutes-miner-gpu` initially**: The gpu-operator and prometheus charts are pinned to stable versions and change rarely. This feature targets `chutes-miner-gpu` only. The pattern is extensible to other charts by adding additional marker files under `/etc/chutes/chart-versions/`.
 - **Ansible writes the marker at build time**: The `chutes-gpu` role records the installed chart version into the marker file after a successful `helm upgrade --install`. This ensures the marker always reflects what was actually installed in the image.
+- **Helm repo exists at build time**: Ansible adds the `chutes` helm repo during the build phase. The boot script only runs `helm repo update` to refresh the index; no `helm repo add` is needed.
 
 ---
 
@@ -56,7 +57,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - The init script must be a standalone bash script following `set -euo pipefail` conventions, matching the pattern of existing `cluster-init/*.sh` scripts.
 - Must not use a `.completed` marker — the script re-evaluates version match on every boot.
 - The marker file path must be on the root filesystem (not under `/var/lib/rancher/k3s/` which is bind-mounted from persistent storage).
-- Must not break existing miners who have no marker file yet (first image with this feature). If the marker file is missing, the script should log a warning and exit 0 (no-op).
+- The marker file and this script are deployed together in the same image; the marker is always present when the script runs.
 - On a fresh storage volume, `setup-storage-bind-mounts.sh` syncs the pre-installed k3s cluster state (including helm releases) from the root FS before k3s starts. The helm release will always exist by the time this script runs. The boot ordering (`setup-storage-bind-mounts.service` → `k3s.service` → `k3s-cluster-init.service`) guarantees this.
 - The `helm upgrade --install` command must preserve the `--set-string minerCredentials.*=REPLACE_ME` and values-file pattern from `setup_chutes.yml` — the real credentials come from the k8s secret, not helm values.
 - Script timeout: must complete within the existing `MAX_SCRIPT_TIMEOUT` (300s).
@@ -81,9 +82,9 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 
 4. **Modified: `ansible/k3s/roles/cleanup/tasks/cleanup-k3s.yml`**
    - Do NOT clear `/etc/chutes/chart-versions/` during cleanup (it lives on root FS, not persistent storage). Verify no existing cleanup task removes `/etc/chutes/`.
+   - (No changes needed — existing cleanup does not touch `/etc/chutes/`.)
 
-5. **New Ansible task in `chutes-gpu` role**: Ensure the helm repo (`chutes`) and repo URL are also written to a persistent location or re-added by the boot script, since `helm repo add` state may live on the storage volume.
-   - The boot script should run `helm repo add chutes https://chutesai.github.io/chutes-miner && helm repo update` before upgrade.
+5. **Helm repo**: Ansible adds the `chutes` repo at build time. The boot script runs `helm repo update` before upgrade to refresh the chart index.
 
 ---
 
@@ -95,7 +96,6 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - The marker file ends up on the persistent storage volume instead of the root FS (defeats the purpose).
 - The upgrade blows away runtime values (miner credentials, custom values) — must use `--reuse-values`.
 - The script blocks boot indefinitely (must respect timeout, must not retry forever).
-- Missing marker file causes a crash instead of a clean no-op skip.
 
 ---
 
@@ -104,5 +104,5 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - **First image with this feature**: Existing miners with old storage volumes will boot, the init script will find the marker file (new root FS) and detect a version mismatch against their persisted cluster state, triggering an automatic upgrade. No manual intervention needed.
 - **Miners with no storage volume**: Normal first-boot flow. Charts are installed at build time, marker matches, no upgrade triggered.
 - **`chutes_chart_version` Ansible var**: Continues to control which version is installed at build time. The marker file reflects whatever version was actually installed. If `null` (latest), the marker captures the resolved version at build time.
-- **Backward compatibility**: The `04-helm-chart-upgrade.sh` script is a no-op if the marker file doesn't exist, so rolling back to an older image without the marker is safe.
+- **Deployment**: The script and marker file are baked into the same image; both are deployed together. Rolling back to an older image removes both.
 - **Future extension**: Additional charts can be added by placing version files under `/etc/chutes/chart-versions/<release-name>` and extending the script (or adding per-chart scripts).
