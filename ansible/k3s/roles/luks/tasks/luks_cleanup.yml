@@ -1,0 +1,42 @@
+---
+# Cleanup: unmount, close LUKS, disconnect nbd. Runs on success or failure (via block/always).
+# All tasks use ignore_errors so we can clean up from any partial state.
+- name: Unmount all possible partitions if mounted
+  ansible.builtin.mount:
+    path: "{{ item }}"
+    state: unmounted
+  ignore_errors: true
+  loop:
+    - "{{ newroot_mount }}/sys/firmware/efi/efivars"
+    - "{{ newroot_mount }}/proc"
+    - "{{ newroot_mount }}/sys"
+    - "{{ newroot_mount }}/dev"
+    - "{{ newroot_mount }}/run"
+    - "{{ newroot_mount }}/boot/efi"
+    - "{{ newroot_mount }}/boot"
+    - "{{ newroot_mount }}"
+    - "{{ root_mount }}/boot/efi"
+    - "{{ root_mount }}/boot"
+    - "{{ root_mount }}"
+
+- name: Close LUKS container if open
+  community.crypto.luks_device:
+    name: "{{ encrypted_root_name }}"
+    state: closed
+  ignore_errors: true
+
+- name: Disconnect nbd device
+  ansible.builtin.command: qemu-nbd --disconnect {{ nbd_device }}
+  register: _nbd_disconnect_result
+  changed_when: _nbd_disconnect_result.rc == 0
+  ignore_errors: true
+
+- name: Clean up temporary directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  ignore_errors: true
+  loop:
+    - "{{ root_mount }}"
+    - "{{ newroot_mount }}"
+    - "{{ backup_dir }}"
