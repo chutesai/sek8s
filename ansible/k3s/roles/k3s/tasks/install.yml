@@ -27,7 +27,7 @@
       ansible.builtin.command:
         argv:
           - /usr/local/bin/k3s-install.sh
-          - --write-kubeconfig-mode 644
+          - --write-kubeconfig-mode 600
           - --disable servicelb
           - --disable traefik
       environment:

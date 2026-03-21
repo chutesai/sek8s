@@ -117,7 +117,7 @@ done
 
 # Continue with the rest of the config
 cat >> /etc/rancher/k3s/config.yaml << EOF
-write-kubeconfig-mode: "0644"
+write-kubeconfig-mode: "0600"
 disable:
   - traefik
   - servicelb

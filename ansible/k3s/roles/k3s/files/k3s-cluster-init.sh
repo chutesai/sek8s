@@ -169,7 +169,14 @@ main() {
         notify_systemd "ERROR: k3s not ready"
         exit 1
     fi
-    
+
+    # Ensure kubeconfig has expected permissions (0600 avoids helm/kubectl "insecure" warnings)
+    local kubeconfig="/etc/rancher/k3s/k3s.yaml"
+    if [ -f "$kubeconfig" ]; then
+        chmod 0600 "$kubeconfig"
+        log "Ensured $kubeconfig has mode 0600"
+    fi
+
     # Get list of scripts to run
     local scripts
     if ! scripts=$(get_script_list); then
