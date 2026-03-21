@@ -43,8 +43,7 @@ sync_if_empty() {
 }
 
 # Always sync static files from image to storage so new VM images refresh manifests/registries
-# without deleting the storage volume. Only overwrites these static image paths; runtime-generated
-# files (config.yaml, k3s.yaml) are left untouched.
+# without deleting the storage volume.
 always_sync_manifests() {
     local src="/var/lib/rancher/k3s/server/manifests"
     local dest="${STORAGE_BASE}/k3s/server/manifests"
@@ -54,6 +53,21 @@ always_sync_manifests() {
             log "Synced manifests: $src -> $dest"
         else
             log "ERROR: Failed to sync manifests"
+            exit 1
+        fi
+    fi
+}
+
+# Always sync admission controller certs so manifest caBundle and cert stay paired after image upgrade.
+always_sync_admission_certs() {
+    local src="/etc/admission-controller/certs"
+    local dest="${STORAGE_BASE}/admission-controller-certs"
+    if [[ -d "$src" ]]; then
+        mkdir -p "$dest"
+        if rsync -a --delete "$src/" "$dest/"; then
+            log "Synced admission certs: $src -> $dest"
+        else
+            log "ERROR: Failed to sync admission certs"
             exit 1
         fi
     fi
@@ -120,9 +134,10 @@ for entry in "${MOUNTS[@]}"; do
     sync_if_empty "$root_path" "${STORAGE_BASE}/${storage_subdir}"
 done
 
-# Refresh static image files on every boot so new VM images update manifests/registries
+# Refresh static image files on every boot so new VM images update manifests/registries/certs.
 always_sync_manifests
 always_sync_registries
+always_sync_admission_certs
 
 for entry in "${MOUNTS[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
