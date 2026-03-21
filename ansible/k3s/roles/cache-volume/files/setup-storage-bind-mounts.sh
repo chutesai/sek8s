@@ -58,7 +58,7 @@ always_sync_manifests() {
     fi
 }
 
-# Always sync admission controller certs so manifest caBundle and cert stay paired after image upgrade.
+# Always sync admission controller certs so manifest caBundle and cert stay paired.
 always_sync_admission_certs() {
     local src="/etc/admission-controller/certs"
     local dest="${STORAGE_BASE}/admission-controller-certs"
@@ -69,6 +69,31 @@ always_sync_admission_certs() {
         else
             log "ERROR: Failed to sync admission certs"
             exit 1
+        fi
+    fi
+}
+
+# Evict stale admission webhook from kine so k3s re-creates it from the manifest on disk.
+# K8s static manifests are not forcefully resynced; some fields (e.g. caBundle) cannot be
+# updated in place. After we sync manifest+certs from the image, we delete the webhook so
+# k3s creates it fresh with the correct caBundle. Expand to other resources as needed.
+evict_stale_admission_webhook() {
+    local db="${STORAGE_BASE}/k3s/server/db/state.db"
+    if [[ -f "$db" ]]; then
+        if python3 - "$db" <<'PYEOF'
+import sqlite3
+import sys
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+conn.execute("DELETE FROM kine WHERE name = ?",
+    ('/registry/validatingwebhookconfigurations/admission-controller-webhook',))
+conn.commit()
+conn.close()
+PYEOF
+        then
+            log "Evicted stale admission webhook from kine (k3s will re-create from manifest)"
+        else
+            log "WARNING: Failed to evict admission webhook from kine"
         fi
     fi
 }
@@ -138,6 +163,9 @@ done
 always_sync_manifests
 always_sync_registries
 always_sync_admission_certs
+
+# Evict stale admission webhook so k3s re-creates it from the synced manifest.
+evict_stale_admission_webhook
 
 for entry in "${MOUNTS[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
