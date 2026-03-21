@@ -1804,6 +1804,401 @@
           }
         }
       }
+    },
+    "/helm/upgrade": {
+      "post": {
+        "tags": [
+          "helm"
+        ],
+        "summary": "Start helm upgrade",
+        "description": "Start helm upgrade for a release. Miner or validator.",
+        "operationId": "start_upgrade_helm_upgrade_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upgrade started, in progress, or already up to date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeStartResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "Helm helper failed"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/helm/releases": {
+      "get": {
+        "tags": [
+          "helm"
+        ],
+        "summary": "List helm releases",
+        "description": "List all helm releases. Miner or validator.",
+        "operationId": "list_releases_helm_releases_get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of helm releases",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "Helm list failed"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/helm/releases/{name}/status": {
+      "get": {
+        "tags": [
+          "helm"
+        ],
+        "summary": "Get release status",
+        "description": "Get detailed status for a release. Miner or validator.",
+        "operationId": "get_release_status_helm_releases__name__status_get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release status details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "502": {
+            "description": "Helm status failed"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/helm/upgrade/status": {
+      "get": {
+        "tags": [
+          "helm"
+        ],
+        "summary": "Get upgrade operation status",
+        "description": "Get async upgrade operation status. Miner or validator.",
+        "operationId": "get_upgrade_status_helm_upgrade_status_get",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upgrade status (in progress, completed, or failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "No upgrade in progress"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2660,6 +3055,198 @@
         "title": "PullStatusResponse",
         "description": "Response for GET /images/pull/status."
       },
+      "ReleaseListEntry": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Release name"
+          },
+          "namespace": {
+            "type": "string",
+            "title": "Namespace",
+            "description": "Namespace"
+          },
+          "chart": {
+            "type": "string",
+            "title": "Chart",
+            "description": "Chart name and version (e.g. chutes-miner-gpu-0.2.1)"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Release status (e.g. deployed)"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "description": "Revision number"
+          },
+          "updated": {
+            "type": "string",
+            "title": "Updated",
+            "description": "Last updated timestamp"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version",
+            "description": "App version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "namespace",
+          "chart",
+          "status",
+          "revision",
+          "updated"
+        ],
+        "title": "ReleaseListEntry",
+        "description": "Single release in the list response."
+      },
+      "ReleaseListResponse": {
+        "properties": {
+          "releases": {
+            "items": {
+              "$ref": "#/components/schemas/ReleaseListEntry"
+            },
+            "type": "array",
+            "title": "Releases",
+            "description": "List of helm releases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "releases"
+        ],
+        "title": "ReleaseListResponse",
+        "description": "Response for GET /helm/releases."
+      },
+      "ReleaseStatusInfo": {
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "Release status"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision number"
+          },
+          "chart": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart",
+            "description": "Chart name and version"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version",
+            "description": "App version"
+          }
+        },
+        "type": "object",
+        "title": "ReleaseStatusInfo",
+        "description": "Structured release status from helm status (nested under info)."
+      },
+      "ReleaseStatusResponse": {
+        "properties": {
+          "info": {
+            "$ref": "#/components/schemas/ReleaseStatusInfo",
+            "description": "Structured release status from helm"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status",
+            "description": "Release status"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision",
+            "description": "Revision number"
+          },
+          "chart": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart",
+            "description": "Chart name and version"
+          },
+          "app_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Version",
+            "description": "App version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "info"
+        ],
+        "title": "ReleaseStatusResponse",
+        "description": "Response for GET /helm/releases/{name}/status."
+      },
       "ServiceInfo": {
         "properties": {
           "id": {
@@ -2905,6 +3492,105 @@
           "timestamp"
         ],
         "title": "ShutdownResponse"
+      },
+      "UpgradeRequest": {
+        "properties": {
+          "release": {
+            "type": "string",
+            "title": "Release",
+            "description": "Release name (must be in allowlist, e.g. chutes)"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version",
+            "description": "Chart version (optional; defaults to latest from repo)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release"
+        ],
+        "title": "UpgradeRequest",
+        "description": "Request body for starting a helm upgrade."
+      },
+      "UpgradeStartResponse": {
+        "properties": {
+          "release": {
+            "type": "string",
+            "title": "Release",
+            "description": "Release name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UpgradeStartStatus",
+            "description": "One of: started, in_progress, up_to_date"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release",
+          "status"
+        ],
+        "title": "UpgradeStartResponse",
+        "description": "Response for POST /helm/upgrade."
+      },
+      "UpgradeStartStatus": {
+        "type": "string",
+        "enum": [
+          "started",
+          "in_progress",
+          "up_to_date"
+        ],
+        "title": "UpgradeStartStatus",
+        "description": "Result of starting a helm upgrade (POST /helm/upgrade)."
+      },
+      "UpgradeStatusEnum": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed",
+          "failed"
+        ],
+        "title": "UpgradeStatusEnum",
+        "description": "Status for an async helm upgrade operation."
+      },
+      "UpgradeStatusResponse": {
+        "properties": {
+          "release": {
+            "type": "string",
+            "title": "Release",
+            "description": "Release name"
+          },
+          "status": {
+            "$ref": "#/components/schemas/UpgradeStatusEnum",
+            "description": "One of: in_progress, completed, failed"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error",
+            "description": "Error message when status is failed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "release",
+          "status"
+        ],
+        "title": "UpgradeStatusResponse",
+        "description": "Response for GET /helm/upgrade/status."
       },
       "ValidationError": {
         "properties": {
