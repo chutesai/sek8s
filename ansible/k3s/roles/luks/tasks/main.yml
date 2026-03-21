@@ -1,4 +1,13 @@
 ---
+# Fail fast if passphrase is missing; avoid wiping the disk then failing at LUKS create.
+- name: Validate LUKS passphrase is set
+  ansible.builtin.assert:
+    that:
+      - luks_passphrase is defined
+      - luks_passphrase | length > 0
+    fail_msg: "LUKS_PASSPHRASE environment variable must be set and non-empty for disk encryption. Export it before running the playbook."
+  no_log: true
+
 - name: Check if LUKS container is open
   ansible.builtin.stat:
     path: "/dev/mapper/{{ encrypted_root_name }}"
@@ -197,14 +206,6 @@
     - "{{ root_mount }}"
   when: not backup_stat.stat.exists
 
-- name: Create LUKS keyfile
-  ansible.builtin.copy:
-    content: "{{ luks_passphrase | mandatory }}"
-    dest: /tmp/luks_keyfile
-    mode: '0600'
-    owner: root
-    group: root
-
 - name: Wipe existing superblock
   ansible.builtin.command: wipefs -a {{ root_partition }}
   register: wipefs_result
@@ -398,8 +399,3 @@
     - "{{ root_mount }}"
     - "{{ newroot_mount }}"
     - "{{ backup_dir }}"
-
-- name: Clean up temporary files
-  ansible.builtin.file:
-    path: "/tmp/luks_keyfile"
-    state: absent
