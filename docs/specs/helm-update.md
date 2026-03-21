@@ -30,6 +30,7 @@ The boot-time cluster init system (`k3s-cluster-init.service`) runs numbered scr
 - **Script ordering: `04-helm-chart-upgrade.sh`**: Runs after miner credentials (03) are created, since the chutes-miner-gpu chart may depend on the `miner-credentials` secret existing in the `chutes` namespace.
 - **Only upgrade `chutes-miner-gpu` initially**: The gpu-operator and prometheus charts are pinned to stable versions and change rarely. This feature targets `chutes-miner-gpu` only. The pattern is extensible to other charts by adding additional marker files under `/etc/chutes/chart-versions/`.
 - **Ansible writes the marker at build time**: The `chutes-gpu` role records the installed chart version into the marker file after a successful `helm upgrade --install`. This ensures the marker always reflects what was actually installed in the image.
+- **Chart version is pinned for reproducibility**: `chutes_chart_version` in `chutes-gpu/defaults/main.yml` is pinned (e.g. `"0.1.0"`) rather than `null`. This makes builds reproducible and ensures the marker file has a well-defined value from one release to the next.
 - **Helm repo exists at build time**: Ansible adds the `chutes` helm repo during the build phase. The boot script only runs `helm repo update` to refresh the index; no `helm repo add` is needed.
 
 ---
@@ -103,6 +104,6 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 
 - **First image with this feature**: Existing miners with old storage volumes will boot, the init script will find the marker file (new root FS) and detect a version mismatch against their persisted cluster state, triggering an automatic upgrade. No manual intervention needed.
 - **Miners with no storage volume**: Normal first-boot flow. Charts are installed at build time, marker matches, no upgrade triggered.
-- **`chutes_chart_version` Ansible var**: Continues to control which version is installed at build time. The marker file reflects whatever version was actually installed. If `null` (latest), the marker captures the resolved version at build time.
+- **`chutes_chart_version` Ansible var**: Pinned in defaults for reproducible builds. Override in group_vars for debug images (e.g. `0.1.0-dev.1`). The marker file reflects whatever version was actually installed.
 - **Deployment**: The script and marker file are baked into the same image; both are deployed together. Rolling back to an older image removes both.
 - **Future extension**: Additional charts can be added by placing version files under `/etc/chutes/chart-versions/<release-name>` and extending the script (or adding per-chart scripts).
