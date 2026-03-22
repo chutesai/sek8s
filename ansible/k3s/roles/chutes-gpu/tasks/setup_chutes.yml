@@ -1,11 +1,36 @@
 ---
-- name: Add Chutes Helm repository
-  kubernetes.core.helm_repository:
-    name: chutes
-    repo_url: https://chutesai.github.io/chutes-miner
+- name: Ensure /etc/chutes exists
+  ansible.builtin.file:
+    path: /etc/chutes
+    state: directory
+    mode: '0755'
 
-- name: Update Helm repositories
-  shell: helm repo update
+- name: Install Helm PGP keyring for chart provenance verification
+  ansible.builtin.copy:
+    src: "{{ helm_chart_public_key_path }}"
+    dest: /etc/chutes/helm-pubkey.gpg
+    mode: '0644'
+
+- name: Create Helm config directories for build-time and boot-time use
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ helm_config_home }}"
+    - "{{ helm_cache_home }}"
+    - "{{ helm_data_home }}"
+
+- name: Add Chutes Helm repository to pre-configured Helm paths
+  ansible.builtin.shell: |
+    helm repo add chutes {{ chutes_helm_repo_url | quote }}
+    helm repo update
+  environment:
+    HELM_CONFIG_HOME: "{{ helm_config_home }}"
+    HELM_CACHE_HOME: "{{ helm_cache_home }}"
+    HELM_DATA_HOME: "{{ helm_data_home }}"
+  args:
+    executable: /bin/bash
 
 - name: Generate Chutes values file
   ansible.builtin.template:
@@ -22,12 +47,17 @@
       {% if chutes_chart_version is defined and chutes_chart_version %}
       --version {{ chutes_chart_version | quote }} \
       {% endif %}
+      --verify --keyring /etc/chutes/helm-pubkey.gpg \
       --set-string minerCredentials.ss58Address="REPLACE_ME" \
       --set-string minerCredentials.secretSeed="REPLACE_ME" \
       {% if (chutes_gpu_values | default({}) | length) > 0 %}
       -f /tmp/chutes-values.yaml \
       {% endif %}
       --kubeconfig=/etc/rancher/k3s/k3s.yaml
+  environment:
+    HELM_CONFIG_HOME: "{{ helm_config_home }}"
+    HELM_CACHE_HOME: "{{ helm_cache_home }}"
+    HELM_DATA_HOME: "{{ helm_data_home }}"
   register: miner_deployment
   changed_when: miner_deployment.rc == 0
   no_log: true

@@ -6,6 +6,18 @@ monitoring_namespace: monitoring
 # Override in group_vars or host_vars for debug images (e.g. 0.1.0-dev.1).
 chutes_chart_version: "0.2.1"
 
+# Path to Helm chart signing PGP public key (build-time, like cosign_public_key_path).
+# Required. Override in inventory or group_vars.
+helm_chart_public_key_path: "~/.chutes/helm-pubkey.gpg"
+
+# Helm repo URL for chutes-miner charts (used at build time and inherited by boot script).
+chutes_helm_repo_url: "https://chutesai.github.io/chutes-miner"
+
+# Helm paths; must match k3s role defaults for cluster-init service.
+helm_config_home: /var/lib/rancher/k3s/helm-config
+helm_cache_home: /var/lib/rancher/k3s/helm-cache
+helm_data_home: /var/lib/rancher/k3s/helm-data
+
 # Additional values for the chutes-miner-gpu Helm chart.
 # Merged into a values file and passed with -f. Override in group_vars or host_vars.
 # Structure matches the chart's values.yaml (e.g. validators, image overrides, etc.).

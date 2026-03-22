@@ -22,8 +22,8 @@
     backup: yes
 
 - name: Install k3s cluster initialization service
-  copy:
-    src: k3s-cluster-init.service
+  ansible.builtin.template:
+    src: k3s-cluster-init.service.j2
     dest: /etc/systemd/system/k3s-cluster-init.service
     owner: root
     group: root

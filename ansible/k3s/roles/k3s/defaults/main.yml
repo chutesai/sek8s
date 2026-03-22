@@ -1,6 +1,10 @@
 ---
 k3s_version: v1.33.7+k3s1
 k3s_server_location: /var/lib/rancher/k3s
+# Helm paths for cluster-init (must match setup_chutes.yml; under ReadWritePaths)
+helm_config_home: /var/lib/rancher/k3s/helm-config
+helm_cache_home: /var/lib/rancher/k3s/helm-cache
+helm_data_home: /var/lib/rancher/k3s/helm-data
 systemd_dir: /etc/systemd/system # noqa var-naming[no-role-prefix]
 k3s_api_port: 6443
 user_kubectl: true # noqa var-naming[no-role-prefix]

@@ -1,17 +1,14 @@
 #!/bin/bash
 # 04-helm-chart-upgrade.sh: Upgrade chutes-miner-gpu helm release when image version differs from cluster.
 # Runs every boot (no .completed marker). Exits early when versions match.
+# Helm repo and HELM_*_HOME are pre-configured at build time by Ansible; this script inherits them.
 set -euo pipefail
 
 LOG_FILE="/var/log/helm-chart-upgrade.log"
 MARKER_FILE="/etc/chutes/chart-versions/chutes-miner-gpu"
+KEYRING_FILE="/etc/chutes/helm-pubkey.gpg"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-HELM_REPO_URL="https://chutesai.github.io/chutes-miner"
-# k3s-cluster-init runs with ProtectHome=true; /root is not writable.
-# Use paths under ReadWritePaths so helm never touches $HOME.
-export HELM_CONFIG_HOME="/var/lib/rancher/k3s/helm-config"
-export HELM_CACHE_HOME="/var/lib/rancher/k3s/helm-cache"
-export HELM_DATA_HOME="/var/lib/rancher/k3s/helm-data"
+# HELM_*_HOME are set by k3s-cluster-init.service; no fallbacks for determinism
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -72,16 +69,21 @@ if [ $admission_n -ge $admission_max ]; then
     log "WARNING: Admission webhook did not become ready in ${admission_max}s, proceeding anyway"
 fi
 
-# k3s-cluster-init runs with ProtectHome=true and cannot read /root/.config/helm where
-# Ansible added the repo at build time. HELM_CONFIG_HOME points to a writable path.
-helm repo add chutes "$HELM_REPO_URL"
+# Keyring is required; missing keyring indicates bad/incorrect image build
+if [ ! -f "$KEYRING_FILE" ]; then
+    log "ERROR: Helm chart keyring not found at $KEYRING_FILE. Chart provenance verification is required. Ensure helm_chart_public_key_path is configured at build time."
+    exit 1
+fi
+
+# Repo is pre-configured at build time; refresh index to pick up new versions
 helm repo update
 
-log "Running helm upgrade --install..."
+log "Running helm upgrade --install (with provenance verification)..."
 helm upgrade --install chutes chutes/chutes-miner-gpu \
     --namespace chutes \
     --version "$expected_version" \
     --reuse-values \
+    --verify --keyring "$KEYRING_FILE" \
     --kubeconfig="$KUBECONFIG"
 
 log "Helm chart upgrade completed successfully"
