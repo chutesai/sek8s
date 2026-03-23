@@ -155,15 +155,10 @@
           register: driver_install
           changed_when: driver_install.changed
 
-        - name: Download Fabric Manager {{ nvidia_version }}
-          ansible.builtin.get_url:
-            url: "http://archive.ubuntu.com/ubuntu/pool/multiverse/f/fabric-manager-{{ nvidia_version }}/nvidia-fabricmanager-{{ nvidia_version }}_{{ nvidia_version }}.{{ nvidia_pkg_release }}_amd64.deb"
-            dest: "/tmp/nvidia-fabricmanager-{{ nvidia_version }}.{{ nvidia_pkg_release }}.deb"
-            mode: "0644"
-
         - name: Install Fabric Manager {{ nvidia_version }}
           ansible.builtin.apt:
-            deb: "/tmp/nvidia-fabricmanager-{{ nvidia_version }}.{{ nvidia_pkg_release }}.deb"
+            name: "nvidia-fabricmanager-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}"
+            state: present
 
         - name: Install NVIDIA Container Toolkit
           ansible.builtin.apt:
