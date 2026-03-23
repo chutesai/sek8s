@@ -35,7 +35,7 @@ The boot-time cluster init system (`k3s-cluster-init.service`) runs numbered scr
 - **Only upgrade `chutes-miner-gpu` initially**: The gpu-operator and prometheus charts are pinned to stable versions and change rarely. This feature targets `chutes-miner-gpu` only. The pattern is extensible to other charts by adding additional marker files under `/etc/chutes/chart-versions/`.
 - **Ansible writes the marker at build time**: The `chutes-gpu` role records the installed chart version into the marker file after a successful `helm upgrade --install`. This ensures the marker always reflects what was actually installed in the image.
 - **Chart version is pinned for reproducibility**: `chutes_chart_version` in `chutes-gpu/defaults/main.yml` is pinned (e.g. `"0.1.0"`) rather than `null`. This makes builds reproducible and ensures the marker file has a well-defined value from one release to the next.
-- **Build-time Helm environment pre-configuration**: Ansible creates `/var/lib/rancher/k3s/helm-config`, `helm-cache`, `helm-data` and runs `helm repo add chutes <url>` + `helm repo update` at build time with `HELM_CONFIG_HOME`/`HELM_CACHE_HOME`/`HELM_DATA_HOME` pointing to those paths. The repo config and cached index are baked into the image. The `k3s-cluster-init` service exports these env vars; the boot script inherits them and does not run `helm repo add`. It only runs `helm repo update` (index refresh) and `helm upgrade --install`. This keeps repo configuration in the trusted Ansible build environment; at boot, only index refresh and chart download occur (both protected by provenance verification when enabled).
+- **Build-time Helm environment pre-configuration**: Ansible creates `/var/lib/chutes/helm-config`, `helm-cache`, `helm-data` (on root volume, VM-version-specific) and runs `helm repo add chutes <url>` + `helm repo update` at build time with `HELM_CONFIG_HOME`/`HELM_CACHE_HOME`/`HELM_DATA_HOME` pointing to those paths. The repo config and cached index are baked into the image. The `k3s-cluster-init` service exports these env vars; the boot script inherits them and does not run `helm repo add`. It only runs `helm repo update` (index refresh) and `helm upgrade --install`. Helm artifacts live on root, not on the storage volume, so no sync is needed — each new VM image carries the correct helm config for that version.
 - **PGP chart provenance (required)**: An attacker who can redirect `chutesai.github.io` (DNS hijack, BGP, CA compromise) could serve a malicious chart with a matching version string. Helm natively supports `--verify` with `.prov` provenance files. The PGP public keyring at `/etc/chutes/helm-pubkey.gpg` is required; both build-time install and boot-time upgrade use `--verify --keyring`. If the keyring is missing at boot, the script exits 1 (fail closed). The `chutesai/chutes-miner` chart repo must sign releases with `helm package --sign` and publish `.tgz.prov` files (external prerequisite).
 
 ---
@@ -68,7 +68,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - The `helm upgrade --install` command must preserve the `--set-string minerCredentials.*=REPLACE_ME` and values-file pattern from `setup_chutes.yml` — the real credentials come from the k8s secret, not helm values.
 - Script timeout: must complete within the existing `MAX_SCRIPT_TIMEOUT` (300s).
 - Helm env vars (`HELM_CONFIG_HOME`, `HELM_CACHE_HOME`, `HELM_DATA_HOME`) are set in the systemd service unit; scripts inherit them and must not override.
-- The build-time `helm repo add` uses the same `HELM_CONFIG_HOME` path the service uses at runtime, so repo config persists through the storage bind-mount.
+- The build-time `helm repo add` uses the same `HELM_CONFIG_HOME` path the service uses at runtime. Helm config/cache/data live on the root volume (`/var/lib/chutes/helm-*`), not on storage, so they are VM-version-specific and require no sync.
 - PGP keyring at `/etc/chutes/helm-pubkey.gpg` must exist; if missing at boot, script exits 1. Provenance verification failure is fatal (exit 1, fail closed). Chart repo must publish `.prov` files.
 
 ---
@@ -76,10 +76,10 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 ## Output Format
 
 1. **Modified: `ansible/k3s/roles/k3s/files/k3s-cluster-init.service`**
-   - Add `Environment=HELM_CONFIG_HOME=/var/lib/rancher/k3s/helm-config`, `HELM_CACHE_HOME=.../helm-cache`, `HELM_DATA_HOME=.../helm-data` to the `[Service]` section so child scripts inherit them.
+   - Add `Environment=HELM_CONFIG_HOME=/var/lib/chutes/helm-config`, `HELM_CACHE_HOME=.../helm-cache`, `HELM_DATA_HOME=.../helm-data` to the `[Service]` section so child scripts inherit them.
 
 2. **Modified: `ansible/k3s/roles/chutes-gpu/tasks/setup_chutes.yml`**
-   - Before helm install: create `/etc/chutes/`; copy PGP keyring from `helm_chart_public_key_path` to `/etc/chutes/helm-pubkey.gpg`; create `helm-config`, `helm-cache`, `helm-data` under `/var/lib/rancher/k3s/`.
+   - Before helm install: create `/etc/chutes/`; copy PGP keyring from `helm_chart_public_key_path` to `/etc/chutes/helm-pubkey.gpg`; create `helm-config`, `helm-cache`, `helm-data` under `/var/lib/chutes/` (root volume, VM-version-specific).
    - Replace `kubernetes.core.helm_repository` with shell tasks that run `helm repo add chutes <url>` and `helm repo update` with `HELM_*_HOME` env vars set.
    - Add `--verify --keyring /etc/chutes/helm-pubkey.gpg` to `helm upgrade --install` (always).
    - After helm install: query installed version and write to `/etc/chutes/chart-versions/chutes-miner-gpu`.
@@ -110,7 +110,7 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 - The script blocks boot indefinitely (must respect timeout, must not retry forever).
 - **No existing release**: If `helm list -n chutes` returns no release, the script exits 1. Running `helm upgrade --install --reuse-values` with no prior release would perform a fresh install using chart defaults (nothing to reuse), which could overwrite or miss runtime configuration. The build process guarantees the release exists; missing release indicates broken cluster state (e.g. setup-storage-bind-mounts did not run).
 - **Provenance verification**: Chart provenance verification fails (missing `.prov`, wrong signature, tampered chart) — script exits 1. PGP keyring missing — script exits 1 (fail closed). Chart repo publishes unsigned releases — upgrade fails until provenance is added.
-- **Helm repo config**: If build-time `helm repo add` did not run or storage sync lost the config — `helm repo update` fails at boot, script exits 1.
+- **Helm repo config**: If build-time `helm repo add` did not run — `helm repo update` fails at boot, script exits 1. (Helm config lives on root volume, so no sync or storage migration concerns.)
 
 ---
 

@@ -14,9 +14,10 @@ helm_chart_public_key_path: "~/.chutes/helm-pubkey.gpg"
 chutes_helm_repo_url: "https://chutesai.github.io/chutes-miner"
 
 # Helm paths; must match k3s role defaults for cluster-init service.
-helm_config_home: /var/lib/rancher/k3s/helm-config
-helm_cache_home: /var/lib/rancher/k3s/helm-cache
-helm_data_home: /var/lib/rancher/k3s/helm-data
+# On root volume (VM-version-specific); not on storage so no sync needed.
+helm_config_home: /var/lib/chutes/helm-config
+helm_cache_home: /var/lib/chutes/helm-cache
+helm_data_home: /var/lib/chutes/helm-data
 
 # Additional values for the chutes-miner-gpu Helm chart.
 # Merged into a values file and passed with -f. Override in group_vars or host_vars.
