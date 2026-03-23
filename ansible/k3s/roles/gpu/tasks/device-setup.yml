@@ -155,10 +155,32 @@
           register: driver_install
           changed_when: driver_install.changed
 
-        - name: Install Fabric Manager {{ nvidia_version }}
-          ansible.builtin.apt:
-            name: "nvidia-fabricmanager-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_fm_pkg_release | default(nvidia_pkg_release) }}"
-            state: present
+        - name: Download Fabric Manager {{ nvidia_version }} from NVIDIA redist
+          ansible.builtin.get_url:
+            url: "https://developer.download.nvidia.com/compute/nvidia-driver/redist/fabricmanager/linux-x86_64/fabricmanager-linux-x86_64-{{ nvidia_version }}.{{ nvidia_pkg_release | regex_replace('-.*$', '') }}-archive.tar.xz"
+            dest: "/tmp/fabricmanager-{{ nvidia_version }}.tar.xz"
+            mode: "0644"
+
+        - name: Extract Fabric Manager archive
+          ansible.builtin.unarchive:
+            src: "/tmp/fabricmanager-{{ nvidia_version }}.tar.xz"
+            dest: /tmp
+            remote_src: true
+
+        - name: Install Fabric Manager binaries and libraries
+          ansible.builtin.shell:
+            cmd: |
+              set -euo pipefail
+              FM_DIR=$(find /tmp -maxdepth 1 -type d -name 'fabricmanager-*' | head -1)
+              [ -d "$FM_DIR" ] || exit 1
+              cp -f "$FM_DIR"/bin/* /usr/bin/
+              cp -f "$FM_DIR"/lib/* /usr/lib/x86_64-linux-gnu/
+              [ -d "$FM_DIR/etc" ] && cp -n "$FM_DIR"/etc/* /usr/share/nvidia/nvswitch/ 2>/dev/null || true
+              [ -f "$FM_DIR/systemd/nvidia-fabricmanager.service" ] && cp -f "$FM_DIR/systemd/nvidia-fabricmanager.service" /lib/systemd/system/ || true
+              ldconfig
+              rm -rf "$FM_DIR" /tmp/fabricmanager-{{ nvidia_version }}.tar.xz
+            executable: /bin/bash
+          changed_when: true
 
         - name: Install NVIDIA Container Toolkit
           ansible.builtin.apt:

@@ -39,12 +39,8 @@ cuda_version: "13-0"
 nvidia_version: "580"
 # NVIDIA package release suffix (minor.patch-release). This is appended to the
 # major `nvidia_version` to form full package versions like
-# "580.126.09-1ubuntu1". Keep this in sync with the package repository.
-nvidia_pkg_release: "126.09-1ubuntu1"
-# Fabric Manager uses Ubuntu's own packaging suffix which differs from the
-# CUDA repo suffix. Must be exact-match with the driver's NVIDIA version
-# (580.126.09) or FM refuses to start on NVSwitch systems.
-nvidia_fm_pkg_release: "126.09-0ubuntu0.24.04.1"
+# "580.126.20-1ubuntu1". Keep this in sync with the package repository.
+nvidia_pkg_release: "126.20-1ubuntu1"
 # Flag to skip the cuda install entirely, if the provider already has cuda 12.x+ installed (note some chutes will not work unless 12.6+)
 skip_cuda: false
 # Flag to enable/disable IPv6. Some hosts may require IPv6 to be on.
