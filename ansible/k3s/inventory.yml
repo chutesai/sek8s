@@ -18,7 +18,7 @@ all:
     tdx_api_endpoint: "https://api.example.com/servers/boot/attestation"
     tdx_nonce_endpoint: "https://api.example.com/servers/nonce"
     tdx_luks_endpoint: "https://api.example.com/servers/vm_name/luks"
-    final_img_path: "{{ img_dir }}/tdx-guest.qcow2"
+    build_env: "prod"
     prime_vm_after_build: true
     prime_wait_timeout: 300
     gpu_verify_debug_mode: false

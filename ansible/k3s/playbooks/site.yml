@@ -1,4 +1,24 @@
 ---
+- name: Confirm guest image build configuration
+  hosts: host
+  become: false
+  tags:
+    - always
+  tasks:
+    - name: Output build configuration
+      ansible.builtin.debug:
+        msg:
+          - "Build env: {{ build_env }}"
+          - "VM version: {{ vm_version }}"
+          - "Debug build: {{ debug_build | default(false) }}"
+          - "Final image: {{ final_img_path }}"
+
+    - name: Confirm intended build before starting VM
+      ansible.builtin.pause:
+        prompt: >-
+          Is this the intended build? The next step launches the TDX guest VM toward this output path.
+          Press Enter to continue, or Ctrl+C to abort.
+
 - name: Run TDX guest image
   hosts: host
   become: true

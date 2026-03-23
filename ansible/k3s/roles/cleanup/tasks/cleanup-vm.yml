@@ -13,6 +13,14 @@
   changed_when: false
   failed_when: vm_shutdown.rc == 0
 
+- name: Ensure final image directory exists
+  ansible.builtin.file:
+    path: "{{ final_img_path | dirname }}"
+    state: directory
+    mode: '0750'
+    owner: root
+    group: libvirt-qemu
+
 - name: Copy sek8s image to final image
   ansible.builtin.command: cp "{{ build_img_path }}" "{{ final_img_path }}"
   register: copy_result
@@ -34,4 +42,4 @@
 
 - name: Output final image path
   ansible.builtin.debug:
-    msg: "TDX guest image created: {{ final_img_path }}"
+    msg: "TDX guest image created at {{ final_img_path }}"

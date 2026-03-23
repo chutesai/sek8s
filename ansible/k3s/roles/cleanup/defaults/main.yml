@@ -1,4 +1,6 @@
-final_img_path: "{{ img_dir }}/tdx-guest.qcow2"
+# Image output env label (override in inventory); used in final_img_path below
+build_env: "dev"
+final_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version | default('0.0.0') }}{{ '-debug' if debug_build | default(false) else '' }}.qcow2"
 
 # GPU verification service name
 gpu_verify_service_name: gpu-verify.service
