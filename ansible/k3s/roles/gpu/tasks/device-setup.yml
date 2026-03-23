@@ -157,7 +157,7 @@
 
         - name: Install Fabric Manager {{ nvidia_version }}
           ansible.builtin.apt:
-            name: "nvidia-fabricmanager-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}"
+            name: "nvidia-fabricmanager-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_fm_pkg_release | default(nvidia_pkg_release) }}"
             state: present
 
         - name: Install NVIDIA Container Toolkit
