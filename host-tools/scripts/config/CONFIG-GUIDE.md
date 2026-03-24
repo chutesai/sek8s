@@ -2,7 +2,7 @@
 
 ## Overview
 
-The TEE VM configuration system uses YAML files with JSON schema validation to ensure correct setup. This prevents common mistakes like missing required fields (e.g., containerd cache volume).
+The TEE VM configuration system uses YAML files with JSON schema validation to ensure correct setup. This prevents common mistakes like missing required fields (e.g., cache or storage volume).
 
 ## Quick Start
 
@@ -67,9 +67,11 @@ pip3 install jsonschema
 
 Values are resolved in this order (highest to lowest):
 
-1. **CLI arguments** (`--hostname`, `--base-image`, `--overlay-dir`, etc.)
+1. **CLI arguments** (`--hostname`, `--base-image`, `--overlay-dir`, `--docker-hub-username` / `--docker-hub-token` when **both** are set, etc.)
 2. **YAML config file** (your config.yaml)
 3. **Hard-coded defaults** (in quick-launch.sh)
+
+For Docker Hub: if you pass **both** `--docker-hub-username` and `--docker-hub-token`, they override the optional `docker_hub` block in YAML. Otherwise `docker_hub.username` / `docker_hub.token` from YAML are used when present.
 
 Example:
 ```bash
@@ -84,6 +86,20 @@ Example:
 # Uses: default /var/lib/chutes/base-images/tdx-guest.qcow2
 ```
 
+## Docker Hub (optional)
+
+Optional `docker_hub` in YAML supplies credentials for authenticated Docker Hub pulls inside the guest (k3s/containerd and cosign). Without it, the VM uses anonymous Hub quota (often too low for busy boots).
+
+```yaml
+docker_hub:
+  username: "your_dockerhub_username"
+  token: "dckr_pat_..."   # prefer read-only Personal Access Token
+```
+
+- Schema: both `username` and `token` are required when `docker_hub` is present (`maxLength` 64 / 128).
+- The host writes `docker-hub-username` and `docker-hub-token` onto the config volume (cleartext); treat the volume like other secrets.
+- See `config.tmpl.yaml`, `config.prod.example.yaml`, and `config.debug.example.yaml` for commented examples.
+
 ## Production vs Debug Configs
 
 ### Production Config (`config.prod.example.yaml`)
@@ -97,15 +113,15 @@ vm:
 volumes:
   cache:
     size: "5000G"
-  containerd:
-    size: "500G"  # Encrypted containerd cache
+  storage:
+    size: "500G"  # VM storage (containerd, kubelet-pods)
 ```
 
 **Features:**
 - Uses encrypted production image (built with `debug_build: false`)
 - Larger volumes for production workloads
-- Encrypted containerd cache with validator key management
 - SSH access removed (hardened)
+- Commented optional `docker_hub` block for authenticated Hub pulls
 
 ### Debug Config (`config.debug.example.yaml`)
 
@@ -118,19 +134,17 @@ vm:
 volumes:
   cache:
     size: "500G"  # Smaller
-  containerd:
-    size: "100G"  # UNENCRYPTED (different from prod!)
+  storage:
+    size: "100G"  # Smaller; see example file re: unencrypted debug storage
 ```
 
 **Features:**
 - Uses debug image (built with `debug_build: true`)
 - Smaller volumes to save disk space
-- Unencrypted containerd cache (no passphrase management)
 - SSH access preserved for debugging
+- Commented optional `docker_hub` block (same semantics as prod)
 
-**⚠️ CRITICAL: Never mix production and debug containerd volumes!**
-
-Debug VMs expect unencrypted containerd cache. If you attach a production encrypted volume, the init script will detect this and fail with a clear error.
+**⚠️ CRITICAL: Never mix production and debug storage volumes** when encryption expectations differ — see comments in `config.debug.example.yaml`.
 
 ## Base Image and Overlay Configuration
 
@@ -158,9 +172,9 @@ When volume paths are empty strings, they're auto-generated based on hostname:
 ```yaml
 volumes:
   cache:
-    path: ""  # Becomes: cache-<hostname>.qcow2
-  containerd:
-    path: ""  # Becomes: containerd-<hostname>.qcow2
+    path: ""  # Becomes: cache-<hostname>.raw (when auto-generated)
+  storage:
+    path: ""  # Becomes: storage-<hostname>.raw
   config:
     path: ""  # Becomes: config-<hostname>.qcow2
 ```
@@ -172,28 +186,22 @@ This ensures debug and production VMs use separate volumes.
 ### Missing Required Field
 
 ```
-Config validation error: 'containerd' is a required property
+Config validation error: 'storage' is a required property
 Path: volumes
 ```
 
-**Fix:** Add the containerd section to volumes:
-```yaml
-volumes:
-  containerd:
-    size: "500G"
-    path: ""
-```
+**Fix:** Add the `storage` section to volumes (see `config.tmpl.yaml`).
 
 ### Invalid Volume Size Format
 
 ```
 Config validation error: '500' does not match '^[0-9]+(K|M|G|T)$'
-Path: volumes -> containerd -> size
+Path: volumes -> storage -> size
 ```
 
 **Fix:** Add unit suffix:
 ```yaml
-containerd:
+storage:
   size: "500G"  # Not "500"
 ```
 
@@ -225,30 +233,9 @@ network:
 
 ## Migrating Old Configs
 
-If you have configs from before containerd cache was added:
+If you have configs from an older layout (e.g. missing `storage`), add the `volumes.storage` section to match `config-schema.json` and the current examples.
 
-### Before
-```yaml
-volumes:
-  cache:
-    size: "5000G"
-    path: ""
-```
-
-### After
-```yaml
-volumes:
-  cache:
-    size: "5000G"
-    path: ""
-  
-  # ADD THIS - required for encrypted containerd storage
-  containerd:
-    size: "500G"
-    path: ""
-```
-
-The schema validation will catch this immediately, preventing runtime errors.
+The schema validation will catch missing required sections, preventing runtime errors.
 
 ## Troubleshooting
 
@@ -290,7 +277,8 @@ See `config-schema.json` for the complete schema definition. Key sections:
 - **vm**: hostname (required), base_image (optional), overlay_directory (optional)
 - **miner**: ss58, seed (both required)
 - **network**: vm_ip, bridge_ip, dns, public_interface (all required), type, ssh_port (optional)
-- **volumes**: cache, containerd (both required), config (optional)
+- **volumes**: cache, storage (both required), config (optional)
+- **docker_hub** (optional): `username` and `token` — Docker Hub auth for guest pulls/cosign
 - **devices**: bind_devices (optional, default: true)
 - **runtime**: foreground (optional, default: false)
 
@@ -317,7 +305,7 @@ network:
 volumes:
   cache:
     size: "100G"
-  containerd:
+  storage:
     size: "50G"
 ```
 

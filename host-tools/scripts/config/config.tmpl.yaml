@@ -15,6 +15,7 @@ miner:
 # Docker Hub (optional) — raises authenticated pull limits for k3s/containerd and cosign.
 # Prefer a read-only Personal Access Token: https://docs.docker.com/docker-hub/access-tokens/
 # CLI flags --docker-hub-username / --docker-hub-token override this block when both are set.
+# See config.prod.example.yaml / config.debug.example.yaml for commented examples.
 # docker_hub:
 #   username: "your_dockerhub_username"
 #   token: "dckr_pat_..."
