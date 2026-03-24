@@ -49,6 +49,7 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
 ### Service ordering (Q1)
 
 - **`config-manager.service`** (runs `process-config.py`) must finish **before** units that need Docker Hub auth for cosign/containerd consume the generated files.
+- **`config-manager.service`** must run **`After=setup-storage-bind-mounts.service`** (and **`Requires=setup-storage-bind-mounts.service`** on images that use the storage bind mount) so `process-config.py` merges Docker Hub auth into **`/etc/rancher/k3s/registries.yaml` after** that path is bind-mounted to persistent storage. If config-manager runs **before** the bind mount, a common failure mode is: `setup-storage-bind-mounts` copies an unmerged file to storage, then `process-config` updates only the **rootfs** copy, then the bind mount hides that with the **unmerged** storage file — containerd then pulls Hub anonymously (`429 TOOMANYREQUESTS`) even though a later `cat` of the bind-mounted file can look correct if credentials were fixed manually afterward.
 - **Spec**: cosign-consuming systemd units (at minimum **`admission-controller.service`**, and any other unit that runs cosign against Hub) declare **`After=config-manager.service`** (and ordering that ensures `process-config` has run successfully for the one-shot config flow).
 - **No hot-reload**: Credentials and merged `registries.yaml` are not expected to change for the lifetime of a running VM without a reboot or explicit re-run of the config flow. Relying on environment and files as they exist at service start is acceptable.
 
@@ -67,7 +68,7 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
 
 - **Do not** “append” raw YAML snippets. Use **`yaml.safe_load`** → update **only** the fixed Docker Hub **`configs.<host>`** keys (and nested `auth`) → **`yaml.safe_dump`**, preserving everything else (e.g. Ansible **`mirrors`** and other **`configs`** entries such as Chutes/local registry). See [K3s private registry configuration](https://docs.k3s.io/installation/private-registry).
 - **Strip on failure**: If credential files are missing or invalid, **remove** those same Hub `configs` keys so the node uses **anonymous** pulls (no stale PAT in the file).
-- **Host keys**: Set auth for at least **`docker.io`**. If testing shows pulls still behave as anonymous without it, also set **`registry-1.docker.io`** with the same credentials (known k3s/containerd behavior varies by reference).
+- **Host keys**: Set auth for **`docker.io`**, **`registry-1.docker.io`**, and **`index.docker.io`** with the same credentials (manifest GETs often go to `registry-1.docker.io`; containerd host matching varies by version).
 - **k3s**: Registry file changes may require a k3s restart per upstream docs; first boot after image install should order `config-manager` before k3s consumes the file. Mid-life updates are out of scope for the static miner VM.
 
 ### Host pipeline (Q5)

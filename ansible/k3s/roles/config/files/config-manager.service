@@ -5,6 +5,10 @@ Wants=local-fs.target
 After=local-fs.target
 After=var-config.mount
 Requires=var-config.mount
+# Merge registries.yaml only after /etc/rancher/k3s is bind-mounted to storage;
+# otherwise process-config updates the rootfs copy and the bind exposes stale storage.
+Requires=setup-storage-bind-mounts.service
+After=setup-storage-bind-mounts.service
 Before=network-pre.target
 
 [Service]

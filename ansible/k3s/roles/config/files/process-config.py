@@ -46,7 +46,12 @@ DOCKER_CONFIG_DIR = "/etc/admission-controller/docker-config"
 DOCKER_CONFIG_JSON = os.path.join(DOCKER_CONFIG_DIR, "config.json")
 REGISTRIES_YAML = "/etc/rancher/k3s/registries.yaml"
 DOCKER_HUB_AUTH_KEY = "https://index.docker.io/v1/"
-HUB_REGISTRY_CONFIG_KEYS = ("docker.io", "registry-1.docker.io")
+# k3s/containerd may match any of these hosts for Hub API traffic.
+HUB_REGISTRY_CONFIG_KEYS = (
+    "docker.io",
+    "registry-1.docker.io",
+    "index.docker.io",
+)
 # Docker Hub IDs are short in practice (~30); cap avoids huge untrusted blobs.
 MAX_DOCKER_HUB_USERNAME_LEN = 64
 # PATs are short (often ~36 chars); 128 leaves slack for format changes and password login.
