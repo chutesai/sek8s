@@ -354,6 +354,10 @@ print_info "  /hostname         : $HOSTNAME"
 print_info "  /miner-ss58       : [credential file]"
 print_info "  /miner-seed       : [credential file]"
 print_info "  /network-config.yaml : ${VM_IP} via ${VM_GATEWAY}"
+if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
+    print_info "  /docker-hub-username : [credential file]"
+    print_info "  /docker-hub-token    : [credential file]"
+fi
 print_info ""
 print_info "To use with run-td:"
 print_info "  python3 ./run-td --config-volume $OUTPUT_PATH [other options...]"
