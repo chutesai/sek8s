@@ -5,12 +5,14 @@ Unit tests for individual validators
 
 import asyncio
 import pytest
+from pathlib import Path
 from unittest.mock import Mock, AsyncMock, patch
 import aiohttp
 
+from sek8s.config import CosignVerificationConfig
 from sek8s.validators.base import ValidationResult
-from sek8s.validators.cosign import CosignValidator
-from sek8s.cosign.client import CosignVerificationUnavailableError
+from sek8s.validators.cosign import CosignValidator, RateLimitError
+from sek8s.cosign.client import CosignRateLimitError, CosignVerificationUnavailableError
 from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
@@ -432,80 +434,259 @@ class TestCosignValidator:
         assert repo == 'app'
         assert tag == '@sha256:abcd1234'
 
-    def test_admission_cache_key(self, config):
-        """Test admission cache key is stable and shared by pods with same images (no name/uid)."""
-        validator = CosignValidator(config)
-        request = {
-            "namespace": "default",
-            "kind": {"kind": "Pod"},
-            "object": {"metadata": {"name": "my-pod", "uid": "pod-uid-123"}},
-        }
-        images = ["docker.io/nginx:latest", "gcr.io/pause:3.9"]
-        key1 = validator._admission_cache_key(request, images)
-        key2 = validator._admission_cache_key(request, images)
-        assert key1 == key2
-        # Key is (namespace, kind, images) only so new pods with same images get cache hit
-        assert key1 == ("default", "Pod", ("docker.io/nginx:latest", "gcr.io/pause:3.9"))
+    def test_is_digest_pinned_reference(self):
+        """Digest-pinned refs are detectable; tag-only refs are not."""
+        from sek8s.image_utils import is_digest_pinned_reference
+
+        assert is_digest_pinned_reference(
+            "docker.io/library/nginx@sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        )
+        assert is_digest_pinned_reference("gcr.io/p/foo/bar@sha512:abcd")
+        assert not is_digest_pinned_reference("docker.io/library/nginx:latest")
+        assert not is_digest_pinned_reference("nginx")
 
     @pytest.mark.asyncio
-    async def test_admission_result_cache_returns_cached_on_same_pod(self, config, valid_admission_review):
-        """Second request with same images returns cached result without re-verifying."""
+    async def test_digest_pinned_result_is_cached(self, config, tmp_path):
+        """Digest-pinned image: first call verifies, second returns cached result."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
         validator = CosignValidator(config)
-        call_count = 0
+        calls = []
 
-        async def count_and_allow(ctx):
-            nonlocal call_count
-            call_count += 1
-            return []
+        async def count_verify(*args, **kwargs):
+            calls.append(1)
+            return True
 
-        with patch.object(validator, "_verify_cosign_config", side_effect=count_and_allow):
-            result1 = await validator.validate(valid_admission_review)
-            result2 = await validator.validate(valid_admission_review)
-        assert result1.allowed == result2.allowed
-        assert call_count == 1, "Second request should use admission cache and not run verification"
+        digest_img = "docker.io/test/img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        with patch.object(validator._cosign_client, "verify", side_effect=count_verify):
+            assert await validator._verify_image_signature(digest_img, vc) is True
+            assert await validator._verify_image_signature(digest_img, vc) is True
+        assert len(calls) == 1
 
     @pytest.mark.asyncio
-    async def test_admission_result_cache_shared_across_new_pods_same_images(self, config, valid_admission_review):
-        """Different pods (different name/uid) with same images share cache so only first runs cosign."""
+    async def test_tag_only_always_re_verifies(self, config, tmp_path):
+        """Tag-only success: never cached; each sequential admission calls cosign."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
         validator = CosignValidator(config)
-        call_count = 0
+        calls = []
 
-        async def count_and_allow(ctx):
-            nonlocal call_count
-            call_count += 1
-            return []
+        async def count_verify(*args, **kwargs):
+            calls.append(1)
+            return True
 
-        with patch.object(validator, "_verify_cosign_config", side_effect=count_and_allow):
-            result1 = await validator.validate(valid_admission_review)
-            # Second "pod": same namespace/kind/images, different name/uid (simulates new pod)
-            review2 = dict(valid_admission_review)
-            review2["request"] = dict(review2["request"])
-            review2["request"]["uid"] = "different-request-uid"
-            review2["request"]["object"] = dict(review2["request"]["object"])
-            review2["request"]["object"]["metadata"] = dict(review2["request"]["object"]["metadata"])
-            review2["request"]["object"]["metadata"]["name"] = "other-pod"
-            review2["request"]["object"]["metadata"]["uid"] = "different-pod-uid"
-            result2 = await validator.validate(review2)
-        assert result1.allowed == result2.allowed
-        assert call_count == 1, "New pod with same images should hit admission cache, not run verification"
+        with patch.object(validator._cosign_client, "verify", side_effect=count_verify):
+            await validator._verify_image_signature("docker.io/test/img:latest", vc)
+            await validator._verify_image_signature("docker.io/test/img:latest", vc)
+        assert len(calls) == 2
 
     @pytest.mark.asyncio
-    async def test_unavailable_error_not_cached_in_admission_result(self, config, valid_admission_review):
-        """CosignVerificationUnavailableError should NOT be cached in admission result cache."""
+    async def test_tag_failure_is_cached(self, config, tmp_path):
+        """Invalid tag-only verify cached so kube retries do not hammer the registry."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
         validator = CosignValidator(config)
-        call_count = 0
+        validator.cosign_config = CosignConfig(tag_failure_cache_ttl_seconds=300)
+        calls = []
 
-        async def raise_unavailable(ctx):
-            nonlocal call_count
-            call_count += 1
-            raise CosignVerificationUnavailableError("registry down")
+        async def fail_verify(*args, **kwargs):
+            calls.append(1)
+            return False
 
-        with patch.object(validator, "_verify_cosign_config", side_effect=raise_unavailable):
-            result1 = await validator.validate(valid_admission_review)
-            assert not result1.allowed
-            assert "unavailable" in result1.messages[0].lower()
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
+            assert await validator._verify_image_signature(tag_img, vc) is False
+            assert await validator._verify_image_signature(tag_img, vc) is False
+        assert len(calls) == 1
 
-            result2 = await validator.validate(valid_admission_review)
-            assert not result2.allowed
+    @pytest.mark.asyncio
+    async def test_tag_failure_cache_respects_zero_ttl(self, config, tmp_path):
+        """tag_failure_cache_ttl_seconds=0 disables caching invalid tag signatures."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        validator.cosign_config = CosignConfig(tag_failure_cache_ttl_seconds=0)
+        calls = []
 
-        assert call_count == 2, "Unavailable results must NOT be admission-cached; both calls should run verification"
+        async def fail_verify(*args, **kwargs):
+            calls.append(1)
+            return False
+
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
+            assert await validator._verify_image_signature(tag_img, vc) is False
+            assert await validator._verify_image_signature(tag_img, vc) is False
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_failure_is_cached_for_digest(self, config, tmp_path):
+        """Invalid signature cached so we don't re-verify the same bad image."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        calls = []
+
+        async def fail_verify(*args, **kwargs):
+            calls.append(1)
+            return False
+
+        digest_img = "docker.io/test/img@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
+            assert await validator._verify_image_signature(digest_img, vc) is False
+            assert await validator._verify_image_signature(digest_img, vc) is False
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_transient_error_cached_short_ttl(self, config, tmp_path):
+        """Transient errors (network) are cached briefly so we don't spam the endpoint."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        calls = []
+
+        async def fail_transient(*args, **kwargs):
+            calls.append(1)
+            raise CosignVerificationUnavailableError("connection refused")
+
+        digest_img = "docker.io/test/img@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_transient):
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(digest_img, vc)
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(digest_img, vc)
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_transient_error_cached_for_tag(self, config, tmp_path):
+        """Transient errors for tag-only refs use short TTL like digest."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        calls = []
+
+        async def fail_transient(*args, **kwargs):
+            calls.append(1)
+            raise CosignVerificationUnavailableError("connection refused")
+
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_transient):
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(tag_img, vc)
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(tag_img, vc)
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_sets_global_backoff(self, config, tmp_path):
+        """Upstream 429 pauses all verifications, not just the triggering image."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+
+        async def raise_rl(*args, **kwargs):
+            raise CosignRateLimitError("rate limited")
+
+        with patch.object(validator._cosign_client, "verify", side_effect=raise_rl):
+            with pytest.raises(CosignRateLimitError):
+                await validator._verify_image_signature("docker.io/x:latest", vc)
+
+        other_img = "docker.io/other@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        with pytest.raises(RateLimitError):
+            await validator._verify_image_signature(other_img, vc)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_same_digest_each_invokes_cosign(self, config, tmp_path):
+        """No singleflight: concurrent verifies for the same ref each run cosign."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        calls = []
+
+        async def slow_verify(*args, **kwargs):
+            calls.append(1)
+            await asyncio.sleep(0.02)
+            return True
+
+        digest_img = "docker.io/test/img@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        with patch.object(validator._cosign_client, "verify", side_effect=slow_verify):
+            results = await asyncio.gather(
+                *[validator._verify_image_signature(digest_img, vc) for _ in range(8)]
+            )
+
+        assert all(r is True for r in results)
+        assert len(calls) == 8
+
+    @pytest.mark.asyncio
+    async def test_concurrent_different_digests_parallel_cosign(self, config, tmp_path):
+        """Different digest-pinned images verify concurrently (no global cosign lock)."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        gate = asyncio.Event()
+        calls = []
+
+        async def slow_verify(*args, **kwargs):
+            calls.append(1)
+            await gate.wait()
+            return True
+
+        img_a = "docker.io/test/a@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        img_b = "docker.io/test/b@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with patch.object(validator._cosign_client, "verify", side_effect=slow_verify):
+            t1 = asyncio.create_task(validator._verify_image_signature(img_a, vc))
+            t2 = asyncio.create_task(validator._verify_image_signature(img_b, vc))
+            await asyncio.sleep(0.05)
+            assert len(calls) == 2
+            gate.set()
+            await asyncio.gather(t1, t2)
+        assert len(calls) == 2

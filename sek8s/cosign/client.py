@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Avoid cosign writing to $HOME/.sigstore (rekor/TUF cache); system-manager runs
 # as unprivileged user with no writable home. In-memory cache works for both
 # admission controller and image pull verification.
+# DOCKER_CONFIG is set by systemd (shared drop-in); inherit from os.environ — do not override here.
 _COSIGN_ENV = {**os.environ, "SIGSTORE_NO_CACHE": "1"}
 
 
@@ -155,7 +156,20 @@ class CosignClient:
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
             combined = f"{stdout}\n{stderr}"
-            if any(p.search(combined) for p in self._RATE_LIMIT_PATTERNS):
+            matched_pattern = next(
+                (p.pattern for p in self._RATE_LIMIT_PATTERNS if p.search(combined)),
+                None,
+            )
+            if matched_pattern:
+                logger.error(
+                    "Cosign rate limit detected for cmd=%s rc=%d pattern=%r\n"
+                    "--- stdout ---\n%s\n--- stderr ---\n%s",
+                    " ".join(cmd),
+                    process.returncode,
+                    matched_pattern,
+                    stdout.strip() or "(empty)",
+                    stderr.strip() or "(empty)",
+                )
                 raise CosignRateLimitError(
                     "Cosign verification rate limited by upstream registry"
                 )

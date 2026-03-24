@@ -28,6 +28,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class _SuppressValidate200(logging.Filter):
+    """Filter out noisy 'POST /validate 200' access-log lines from uvicorn."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "/validate" in msg and "200" in msg:
+            return False
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressValidate200())
+
+
 class AdmissionController:
     """Main admission controller that orchestrates validation."""
 

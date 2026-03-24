@@ -158,6 +158,26 @@
           "default": false
         }
       }
+    },
+    "docker_hub": {
+      "type": "object",
+      "description": "Optional Docker Hub credentials for authenticated image pulls (config volume files)",
+      "additionalProperties": false,
+      "required": ["username", "token"],
+      "properties": {
+        "username": {
+          "type": "string",
+          "description": "Docker Hub username",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "token": {
+          "type": "string",
+          "description": "Docker Hub password or personal access token (prefer read-only PAT)",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
     }
   },
   "additionalProperties": false

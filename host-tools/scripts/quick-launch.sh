@@ -4,6 +4,15 @@
 
 set -e
 
+run_create_config() {
+  local vol_path="$1"
+  if [[ -n "$DOCKER_HUB_USERNAME" && -n "$DOCKER_HUB_TOKEN" ]]; then
+    sudo ./volumes/create-config.sh "$vol_path" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS" "$DOCKER_HUB_USERNAME" "$DOCKER_HUB_TOKEN"
+  else
+    sudo ./volumes/create-config.sh "$vol_path" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
+  fi
+}
+
 # --------------------------------------------------------------------
 # VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
 # Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
@@ -36,6 +45,8 @@ SKIP_CHECKSUM="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
 EPHEMERAL="false"
+DOCKER_HUB_USERNAME=""
+DOCKER_HUB_TOKEN=""
 
 # --------------------------------------------------------------------
 # Temporary CLI containers
@@ -61,6 +72,8 @@ CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 CLI_EPHEMERAL=""
 CLI_DOWNLOAD=""
+CLI_DOCKER_HUB_USERNAME=""
+CLI_DOCKER_HUB_TOKEN=""
 
 # --------------------------------------------------------------------
 # Parse CLI options
@@ -92,6 +105,8 @@ while [[ $# -gt 0 ]]; do
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
+    --docker-hub-username) CLI_DOCKER_HUB_USERNAME="$2"; shift 2 ;;
+    --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
     --download)
       echo "=== Downloading VM Base Image (production) ==="
       BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
@@ -175,6 +190,8 @@ Command Line Options (CLI overrides YAML when provided):
   --overlay-dir PATH        Directory for overlay files. Default: /var/lib/chutes/vm-overlays/
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)
+  --docker-hub-username U   Docker Hub username (optional; use with --docker-hub-token; overrides config.yaml)
+  --docker-hub-token T      Docker Hub PAT or password (optional; overrides config.yaml)
 
 Network:
   --vm-ip IP
@@ -187,7 +204,7 @@ Volumes:
   --cache-volume PATH        Default: cache-<hostname>.raw (existing .qcow2 allowed at launch)
   --storage-size SIZE
   --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
-  --config-volume PATH
+  --config-volume PATH       Existing qcow2 is repopulated from config.yaml each launch (same file)
   --skip-bind
   --skip-checksum         Skip base image SHA256 verification (for debug with custom images)
 
@@ -294,6 +311,15 @@ fi
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
 [[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
 [[ -n "$CLI_EPHEMERAL" ]] && EPHEMERAL="$CLI_EPHEMERAL"
+
+if [[ -n "$CLI_DOCKER_HUB_USERNAME" || -n "$CLI_DOCKER_HUB_TOKEN" ]]; then
+  if [[ -z "$CLI_DOCKER_HUB_USERNAME" || -z "$CLI_DOCKER_HUB_TOKEN" ]]; then
+    echo "Error: use both --docker-hub-username and --docker-hub-token together (or neither)."
+    exit 1
+  fi
+  DOCKER_HUB_USERNAME="$CLI_DOCKER_HUB_USERNAME"
+  DOCKER_HUB_TOKEN="$CLI_DOCKER_HUB_TOKEN"
+fi
 
 # Default base image and overlay directory when not specified
 [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest.qcow2"
@@ -462,29 +488,19 @@ echo ""
 # Config volume
 # --------------------------------------------------------------------
 echo "Step 4: Setting up config volume..."
-if [[ -n "$CONFIG_VOLUME" ]]; then
-  if [[ -f "$CONFIG_VOLUME" ]]; then
-    echo "✓ Using existing config volume: $CONFIG_VOLUME"
-  else
-    echo "Creating config volume at configured path: $CONFIG_VOLUME"
-    if sudo ./volumes/create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
-      echo "✓ Config volume created"
-    else
-      echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
-      exit 1
-    fi
-  fi
-else
+if [[ -z "$CONFIG_VOLUME" ]]; then
   CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
-  [[ -f "$CONFIG_VOLUME" ]] && sudo rm -f "$CONFIG_VOLUME"
-
+fi
+if [[ -f "$CONFIG_VOLUME" ]]; then
+  echo "Refreshing existing config volume from current config: $CONFIG_VOLUME"
+else
   echo "Creating config volume: $CONFIG_VOLUME"
-  if sudo ./volumes/create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
-    echo "✓ Config volume created"
-  else
-    echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
-    exit 1
-  fi
+fi
+if run_create_config "$CONFIG_VOLUME"; then
+  echo "✓ Config volume ready"
+else
+  echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
+  exit 1
 fi
 echo ""
 

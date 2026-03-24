@@ -4,10 +4,13 @@ validate-config.py - Secure config volume validator for TEE TDX VMs
 Validates config files from mounted config volume and sets up system configuration
 """
 
+import base64
+import grp
+import json
 import os
-import sys
 import re
 import shutil
+import sys
 import yaml
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +38,24 @@ MINER_SEED_TARGET = os.path.join(MINER_CREDS_DIR, "miner-seed")
 # we never modify system-manager.env.
 SYSTEM_MANAGER_MINER_ENV = "/etc/system-manager/miner.env"
 NETWORK_CONFIG_TARGET = "/etc/netplan/50-config-volume.yaml"
+
+# Optional Docker Hub credentials (config volume); guest applies to cosign + k3s registries
+DOCKER_HUB_USER_FILE = os.path.join(CONFIG_MOUNT_DIR, "docker-hub-username")
+DOCKER_HUB_TOKEN_FILE = os.path.join(CONFIG_MOUNT_DIR, "docker-hub-token")
+DOCKER_CONFIG_DIR = "/etc/admission-controller/docker-config"
+DOCKER_CONFIG_JSON = os.path.join(DOCKER_CONFIG_DIR, "config.json")
+REGISTRIES_YAML = "/etc/rancher/k3s/registries.yaml"
+DOCKER_HUB_AUTH_KEY = "https://index.docker.io/v1/"
+# k3s/containerd may match any of these hosts for Hub API traffic.
+HUB_REGISTRY_CONFIG_KEYS = (
+    "docker.io",
+    "registry-1.docker.io",
+    "index.docker.io",
+)
+# Docker Hub IDs are short in practice (~30); cap avoids huge untrusted blobs.
+MAX_DOCKER_HUB_USERNAME_LEN = 64
+# PATs are short (often ~36 chars); 128 leaves slack for format changes and password login.
+MAX_DOCKER_HUB_TOKEN_LEN = 128
 
 def log(message, level="INFO"):
     """Log a message with timestamp"""
@@ -149,6 +170,132 @@ def validate_network_config(network_config):
             return False, f"Interface {interface} must have either addresses or DHCP enabled"
     
     return True, "Network config is valid"
+
+
+def validate_docker_hub_string(value, max_len, field_label):
+    """Parser-safe string check: non-empty after strip, bounded length, no C0 controls (incl. NUL)."""
+    if not isinstance(value, str):
+        return None, f"{field_label} must be a string"
+    stripped = value.strip()
+    if not stripped:
+        return None, f"{field_label} is empty"
+    if len(stripped) > max_len:
+        return None, f"{field_label} exceeds max length ({max_len})"
+    if any(ord(c) < 32 for c in stripped):
+        return None, f"{field_label} contains control characters"
+    return stripped, None
+
+
+def read_docker_hub_credentials():
+    """
+    Read optional Docker Hub username/token from config volume.
+    Returns (username, token) both str if valid, or (None, None) to use anonymous Hub.
+    """
+    have_user = os.path.isfile(DOCKER_HUB_USER_FILE)
+    have_token = os.path.isfile(DOCKER_HUB_TOKEN_FILE)
+    if not have_user and not have_token:
+        return None, None
+    if not have_user or not have_token:
+        log("Docker Hub: need both docker-hub-username and docker-hub-token; skipping Hub auth", "WARNING")
+        return None, None
+
+    user_raw = read_config_file(DOCKER_HUB_USER_FILE)
+    token_raw = read_config_file(DOCKER_HUB_TOKEN_FILE)
+    if user_raw is None or token_raw is None:
+        log("Docker Hub: failed to read credential files; skipping Hub auth", "WARNING")
+        return None, None
+
+    user, u_err = validate_docker_hub_string(user_raw, MAX_DOCKER_HUB_USERNAME_LEN, "docker_hub.username")
+    if u_err:
+        log(f"Docker Hub username invalid ({u_err}); skipping Hub auth", "WARNING")
+        return None, None
+    token, t_err = validate_docker_hub_string(token_raw, MAX_DOCKER_HUB_TOKEN_LEN, "docker_hub.token")
+    if t_err:
+        log(f"Docker Hub token invalid ({t_err}); skipping Hub auth", "WARNING")
+        return None, None
+
+    return user, token
+
+
+def apply_docker_hub_and_registries(username, token):
+    """
+    Write Docker config.json (always) and merge Docker Hub auth into registries.yaml.
+    username and token are both set (str) for authenticated Hub, or both None for anonymous.
+    """
+    try:
+        admission_gid = grp.getgrnam("admission").gr_gid
+    except KeyError:
+        log("Group 'admission' not found; cannot configure docker-config", "ERROR")
+        return False
+
+    try:
+        os.makedirs(DOCKER_CONFIG_DIR, mode=0o750, exist_ok=True)
+        os.chmod(DOCKER_CONFIG_DIR, 0o750)
+        os.chown(DOCKER_CONFIG_DIR, 0, admission_gid)
+    except OSError as e:
+        log(f"Failed to prepare {DOCKER_CONFIG_DIR}: {e}", "ERROR")
+        return False
+
+    if username is not None and token is not None:
+        auth_b64 = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
+        docker_cfg = {"auths": {DOCKER_HUB_AUTH_KEY: {"auth": auth_b64}}}
+    else:
+        docker_cfg = {"auths": {}}
+
+    try:
+        with open(DOCKER_CONFIG_JSON, "w", encoding="utf-8") as f:
+            f.write(json.dumps(docker_cfg))
+        os.chmod(DOCKER_CONFIG_JSON, 0o640)
+        os.chown(DOCKER_CONFIG_JSON, 0, admission_gid)
+        log(
+            f"Wrote {DOCKER_CONFIG_JSON} (hub_auth={'yes' if username else 'no'})",
+            "INFO",
+        )
+    except OSError as e:
+        log(f"Failed to write {DOCKER_CONFIG_JSON}: {e}", "ERROR")
+        return False
+
+    if not os.path.isfile(REGISTRIES_YAML):
+        log(f"{REGISTRIES_YAML} not found; skipping registries merge (docker config applied)", "WARNING")
+        return True
+
+    try:
+        with open(REGISTRIES_YAML, "r", encoding="utf-8") as f:
+            raw = f.read()
+        data = yaml.safe_load(raw) if raw.strip() else {}
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            log("registries.yaml root is not a mapping; skipping Hub merge", "WARNING")
+            return True
+
+        configs = data.get("configs")
+        if configs is None:
+            configs = {}
+            data["configs"] = configs
+        elif not isinstance(configs, dict):
+            log("registries.yaml 'configs' is not a mapping; skipping Hub merge", "WARNING")
+            return True
+
+        for key in HUB_REGISTRY_CONFIG_KEYS:
+            configs.pop(key, None)
+
+        if username is not None and token is not None:
+            for key in HUB_REGISTRY_CONFIG_KEYS:
+                configs[key] = {
+                    "auth": {"username": username, "password": token},
+                }
+
+        out = yaml.safe_dump(data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        with open(REGISTRIES_YAML, "w", encoding="utf-8") as f:
+            f.write(out)
+        log("Merged Docker Hub auth into registries.yaml", "INFO")
+    except (yaml.YAMLError, OSError) as e:
+        log(f"Failed to merge {REGISTRIES_YAML}: {e}", "ERROR")
+        return False
+
+    return True
+
 
 def create_backup_dir():
     """Create backup directory"""
@@ -301,6 +448,11 @@ def validate_and_apply_config():
 
     # Apply network config
     if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o600):
+        return False
+
+    # Docker Hub (optional): always refresh config.json + Hub keys in registries.yaml
+    hub_user, hub_token = read_docker_hub_credentials()
+    if not apply_docker_hub_and_registries(hub_user, hub_token):
         return False
     
     # Set hostname immediately

@@ -14,6 +14,8 @@ opa_decision_logs: false
 # Admission controller settings
 admission_bind_address: "127.0.0.1"
 admission_port: 8443
+# API server waits at most this long per validating webhook call (cosign/OPA). K8s caps at 30.
+admission_webhook_timeout_seconds: 30
 enforcement_mode: "enforce"
 cache_enabled: true
 cache_ttl: 300

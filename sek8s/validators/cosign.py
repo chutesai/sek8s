@@ -1,21 +1,41 @@
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from cachetools import TTLCache
-
 from sek8s.validators.base import ValidatorBase, ValidationResult
 from sek8s.config import AdmissionConfig, CosignConfig, CosignVerificationConfig
 from sek8s.cosign.client import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
-from sek8s.image_utils import parse_image_reference
+from sek8s.image_utils import is_digest_pinned_reference, parse_image_reference
 
 logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility
 RateLimitError = CosignRateLimitError
+
+# When upstream registry returns 429, pause all cosign calls for this long.
+_RATE_LIMIT_BACKOFF_SECONDS = 300
+
+# Transient errors (DNS, connection refused) are cached for a short window so we
+# don't spam a broken endpoint, but retry quickly once it recovers.
+_TRANSIENT_CACHE_SECONDS = 30
+
+# Hard cap on verify cache entries to bound memory.
+_CACHE_MAX_SIZE = 2048
+
+
+@dataclass
+class _CacheEntry:
+    """Cached cosign outcome: digest success/failure, tag failure only, or transient error."""
+
+    valid: Optional[bool]
+    error: Optional[str]
+    expires_at: float
+
+    @property
+    def expired(self) -> bool:
+        return time.monotonic() >= self.expires_at
 
 
 @dataclass
@@ -41,26 +61,31 @@ Rule = Callable[["CosignValidator", ValidationContext], Awaitable[List[str]]]
 
 
 class CosignValidator(ValidatorBase):
-    """Validator that verifies container image signatures using cosign."""
+    """Validator that verifies container image signatures using cosign.
+
+    Caching (key = full image string):
+
+    - **Digest-pinned** — cache success and failure with configured TTLs.
+    - **Tag-only** — never cache success (tag can move). Cache **invalid** signature
+      results for ``tag_failure_cache_ttl_seconds`` so kube retries do not hammer
+      the registry. Set TTL to ``0`` to disable.
+    - **Transient** errors (any ref) — short TTL to avoid spamming a broken upstream.
+
+    Upstream HTTP 429 from cosign/registry triggers a global cooldown (reactive only;
+    there is no proactive admission-side RPM throttle).
+    """
 
     def __init__(self, config: AdmissionConfig):
         super().__init__(config)
         self.cosign_config = CosignConfig()
         self._cosign_client = CosignClient()
-        self._result_cache = TTLCache(
-            maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.cache_ttl
-        )
-        self._negative_cache = TTLCache(
-            maxsize=self.cosign_config.cache_maxsize, ttl=self.cosign_config.negative_cache_ttl
-        )
-        self._admission_result_cache = TTLCache(
-            maxsize=self.cosign_config.admission_result_cache_maxsize,
-            ttl=self.cosign_config.admission_result_cache_ttl,
-        )
-        self._admission_cache_lock = asyncio.Lock()
-        self._rate_limit_until = 0.0
+        self._cache: Dict[str, _CacheEntry] = {}
+        self._rate_limited_until = 0.0
 
-    # Rule sets: properties returning lists of generic rules (class methods)
+    # ------------------------------------------------------------------
+    # Rule sets
+    # ------------------------------------------------------------------
+
     @property
     def _chutes_rules(self) -> List[Rule]:
         """Rule set for chutes namespace: require config, key, and verify."""
@@ -94,23 +119,14 @@ class CosignValidator(ValidatorBase):
 
         return list(rules)
 
-    def _admission_cache_key(self, request: dict, images: List[str]) -> tuple:
-        """Build a cache key for admission result so all pods with same images reuse result.
-
-        Key is (namespace, kind, image_set) only—no name or UID. So when many new pods
-        are created with the same bad image (e.g. controller replacing crashlooping pods),
-        only the first admission runs cosign; the rest get a cache hit and avoid registry
-        rate limits. Result is valid for admission_result_cache_ttl (default 20 min).
-        """
-        namespace = request.get("namespace", "default")
-        kind = request.get("kind", {}).get("kind", "")
-        return (namespace, kind, tuple(sorted(images)))
+    # ------------------------------------------------------------------
+    # Validate entry point
+    # ------------------------------------------------------------------
 
     async def validate(self, admission_review: Dict) -> ValidationResult:
         """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
 
-        # Only check pods and pod-creating resources
         kind = request.get("kind", {}).get("kind", "")
         if kind not in [
             "Pod",
@@ -123,34 +139,19 @@ class CosignValidator(ValidatorBase):
         ]:
             return ValidationResult.allow()
 
-        operation = request.get("operation", None)
-        if operation == "DELETE":
+        if request.get("operation") == "DELETE":
             return ValidationResult.allow()
 
         obj = request.get("object", {})
         images = self.extract_images(obj)
         namespace = request.get("namespace", "default")
 
-        logger.debug(f"Found {len(images)} images for pod {obj.get('metadata', {}).get('name', 'Unknown')}")
+        pod_name = obj.get("metadata", {}).get("name", "Unknown")
+        logger.debug(f"Found {len(images)} images for pod {pod_name}")
 
         if not images:
             return ValidationResult.allow()
 
-        # Admission-level cache: same pod/spec (same uid or same name+images) → return cached result to avoid repeated cosign calls
-        cache_key = self._admission_cache_key(request, images)
-        async with self._admission_cache_lock:
-            if cache_key in self._admission_result_cache:
-                cached = self._admission_result_cache[cache_key]
-                logger.debug(
-                    "Cosign admission cache hit for %s/%s (%s), allowed=%s",
-                    namespace,
-                    obj.get("metadata", {}).get("name", ""),
-                    kind,
-                    cached.allowed,
-                )
-                return cached
-
-        # 1. Create validation context (required_key_path set in _get_rules_for_context when chutes)
         ctx = ValidationContext(
             config=self.config,
             request=request,
@@ -159,15 +160,14 @@ class CosignValidator(ValidatorBase):
             cosign_config=self.cosign_config,
             validator=self,
         )
-        # 2. Get validation rules (based on context)
         rules = self._get_rules_for_context(ctx)
-        # 3. Run rule set
+
         violations: List[str] = []
         for rule in rules:
             try:
                 violations.extend(await rule(ctx))
             except CosignVerificationUnavailableError as e:
-                logger.warning("Cosign verification unavailable (network/infra), not caching: %s", e)
+                logger.warning(f"Cosign verification unavailable (network/infra): {e}")
                 return ValidationResult.deny(
                     f"Cosign verification unavailable (network/infra): {e}"
                 )
@@ -176,20 +176,16 @@ class CosignValidator(ValidatorBase):
                 violations.append(str(e))
                 break
             except Exception as e:
-                logger.exception("Rule %s failed", getattr(rule, "__name__", rule))
+                logger.exception(f"Rule {getattr(rule, '__name__', rule)} failed")
                 violations.append(f"Verification failed: {str(e)}")
-        # 4. Return validation result and cache it for this pod/spec
-        if violations:
-            result = ValidationResult.deny("; ".join(violations))
-        else:
-            result = ValidationResult.allow()
-        async with self._admission_cache_lock:
-            self._admission_result_cache[cache_key] = result
-        return result
 
-    # -------------------------------------------------------------------------
-    # Generic rules: operate only on context; no namespace or rule-set awareness
-    # -------------------------------------------------------------------------
+        if violations:
+            return ValidationResult.deny("; ".join(violations))
+        return ValidationResult.allow()
+
+    # ------------------------------------------------------------------
+    # Generic rules
+    # ------------------------------------------------------------------
 
     async def _require_cosign_config(self, ctx: ValidationContext) -> List[str]:
         """Report any image that has no cosign configuration (used in rule sets that require config for all images)."""
@@ -290,99 +286,82 @@ class CosignValidator(ValidatorBase):
                 violations.append(f"Verification failed for {image}: {str(e)}")
         return violations
 
+    # ------------------------------------------------------------------
+    # Core verify + cache
+    # ------------------------------------------------------------------
+
+    def _read_cache(self, image: str, digest_pinned: bool) -> Optional[bool]:
+        """Return cached bool result, or None if miss. Raises on cached transient error."""
+        entry = self._cache.get(image)
+        if not entry or entry.expired:
+            return None
+        if entry.valid is None:
+            raise CosignVerificationUnavailableError(entry.error or "")
+        if entry.valid is False:
+            logger.info(f"Cosign cache hit for {image} (cached invalid signature)")
+            return False
+        if digest_pinned:
+            logger.info(f"Cosign cache hit for {image} (valid=True)")
+            return True
+        return None
+
     async def _verify_image_signature(
         self, image: str, verification_config: CosignVerificationConfig
     ) -> bool:
-        """Verify image signature using cosign based on verification configuration."""
-        logger.debug(f"Verifying image signature for {image=}")
+        """Verify image signature with registry-friendly caching (see class docstring)."""
+        digest_pinned = is_digest_pinned_reference(image)
 
-        if self._rate_limit_until and time.time() < self._rate_limit_until:
+        cached = self._read_cache(image, digest_pinned)
+        if cached is not None:
+            return cached
+
+        if self._rate_limited_until and time.monotonic() < self._rate_limited_until:
             raise RateLimitError(
-                f"Cosign verification paused due to upstream rate limiting; retry after "
-                f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until))}"
+                "Cosign verification paused due to upstream rate limiting"
             )
-
-        resolved_image = await self._resolve_image_reference(image)
-        cache_key = self._make_cache_key(resolved_image, verification_config)
-
-        if cache_key in self._result_cache:
-            logger.debug(f"Cosign cache hit (positive) for {resolved_image}")
-            return True
-        if cache_key in self._negative_cache:
-            logger.debug(f"Cosign cache hit (negative) for {resolved_image}")
-            return False
 
         try:
             valid = await self._cosign_client.verify(
-                resolved_image, verification_config, timeout=60.0
+                image, verification_config, timeout=60.0
             )
-        except CosignVerificationUnavailableError:
+        except CosignVerificationUnavailableError as e:
+            self._put(image, None, str(e), _TRANSIENT_CACHE_SECONDS)
             raise
         except CosignRateLimitError:
-            self._record_rate_limit()
+            self._rate_limited_until = time.monotonic() + _RATE_LIMIT_BACKOFF_SECONDS
             raise
         except Exception as e:
-            logger.error(f"Exception during cosign verification: {e}")
+            logger.error(f"cosign verify exception for {image}: {e}")
             valid = False
 
-        # Cache result (success in main cache; failure in short negative cache)
-        if valid:
-            self._result_cache[cache_key] = True
-        else:
-            self._negative_cache[cache_key] = False
+        if digest_pinned:
+            ttl = (
+                self.cosign_config.success_cache_ttl_seconds
+                if valid
+                else self.cosign_config.failure_cache_ttl_seconds
+            )
+            self._put(image, valid, None, float(ttl))
+        elif not valid:
+            ttl = self.cosign_config.tag_failure_cache_ttl_seconds
+            if ttl > 0:
+                self._put(image, False, None, float(ttl))
 
         return valid
 
-    async def _resolve_image_reference(self, image: str) -> str:
-        """Resolve image reference to digest if possible; return as-is if already a digest or if resolution fails."""
-        # If image already has digest, return as-is
-        if "@" in image:
-            return image
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-        try:
-            # Use docker inspect to resolve tag to digest
-            process = await asyncio.create_subprocess_exec(
-                "docker",
-                "inspect",
-                "--format={{index .RepoDigests 0}}",
-                image,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0:
-                digest_ref = stdout.decode().strip()
-                if digest_ref and digest_ref != "<no value>":
-                    logger.debug(f"Resolved {image} to {digest_ref}")
-                    return digest_ref
-
-            # If resolution fails, return original image reference
-            # This allows cosign to handle the resolution
-            logger.debug(f"Could not resolve {image} to digest, using original reference")
-            return image
-
-        except Exception as e:
-            logger.debug(f"Could not resolve image reference {image}: {e}")
-            return image
-
-    def _record_rate_limit(self):
-        """Record rate-limit and set backoff until time so verification is paused for the configured period."""
-        self._rate_limit_until = time.time() + self.cosign_config.rate_limit_backoff_seconds
-
-    def _make_cache_key(
-        self, resolved_image: str, verification_config: CosignVerificationConfig
-    ) -> tuple:
-        """Create a cache key from the resolved image reference and verification config."""
-        return (
-            resolved_image,
-            verification_config.verification_method,
-            str(verification_config.public_key) if verification_config.public_key else None,
-            verification_config.keyless_identity_regex,
-            verification_config.keyless_issuer,
-            verification_config.rekor_url,
-            verification_config.fulcio_url,
-            verification_config.allow_http,
-            verification_config.allow_insecure,
+    def _put(
+        self,
+        key: str,
+        valid: Optional[bool],
+        error: Optional[str],
+        ttl: float,
+    ) -> None:
+        if len(self._cache) >= _CACHE_MAX_SIZE:
+            now = time.monotonic()
+            self._cache = {k: v for k, v in self._cache.items() if v.expires_at > now}
+        self._cache[key] = _CacheEntry(
+            valid=valid, error=error, expires_at=time.monotonic() + ttl
         )

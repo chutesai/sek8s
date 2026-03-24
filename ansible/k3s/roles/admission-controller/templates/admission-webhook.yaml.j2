@@ -29,4 +29,4 @@ webhooks:
     failurePolicy: Fail  # Fail closed if validator is down
     admissionReviewVersions: ["v1", "v1beta1"]
     sideEffects: None
-    timeoutSeconds: 10
+    timeoutSeconds: {{ admission_webhook_timeout_seconds | default(30) }}

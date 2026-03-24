@@ -10,6 +10,14 @@ miner:
   ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
   seed: "your_production_seed_here"
 
+# Optional Docker Hub credentials — higher pull limits for k3s/containerd and cosign (anonymous quota is tight).
+# Use a read-only PAT: https://docs.docker.com/docker-hub/access-tokens/
+# Values are written to the config volume as cleartext files; protect the volume.
+# CLI wins when both are set: --docker-hub-username / --docker-hub-token
+# docker_hub:
+#   username: "your_dockerhub_username"
+#   token: "dckr_pat_xxxxxxxx"
+
 network:
   vm_ip: "192.168.100.2"
   bridge_ip: "192.168.100.1/24"

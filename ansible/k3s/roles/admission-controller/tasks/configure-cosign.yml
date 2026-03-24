@@ -9,6 +9,14 @@
         mode: '0644'
       notify: restart admission-controller
 
+    - name: Create docker-config directory for DOCKER_CONFIG/cosign (config.json written at boot by config-manager)
+      ansible.builtin.file:
+        path: /etc/admission-controller/docker-config
+        state: directory
+        owner: root
+        group: admission
+        mode: '0750'
+
     - name: Create cosign directory for admission controller
       ansible.builtin.file:
         path: /etc/admission-controller/cosign
