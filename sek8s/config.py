@@ -439,16 +439,36 @@ class CosignRegistryConfig(CosignVerificationConfig):
     # Optional organization-level configs
     organizations: Dict[str, CosignOrganizationConfig] = Field(default_factory=dict)
 
-class CosignConfig(BaseSettings):
-    """Configuration for Cosign integration (Phase 4b)."""
 
-    cache_ttl: int = Field(default=3600, ge=0)
-    cache_maxsize: int = Field(default=1024, ge=1)
-    negative_cache_ttl: int = Field(default=600, ge=0)
-    rate_limit_backoff_seconds: int = Field(default=300, ge=0)
-    # Admission-level result cache: same pod/spec re-admissions reuse result to avoid registry rate limits
-    admission_result_cache_ttl: int = Field(default=600, ge=0)  # 10 minutes
-    admission_result_cache_maxsize: int = Field(default=2048, ge=1)
+class CosignConfig(BaseSettings):
+    """Configuration for Cosign integration (Phase 4b).
+
+    - ``rate_limit`` — max cosign verify *starts* per minute (spacing). ``0`` disables.
+    - ``success_cache_ttl_seconds`` / ``failure_cache_ttl_seconds`` — TTL (seconds) for
+      **digest-pinned** verify caches only (``image@sha256:…``). Tag-only refs verify every admission.
+
+    Environment (one alias each): ``COSIGN_RATE_LIMIT``, ``COSIGN_SUCCESS_CACHE_TTL``,
+    ``COSIGN_FAILURE_CACHE_TTL`` (TTL values are seconds).
+    """
+
+    rate_limit: int = Field(
+        default=30,
+        ge=0,
+        description="Max cosign verify starts per minute (0 = no spacing limit).",
+        validation_alias="COSIGN_RATE_LIMIT",
+    )
+    success_cache_ttl_seconds: int = Field(
+        default=3600,
+        ge=0,
+        description="Seconds to cache a successful verify for a digest-pinned image.",
+        validation_alias="COSIGN_SUCCESS_CACHE_TTL",
+    )
+    failure_cache_ttl_seconds: int = Field(
+        default=600,
+        ge=0,
+        description="Seconds to cache a failed verify for a digest-pinned image.",
+        validation_alias="COSIGN_FAILURE_CACHE_TTL",
+    )
 
     # Cosign config
     oidc_identity_regex: str = Field(default="^https://github.com/your-org/.*")
@@ -470,6 +490,7 @@ class CosignConfig(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     @field_validator("registry_configs", mode="before")

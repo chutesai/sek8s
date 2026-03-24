@@ -50,9 +50,11 @@ def test_env():
         "CACHE_MAXSIZE",
         "OIDC_IDENTITY_REGEX",
         "OIDC_ISSUER",
-        "COSIGN_CACHE_TTL",
         "COSIGN_OIDC_IDENTITY_REGEX",
         "COSIGN_OIDC_ISSUER",
+        "COSIGN_SUCCESS_CACHE_TTL",
+        "COSIGN_FAILURE_CACHE_TTL",
+        "COSIGN_RATE_LIMIT",
         "POLICY_PATH",
     ]
     for var in test_vars:
@@ -274,7 +276,9 @@ class TestCosignConfig:
         """Test default Cosign configuration."""
         config = CosignConfig()
 
-        assert config.cache_ttl == 3600
+        assert config.success_cache_ttl_seconds == 3600
+        assert config.failure_cache_ttl_seconds == 600
+        assert config.rate_limit == 30
         assert config.oidc_identity_regex == "^https://github.com/your-org/.*"
         assert config.oidc_issuer == "https://token.actions.githubusercontent.com"
         assert config.cosign_rekor_url == "https://rekor.sigstore.dev"
@@ -289,20 +293,29 @@ class TestCosignConfig:
         assert default_registry.public_key == Path("/etc/admission-controller/.cosign/cosign.pub")
 
     def test_cosign_config_from_env(self):
-        """Test Cosign config with environment variables."""
-        os.environ["CACHE_TTL"] = "7200"
+        """Test Cosign config with single COSIGN_* env alias per tunable."""
+        os.environ["COSIGN_SUCCESS_CACHE_TTL"] = "7200"
+        os.environ["COSIGN_FAILURE_CACHE_TTL"] = "120"
+        os.environ["COSIGN_RATE_LIMIT"] = "15"
         os.environ["OIDC_IDENTITY_REGEX"] = "^https://github.com/myorg/.*"
         os.environ["OIDC_ISSUER"] = "https://custom.issuer.com"
 
         try:
             config = CosignConfig()
 
-            assert config.cache_ttl == 7200
+            assert config.success_cache_ttl_seconds == 7200
+            assert config.failure_cache_ttl_seconds == 120
+            assert config.rate_limit == 15
             assert config.oidc_identity_regex == "^https://github.com/myorg/.*"
             assert config.oidc_issuer == "https://custom.issuer.com"
         finally:
-            # Cleanup
-            for var in ["CACHE_TTL", "OIDC_IDENTITY_REGEX", "OIDC_ISSUER"]:
+            for var in [
+                "COSIGN_SUCCESS_CACHE_TTL",
+                "COSIGN_FAILURE_CACHE_TTL",
+                "COSIGN_RATE_LIMIT",
+                "OIDC_IDENTITY_REGEX",
+                "OIDC_ISSUER",
+            ]:
                 os.environ.pop(var, None)
 
     def test_cosign_config_with_registry_configs_list(self):

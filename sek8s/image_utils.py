@@ -7,6 +7,19 @@ Used by validators (registry, cosign) and system-manager images module.
 from __future__ import annotations
 
 
+def is_digest_pinned_reference(image_ref: str) -> bool:
+    """Return True if *image_ref* includes an OCI digest (immutable id).
+
+    Tag-only references (e.g. ``nginx:latest``) can move to new content; callers
+    must not treat verify results as valid for a later admission that reuses the
+    same tag string.
+    """
+    if "@" not in image_ref:
+        return False
+    digest_part = image_ref.rsplit("@", 1)[-1]
+    return digest_part.startswith("sha256:") or digest_part.startswith("sha512:")
+
+
 def normalize_registry_hostname(image_ref: str) -> str:
     """Lowercase registry hostname so ctr matches registries.yaml (case-sensitive lookup)."""
     if "/" not in image_ref:

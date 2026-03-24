@@ -50,6 +50,19 @@ def webhook_server(test_config):
 
 
 @pytest.fixture
+def digest_pinned_admission_review(valid_admission_review):
+    """Same as ``valid_admission_review`` but with a digest-pinned image (Cosign admission cache eligible)."""
+    import copy
+
+    r = copy.deepcopy(valid_admission_review)
+    r["request"]["object"]["spec"]["containers"][0]["image"] = (
+        "docker.io/library/nginx@sha256:abcdef1234567890abcdef1234567890"
+        "abcdef1234567890abcdef1234567890"
+    )
+    return r
+
+
+@pytest.fixture
 def valid_admission_review():
     """Create a valid admission review request."""
     return {
