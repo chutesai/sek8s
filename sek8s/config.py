@@ -443,20 +443,15 @@ class CosignRegistryConfig(CosignVerificationConfig):
 class CosignConfig(BaseSettings):
     """Configuration for Cosign integration (Phase 4b).
 
-    - ``rate_limit`` — max cosign verify *starts* per minute (spacing). ``0`` disables.
-    - ``success_cache_ttl_seconds`` / ``failure_cache_ttl_seconds`` — TTL (seconds) for
-      **digest-pinned** verify caches only (``image@sha256:…``). Tag-only refs verify every admission.
+    - ``success_cache_ttl_seconds`` / ``failure_cache_ttl_seconds`` — digest-pinned
+      (``@sha256:…``) success/failure TTLs. Tag-only refs never cache success (tag may move).
+    - ``tag_failure_cache_ttl_seconds`` — for tag-only refs, how long to remember
+      invalid/missing signature so admission retries do not hammer the registry. ``0`` disables.
 
-    Environment (one alias each): ``COSIGN_RATE_LIMIT``, ``COSIGN_SUCCESS_CACHE_TTL``,
-    ``COSIGN_FAILURE_CACHE_TTL`` (TTL values are seconds).
+    Environment (one alias each): ``COSIGN_SUCCESS_CACHE_TTL``,
+    ``COSIGN_FAILURE_CACHE_TTL``, ``COSIGN_TAG_FAILURE_CACHE_TTL`` (TTL values are seconds).
     """
 
-    rate_limit: int = Field(
-        default=30,
-        ge=0,
-        description="Max cosign verify starts per minute (0 = no spacing limit).",
-        validation_alias="COSIGN_RATE_LIMIT",
-    )
     success_cache_ttl_seconds: int = Field(
         default=3600,
         ge=0,
@@ -468,6 +463,12 @@ class CosignConfig(BaseSettings):
         ge=0,
         description="Seconds to cache a failed verify for a digest-pinned image.",
         validation_alias="COSIGN_FAILURE_CACHE_TTL",
+    )
+    tag_failure_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description="Seconds to cache invalid/missing signature for tag-only refs (0 = no cache).",
+        validation_alias="COSIGN_TAG_FAILURE_CACHE_TTL",
     )
 
     # Cosign config

@@ -54,7 +54,7 @@ def test_env():
         "COSIGN_OIDC_ISSUER",
         "COSIGN_SUCCESS_CACHE_TTL",
         "COSIGN_FAILURE_CACHE_TTL",
-        "COSIGN_RATE_LIMIT",
+        "COSIGN_TAG_FAILURE_CACHE_TTL",
         "POLICY_PATH",
     ]
     for var in test_vars:
@@ -278,7 +278,7 @@ class TestCosignConfig:
 
         assert config.success_cache_ttl_seconds == 3600
         assert config.failure_cache_ttl_seconds == 600
-        assert config.rate_limit == 30
+        assert config.tag_failure_cache_ttl_seconds == 300
         assert config.oidc_identity_regex == "^https://github.com/your-org/.*"
         assert config.oidc_issuer == "https://token.actions.githubusercontent.com"
         assert config.cosign_rekor_url == "https://rekor.sigstore.dev"
@@ -296,7 +296,6 @@ class TestCosignConfig:
         """Test Cosign config with single COSIGN_* env alias per tunable."""
         os.environ["COSIGN_SUCCESS_CACHE_TTL"] = "7200"
         os.environ["COSIGN_FAILURE_CACHE_TTL"] = "120"
-        os.environ["COSIGN_RATE_LIMIT"] = "15"
         os.environ["OIDC_IDENTITY_REGEX"] = "^https://github.com/myorg/.*"
         os.environ["OIDC_ISSUER"] = "https://custom.issuer.com"
 
@@ -305,14 +304,12 @@ class TestCosignConfig:
 
             assert config.success_cache_ttl_seconds == 7200
             assert config.failure_cache_ttl_seconds == 120
-            assert config.rate_limit == 15
             assert config.oidc_identity_regex == "^https://github.com/myorg/.*"
             assert config.oidc_issuer == "https://custom.issuer.com"
         finally:
             for var in [
                 "COSIGN_SUCCESS_CACHE_TTL",
                 "COSIGN_FAILURE_CACHE_TTL",
-                "COSIGN_RATE_LIMIT",
                 "OIDC_IDENTITY_REGEX",
                 "OIDC_ISSUER",
             ]:

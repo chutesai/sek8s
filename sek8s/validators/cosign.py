@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ _CACHE_MAX_SIZE = 2048
 
 @dataclass
 class _CacheEntry:
-    """Single cached cosign verify outcome for a digest-pinned image."""
+    """Cached cosign outcome: digest success/failure, tag failure only, or transient error."""
 
     valid: Optional[bool]
     error: Optional[str]
@@ -64,24 +63,24 @@ Rule = Callable[["CosignValidator", ValidationContext], Awaitable[List[str]]]
 class CosignValidator(ValidatorBase):
     """Validator that verifies container image signatures using cosign.
 
-    Verification flow for each image:
-      1. If the image is digest-pinned and we have a cached result, return it.
-      2. Otherwise acquire the verify lock (serialises all cosign calls),
-         re-check the cache, respect rate-limit spacing, then call cosign.
-      3. Cache the result (success / failure / transient error) by digest.
+    Caching (key = full image string):
 
-    Tag-only references (no ``@sha256:…``) are always verified fresh because
-    the tag can move to new content between admissions.
+    - **Digest-pinned** — cache success and failure with configured TTLs.
+    - **Tag-only** — never cache success (tag can move). Cache **invalid** signature
+      results for ``tag_failure_cache_ttl_seconds`` so kube retries do not hammer
+      the registry. Set TTL to ``0`` to disable.
+    - **Transient** errors (any ref) — short TTL to avoid spamming a broken upstream.
+
+    Upstream HTTP 429 from cosign/registry triggers a global cooldown (reactive only;
+    there is no proactive admission-side RPM throttle).
     """
 
     def __init__(self, config: AdmissionConfig):
         super().__init__(config)
         self.cosign_config = CosignConfig()
         self._cosign_client = CosignClient()
-        self._verify_lock = asyncio.Lock()
         self._cache: Dict[str, _CacheEntry] = {}
         self._rate_limited_until = 0.0
-        self._next_verify_at = 0.0
 
     # ------------------------------------------------------------------
     # Rule sets
@@ -291,80 +290,67 @@ class CosignValidator(ValidatorBase):
     # Core verify + cache
     # ------------------------------------------------------------------
 
+    def _read_cache(self, image: str, digest_pinned: bool) -> Optional[bool]:
+        """Return cached bool result, or None if miss. Raises on cached transient error."""
+        entry = self._cache.get(image)
+        if not entry or entry.expired:
+            return None
+        if entry.valid is None:
+            raise CosignVerificationUnavailableError(entry.error or "")
+        if entry.valid is False:
+            logger.info(f"Cosign cache hit for {image} (cached invalid signature)")
+            return False
+        if digest_pinned:
+            logger.info(f"Cosign cache hit for {image} (valid=True)")
+            return True
+        return None
+
     async def _verify_image_signature(
         self, image: str, verification_config: CosignVerificationConfig
     ) -> bool:
-        """Verify image signature. Cache results by digest; tag-only refs verify every time."""
-        cache_key = image if is_digest_pinned_reference(image) else None
+        """Verify image signature with registry-friendly caching (see class docstring)."""
+        digest_pinned = is_digest_pinned_reference(image)
 
-        # Fast path: check cache without lock
-        if cache_key:
-            entry = self._cache.get(cache_key)
-            if entry and not entry.expired:
-                return self._return_cached(entry, image)
+        cached = self._read_cache(image, digest_pinned)
+        if cached is not None:
+            return cached
 
-        async with self._verify_lock:
-            # Re-check: another coroutine may have verified while we waited
-            if cache_key:
-                entry = self._cache.get(cache_key)
-                if entry and not entry.expired:
-                    return self._return_cached(entry, image)
+        if self._rate_limited_until and time.monotonic() < self._rate_limited_until:
+            raise RateLimitError(
+                "Cosign verification paused due to upstream rate limiting"
+            )
 
-            # Global upstream rate-limit backoff
-            if self._rate_limited_until and time.monotonic() < self._rate_limited_until:
-                raise RateLimitError(
-                    "Cosign verification paused due to upstream rate limiting"
-                )
+        try:
+            valid = await self._cosign_client.verify(
+                image, verification_config, timeout=60.0
+            )
+        except CosignVerificationUnavailableError as e:
+            self._put(image, None, str(e), _TRANSIENT_CACHE_SECONDS)
+            raise
+        except CosignRateLimitError:
+            self._rate_limited_until = time.monotonic() + _RATE_LIMIT_BACKOFF_SECONDS
+            raise
+        except Exception as e:
+            logger.error(f"cosign verify exception for {image}: {e}")
+            valid = False
 
-            # Proactive rate-limit spacing
-            now = time.monotonic()
-            wait = max(0.0, self._next_verify_at - now)
-            if wait > 0:
-                await asyncio.sleep(wait)
+        if digest_pinned:
+            ttl = (
+                self.cosign_config.success_cache_ttl_seconds
+                if valid
+                else self.cosign_config.failure_cache_ttl_seconds
+            )
+            self._put(image, valid, None, float(ttl))
+        elif not valid:
+            ttl = self.cosign_config.tag_failure_cache_ttl_seconds
+            if ttl > 0:
+                self._put(image, False, None, float(ttl))
 
-            try:
-                valid = await self._cosign_client.verify(
-                    image, verification_config, timeout=60.0
-                )
-            except CosignVerificationUnavailableError as e:
-                if cache_key:
-                    self._put(cache_key, None, str(e), _TRANSIENT_CACHE_SECONDS)
-                raise
-            except CosignRateLimitError:
-                self._rate_limited_until = time.monotonic() + _RATE_LIMIT_BACKOFF_SECONDS
-                raise
-            except Exception as e:
-                logger.error(f"cosign verify exception for {image}: {e}")
-                valid = False
-            finally:
-                self._schedule_next_verify()
-
-            if cache_key:
-                ttl = (
-                    self.cosign_config.success_cache_ttl_seconds
-                    if valid
-                    else self.cosign_config.failure_cache_ttl_seconds
-                )
-                self._put(cache_key, valid, None, ttl)
-
-            return valid
+        return valid
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _return_cached(entry: _CacheEntry, image: str) -> bool:
-        if entry.valid is None:
-            raise CosignVerificationUnavailableError(entry.error or "")
-        logger.info(f"Cosign cache hit for {image} (valid={entry.valid})")
-        return entry.valid
-
-    def _schedule_next_verify(self) -> None:
-        """Set the earliest monotonic time the next cosign call is allowed to start."""
-        rpm = self.cosign_config.rate_limit
-        interval = (60.0 / rpm) if rpm and rpm > 0 else 0.0
-        self._next_verify_at = time.monotonic() + interval
 
     def _put(
         self,

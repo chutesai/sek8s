@@ -470,7 +470,7 @@ class TestCosignValidator:
 
     @pytest.mark.asyncio
     async def test_tag_only_always_re_verifies(self, config, tmp_path):
-        """Tag-only image refs can't be cached; cosign runs every time."""
+        """Tag-only success: never cached; each sequential admission calls cosign."""
         key_file = tmp_path / "cosign.pub"
         key_file.write_text("test")
         vc = CosignVerificationConfig(
@@ -488,6 +488,54 @@ class TestCosignValidator:
         with patch.object(validator._cosign_client, "verify", side_effect=count_verify):
             await validator._verify_image_signature("docker.io/test/img:latest", vc)
             await validator._verify_image_signature("docker.io/test/img:latest", vc)
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_tag_failure_is_cached(self, config, tmp_path):
+        """Invalid tag-only verify cached so kube retries do not hammer the registry."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        validator.cosign_config = CosignConfig(tag_failure_cache_ttl_seconds=300)
+        calls = []
+
+        async def fail_verify(*args, **kwargs):
+            calls.append(1)
+            return False
+
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
+            assert await validator._verify_image_signature(tag_img, vc) is False
+            assert await validator._verify_image_signature(tag_img, vc) is False
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_tag_failure_cache_respects_zero_ttl(self, config, tmp_path):
+        """tag_failure_cache_ttl_seconds=0 disables caching invalid tag signatures."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        validator.cosign_config = CosignConfig(tag_failure_cache_ttl_seconds=0)
+        calls = []
+
+        async def fail_verify(*args, **kwargs):
+            calls.append(1)
+            return False
+
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
+            assert await validator._verify_image_signature(tag_img, vc) is False
+            assert await validator._verify_image_signature(tag_img, vc) is False
         assert len(calls) == 2
 
     @pytest.mark.asyncio
@@ -539,6 +587,31 @@ class TestCosignValidator:
         assert len(calls) == 1
 
     @pytest.mark.asyncio
+    async def test_transient_error_cached_for_tag(self, config, tmp_path):
+        """Transient errors for tag-only refs use short TTL like digest."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        calls = []
+
+        async def fail_transient(*args, **kwargs):
+            calls.append(1)
+            raise CosignVerificationUnavailableError("connection refused")
+
+        tag_img = "docker.io/test/img:latest"
+        with patch.object(validator._cosign_client, "verify", side_effect=fail_transient):
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(tag_img, vc)
+            with pytest.raises(CosignVerificationUnavailableError):
+                await validator._verify_image_signature(tag_img, vc)
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
     async def test_rate_limit_sets_global_backoff(self, config, tmp_path):
         """Upstream 429 pauses all verifications, not just the triggering image."""
         key_file = tmp_path / "cosign.pub"
@@ -562,8 +635,8 @@ class TestCosignValidator:
             await validator._verify_image_signature(other_img, vc)
 
     @pytest.mark.asyncio
-    async def test_concurrent_digest_verify_only_one_cosign_call(self, config, tmp_path):
-        """Concurrent verify for same digest-pinned image: lock serialises, cache deduplicates."""
+    async def test_concurrent_same_digest_each_invokes_cosign(self, config, tmp_path):
+        """No singleflight: concurrent verifies for the same ref each run cosign."""
         key_file = tmp_path / "cosign.pub"
         key_file.write_text("test")
         vc = CosignVerificationConfig(
@@ -586,4 +659,34 @@ class TestCosignValidator:
             )
 
         assert all(r is True for r in results)
-        assert len(calls) == 1
+        assert len(calls) == 8
+
+    @pytest.mark.asyncio
+    async def test_concurrent_different_digests_parallel_cosign(self, config, tmp_path):
+        """Different digest-pinned images verify concurrently (no global cosign lock)."""
+        key_file = tmp_path / "cosign.pub"
+        key_file.write_text("test")
+        vc = CosignVerificationConfig(
+            verification_method="key",
+            public_key=key_file,
+            rekor_url="https://rekor.sigstore.dev",
+        )
+        validator = CosignValidator(config)
+        gate = asyncio.Event()
+        calls = []
+
+        async def slow_verify(*args, **kwargs):
+            calls.append(1)
+            await gate.wait()
+            return True
+
+        img_a = "docker.io/test/a@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        img_b = "docker.io/test/b@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with patch.object(validator._cosign_client, "verify", side_effect=slow_verify):
+            t1 = asyncio.create_task(validator._verify_image_signature(img_a, vc))
+            t2 = asyncio.create_task(validator._verify_image_signature(img_b, vc))
+            await asyncio.sleep(0.05)
+            assert len(calls) == 2
+            gate.set()
+            await asyncio.gather(t1, t2)
+        assert len(calls) == 2
