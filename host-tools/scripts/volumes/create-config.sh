@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# create-config-volume.sh - Create and populate a config volume for TDX VMs
+# create-config-volume.sh - Create or refresh a config qcow2 for TDX VMs
 # Usage: ./create-config.sh <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]
+# If output-path exists, the image is mounted and config files are replaced in place (stop QEMU if it holds the file open).
 # Example: ./create-config.sh config.qcow2 chutes-miner "ss58_value" "seed_value" 192.168.100.2 192.168.100.1
 # With Docker Hub (optional 8th/9th args, requires vm-dns as 7th): ... 8.8.8.8 "hubuser" "dckr_pat_..."
 
@@ -49,15 +50,59 @@ ensure_parent_directory() {
     fi
 }
 
+populate_config_into_mount() {
+    local MOUNT_DIR="$1"
+    print_info "  Clearing all entries at volume root..."
+    if ! find "$MOUNT_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; then
+        print_error "Failed to clear config volume"
+        exit 1
+    fi
+
+    echo "$HOSTNAME" > "$MOUNT_DIR/hostname"
+    print_info "  ✓ hostname: $HOSTNAME"
+
+    echo "$MINER_SS58" > "$MOUNT_DIR/miner-ss58"
+    echo "$MINER_SEED" > "$MOUNT_DIR/miner-seed"
+    print_info "  ✓ miner credential files"
+
+    cat > "$MOUNT_DIR/network-config.yaml" << EOF
+network:
+  version: 2
+  ethernets:
+    any-ethernet:
+      match:
+        name: "en*"
+      addresses:
+        - ${VM_IP}/24
+      routes:
+        - to: default
+          via: ${VM_GATEWAY}
+      nameservers:
+        addresses:
+          - ${VM_DNS}
+EOF
+    print_info "  ✓ network-config.yaml (${VM_IP} via ${VM_GATEWAY})"
+
+    chmod 644 "$MOUNT_DIR/hostname" "$MOUNT_DIR/network-config.yaml"
+    chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
+
+    if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
+        printf '%s' "$DOCKER_HUB_USER" > "$MOUNT_DIR/docker-hub-username"
+        printf '%s' "$DOCKER_HUB_TOKEN" > "$MOUNT_DIR/docker-hub-token"
+        chmod 600 "$MOUNT_DIR/docker-hub-username" "$MOUNT_DIR/docker-hub-token"
+        print_info "  ✓ Docker Hub credential files"
+    fi
+}
+
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
 Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]
 
-Create and populate a config volume for TDX VMs with the required label.
+Create a new config qcow2, or refresh an existing one (same path, ext4 label $LABEL).
 
 Arguments:
-  output-path    Path where the qcow2 file will be created
+  output-path    qcow2 path (created if missing; updated in place if it already exists)
   hostname       VM hostname
   miner-ss58     Miner SS58 credential
   miner-seed     Miner seed credential  
@@ -142,17 +187,22 @@ if ! [[ "$HOSTNAME" =~ ^[a-zA-Z0-9-]+$ ]]; then
     exit 1
 fi
 
-# Check if output file already exists
+EXISTING_VOLUME=false
 if [ -f "$OUTPUT_PATH" ]; then
-    print_error "Output file already exists: $OUTPUT_PATH"
-    echo "Please remove it first or choose a different path"
+    EXISTING_VOLUME=true
+elif [ -e "$OUTPUT_PATH" ]; then
+    print_error "Path exists and is not a regular file: $OUTPUT_PATH"
     exit 1
+else
+    ensure_parent_directory "$OUTPUT_PATH"
 fi
 
-ensure_parent_directory "$OUTPUT_PATH"
-
 # Check for required commands
-for cmd in qemu-img qemu-nbd mkfs.ext4 blkid; do
+REQUIRED_CMDS=(qemu-nbd blkid)
+if [ "$EXISTING_VOLUME" != true ]; then
+    REQUIRED_CMDS=(qemu-img qemu-nbd mkfs.ext4 blkid)
+fi
+for cmd in "${REQUIRED_CMDS[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
         print_error "Required command not found: $cmd"
         case "$cmd" in
@@ -213,30 +263,39 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Step 1: Create small qcow2 image (config files are tiny)
-print_info ""
-print_info "Step 1/5: Creating qcow2 config volume..."
-print_info "  Path: $OUTPUT_PATH"
-print_info "  Size: 10M"
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_info ""
+    print_info "Updating existing config volume (replace files in place)..."
+    print_info "  Path: $OUTPUT_PATH"
+else
+    print_info ""
+    print_info "Step 1/5: Creating qcow2 config volume..."
+    print_info "  Path: $OUTPUT_PATH"
+    print_info "  Size: 10M"
 
-if ! qemu-img create -f qcow2 "$OUTPUT_PATH" 10M; then
-    print_error "Failed to create qcow2 image"
-    exit 1
+    if ! qemu-img create -f qcow2 "$OUTPUT_PATH" 10M; then
+        print_error "Failed to create qcow2 image"
+        exit 1
+    fi
+
+    print_success "qcow2 image created"
 fi
 
-print_success "qcow2 image created"
-
-# Step 2: Connect to NBD
 print_info ""
-print_info "Step 2/5: Connecting to NBD device..."
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_info "Step 1/3: Connecting to NBD device..."
+else
+    print_info "Step 2/5: Connecting to NBD device..."
+fi
 
 if ! qemu-nbd --connect="$NBD_DEVICE" "$OUTPUT_PATH"; then
     print_error "Failed to connect qcow2 to NBD device"
-    rm -f "$OUTPUT_PATH"
+    if [ "$EXISTING_VOLUME" != true ]; then
+        rm -f "$OUTPUT_PATH"
+    fi
     exit 1
 fi
 
-# Wait for device to be ready
 sleep 1
 
 if [ ! -b "$NBD_DEVICE" ]; then
@@ -246,21 +305,25 @@ fi
 
 print_success "Connected to $NBD_DEVICE"
 
-# Step 3: Format with ext4 and label
-print_info ""
-print_info "Step 3/5: Formatting with ext4..."
-print_info "  Label: $LABEL"
+if [ "$EXISTING_VOLUME" != true ]; then
+    print_info ""
+    print_info "Step 3/5: Formatting with ext4..."
+    print_info "  Label: $LABEL"
 
-if ! mkfs.ext4 -L "$LABEL" "$NBD_DEVICE"; then
-    print_error "Failed to format device"
-    exit 1
+    if ! mkfs.ext4 -L "$LABEL" "$NBD_DEVICE"; then
+        print_error "Failed to format device"
+        exit 1
+    fi
+
+    print_success "Formatted with ext4"
 fi
 
-print_success "Formatted with ext4"
-
-# Step 4: Mount and populate with config files
 print_info ""
-print_info "Step 4/5: Populating config files..."
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_info "Step 2/3: Populating config files..."
+else
+    print_info "Step 4/5: Populating config files..."
+fi
 
 MOUNT_DIR="/tmp/tdx-config-mount-$$"
 mkdir -p "$MOUNT_DIR"
@@ -271,55 +334,24 @@ if ! mount "$NBD_DEVICE" "$MOUNT_DIR"; then
     exit 1
 fi
 
-# Create hostname file
-echo "$HOSTNAME" > "$MOUNT_DIR/hostname"
-print_info "  ✓ Created hostname: $HOSTNAME"
+populate_config_into_mount "$MOUNT_DIR"
 
-# Create miner credential files  
-echo "$MINER_SS58" > "$MOUNT_DIR/miner-ss58"
-echo "$MINER_SEED" > "$MOUNT_DIR/miner-seed"
-print_info "  ✓ Created miner credential files"
-
-# Create network configuration
-cat > "$MOUNT_DIR/network-config.yaml" << EOF
-network:
-  version: 2
-  ethernets:
-    any-ethernet:
-      match:
-        name: "en*"
-      addresses:
-        - ${VM_IP}/24
-      routes:
-        - to: default
-          via: ${VM_GATEWAY}
-      nameservers:
-        addresses:
-          - ${VM_DNS}
-EOF
-print_info "  ✓ Created network config: ${VM_IP} via ${VM_GATEWAY}"
-
-# Set proper permissions
-chmod 644 "$MOUNT_DIR/hostname" "$MOUNT_DIR/network-config.yaml"
-chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
-
-if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
-    printf '%s' "$DOCKER_HUB_USER" > "$MOUNT_DIR/docker-hub-username"
-    printf '%s' "$DOCKER_HUB_TOKEN" > "$MOUNT_DIR/docker-hub-token"
-    chmod 600 "$MOUNT_DIR/docker-hub-username" "$MOUNT_DIR/docker-hub-token"
-    print_info "  ✓ Created Docker Hub credential files"
-fi
-
-# Sync and unmount
 sync
 umount "$MOUNT_DIR"
 rmdir "$MOUNT_DIR"
 
-print_success "Config files created and volume unmounted"
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_success "Config files written and volume unmounted"
+else
+    print_success "Config files created and volume unmounted"
+fi
 
-# Step 5: Verify
 print_info ""
-print_info "Step 5/5: Verifying volume..."
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_info "Step 3/3: Verifying volume..."
+else
+    print_info "Step 5/5: Verifying volume..."
+fi
 
 FS_INFO=$(blkid -o export "$NBD_DEVICE" 2>/dev/null || true)
 FS_TYPE=$(echo "$FS_INFO" | grep '^TYPE=' | cut -d= -f2 || echo "unknown")
@@ -337,15 +369,20 @@ fi
 
 print_success "Volume verified successfully"
 
-# Disconnect NBD (will also happen in cleanup trap)
 qemu-nbd --disconnect "$NBD_DEVICE" &> /dev/null
 
 print_info ""
-print_success "Config volume created successfully!"
+if [ "$EXISTING_VOLUME" = true ]; then
+    print_success "Config volume updated successfully!"
+else
+    print_success "Config volume created successfully!"
+fi
 print_info ""
 print_info "Volume details:"
 print_info "  Path: $OUTPUT_PATH"
-print_info "  Size: 10M"
+if [ "$EXISTING_VOLUME" != true ]; then
+    print_info "  Size: 10M"
+fi
 print_info "  Filesystem: ext4"
 print_info "  Label: $LABEL"
 print_info ""

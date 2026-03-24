@@ -204,7 +204,7 @@ Volumes:
   --cache-volume PATH        Default: cache-<hostname>.raw (existing .qcow2 allowed at launch)
   --storage-size SIZE
   --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
-  --config-volume PATH
+  --config-volume PATH       Existing qcow2 is repopulated from config.yaml each launch (same file)
   --skip-bind
   --skip-checksum         Skip base image SHA256 verification (for debug with custom images)
 
@@ -488,29 +488,19 @@ echo ""
 # Config volume
 # --------------------------------------------------------------------
 echo "Step 4: Setting up config volume..."
-if [[ -n "$CONFIG_VOLUME" ]]; then
-  if [[ -f "$CONFIG_VOLUME" ]]; then
-    echo "✓ Using existing config volume: $CONFIG_VOLUME"
-  else
-    echo "Creating config volume at configured path: $CONFIG_VOLUME"
-    if run_create_config "$CONFIG_VOLUME"; then
-      echo "✓ Config volume created"
-    else
-      echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
-      exit 1
-    fi
-  fi
-else
+if [[ -z "$CONFIG_VOLUME" ]]; then
   CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
-  [[ -f "$CONFIG_VOLUME" ]] && sudo rm -f "$CONFIG_VOLUME"
-
+fi
+if [[ -f "$CONFIG_VOLUME" ]]; then
+  echo "Refreshing existing config volume from current config: $CONFIG_VOLUME"
+else
   echo "Creating config volume: $CONFIG_VOLUME"
-  if run_create_config "$CONFIG_VOLUME"; then
-    echo "✓ Config volume created"
-  else
-    echo "✗ Error: Failed to create config volume at $CONFIG_VOLUME"
-    exit 1
-  fi
+fi
+if run_create_config "$CONFIG_VOLUME"; then
+  echo "✓ Config volume ready"
+else
+  echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
+  exit 1
 fi
 echo ""
 

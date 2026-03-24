@@ -98,6 +98,7 @@ docker_hub:
 
 - Schema: both `username` and `token` are required when `docker_hub` is present (`maxLength` 64 / 128).
 - The host writes `docker-hub-username` and `docker-hub-token` onto the config volume (cleartext); treat the volume like other secrets.
+- `quick-launch.sh` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
 - See `config.tmpl.yaml`, `config.prod.example.yaml`, and `config.debug.example.yaml` for commented examples.
 
 ## Production vs Debug Configs

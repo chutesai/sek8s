@@ -292,7 +292,7 @@ For advanced users who want to manage components separately:
 # Manually create cache volume (raw format, XFS)
 sudo ./volumes/create-cache.sh cache.raw 5000G tdx-cache
 
-# Manually create config volume
+# Create or refresh config qcow2 (existing file is updated in place)
 sudo ./volumes/create-config.sh config.qcow2 hostname ss58 seed vm-ip gateway dns
 
 # Manually setup network
