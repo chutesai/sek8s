@@ -1,4 +1,6 @@
 # Registry mirrors configuration
+# Docker Hub authentication (docker.io / registry-1.docker.io) is merged at VM boot by
+# config-manager (process-config.py) from the config volume — no Hub secrets in the image.
 mirrors:
   "{{ registry_hostname }}:{{ registry_port | default('30500') }}":
     endpoint:

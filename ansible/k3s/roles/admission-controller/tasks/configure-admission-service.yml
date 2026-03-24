@@ -25,6 +25,14 @@
         group: root
         mode: '0644'
 
+    - name: Deploy DOCKER_CONFIG drop-in (shared path with system-manager)
+      ansible.builtin.copy:
+        src: 20-docker-config.conf
+        dest: /etc/systemd/system/admission-controller.service.d/20-docker-config.conf
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Reload systemd and start admission controller
       ansible.builtin.systemd:
         name: admission-controller

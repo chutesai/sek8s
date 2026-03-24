@@ -115,6 +115,12 @@ def main():
     runtime = config.get('runtime', {})
     foreground = runtime.get('foreground', False)
 
+    docker_hub = config.get('docker_hub') or {}
+    if not isinstance(docker_hub, dict):
+        docker_hub = {}
+    docker_hub_username = docker_hub.get('username', '') or ''
+    docker_hub_token = docker_hub.get('token', '') or ''
+
     print(f"HOSTNAME={shlex.quote(hostname)}")
     print(f"BASE_IMAGE={shlex.quote(base_image)}")
     print(f"OVERLAY_DIR={shlex.quote(overlay_directory)}")
@@ -133,6 +139,8 @@ def main():
     print(f"CONFIG_VOLUME={shlex.quote(config_volume)}")
     print(f"SKIP_BIND={'true' if not bind_devices else 'false'}")
     print(f"FOREGROUND={'true' if foreground else 'false'}")
+    print(f"DOCKER_HUB_USERNAME={shlex.quote(docker_hub_username)}")
+    print(f"DOCKER_HUB_TOKEN={shlex.quote(docker_hub_token)}")
 
 
 if __name__ == '__main__':

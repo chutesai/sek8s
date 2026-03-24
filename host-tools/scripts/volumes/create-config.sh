@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # create-config-volume.sh - Create and populate a config volume for TDX VMs
-# Usage: ./create-config.sh <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns]
+# Usage: ./create-config.sh <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]
 # Example: ./create-config.sh config.qcow2 chutes-miner "ss58_value" "seed_value" 192.168.100.2 192.168.100.1
+# With Docker Hub (optional 8th/9th args, requires vm-dns as 7th): ... 8.8.8.8 "hubuser" "dckr_pat_..."
 
 set -euo pipefail
 
@@ -51,7 +52,7 @@ ensure_parent_directory() {
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
-Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns]
+Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]
 
 Create and populate a config volume for TDX VMs with the required label.
 
@@ -62,17 +63,21 @@ Arguments:
   miner-seed     Miner seed credential  
   vm-ip          VM IP address
   vm-gateway     VM gateway IP
-  vm-dns         VM DNS server (optional, default: 8.8.8.8)
+  vm-dns         VM DNS server (optional if only 6 base args; default: 8.8.8.8)
+  docker-hub-user   Optional Docker Hub username (requires docker-hub-token and vm-dns)
+  docker-hub-token  Optional Docker Hub PAT/password (requires docker-hub-user)
 
 Examples:
   $0 config.qcow2 chutes-miner "5abc..." "seed123" 192.168.100.2 192.168.100.1
   $0 /path/to/config.qcow2 my-miner "5def..." "seed456" 192.168.100.3 192.168.100.1 1.1.1.1
+  $0 config.qcow2 miner "5..." "seed..." 192.168.100.2 192.168.100.1 8.8.8.8 "dockeruser" "dckr_pat_xxx"
 
 The volume will contain:
   /hostname         - VM hostname
   /miner-ss58       - Miner SS58 credential
   /miner-seed       - Miner seed credential
   /network-config.yaml - Netplan network configuration
+  /docker-hub-username, /docker-hub-token - optional Docker Hub credentials (mode 0600)
 
 The volume will be formatted with:
   - Filesystem: ext4
@@ -89,10 +94,10 @@ EOF
     exit 0
 fi
 
-# Validate arguments
-if [ $# -lt 6 ] || [ $# -gt 7 ]; then
+# Validate arguments: 6 (no dns), 7 (with dns), or 9 (dns + docker hub pair)
+if [ $# -lt 6 ] || [ $# -eq 8 ] || [ $# -gt 9 ]; then
     print_error "Invalid number of arguments"
-    echo "Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns]"
+    echo "Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]"
     echo "Example: $0 config.qcow2 chutes-miner 'ss58_value' 'seed_value' 192.168.100.2 192.168.100.1"
     echo "Run '$0 --help' for more information"
     exit 1
@@ -104,12 +109,30 @@ MINER_SS58="$3"
 MINER_SEED="$4"
 VM_IP="$5"
 VM_GATEWAY="$6"
-VM_DNS="${7:-8.8.8.8}"
+DOCKER_HUB_USER=""
+DOCKER_HUB_TOKEN=""
+
+if [ $# -eq 6 ]; then
+    VM_DNS="8.8.8.8"
+elif [ $# -eq 7 ]; then
+    VM_DNS="$7"
+elif [ $# -eq 9 ]; then
+    VM_DNS="$7"
+    DOCKER_HUB_USER="$8"
+    DOCKER_HUB_TOKEN="$9"
+fi
 
 # Basic validation
-if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" || -z "$VM_IP" || -z "$VM_GATEWAY" ]]; then
-    print_error "All arguments except vm-dns are required and cannot be empty"
+if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" || -z "$VM_IP" || -z "$VM_GATEWAY" || -z "$VM_DNS" ]]; then
+    print_error "Hostname, miner credentials, VM IP, gateway, and DNS must be non-empty"
     exit 1
+fi
+
+if [[ -n "$DOCKER_HUB_USER" || -n "$DOCKER_HUB_TOKEN" ]]; then
+    if [[ -z "$DOCKER_HUB_USER" || -z "$DOCKER_HUB_TOKEN" ]]; then
+        print_error "Docker Hub username and token must both be provided when using Hub auth"
+        exit 1
+    fi
 fi
 
 # Validate hostname (basic check)
@@ -279,6 +302,13 @@ print_info "  ✓ Created network config: ${VM_IP} via ${VM_GATEWAY}"
 # Set proper permissions
 chmod 644 "$MOUNT_DIR/hostname" "$MOUNT_DIR/network-config.yaml"
 chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
+
+if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
+    printf '%s' "$DOCKER_HUB_USER" > "$MOUNT_DIR/docker-hub-username"
+    printf '%s' "$DOCKER_HUB_TOKEN" > "$MOUNT_DIR/docker-hub-token"
+    chmod 600 "$MOUNT_DIR/docker-hub-username" "$MOUNT_DIR/docker-hub-token"
+    print_info "  ✓ Created Docker Hub credential files"
+fi
 
 # Sync and unmount
 sync

@@ -1,7 +1,7 @@
 # Feature Spec: Docker Hub Credential Support for Cosign and Containerd
 
 **Date**: 2026-03-24  
-**Status**: draft (Q1–Q7 design locked; implementation pending)
+**Status**: draft
 
 ---
 
@@ -38,7 +38,7 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
   - **No** shell interpolation and **no** raw username/token on **guest** subprocess argv.
   - **`config.json`**: build only with **`json.dumps`** from a small dict and the computed base64 `auth` value — no format-string templates filled from untrusted input.
   - **`registries.yaml`**: read with **`yaml.safe_load`**, write with **`yaml.safe_dump`** (or equivalent safe round-trip); change only **known keys** under fixed paths (e.g. `configs` entries for Docker Hub). Never append untrusted bytes as a raw tail; never use unsafe `yaml.load`.
-  - **Credential strings**: enforce **non-empty**, **bounded length**, reject **NUL and C0 control characters** (and optionally strip surrounding whitespace). Goal is **parser-safe and serialization-safe**, not matching Docker’s undocumented PAT character set. See [Docker Hub access tokens](https://docs.docker.com/docker-hub/access-tokens/) for miner guidance (prefer read-only PATs).
+  - **Credential strings**: enforce **non-empty**, **bounded length** (implementation: username ≤ **64**, token/password ≤ **128** chars after strip), reject **NUL and C0 control characters** (and optionally strip surrounding whitespace). Goal is **parser-safe and serialization-safe**, not matching Docker’s undocumented PAT character set. See [Docker Hub access tokens](https://docs.docker.com/docker-hub/access-tokens/) for miner guidance (prefer read-only PATs).
   - **`registries.yaml` caveat**: Hub `username` / `password` appear as YAML string fields (not base64 there). Safety comes from **no shell**, **safe emit**, and **control-free bounded strings**.
 - **Fail open**: If validation fails, fall back to anonymous Hub pulls and log a warning — do not block boot.
 
@@ -111,7 +111,7 @@ Success = A miner who provides Docker Hub credentials has both containerd (k3s) 
 ## Constraints
 
 - **Guest**: Credentials must never be interpolated into shell commands, subprocess arguments, or executable strings. **Structured file I/O only** (`json.dumps`, `yaml.safe_load` / `yaml.safe_dump` on known subtrees).
-- **Guest validation**: **Safe string** rules (non-empty, max length, no NUL/C0 controls, optional strip) — **not** a strict alphanumeric-only PAT regex.
+- **Guest validation**: **Safe string** rules (non-empty, max length **64** / **128** for username / token, no NUL/C0 controls, optional strip) — **not** a strict alphanumeric-only PAT regex.
 - The config volume is untrusted input. Treat all values read from `/var/config/` as adversarial at the guest boundary.
 - **`create-config.sh`**: Write credential files with redirection to files only; do not pass values to external commands as arguments where avoidable (values still may appear in host argv per Q5 — document for operators).
 - **`DOCKER_CONFIG`** holds a **directory path** only.

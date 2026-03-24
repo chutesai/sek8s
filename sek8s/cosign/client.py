@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Avoid cosign writing to $HOME/.sigstore (rekor/TUF cache); system-manager runs
 # as unprivileged user with no writable home. In-memory cache works for both
 # admission controller and image pull verification.
+# DOCKER_CONFIG is set by systemd (shared drop-in); inherit from os.environ — do not override here.
 _COSIGN_ENV = {**os.environ, "SIGSTORE_NO_CACHE": "1"}
 
 
