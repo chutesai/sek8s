@@ -155,7 +155,20 @@ class CosignClient:
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
             combined = f"{stdout}\n{stderr}"
-            if any(p.search(combined) for p in self._RATE_LIMIT_PATTERNS):
+            matched_pattern = next(
+                (p.pattern for p in self._RATE_LIMIT_PATTERNS if p.search(combined)),
+                None,
+            )
+            if matched_pattern:
+                logger.error(
+                    "Cosign rate limit detected for cmd=%s rc=%d pattern=%r\n"
+                    "--- stdout ---\n%s\n--- stderr ---\n%s",
+                    " ".join(cmd),
+                    process.returncode,
+                    matched_pattern,
+                    stdout.strip() or "(empty)",
+                    stderr.strip() or "(empty)",
+                )
                 raise CosignRateLimitError(
                     "Cosign verification rate limited by upstream registry"
                 )

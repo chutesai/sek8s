@@ -172,6 +172,7 @@ class CosignValidator(ValidatorBase):
                     f"Cosign verification unavailable (network/infra): {e}"
                 )
             except RateLimitError as e:
+                logger.error(f"Rate limited: {images=}")
                 logger.warning(f"Rate limited: {e}")
                 violations.append(str(e))
                 break
@@ -297,6 +298,14 @@ class CosignValidator(ValidatorBase):
         logger.debug(f"Verifying image signature for {image=}")
 
         if self._rate_limit_until and time.time() < self._rate_limit_until:
+            remaining = self._rate_limit_until - time.time()
+            logger.warning(
+                "Cosign backoff gate: skipping verification for image=%s "
+                "(%.0fs remaining until %s)",
+                image,
+                remaining,
+                time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until)),
+            )
             raise RateLimitError(
                 f"Cosign verification paused due to upstream rate limiting; retry after "
                 f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(self._rate_limit_until))}"
@@ -319,6 +328,13 @@ class CosignValidator(ValidatorBase):
         except CosignVerificationUnavailableError:
             raise
         except CosignRateLimitError:
+            logger.error(
+                "Cosign rate limit triggered during verification of image=%s "
+                "(resolved=%s), entering %.0fs backoff",
+                image,
+                resolved_image,
+                self.cosign_config.rate_limit_backoff_seconds,
+            )
             self._record_rate_limit()
             raise
         except Exception as e:
