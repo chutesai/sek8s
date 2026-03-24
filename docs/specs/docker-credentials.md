@@ -1,7 +1,7 @@
 # Feature Spec: Docker Hub Credential Support for Cosign and Containerd
 
 **Date**: 2026-03-24  
-**Status**: draft
+**Status**: draft (Q1–Q7 design locked; implementation pending)
 
 ---
 
@@ -11,32 +11,79 @@ Cosign image signature verification and containerd image pulls both hit Docker H
 
 Authenticated Docker Hub users get at least 200 pulls/6hrs (free tier) and significantly more on paid tiers. This feature adds optional Docker Hub credentials to the miner config pipeline so both containerd and cosign authenticate, avoiding the anonymous rate limit entirely.
 
-The config volume (`/var/config`) is an **untrusted input boundary** — the miner provides the credentials on the host, and the guest must treat them as potentially adversarial. Credentials must never be interpolated into shell commands or subprocess arguments.
+The config volume (`/var/config`) is an **untrusted input boundary** — the miner provides the credentials on the host, and the guest must treat them as potentially adversarial. On the **guest**, credentials must never be interpolated into shell commands or subprocess arguments. On the **host**, passing username/token as optional positional arguments into `create-config.sh` is acceptable: the same values are stored as **cleartext files on the config volume**, so anyone who can mount that volume can read them anyway; the primary threat model is **guest-side injection** into generated files (see **Threat model**).
 
-- **Packages affected**: `host-tools/scripts`, `ansible/k3s/roles/config`, `ansible/k3s/roles/common`, `ansible/k3s/roles/admission-controller`, `sek8s/cosign`
+- **Packages affected**: `host-tools/scripts`, `ansible/k3s/roles/config`, `ansible/k3s/roles/common`, `ansible/k3s/roles/admission-controller`, `ansible/k3s/roles/system-manager`, `sek8s/cosign`
 - **Key files**:
   - `host-tools/scripts/config/config.tmpl.yaml` — user-facing config template
   - `host-tools/scripts/config/config-schema.json` — JSON Schema for config validation
   - `host-tools/scripts/chutes_host/config.py` — YAML parser, emits shell vars
   - `host-tools/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
   - `host-tools/scripts/volumes/create-config.sh` — creates and populates config volume
-  - `ansible/k3s/roles/config/files/process-config.py` — guest-side config validator and applier
-  - `ansible/k3s/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s)
-  - `sek8s/cosign/client.py` — cosign subprocess runner (`_COSIGN_ENV`)
-  - `ansible/k3s/roles/admission-controller/files/admission-controller.service` — systemd unit for admission controller
+  - `ansible/k3s/roles/config/files/process-config.py` — guest-side config validator and applier (already uses PyYAML)
+  - `ansible/k3s/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s); Ansible content preserved at runtime
+  - `sek8s/cosign/client.py` — cosign subprocess runner (`_COSIGN_ENV`); should follow systemd `DOCKER_CONFIG`, not duplicate path logic
+  - `ansible/k3s/roles/admission-controller/files/admission-controller.service` — systemd unit; ordering vs `config-manager`
+  - Shared **systemd drop-in** (implementation choice: e.g. under `admission-controller.service.d/` and `system-manager.service.d/`, or a shared snippet included by both) setting `DOCKER_CONFIG`
+  - `ansible/k3s/roles/system-manager/files/system-manager.service` — must receive the same `DOCKER_CONFIG` as admission
 - **Dependencies**: Depends on (but does not block) the single-flight cosign dedup fix. Both reduce Docker Hub rate limit pressure independently.
+
+---
+
+## Threat model
+
+- **Secondary concern**: A local attacker on the guest “stealing” credentials. The miner intentionally supplies credentials; the VM is otherwise locked down. Secrecy against someone who already has root on the box is not the main design driver.
+- **Primary concern**: **Untrusted strings** from the config volume must not **inject** or corrupt **`config.json`** or **`registries.yaml`** in ways that cause unsafe behavior — e.g. shell execution, unsafe YAML constructs, parser confusion, or broken JSON/YAML structure.
+- **Enforcement (guest)**:
+  - **No** shell interpolation and **no** raw username/token on **guest** subprocess argv.
+  - **`config.json`**: build only with **`json.dumps`** from a small dict and the computed base64 `auth` value — no format-string templates filled from untrusted input.
+  - **`registries.yaml`**: read with **`yaml.safe_load`**, write with **`yaml.safe_dump`** (or equivalent safe round-trip); change only **known keys** under fixed paths (e.g. `configs` entries for Docker Hub). Never append untrusted bytes as a raw tail; never use unsafe `yaml.load`.
+  - **Credential strings**: enforce **non-empty**, **bounded length**, reject **NUL and C0 control characters** (and optionally strip surrounding whitespace). Goal is **parser-safe and serialization-safe**, not matching Docker’s undocumented PAT character set. See [Docker Hub access tokens](https://docs.docker.com/docker-hub/access-tokens/) for miner guidance (prefer read-only PATs).
+  - **`registries.yaml` caveat**: Hub `username` / `password` appear as YAML string fields (not base64 there). Safety comes from **no shell**, **safe emit**, and **control-free bounded strings**.
+- **Fail open**: If validation fails, fall back to anonymous Hub pulls and log a warning — do not block boot.
 
 ---
 
 ## Design Decisions
 
-- **Credentials are optional**: If `docker_hub` is absent from config, the system operates exactly as it does today (anonymous pulls). No breaking change for existing miners.
-- **File-only credential flow**: Credentials travel as files on the config volume, are validated in Python, and written to Docker `config.json` and `registries.yaml` files. They are **never** passed as subprocess arguments, shell expansions, or interpolated into executed strings.
-- **Strict input validation at the guest boundary**: `process-config.py` validates credentials with strict regexes before using them. Username: `^[a-zA-Z0-9._-]{1,128}$`. Token: `^[a-zA-Z0-9_-]{1,512}$`. Anything else is rejected.
-- **Fail open to anonymous**: If credentials are present but fail validation, skip Docker Hub auth and fall back to anonymous. Log a warning but do not halt boot. A miner with bad credentials is better off running anonymously than not booting.
-- **Standard Docker auth format**: The Docker `config.json` uses the standard `{"auths": {"https://index.docker.io/v1/": {"auth": "<base64(user:token)>"}}}` format. Both cosign and Docker tooling natively consume this.
-- **Two consumers, one source**: `process-config.py` generates auth for both containerd (`registries.yaml` inline auth) and cosign (`config.json` via `DOCKER_CONFIG`). The credentials are read once from the config volume and written to two destination formats.
-- **Cosign gets a path, not credentials**: The admission controller service sets `DOCKER_CONFIG=/etc/admission-controller/docker-config` (a directory path). Cosign reads `config.json` from that directory. No credential values appear in environment variables, command lines, or process listings.
+### Service ordering (Q1)
+
+- **`config-manager.service`** (runs `process-config.py`) must finish **before** units that need Docker Hub auth for cosign/containerd consume the generated files.
+- **Spec**: cosign-consuming systemd units (at minimum **`admission-controller.service`**, and any other unit that runs cosign against Hub) declare **`After=config-manager.service`** (and ordering that ensures `process-config` has run successfully for the one-shot config flow).
+- **No hot-reload**: Credentials and merged `registries.yaml` are not expected to change for the lifetime of a running VM without a reboot or explicit re-run of the config flow. Relying on environment and files as they exist at service start is acceptable.
+
+### Shared `DOCKER_CONFIG` for admission and system-manager (Q2, Q6, Q7)
+
+- **One directory**: `/etc/admission-controller/docker-config` with `config.json` inside.
+- **Both consumers**: **`admission-controller.service`** and **`system-manager.service`** get **`Environment=DOCKER_CONFIG=/etc/admission-controller/docker-config`** from a **shared systemd drop-in** (or equivalent), not admission-only.
+- **Always set**: `DOCKER_CONFIG` is set **even when Hub creds are absent or invalid** — do not conditionally omit it in systemd.
+- **Permissions (Q7)**: Directory **`0750`**, **`root:admission`**. File **`config.json`** **`0640`**, **`root:admission`**. **`User=admission`** reads via primary group **`admission`**. **`User=system-manager`** reads via **supplemental `admission`** (already configured in Ansible for cosign key sharing). No new Unix group required. Never world-readable.
+
+### `config.json` when creds missing or invalid (Q6)
+
+- **`process-config.py`** always maintains **`config.json`**: with valid Hub creds, write full Docker auth for `https://index.docker.io/v1/` (standard format). With **missing or invalid** creds, write **`{"auths": {}}`** (via `json.dumps`) so the file always exists and **stale Hub auth is never left on disk**.
+
+### `registries.yaml` merge (Q4)
+
+- **Do not** “append” raw YAML snippets. Use **`yaml.safe_load`** → update **only** the fixed Docker Hub **`configs.<host>`** keys (and nested `auth`) → **`yaml.safe_dump`**, preserving everything else (e.g. Ansible **`mirrors`** and other **`configs`** entries such as Chutes/local registry). See [K3s private registry configuration](https://docs.k3s.io/installation/private-registry).
+- **Strip on failure**: If credential files are missing or invalid, **remove** those same Hub `configs` keys so the node uses **anonymous** pulls (no stale PAT in the file).
+- **Host keys**: Set auth for at least **`docker.io`**. If testing shows pulls still behave as anonymous without it, also set **`registry-1.docker.io`** with the same credentials (known k3s/containerd behavior varies by reference).
+- **k3s**: Registry file changes may require a k3s restart per upstream docs; first boot after image install should order `config-manager` before k3s consumes the file. Mid-life updates are out of scope for the static miner VM.
+
+### Host pipeline (Q5)
+
+- **Inputs**: Optional **`docker_hub`** in miner **`config.yaml`** **and** **`quick-launch.sh`** flags **`--docker-hub-username`** / **`--docker-hub-token`**. When both are set, **CLI overrides YAML**.
+- **Transport**: Optional **8th/9th positional args** to **`create-config.sh`** remain acceptable. Host **`ps`** visibility is a minor concern versus **cleartext files on the config volume**.
+
+### Cosign client (`sek8s/cosign/client.py`)
+
+- **Systemd is source of truth** for `DOCKER_CONFIG`. Prefer inheriting **`os.environ`** as set by the unit. **Avoid** duplicating “if directory exists, set `DOCKER_CONFIG`” logic in Python if it conflicts with systemd (Q1/Q6).
+
+### Other
+
+- **Credentials are optional**: If `docker_hub` is absent, behavior matches today’s anonymous pulls except that **`config.json`** still exists with empty `auths` and **`DOCKER_CONFIG`** is still set.
+- **Standard Docker auth format** for `config.json`: `{"auths": {"https://index.docker.io/v1/": {"auth": "<base64(user:token)>"}}}`.
+- **Two consumers, one source**: `process-config.py` reads credential files once and writes **`config.json`** and merged **`registries.yaml`**.
 
 ---
 
@@ -50,82 +97,80 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
 
 ## Goal
 
-Success = A miner who provides Docker Hub credentials in their config.yaml has both containerd (k3s image pulls) and cosign (signature verification) authenticate to Docker Hub, avoiding the anonymous rate limit. Specifically:
+Success = A miner who provides Docker Hub credentials has both containerd (k3s) and cosign authenticate to Docker Hub where applicable, avoiding anonymous rate limits when credentials are valid. Specifically:
 
-1. A config.yaml with valid `docker_hub.username` and `docker_hub.token` results in authenticated Docker Hub pulls. Verify by checking `docker.io` rate limit headers show the authenticated tier.
-2. A config.yaml without the `docker_hub` section boots normally with anonymous pulls (backward compatible).
-3. A config.yaml with malformed credentials (special characters, excessive length, empty strings) falls back to anonymous and logs a warning — does not block boot.
-4. Credentials never appear in `ps` output, journal logs, or any process argument list. Only file paths appear in env vars.
-5. Credential files on disk have restrictive permissions (0600 root-only for config volume files, 0640 root:admission for the cosign Docker config).
+1. A config with valid `docker_hub.username` and `docker_hub.token` results in authenticated Docker Hub usage (verify via Hub rate-limit headers / tier).
+2. A config without `docker_hub` boots normally with anonymous Hub pulls (**backward compatible**).
+3. Malformed credentials (per **safe string** rules) fall back to anonymous with a warning — **does not block boot**.
+4. On the **guest**, credential **values** do not appear in `ps`, journal, or `/proc/*/cmdline` for cosign/systemd — only paths such as **`DOCKER_CONFIG`**.
+5. **`config.json`**: **`0640` `root:admission`**, directory **`0750` `root:admission`**; **`system-manager`** can read the same file as **`admission`** (supplemental **`admission`**). Not world-readable.
+6. **`registries.yaml`** after merge contains no stale Hub auth when creds are missing/invalid; non-Hub content from Ansible is preserved.
 
 ---
 
 ## Constraints
 
-- Credentials must never be interpolated into shell commands, subprocess arguments, or any context where special characters could escape process controls. Pure file I/O only.
-- `process-config.py` must validate credentials with strict regexes before any use. Reject on first invalid character.
-- The config volume is untrusted input. Treat all values read from `/var/config/` as adversarial.
-- `create-config.sh` writes credential files using shell redirection to files only (`echo "$VAR" > file`), never passes them to external commands.
-- The `DOCKER_CONFIG` env var contains a directory path, not credentials. Cosign and Docker tooling read `config.json` from that directory.
-- No new Python dependencies. Use only stdlib (`base64`, `json`, `re`, `os`, `pathlib`).
-- Must not break existing miners who have no `docker_hub` section in their config.
+- **Guest**: Credentials must never be interpolated into shell commands, subprocess arguments, or executable strings. **Structured file I/O only** (`json.dumps`, `yaml.safe_load` / `yaml.safe_dump` on known subtrees).
+- **Guest validation**: **Safe string** rules (non-empty, max length, no NUL/C0 controls, optional strip) — **not** a strict alphanumeric-only PAT regex.
+- The config volume is untrusted input. Treat all values read from `/var/config/` as adversarial at the guest boundary.
+- **`create-config.sh`**: Write credential files with redirection to files only; do not pass values to external commands as arguments where avoidable (values still may appear in host argv per Q5 — document for operators).
+- **`DOCKER_CONFIG`** holds a **directory path** only.
+- **Guest Python**: Use stdlib **`json`** and existing **`yaml`** (PyYAML) already used by `process-config.py` — **no new dependencies** without separate discussion.
+- Must not break existing miners who have no `docker_hub` section.
 
 ---
 
 ## Output Format
 
 1. **Modified: `host-tools/scripts/config/config.tmpl.yaml`**
-  - Add optional `docker_hub` section:
+   - Add optional `docker_hub` section (document PAT link in comments/help).
 2. **Modified: `host-tools/scripts/config/config-schema.json`**
-  - Add `docker_hub` to schema properties (not in `required`):
+   - Add `docker_hub` to schema properties (not in `required`).
 3. **Modified: `host-tools/scripts/chutes_host/config.py`**
-  - Parse `docker_hub.username` and `docker_hub.token` from config.
-  - Emit `DOCKER_HUB_USERNAME` and `DOCKER_HUB_TOKEN` shell vars via `shlex.quote` (defense in depth).
+   - Parse `docker_hub.username` and `docker_hub.token` from config.
+   - Emit `DOCKER_HUB_USERNAME` and `DOCKER_HUB_TOKEN` shell vars via `shlex.quote` (defense in depth for host scripts).
 4. **Modified: `host-tools/scripts/quick-launch.sh`**
-  - Accept `--docker-hub-username` / `--docker-hub-token` CLI overrides.
-  - Pass credentials as additional positional args to `create-config.sh` (optional 8th and 9th args).
+   - Accept `--docker-hub-username` / `--docker-hub-token`.
+   - **Precedence**: CLI overrides `config.yaml` when both set.
+   - Pass credentials as optional 8th/9th positional args to `create-config.sh`.
 5. **Modified: `host-tools/scripts/volumes/create-config.sh`**
-  - Accept optional Docker Hub username/token args.
-  - Write `docker-hub-username` and `docker-hub-token` as files on the config volume (mode 0600).
-  - No shell interpolation beyond writing to files.
+   - Accept optional Docker Hub username/token args.
+   - Write `docker-hub-username` and `docker-hub-token` on the config volume (mode **0600**).
 6. **Modified: `ansible/k3s/roles/config/files/process-config.py`**
-  - Read `/var/config/docker-hub-username` and `/var/config/docker-hub-token` (skip if missing).
-  - Validate with `^[a-zA-Z0-9._-]{1,128}$` and `^[a-zA-Z0-9_-]{1,512}$` respectively.
-  - If valid: generate `/etc/admission-controller/docker-config/config.json` with standard Docker auth (base64-encoded `username:token`), mode 0640 root:admission.
-  - If valid: append Docker Hub auth to `/etc/rancher/k3s/registries.yaml` (containerd config) — add `docker.io` mirror with inline `username`/`password` under `configs`.
-  - If invalid: log warning, skip auth setup, continue boot.
-7. **Modified: `ansible/k3s/roles/common/templates/registries.yaml.j2`**
-  - Add commented Docker Hub mirror block with placeholder for runtime injection:
+   - Read `/var/config/docker-hub-username` and `/var/config/docker-hub-token` (treat missing as no creds).
+   - Validate with **safe string** rules (see **Threat model** / **Constraints**).
+   - **Always** write `/etc/admission-controller/docker-config/config.json`: either full Hub auth or `{"auths": {}}`; mode **0640**, **root:admission**. Never leave stale Hub entries when creds are invalid or removed.
+   - **`registries.yaml`**: **`yaml.safe_load`** → merge/strip **only** fixed Hub `configs` keys → **`yaml.safe_dump`**; preserve mirrors and other registry configs from Ansible.
+7. **Modified: `ansible/k3s/roles/common/templates/registries.yaml.j2`** (optional)
+   - Prefer a **comment** documenting that Docker Hub auth is applied at runtime by `process-config.py` (no secrets baked into the image).
 8. **Modified: `sek8s/cosign/client.py`**
-  - In `_COSIGN_ENV` construction: if `/etc/admission-controller/docker-config` exists, set `DOCKER_CONFIG` to that path. Otherwise omit (anonymous).
-9. **Modified: `ansible/k3s/roles/admission-controller/files/admission-controller.service`**
-  - Add `Environment=DOCKER_CONFIG=/etc/admission-controller/docker-config` to `[Service]` section.
-10. **Modified: `ansible/k3s/roles/admission-controller/tasks/configure-cosign.yml`**
-  - Ensure `/etc/admission-controller/docker-config` directory exists at build time (mode 0750, root:admission).
+   - **`_COSIGN_ENV`**: Rely on **`DOCKER_CONFIG`** from the process environment (systemd). Remove or narrow redundant “set `DOCKER_CONFIG` if directory exists” logic if it duplicates systemd.
+9. **Modified: systemd units / drop-ins**
+   - **`admission-controller.service`**: **`After=config-manager.service`** (plus any existing ordering).
+   - **Shared drop-in** for **`admission-controller.service`** and **`system-manager.service`**: **`Environment=DOCKER_CONFIG=/etc/admission-controller/docker-config`**.
+10. **Modified: Ansible (image layout)**
+    - Ensure `/etc/admission-controller/docker-config` exists at build time (**0750**, **root:admission**), e.g. in admission-controller or config role tasks; align with **`configure-cosign.yml`** or equivalent.
 
 ---
 
 ## Failure Conditions
 
-- Credentials are passed as subprocess arguments or shell expansions anywhere in the pipeline.
-- A username or token containing shell metacharacters (`;`, `|`, `$`, ```, `\n`, etc.) causes command injection or unexpected behavior.
-- Malformed credentials halt boot instead of falling back to anonymous.
-- Credential values appear in journal logs, `ps` output, or `/proc/*/cmdline`.
-- Existing miners without `docker_hub` in their config fail to boot (backward compatibility regression).
-- `process-config.py` writes credentials without validating them first.
-- Docker `config.json` has world-readable permissions.
-- containerd `registries.yaml` auth section has world-readable permissions.
-- The `DOCKER_CONFIG` environment variable contains actual credentials instead of a file path.
+- Guest passes credentials as subprocess arguments or shell expansions (except documented host pipeline per Q5).
+- Injection or unsafe YAML/JSON generation from untrusted config-volume strings (e.g. unsafe `yaml.load`, uncontrolled append to `registries.yaml`, format-string-built `config.json`).
+- Malformed credentials **halt boot** instead of falling back to anonymous.
+- **Guest**: Credential **values** appear in journal, `ps`, or `/proc/*/cmdline` for cosign-related services.
+- **`system-manager`** cannot read **`config.json`** while **`admission`** can (permission regression), or either file is world-readable.
+- **`config.json`** or merged **`registries.yaml`** retains Hub auth when creds are missing or invalid (**stale auth**).
+- Existing miners without `docker_hub` fail to boot (**backward compatibility** regression).
+- **`DOCKER_CONFIG`** env var contains credential material instead of a directory path.
 
 ---
 
 ## Rollout Notes
 
-- **Backward compatible**: No changes needed for existing miners. `docker_hub` section is optional in both schema and all code paths.
-- **Miner action required for auth**: Miners who want authenticated pulls must add `docker_hub.username` and `docker_hub.token` to their `config.yaml` and re-create the config volume (or re-run `quick-launch.sh` which recreates it).
-- **Existing config volumes**: Config volumes created before this feature simply lack the `docker-hub-username`/`docker-hub-token` files. `process-config.py` skips auth setup when these files are missing.
-- **Token type**: Docker Hub Personal Access Tokens (PATs) with `Read-only` scope are sufficient. Miners should not use their password. The config template and help text should guide them to create a read-only PAT.
-- **Rate limit tiers**: Free Docker Hub accounts get 200 pulls/6hrs authenticated (vs 100 anonymous). Paid Docker Pro/Team/Business accounts get higher limits. The feature works with any valid Docker Hub credential.
-- **Interaction with single-flight dedup**: The single-flight fix (separate PR) reduces Docker Hub calls from `N * images` to `1 * images` on cold start. Docker Hub credentials increase the budget. Together they make rate limiting effectively impossible under normal operation.
-- **Config volume re-creation**: The config volume is always re-created by `quick-launch.sh` unless the user provides a pre-existing `--config-volume` path. On a normal launch, credentials are always fresh from the current config.yaml.
-
+- **Backward compatible**: `docker_hub` is optional in schema and code paths.
+- **Miner action**: To use auth, add `docker_hub.username` and `docker_hub.token` to `config.yaml` and re-create the config volume / re-run `quick-launch.sh`.
+- **Existing config volumes**: Without `docker-hub-*` files, guest writes empty `auths` and strips Hub keys from `registries.yaml` merge target behavior.
+- **Tokens**: Prefer Docker Hub [access tokens](https://docs.docker.com/docker-hub/access-tokens/) with **Read-only** scope; avoid account passwords in config.
+- **Rate limits**: Free tier 200 pulls/6h authenticated vs 100 anonymous; paid tiers higher. Complements single-flight dedup (separate change).
+- **Config volume**: Normally re-created by `quick-launch.sh`; cleartext credential files on the volume remain the main host-side exposure.
