@@ -167,16 +167,19 @@
             dest: /tmp
             remote_src: true
 
-        - name: Install Fabric Manager binaries and libraries
+        - name: Install Fabric Manager binaries, config, and topology data
           ansible.builtin.shell:
             cmd: |
               set -euo pipefail
               FM_DIR=$(find /tmp -maxdepth 1 -type d -name 'fabricmanager-*' | head -1)
               [ -d "$FM_DIR" ] || exit 1
+              mkdir -p /usr/share/nvidia/nvswitch
               cp -f "$FM_DIR"/bin/* /usr/bin/
               cp -f "$FM_DIR"/lib/* /usr/lib/x86_64-linux-gnu/
-              [ -d "$FM_DIR/etc" ] && cp -n "$FM_DIR"/etc/* /usr/share/nvidia/nvswitch/ 2>/dev/null || true
-              [ -f "$FM_DIR/systemd/nvidia-fabricmanager.service" ] && cp -f "$FM_DIR/systemd/nvidia-fabricmanager.service" /lib/systemd/system/ || true
+              # Tarball ships fabricmanager.cfg under etc/; systemd start script expects /usr/share/nvidia/nvswitch/
+              if [ -d "$FM_DIR/etc" ]; then cp -f "$FM_DIR"/etc/* /usr/share/nvidia/nvswitch/; fi
+              if [ -d "$FM_DIR/share/nvidia/nvswitch" ]; then cp -f "$FM_DIR/share/nvidia/nvswitch/"* /usr/share/nvidia/nvswitch/; fi
+              if [ -f "$FM_DIR/systemd/nvidia-fabricmanager.service" ]; then cp -f "$FM_DIR/systemd/nvidia-fabricmanager.service" /lib/systemd/system/; fi
               ldconfig
               rm -rf "$FM_DIR" /tmp/fabricmanager-{{ nvidia_version }}.tar.xz
             executable: /bin/bash
