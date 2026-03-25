@@ -55,6 +55,7 @@ After=nvidia-persistenced-config.service
 [Service]
 ExecStart=
 ExecStart=/usr/bin/nvidia-persistenced ${FLAG} --verbose
+TimeoutStartSec=300
 EOF
 
 TMP_FILE=$(mktemp)
