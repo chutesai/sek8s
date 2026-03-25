@@ -1,13 +1,14 @@
 import logging
 import time
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sek8s.validators.base import ValidatorBase, ValidationResult
 from sek8s.config import AdmissionConfig, CosignConfig, CosignVerificationConfig
 from sek8s.cosign.client import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
-from sek8s.image_utils import is_digest_pinned_reference, parse_image_reference
+from sek8s.image_utils import extract_registry, is_digest_pinned_reference, parse_image_reference
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,91 @@ _TRANSIENT_CACHE_SECONDS = 30
 
 # Hard cap on verify cache entries to bound memory.
 _CACHE_MAX_SIZE = 2048
+
+_MAX_RECENT_TRIGGERS = 20
+
+
+@dataclass
+class _ImageStats:
+    """Per-image Docker Hub request tracking."""
+
+    attempts: int = 0
+    cache_hits: int = 0
+    cache_misses: int = 0
+    is_tag_only: bool = True
+    recent_triggers: List[Tuple[str, str, str]] = field(default_factory=list)
+
+    def record_trigger(self, kind: str, name: str, namespace: str) -> None:
+        if len(self.recent_triggers) < _MAX_RECENT_TRIGGERS:
+            self.recent_triggers.append((kind, name, namespace))
+
+
+@dataclass
+class DockerHubTracker:
+    """Tracks cosign verification calls that target Docker Hub."""
+
+    docker_hub_verify_attempts: int = 0
+    docker_hub_cache_hits: int = 0
+    docker_hub_cache_misses: int = 0
+    other_registry_verify_calls: int = 0
+    rate_limit_events: int = 0
+    docker_hub_images: Dict[str, _ImageStats] = field(default_factory=dict)
+
+    def record_attempt(
+        self, image: str, registry: str, cache_hit: bool,
+        kind: str, name: str, namespace: str,
+    ) -> None:
+        is_docker_hub = registry == "docker.io"
+        if is_docker_hub:
+            self.docker_hub_verify_attempts += 1
+            if cache_hit:
+                self.docker_hub_cache_hits += 1
+            else:
+                self.docker_hub_cache_misses += 1
+
+            stats = self.docker_hub_images.get(image)
+            if stats is None:
+                stats = _ImageStats(is_tag_only=not is_digest_pinned_reference(image))
+                self.docker_hub_images[image] = stats
+            stats.attempts += 1
+            if cache_hit:
+                stats.cache_hits += 1
+            else:
+                stats.cache_misses += 1
+            stats.record_trigger(kind, name, namespace)
+        else:
+            self.other_registry_verify_calls += 1
+
+    def record_rate_limit(self) -> None:
+        self.rate_limit_events += 1
+
+    def get_stats(self) -> dict:
+        top_images = sorted(
+            self.docker_hub_images.items(),
+            key=lambda kv: kv[1].cache_misses,
+            reverse=True,
+        )
+        return {
+            "docker_hub_verify_attempts": self.docker_hub_verify_attempts,
+            "docker_hub_cache_hits": self.docker_hub_cache_hits,
+            "docker_hub_cache_misses": self.docker_hub_cache_misses,
+            "other_registry_verify_calls": self.other_registry_verify_calls,
+            "rate_limit_events": self.rate_limit_events,
+            "docker_hub_images": [
+                {
+                    "image": img,
+                    "tag_only": s.is_tag_only,
+                    "attempts": s.attempts,
+                    "cache_hits": s.cache_hits,
+                    "cache_misses": s.cache_misses,
+                    "recent_triggers": [
+                        {"kind": k, "name": n, "namespace": ns}
+                        for k, n, ns in s.recent_triggers
+                    ],
+                }
+                for img, s in top_images
+            ],
+        }
 
 
 @dataclass
@@ -81,6 +167,7 @@ class CosignValidator(ValidatorBase):
         self._cosign_client = CosignClient()
         self._cache: Dict[str, _CacheEntry] = {}
         self._rate_limited_until = 0.0
+        self.hub_tracker = DockerHubTracker()
 
     # ------------------------------------------------------------------
     # Rule sets
@@ -256,6 +343,10 @@ class CosignValidator(ValidatorBase):
         """Verify signatures for images that have verification config enabled; skip images with no config or verification disabled."""
         violations: List[str] = []
         seen: set = set()
+        obj_meta = ctx.request.get("object", {}).get("metadata", {})
+        resource_kind = ctx.request.get("kind", {}).get("kind", "Unknown")
+        resource_name = obj_meta.get("name") or obj_meta.get("generateName", "unknown")
+
         for image in ctx.images:
             if image in seen:
                 continue
@@ -272,7 +363,12 @@ class CosignValidator(ValidatorBase):
                 logger.debug(f"Signature verification disabled for {registry}/{org}/{repo}")
                 continue
             try:
-                is_valid = await ctx.validator._verify_image_signature(image, vc)
+                is_valid = await ctx.validator._verify_image_signature(
+                    image, vc,
+                    resource_kind=resource_kind,
+                    resource_name=resource_name,
+                    namespace=ctx.namespace,
+                )
                 if not is_valid:
                     violations.append(
                         f"Image {image} has invalid or missing signature (registry: {registry}, org: {org})"
@@ -306,18 +402,42 @@ class CosignValidator(ValidatorBase):
         return None
 
     async def _verify_image_signature(
-        self, image: str, verification_config: CosignVerificationConfig
+        self,
+        image: str,
+        verification_config: CosignVerificationConfig,
+        resource_kind: str = "Unknown",
+        resource_name: str = "unknown",
+        namespace: str = "default",
     ) -> bool:
         """Verify image signature with registry-friendly caching (see class docstring)."""
         digest_pinned = is_digest_pinned_reference(image)
+        registry = extract_registry(image)
 
         cached = self._read_cache(image, digest_pinned)
         if cached is not None:
+            self.hub_tracker.record_attempt(
+                image, registry, cache_hit=True,
+                kind=resource_kind, name=resource_name, namespace=namespace,
+            )
             return cached
 
         if self._rate_limited_until and time.monotonic() < self._rate_limited_until:
+            self.hub_tracker.record_rate_limit()
             raise RateLimitError(
                 "Cosign verification paused due to upstream rate limiting"
+            )
+
+        self.hub_tracker.record_attempt(
+            image, registry, cache_hit=False,
+            kind=resource_kind, name=resource_name, namespace=namespace,
+        )
+        if registry == "docker.io":
+            tag_label = "TAG-ONLY" if not digest_pinned else "digest-pinned"
+            logger.info(
+                "DOCKER HUB HIT: cosign verify image=%s (%s, miss #%d to docker.io, "
+                "triggered by %s/%s in %s)",
+                image, tag_label, self.hub_tracker.docker_hub_cache_misses,
+                resource_kind, resource_name, namespace,
             )
 
         try:
@@ -329,6 +449,7 @@ class CosignValidator(ValidatorBase):
             raise
         except CosignRateLimitError:
             self._rate_limited_until = time.monotonic() + _RATE_LIMIT_BACKOFF_SECONDS
+            self.hub_tracker.record_rate_limit()
             raise
         except Exception as e:
             logger.error(f"cosign verify exception for {image}: {e}")
@@ -347,6 +468,19 @@ class CosignValidator(ValidatorBase):
                 self._put(image, False, None, float(ttl))
 
         return valid
+
+    def get_stats(self) -> dict:
+        """Return combined Docker Hub tracking stats and cosign client call stats."""
+        return {
+            "hub_tracker": self.hub_tracker.get_stats(),
+            "cosign_client": self._cosign_client.get_call_stats(),
+            "cache_size": len(self._cache),
+            "rate_limited_until": (
+                self._rate_limited_until - time.monotonic()
+                if self._rate_limited_until and time.monotonic() < self._rate_limited_until
+                else 0
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Helpers
