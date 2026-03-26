@@ -440,6 +440,24 @@ class CosignRegistryConfig(CosignVerificationConfig):
     organizations: Dict[str, CosignOrganizationConfig] = Field(default_factory=dict)
 
 
+class DigestPinEntry(BaseModel):
+    """An image eligible for digest pinning by the mutating admission webhook.
+
+    Only whitelisted images get the TTL + digest-pin optimization. All other
+    images pass through the mutating webhook unmodified.
+    """
+
+    image: str = Field(
+        ...,
+        description="Fully-qualified image name without tag (e.g. 'docker.io/parachutes/failed-chute-cleanup'). Exact match only.",
+    )
+    ttl: int = Field(
+        default=3600,
+        ge=60,
+        description="Seconds to pin the verified digest before requiring a fresh cosign verification.",
+    )
+
+
 class CosignConfig(BaseSettings):
     """Configuration for Cosign integration (Phase 4b).
 
@@ -447,6 +465,8 @@ class CosignConfig(BaseSettings):
       (``@sha256:…``) success/failure TTLs. Tag-only refs never cache success (tag may move).
     - ``tag_failure_cache_ttl_seconds`` — for tag-only refs, how long to remember
       invalid/missing signature so admission retries do not hammer the registry. ``0`` disables.
+    - ``digest_pin_whitelist`` — images whose tags can be pinned to a verified digest
+      by the mutating webhook (loaded from ``pin_digest_whitelist`` in cosign-registries.json).
 
     Environment (one alias each): ``COSIGN_SUCCESS_CACHE_TTL``,
     ``COSIGN_FAILURE_CACHE_TTL``, ``COSIGN_TAG_FAILURE_CACHE_TTL`` (TTL values are seconds).
@@ -469,6 +489,16 @@ class CosignConfig(BaseSettings):
         ge=0,
         description="Seconds to cache invalid/missing signature for tag-only refs (0 = no cache).",
         validation_alias="COSIGN_TAG_FAILURE_CACHE_TTL",
+    )
+    tag_pin_default_ttl_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description="Default TTL for digest pinning when a whitelist entry omits ttl.",
+        validation_alias="COSIGN_TAG_PIN_DEFAULT_TTL",
+    )
+    digest_pin_whitelist: List[DigestPinEntry] = Field(
+        default_factory=list,
+        description="Images eligible for mutating webhook digest pinning (whitelist-only).",
     )
 
     # Cosign config
@@ -553,6 +583,22 @@ class CosignConfig(BaseSettings):
                 self.registry_configs = configs
                 logger.info(f"Loaded {len(configs)} registry configs from {config_file_path}")
 
+                # Load digest pin whitelist from the same config file
+                if isinstance(config_data, dict) and "pin_digest_whitelist" in config_data:
+                    pin_list = config_data["pin_digest_whitelist"]
+                    if isinstance(pin_list, list):
+                        entries = []
+                        for item in pin_list:
+                            if isinstance(item, dict):
+                                if "ttl" not in item:
+                                    item["ttl"] = self.tag_pin_default_ttl_seconds
+                                entries.append(DigestPinEntry(**item))
+                        self.digest_pin_whitelist = entries
+                        logger.info(
+                            "Loaded %d digest pin whitelist entries from %s",
+                            len(entries), config_file_path,
+                        )
+
             except Exception as e:
                 logger.error(f"Failed to load cosign config from {config_file_path}: {e}")
         else:
@@ -566,6 +612,17 @@ class CosignConfig(BaseSettings):
                     public_key=Path("/etc/admission-controller/.cosign/cosign.pub"),
                 )
             ]
+
+    def get_pin_ttl(self, image_no_tag: str) -> Optional[int]:
+        """Return the TTL if *image_no_tag* is whitelisted for digest pinning, else ``None``.
+
+        *image_no_tag* must be the fully-qualified image name without tag
+        (e.g. ``docker.io/parachutes/failed-chute-cleanup``).
+        """
+        for entry in self.digest_pin_whitelist:
+            if entry.image == image_no_tag:
+                return entry.ttl
+        return None
 
     def get_verification_config(
         self, registry: str, organization: str = "", repository: str = ""

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from loguru import logger
 
 from sek8s.config import CosignVerificationConfig
-from sek8s.cosign.client import CosignClient
+from sek8s.clients.cosign import CosignClient
 from sek8s.image_utils import extract_registry, normalize_registry_hostname
 
 from .models import ImageEntry, PullSnapshot, PullStatusEnum
@@ -84,7 +84,7 @@ class ImageManager:
                 allow_http=True,
                 allow_insecure=True,
             )
-            ok = await self._cosign_client.verify(image_ref, vc, timeout=60.0)
+            ok, _digest = await self._cosign_client.verify(image_ref, vc, timeout=60.0)
             if not ok:
                 self._pull_results[image_ref] = (
                     PullStatusEnum.FAILED,

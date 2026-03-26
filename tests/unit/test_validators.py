@@ -12,7 +12,7 @@ import aiohttp
 from sek8s.config import CosignVerificationConfig
 from sek8s.validators.base import ValidationResult
 from sek8s.validators.cosign import CosignValidator, RateLimitError
-from sek8s.cosign.client import CosignRateLimitError, CosignVerificationUnavailableError
+from sek8s.clients.cosign import CosignRateLimitError, CosignVerificationUnavailableError
 from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
@@ -460,7 +460,7 @@ class TestCosignValidator:
 
         async def count_verify(*args, **kwargs):
             calls.append(1)
-            return True
+            return (True, None)
 
         digest_img = "docker.io/test/img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         with patch.object(validator._cosign_client, "verify", side_effect=count_verify):
@@ -483,7 +483,7 @@ class TestCosignValidator:
 
         async def count_verify(*args, **kwargs):
             calls.append(1)
-            return True
+            return (True, None)
 
         with patch.object(validator._cosign_client, "verify", side_effect=count_verify):
             await validator._verify_image_signature("docker.io/test/img:latest", vc)
@@ -506,7 +506,7 @@ class TestCosignValidator:
 
         async def fail_verify(*args, **kwargs):
             calls.append(1)
-            return False
+            return (False, None)
 
         tag_img = "docker.io/test/img:latest"
         with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
@@ -530,7 +530,7 @@ class TestCosignValidator:
 
         async def fail_verify(*args, **kwargs):
             calls.append(1)
-            return False
+            return (False, None)
 
         tag_img = "docker.io/test/img:latest"
         with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
@@ -553,7 +553,7 @@ class TestCosignValidator:
 
         async def fail_verify(*args, **kwargs):
             calls.append(1)
-            return False
+            return (False, None)
 
         digest_img = "docker.io/test/img@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         with patch.object(validator._cosign_client, "verify", side_effect=fail_verify):
@@ -650,7 +650,7 @@ class TestCosignValidator:
         async def slow_verify(*args, **kwargs):
             calls.append(1)
             await asyncio.sleep(0.02)
-            return True
+            return (True, None)
 
         digest_img = "docker.io/test/img@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         with patch.object(validator._cosign_client, "verify", side_effect=slow_verify):
@@ -678,7 +678,7 @@ class TestCosignValidator:
         async def slow_verify(*args, **kwargs):
             calls.append(1)
             await gate.wait()
-            return True
+            return (True, None)
 
         img_a = "docker.io/test/a@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         img_b = "docker.io/test/b@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

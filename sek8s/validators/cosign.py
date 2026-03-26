@@ -7,8 +7,8 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from sek8s.validators.base import ValidatorBase, ValidationResult
 from sek8s.config import AdmissionConfig, CosignConfig, CosignVerificationConfig
-from sek8s.cosign.client import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
-from sek8s.image_utils import extract_registry, is_digest_pinned_reference, parse_image_reference
+from sek8s.clients.cosign import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
+from sek8s.image_utils import extract_registry, is_digest_pinned_reference, parse_image_reference, strip_tag
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,23 @@ class _CacheEntry:
 
 
 @dataclass
+class _TagVerification:
+    """Cached tag -> digest mapping from a successful cosign verification.
+
+    Only populated for images on the ``pin_digest_whitelist``.  The mutating
+    webhook reads this to decide whether to pin an image to a digest.
+    """
+
+    digest: str
+    verified_at: float
+    ttl: float
+
+    @property
+    def expired(self) -> bool:
+        return time.monotonic() >= (self.verified_at + self.ttl)
+
+
+@dataclass
 class ValidationContext:
     """Context passed to validation rules: config, request, and pre-extracted data.
 
@@ -155,6 +172,10 @@ class CosignValidator(ValidatorBase):
     - **Tag-only** — never cache success (tag can move). Cache **invalid** signature
       results for ``tag_failure_cache_ttl_seconds`` so kube retries do not hammer
       the registry. Set TTL to ``0`` to disable.
+    - **Whitelisted tag-only** — after a successful verify, store the verified
+      digest in ``_tag_cache`` with a per-image TTL.  The mutating webhook reads
+      ``get_pinned_digest`` to pin pod images to that digest, and the subsequent
+      validating pass hits the digest-pinned cache for zero Docker Hub calls.
     - **Transient** errors (any ref) — short TTL to avoid spamming a broken upstream.
 
     Upstream HTTP 429 from cosign/registry triggers a global cooldown (reactive only;
@@ -166,6 +187,7 @@ class CosignValidator(ValidatorBase):
         self.cosign_config = CosignConfig()
         self._cosign_client = CosignClient()
         self._cache: Dict[str, _CacheEntry] = {}
+        self._tag_cache: Dict[str, _TagVerification] = {}
         self._rate_limited_until = 0.0
         self.hub_tracker = DockerHubTracker()
 
@@ -441,7 +463,7 @@ class CosignValidator(ValidatorBase):
             )
 
         try:
-            valid = await self._cosign_client.verify(
+            valid, verified_digest = await self._cosign_client.verify(
                 image, verification_config, timeout=60.0
             )
         except CosignVerificationUnavailableError as e:
@@ -454,6 +476,7 @@ class CosignValidator(ValidatorBase):
         except Exception as e:
             logger.error(f"cosign verify exception for {image}: {e}")
             valid = False
+            verified_digest = None
 
         if digest_pinned:
             ttl = (
@@ -466,15 +489,52 @@ class CosignValidator(ValidatorBase):
             ttl = self.cosign_config.tag_failure_cache_ttl_seconds
             if ttl > 0:
                 self._put(image, False, None, float(ttl))
+        elif valid and verified_digest:
+            image_no_tag = strip_tag(image)
+            pin_ttl = self.cosign_config.get_pin_ttl(image_no_tag)
+            if pin_ttl is not None:
+                self._tag_cache[image] = _TagVerification(
+                    digest=verified_digest,
+                    verified_at=time.monotonic(),
+                    ttl=float(pin_ttl),
+                )
+                digest_ref = f"{image_no_tag}@{verified_digest}"
+                self._put(
+                    digest_ref, True, None,
+                    float(self.cosign_config.success_cache_ttl_seconds),
+                )
+                logger.info(
+                    "Cached tag pin: %s -> %s (TTL %ds)",
+                    image, verified_digest, pin_ttl,
+                )
 
         return valid
 
+    def get_pinned_digest(self, image: str) -> Optional[str]:
+        """Return a verified digest for a whitelisted tag-only image if within TTL.
+
+        Called by the mutating webhook to decide whether to pin the image to a
+        specific digest.  Returns ``None`` if the image is not whitelisted, has
+        never been verified, or the TTL has expired.
+        """
+        entry = self._tag_cache.get(image)
+        if entry and not entry.expired:
+            return entry.digest
+        return None
+
     def get_stats(self) -> dict:
         """Return combined Docker Hub tracking stats and cosign client call stats."""
+        active_pins = {
+            img: {"digest": tv.digest, "remaining_s": round(tv.ttl - (time.monotonic() - tv.verified_at), 1)}
+            for img, tv in self._tag_cache.items()
+            if not tv.expired
+        }
         return {
             "hub_tracker": self.hub_tracker.get_stats(),
             "cosign_client": self._cosign_client.get_call_stats(),
             "cache_size": len(self._cache),
+            "tag_pin_cache_size": len(active_pins),
+            "active_tag_pins": active_pins,
             "rate_limited_until": (
                 self._rate_limited_until - time.monotonic()
                 if self._rate_limited_until and time.monotonic() < self._rate_limited_until

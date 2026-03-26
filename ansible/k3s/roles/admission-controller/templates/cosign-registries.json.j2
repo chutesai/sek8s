@@ -75,5 +75,11 @@
       "public_key": "/etc/admission-controller/cosign/cosign.pub",
       "rekor_url": "https://rekor.sigstore.dev"
     }
+  ],
+  "pin_digest_whitelist": [
+    {
+      "image": "docker.io/parachutes/failed-chute-cleanup",
+      "ttl": 3600
+    }
   ]
 }

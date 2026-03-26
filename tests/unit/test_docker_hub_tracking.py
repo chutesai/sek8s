@@ -9,7 +9,7 @@ import pytest
 from collections import defaultdict
 from unittest.mock import AsyncMock, Mock, patch
 
-from sek8s.cosign.client import CosignClient
+from sek8s.clients.cosign import CosignClient
 from sek8s.services.admission_controller import AdmissionController, RequestTracker
 from sek8s.validators.cosign import CosignValidator, DockerHubTracker, _ImageStats
 from sek8s.validators.base import ValidationResult
