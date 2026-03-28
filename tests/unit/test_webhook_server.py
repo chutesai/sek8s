@@ -9,6 +9,11 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, AsyncMock
 
 from sek8s.services.admission_controller import AdmissionWebhookServer
+from sek8s.services.admission_models import (
+    AdmissionResponseBody,
+    AdmissionReviewResponse,
+    AdmissionStatus,
+)
 from sek8s.config import AdmissionConfig
 
 
@@ -105,11 +110,9 @@ def test_validate_endpoint_success(client, webhook_server):
     }
 
     with patch.object(webhook_server.controller, "validate_admission", new_callable=AsyncMock) as mock_validate:
-        mock_validate.return_value = {
-            "apiVersion": "admission.k8s.io/v1",
-            "kind": "AdmissionReview",
-            "response": {"uid": "test-123", "allowed": True},
-        }
+        mock_validate.return_value = AdmissionReviewResponse(
+            response=AdmissionResponseBody(uid="test-123", allowed=True),
+        )
 
         resp = client.post("/validate", json=admission_review)
 
@@ -132,15 +135,13 @@ def test_validate_endpoint_denial(client, webhook_server):
     }
 
     with patch.object(webhook_server.controller, "validate_admission", new_callable=AsyncMock) as mock_validate:
-        mock_validate.return_value = {
-            "apiVersion": "admission.k8s.io/v1",
-            "kind": "AdmissionReview",
-            "response": {
-                "uid": "test-456",
-                "allowed": False,
-                "status": {"message": "Pod violates security policy"},
-            },
-        }
+        mock_validate.return_value = AdmissionReviewResponse(
+            response=AdmissionResponseBody(
+                uid="test-456",
+                allowed=False,
+                status=AdmissionStatus(message="Pod violates security policy"),
+            ),
+        )
 
         resp = client.post("/validate", json=admission_review)
 

@@ -20,6 +20,19 @@ def is_digest_pinned_reference(image_ref: str) -> bool:
     return digest_part.startswith("sha256:") or digest_part.startswith("sha512:")
 
 
+def strip_tag(image_ref: str) -> str:
+    """Return the fully-qualified image name without tag or digest.
+
+    Examples:
+        docker.io/parachutes/foo:latest -> docker.io/parachutes/foo
+        parachutes/foo:v1.2 -> docker.io/parachutes/foo
+        nginx:latest -> docker.io/library/nginx
+        docker.io/library/nginx@sha256:abc -> docker.io/library/nginx
+    """
+    registry, org, repo, _ = parse_image_reference(image_ref)
+    return f"{registry}/{org}/{repo}"
+
+
 def normalize_registry_hostname(image_ref: str) -> str:
     """Lowercase registry hostname so ctr matches registries.yaml (case-sensitive lookup)."""
     if "/" not in image_ref:

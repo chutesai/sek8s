@@ -29,3 +29,25 @@
         group: root
         mode: '0400'  # Read-only
         attributes: '+i'  # Immutable flag (requires root to remove)
+
+    - name: Create mutating webhook manifest
+      ansible.builtin.template:
+        src: mutation-webhook.yaml.j2
+        dest: /var/lib/rancher/k3s/server/manifests/mutation-webhook.yaml
+        owner: root
+        group: root
+        mode: '0600'
+      vars:
+        mutation_webhook_config:
+          webhook_name: admission-controller-mutator
+          port: "{{ admission_port | default(8443) }}"
+          localhost: true
+      notify: restart k3s
+
+    - name: Protect mutating webhook manifest from modifications
+      ansible.builtin.file:
+        path: /var/lib/rancher/k3s/server/manifests/mutation-webhook.yaml
+        owner: root
+        group: root
+        mode: '0400'
+        attributes: '+i'

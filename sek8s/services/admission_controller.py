@@ -5,40 +5,79 @@ Phase 4a - Basic Python + OPA
 """
 
 import asyncio
+import base64
 import json
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from sek8s.config import AdmissionConfig
+from sek8s.image_utils import is_digest_pinned_reference, strip_tag
 from sek8s.server import WebServer
+from sek8s.services.admission_models import (
+    AdmissionResponseBody,
+    AdmissionReviewResponse,
+    AdmissionStatus,
+)
 from sek8s.validators.base import ValidatorBase
 from sek8s.validators.cosign import CosignValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.validators.registry import RegistryValidator
 from sek8s.metrics import MetricsCollector
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
+_ACCESS_LOG_INTERVAL_SECONDS = 60
 
-class _SuppressValidate200(logging.Filter):
-    """Filter out noisy 'POST /validate 200' access-log lines from uvicorn."""
+
+class _BatchAccessLog(logging.Filter):
+    """Suppress individual 'POST /validate 200' and 'POST /mutate 200' uvicorn
+    access-log lines and instead emit a single count every 60 seconds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._validate_ok: int = 0
+        self._mutate_ok: int = 0
+        self._last_flush = time.monotonic()
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
-        if "/validate" in msg and "200" in msg:
-            return False
-        return True
+        is_ok = "200" in msg
+        suppress = False
+
+        if is_ok and "/validate" in msg:
+            self._validate_ok += 1
+            suppress = True
+        elif is_ok and "/mutate" in msg:
+            self._mutate_ok += 1
+            suppress = True
+
+        self._maybe_flush()
+        return not suppress
+
+    def _maybe_flush(self) -> None:
+        now = time.monotonic()
+        if now - self._last_flush < _ACCESS_LOG_INTERVAL_SECONDS:
+            return
+        self._last_flush = now
+        total = self._validate_ok + self._mutate_ok
+        if total > 0:
+            logger.info(
+                "Admission webhooks: %d requests in last %ds (validate=%d, mutate=%d)",
+                total, _ACCESS_LOG_INTERVAL_SECONDS,
+                self._validate_ok, self._mutate_ok,
+            )
+        self._validate_ok = 0
+        self._mutate_ok = 0
 
 
-logging.getLogger("uvicorn.access").addFilter(_SuppressValidate200())
+logging.getLogger("uvicorn.access").addFilter(_BatchAccessLog())
 
 
 class AdmissionController:
@@ -48,25 +87,24 @@ class AdmissionController:
         self.config = config
         self.metrics = MetricsCollector()
 
-        # Initialize validators
         self.validators: List[ValidatorBase] = []
+        self._cosign_validator: Optional[CosignValidator] = None
         self._init_validators()
 
         logger.info("Admission controller initialized with %d validators", len(self.validators))
 
     def _init_validators(self):
         """Initialize all configured validators."""
-        # OPA validator (always enabled for Phase 4a)
         self.validators.append(OPAValidator(self.config))
-
-        # Registry validator (lightweight, always enabled)
         self.validators.append(RegistryValidator(self.config))
 
-        self.validators.append(CosignValidator(self.config))
+        cosign = CosignValidator(self.config)
+        self.validators.append(cosign)
+        self._cosign_validator = cosign
 
         logger.info("Initialized validators: %s", [v.__class__.__name__ for v in self.validators])
 
-    async def validate_admission(self, admission_review: Dict) -> Dict:
+    async def validate_admission(self, admission_review: Dict) -> AdmissionReviewResponse:
         """
         Main validation entry point.
 
@@ -79,23 +117,22 @@ class AdmissionController:
         start_time = time.time()
         request = admission_review.get("request", {})
         uid = request.get("uid", "unknown")
+        kind = request.get("kind", {}).get("kind", "unknown")
+        operation = request.get("operation", "unknown")
+        namespace = request.get("namespace", "default")
 
         logger.debug(
-            "Processing admission request: uid=%s, kind=%s, operation=%s",
-            uid,
-            request.get("kind", {}).get("kind", "unknown"),
-            request.get("operation", "unknown"),
+            "Processing admission request: uid=%s, kind=%s, operation=%s, namespace=%s",
+            uid, kind, operation, namespace,
         )
 
         try:
-            # Run validators in parallel
             validation_tasks = [
                 validator.validate(admission_review) for validator in self.validators
             ]
 
             results = await asyncio.gather(*validation_tasks, return_exceptions=True)
 
-            # Process results
             allowed = True
             messages = []
             warnings = []
@@ -105,7 +142,6 @@ class AdmissionController:
 
                 if isinstance(result, Exception):
                     logger.error("Validator %s failed: %s", validator_name, result)
-                    # Fail closed on validator errors
                     allowed = False
                     messages.append(f"{validator_name}: Internal error")
                     continue
@@ -116,7 +152,6 @@ class AdmissionController:
 
                 warnings.extend(result.warnings)
 
-                # Log validator result
                 logger.debug(
                     "Validator %s: allowed=%s, messages=%d, warnings=%d",
                     validator_name,
@@ -125,17 +160,15 @@ class AdmissionController:
                     len(result.warnings),
                 )
 
-            # Build response
             response = self._build_response(
                 uid=uid, allowed=allowed, messages=messages, warnings=warnings
             )
 
-            # Record metrics
             elapsed = time.time() - start_time
             self.metrics.record_admission_decision(
                 allowed=allowed,
-                resource_kind=request.get("kind", {}).get("kind", "unknown"),
-                operation=request.get("operation", "unknown"),
+                resource_kind=kind,
+                operation=operation,
                 duration=elapsed,
             )
 
@@ -148,30 +181,21 @@ class AdmissionController:
         except Exception as e:
             logger.exception("Unexpected error processing admission request %s", uid)
 
-            # Fail closed on unexpected errors
             return self._build_response(
                 uid=uid, allowed=False, messages=[f"Internal error: {str(e)}"], warnings=[]
             )
 
     def _build_response(
         self, uid: str, allowed: bool, messages: List[str], warnings: List[str]
-    ) -> Dict:
+    ) -> AdmissionReviewResponse:
         """Build admission review response."""
-        response = {
-            "apiVersion": "admission.k8s.io/v1",
-            "kind": "AdmissionReview",
-            "response": {"uid": uid, "allowed": allowed},
-        }
-
-        # Add status message
-        if messages:
-            response["response"]["status"] = {"message": "; ".join(messages)}
-
-        # Add warnings (Kubernetes 1.19+)
-        if warnings:
-            response["response"]["warnings"] = warnings
-
-        return response
+        body = AdmissionResponseBody(
+            uid=uid,
+            allowed=allowed,
+            status=AdmissionStatus(message="; ".join(messages)) if messages else None,
+            warnings=warnings or None,
+        )
+        return AdmissionReviewResponse(response=body)
 
     async def health_check(self) -> Dict:
         """Check health of all validators."""
@@ -191,6 +215,59 @@ class AdmissionController:
                 health_status["healthy"] = False
 
         return health_status
+
+    def build_image_pin_patches(self, request: dict) -> List[dict]:
+        """Build JSON Patch operations to pin whitelisted tag-only images to their verified digest.
+
+        Returns an empty list when there is nothing to mutate (no cosign
+        validator, no whitelisted images, or no cached digest).
+        """
+        if not self._cosign_validator:
+            return []
+
+        obj = request.get("object", {})
+        patches: List[dict] = []
+
+        def _maybe_pin(containers: List[dict], json_prefix: str) -> None:
+            for idx, container in enumerate(containers):
+                image = container.get("image", "")
+                if not image or is_digest_pinned_reference(image):
+                    continue
+                digest = self._cosign_validator.get_pinned_digest(image)
+                if digest:
+                    image_no_tag = strip_tag(image)
+                    pinned = f"{image_no_tag}@{digest}"
+                    patches.append({
+                        "op": "replace",
+                        "path": f"{json_prefix}/{idx}/image",
+                        "value": pinned,
+                    })
+
+        spec = obj.get("spec", {})
+
+        # Direct pod spec
+        if "containers" in spec:
+            _maybe_pin(spec.get("containers", []), "/spec/containers")
+        if "initContainers" in spec:
+            _maybe_pin(spec.get("initContainers", []), "/spec/initContainers")
+
+        # Deployment / StatefulSet / DaemonSet / Job template
+        tpl_spec = spec.get("template", {}).get("spec", {})
+        if tpl_spec:
+            if "containers" in tpl_spec:
+                _maybe_pin(tpl_spec["containers"], "/spec/template/spec/containers")
+            if "initContainers" in tpl_spec:
+                _maybe_pin(tpl_spec["initContainers"], "/spec/template/spec/initContainers")
+
+        # CronJob extra nesting
+        jt_spec = spec.get("jobTemplate", {}).get("spec", {}).get("template", {}).get("spec", {})
+        if jt_spec:
+            if "containers" in jt_spec:
+                _maybe_pin(jt_spec["containers"], "/spec/jobTemplate/spec/template/spec/containers")
+            if "initContainers" in jt_spec:
+                _maybe_pin(jt_spec["initContainers"], "/spec/jobTemplate/spec/template/spec/initContainers")
+
+        return patches
 
 
 class AdmissionWebhookServer(WebServer):
@@ -213,60 +290,76 @@ class AdmissionWebhookServer(WebServer):
         try:
             admission_review = await request.json()
 
-            # Validate request structure
             if not admission_review.get("request"):
                 return JSONResponse(
-                    content={"error": "Invalid admission review: missing request"}, 
-                    status_code=400
+                    content={"error": "Invalid admission review: missing request"},
+                    status_code=400,
                 )
 
-            # Process admission
             response = await self.controller.validate_admission(admission_review)
-
-            return JSONResponse(content=response)
+            return JSONResponse(content=response.model_dump(exclude_none=True))
 
         except json.JSONDecodeError as e:
             logger.error("Invalid JSON in request: %s", e)
             return JSONResponse(
-                content={"error": "Invalid JSON"}, 
-                status_code=400
+                content={"error": "Invalid JSON"},
+                status_code=400,
             )
         except Exception as e:
             logger.exception("Error handling validation request")
 
-            # Return a valid admission response that denies the request
-            return JSONResponse(
-                content={
-                    "apiVersion": "admission.k8s.io/v1",
-                    "kind": "AdmissionReview",
-                    "response": {
-                        "uid": admission_review.get("request", {}).get("uid", "unknown"),
-                        "allowed": False,
-                        "status": {"message": f"Internal server error: {str(e)}"},
-                    },
-                }
+            uid = admission_review.get("request", {}).get("uid", "unknown")
+            error_response = AdmissionReviewResponse(
+                response=AdmissionResponseBody(
+                    uid=uid,
+                    allowed=False,
+                    status=AdmissionStatus(message=f"Internal server error: {str(e)}"),
+                )
             )
+            return JSONResponse(content=error_response.model_dump(exclude_none=True))
 
     async def handle_mutate(self, request: Request) -> JSONResponse:
-        """Handle mutation webhook requests (placeholder for future)."""
+        """Handle mutation webhook requests.
+
+        For whitelisted images with a cached verified digest, pin the image
+        reference to that digest via JSON Patch.  All other images pass through
+        unmodified.
+        """
         try:
             request_data = await request.json()
-            return JSONResponse(
-                content={
-                    "apiVersion": "admission.k8s.io/v1",
-                    "kind": "AdmissionReview",
-                    "response": {
-                        "uid": request_data.get("request", {}).get("uid", "unknown"),
-                        "allowed": True,
-                    },
-                }
+            req = request_data.get("request", {})
+            uid = req.get("uid", "unknown")
+
+            patches = self.controller.build_image_pin_patches(req)
+
+            patch_type: Optional[str] = None
+            patch_data: Optional[str] = None
+            if patches:
+                patch_type = "JSONPatch"
+                patch_data = base64.b64encode(
+                    json.dumps(patches).encode()
+                ).decode()
+                logger.info(
+                    "Mutating webhook: pinned %d image(s) for %s/%s",
+                    len(patches), req.get("namespace", "?"),
+                    req.get("name", req.get("object", {}).get("metadata", {}).get("generateName", "?")),
+                )
+
+            response = AdmissionReviewResponse(
+                response=AdmissionResponseBody(
+                    uid=uid,
+                    allowed=True,
+                    patchType=patch_type,
+                    patch=patch_data,
+                )
             )
+            return JSONResponse(content=response.model_dump(exclude_none=True))
         except Exception as e:
             logger.exception("Error handling mutation request")
-            return JSONResponse(
-                content={"error": "Invalid request"}, 
-                status_code=400
+            error_response = AdmissionReviewResponse(
+                response=AdmissionResponseBody(uid="unknown", allowed=True)
             )
+            return JSONResponse(content=error_response.model_dump(exclude_none=True))
 
     async def handle_health(self, request: Request) -> JSONResponse:
         """Health check endpoint."""
@@ -292,20 +385,16 @@ class AdmissionWebhookServer(WebServer):
 def run():
     """Main entry point."""
     try:
-        # Load configuration using Pydantic
         config = AdmissionConfig()
 
-        # Setup logging level based on config
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)
             logger.debug("Debug mode enabled")
             logger.debug("Configuration: %s", config.export_json())
 
-        # Validate required TLS configuration
         if not config.tls_cert_path or not config.tls_key_path:
             logger.warning("TLS certificates not configured, running in insecure mode")
 
-        # Create and run server
         server = AdmissionWebhookServer(config)
         server.run()
 

@@ -24,8 +24,8 @@ async def test_validate_allowed_pod(admission_controller, valid_admission_review
 
         response = await admission_controller.validate_admission(valid_admission_review)
 
-        assert response["response"]["allowed"] is True
-        assert response["response"]["uid"] == "test-uid-123"
+        assert response.response.allowed is True
+        assert response.response.uid == "test-uid-123"
 
 
 @pytest.mark.asyncio
@@ -43,8 +43,8 @@ async def test_validate_denied_pod_privileged(admission_controller, privileged_p
 
         response = await admission_controller.validate_admission(privileged_pod_review)
 
-        assert response["response"]["allowed"] is False
-        assert "privileged security context" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "privileged security context" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -64,8 +64,8 @@ async def test_validate_untrusted_registry(admission_controller, untrusted_regis
 
         response = await admission_controller.validate_admission(untrusted_registry_review)
 
-        assert response["response"]["allowed"] is False
-        assert "disallowed registry" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "disallowed registry" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -81,9 +81,9 @@ async def test_validate_with_warnings(admission_controller, valid_admission_revi
 
         response = await admission_controller.validate_admission(valid_admission_review)
 
-        assert response["response"]["allowed"] is True
-        assert "warnings" in response["response"]
-        assert "Policy violation detected" in response["response"]["warnings"][0]
+        assert response.response.allowed is True
+        assert response.response.warnings is not None
+        assert "Policy violation detected" in response.response.warnings[0]
 
 
 @pytest.mark.asyncio
@@ -96,11 +96,11 @@ async def test_cache_hit(admission_controller, valid_admission_review):
 
         # First request
         response1 = await admission_controller.validate_admission(valid_admission_review)
-        assert response1["response"]["allowed"] is True
+        assert response1.response.allowed is True
 
         # Second request (should hit cache)
         response2 = await admission_controller.validate_admission(valid_admission_review)
-        assert response2["response"]["allowed"] is True
+        assert response2.response.allowed is True
 
         # Validator should only be called once due to caching
         mock_validator.validate.assert_called_once()
@@ -116,8 +116,8 @@ async def test_validator_exception_handling(admission_controller, valid_admissio
 
         response = await admission_controller.validate_admission(valid_admission_review)
 
-        assert response["response"]["allowed"] is False
-        assert "Internal error" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "Internal error" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -130,7 +130,7 @@ async def test_deployment_validation(admission_controller, deployment_review):
 
         response = await admission_controller.validate_admission(deployment_review)
 
-        assert response["response"]["allowed"] is True
+        assert response.response.allowed is True
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_cronjob_validation(admission_controller, cronjob_review):
 
         response = await admission_controller.validate_admission(cronjob_review)
 
-        assert response["response"]["allowed"] is True
+        assert response.response.allowed is True
 
 
 @pytest.mark.asyncio
@@ -158,8 +158,8 @@ async def test_namespace_creation_denied(admission_controller, namespace_creatio
 
         response = await admission_controller.validate_admission(namespace_creation_review)
 
-        assert response["response"]["allowed"] is False
-        assert "namespaces is prohibited" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "namespaces is prohibited" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -174,8 +174,8 @@ async def test_host_network_denied(admission_controller, host_network_pod_review
 
         response = await admission_controller.validate_admission(host_network_pod_review)
 
-        assert response["response"]["allowed"] is False
-        assert "host network" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "host network" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -192,8 +192,8 @@ async def test_invalid_hostpath_denied(admission_controller, invalid_hostpath_re
 
         response = await admission_controller.validate_admission(invalid_hostpath_review)
 
-        assert response["response"]["allowed"] is False
-        assert "/cache paths are permitted" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "/cache paths are permitted" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -206,7 +206,7 @@ async def test_valid_cache_mount_allowed(admission_controller, valid_cache_mount
 
         response = await admission_controller.validate_admission(valid_cache_mount_review)
 
-        assert response["response"]["allowed"] is True
+        assert response.response.allowed is True
 
 
 @pytest.mark.asyncio
@@ -221,8 +221,8 @@ async def test_no_resource_limits_denied(admission_controller, no_limits_pod_rev
 
         response = await admission_controller.validate_admission(no_limits_pod_review)
 
-        assert response["response"]["allowed"] is False
-        assert "missing resource limits" in response["response"]["status"]["message"]
+        assert response.response.allowed is False
+        assert "missing resource limits" in response.response.status.message
 
 
 @pytest.mark.asyncio
@@ -235,7 +235,7 @@ async def test_service_allowed(admission_controller, service_review):
 
         response = await admission_controller.validate_admission(service_review)
 
-        assert response["response"]["allowed"] is True
+        assert response.response.allowed is True
 
 
 @pytest.mark.asyncio
@@ -253,8 +253,8 @@ async def test_exempt_namespace(admission_controller, exempt_namespace_review):
 
         response = await admission_controller.validate_admission(exempt_namespace_review)
 
-        assert response["response"]["allowed"] is True
-        assert "warnings" in response["response"]
+        assert response.response.allowed is True
+        assert response.response.warnings is not None
 
 
 @pytest.mark.asyncio
@@ -271,8 +271,8 @@ async def test_multiple_validators_combined(admission_controller, valid_admissio
 
         response = await admission_controller.validate_admission(valid_admission_review)
 
-        assert response["response"]["allowed"] is True
-        assert len(response["response"]["warnings"]) == 2
+        assert response.response.allowed is True
+        assert len(response.response.warnings) == 2
 
 
 @pytest.mark.asyncio

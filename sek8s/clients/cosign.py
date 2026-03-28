@@ -12,6 +12,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Optional
 
 from sek8s.config import CosignVerificationConfig
 
@@ -32,8 +33,30 @@ class CosignVerificationUnavailableError(Exception):
     """Raised when cosign cannot verify due to network/infra failure."""
 
 
+def _extract_verified_digest(stdout: str) -> Optional[str]:
+    """Extract the image digest from cosign's JSON verification output.
+
+    Cosign outputs a JSON array on success. Each entry contains
+    ``critical.image.docker-manifest-digest`` with the verified digest.
+    """
+    try:
+        result = json.loads(stdout)
+        if not isinstance(result, list) or not result:
+            return None
+        critical = result[0].get("critical", {})
+        digest = critical.get("image", {}).get("docker-manifest-digest")
+        if digest and isinstance(digest, str):
+            return digest
+    except (json.JSONDecodeError, AttributeError, IndexError, TypeError):
+        pass
+    return None
+
+
 class CosignClient:
     """Client for verifying container image signatures via cosign subprocess."""
+
+    def __init__(self) -> None:
+        pass
 
     async def verify(
         self,
@@ -41,14 +64,19 @@ class CosignClient:
         config: CosignVerificationConfig,
         *,
         timeout: float = 60.0,
-    ) -> bool:
-        """Verify image signature. Returns True if valid."""
+    ) -> tuple[bool, Optional[str]]:
+        """Verify image signature.
+
+        Returns ``(valid, verified_digest)`` where *verified_digest* is the
+        ``sha256:…`` digest extracted from cosign's output on success, or
+        ``None`` when verification fails or the digest cannot be parsed.
+        """
         if config.verification_method == "key":
             return await self._verify_with_key(image, config, timeout=timeout)
         if config.verification_method == "keyless":
             return await self._verify_keyless(image, config, timeout=timeout)
         logger.error("Unknown verification method: %s", config.verification_method)
-        return False
+        return (False, None)
 
     async def _verify_with_key(
         self,
@@ -56,11 +84,11 @@ class CosignClient:
         config: CosignVerificationConfig,
         *,
         timeout: float = 60.0,
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         """Verify using public key."""
         if not config.public_key or not config.public_key.exists():
             logger.error("Cosign public key not found: %s", config.public_key)
-            return False
+            return (False, None)
 
         cmd = [
             "cosign",
@@ -76,10 +104,11 @@ class CosignClient:
             cmd.extend(["--rekor-url", config.rekor_url])
         cmd.append(image)
 
-        success, _stdout, stderr = await self._run_cosign(cmd, timeout=timeout)
+        success, stdout, stderr = await self._run_cosign(cmd, timeout=timeout)
         if not success:
             logger.warning("Cosign verify failed for %s: %s", image, stderr)
-        return success
+            return (False, None)
+        return (True, _extract_verified_digest(stdout))
 
     async def _verify_keyless(
         self,
@@ -87,11 +116,11 @@ class CosignClient:
         config: CosignVerificationConfig,
         *,
         timeout: float = 60.0,
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         """Verify using keyless (OIDC)."""
         if not config.keyless_identity_regex or not config.keyless_issuer:
             logger.error("Keyless verification requires identity regex and issuer")
-            return False
+            return (False, None)
 
         cmd = [
             "cosign",
@@ -111,11 +140,12 @@ class CosignClient:
         if success:
             try:
                 result = json.loads(stdout)
-                return isinstance(result, list) and len(result) > 0
+                if isinstance(result, list) and len(result) > 0:
+                    return (True, _extract_verified_digest(stdout))
             except json.JSONDecodeError:
                 logger.error("Invalid JSON from cosign: %s", stdout)
-                return False
-        return False
+                return (False, None)
+        return (False, None)
 
     _RATE_LIMIT_PATTERNS = [
         re.compile(r"\brate\s*limit", re.IGNORECASE),
@@ -141,7 +171,6 @@ class CosignClient:
         """Run cosign command. Returns (success, stdout, stderr).
         Raises CosignRateLimitError or CosignVerificationUnavailableError when detected.
         """
-        logger.debug("Running cosign: %s", " ".join(cmd))
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
