@@ -499,10 +499,7 @@ class CosignValidator(ValidatorBase):
                     ttl=float(pin_ttl),
                 )
                 digest_ref = f"{image_no_tag}@{verified_digest}"
-                self._put(
-                    digest_ref, True, None,
-                    float(self.cosign_config.success_cache_ttl_seconds),
-                )
+                self._put(digest_ref, True, None, float(pin_ttl))
                 logger.info(
                     "Cached tag pin: %s -> %s (TTL %ds)",
                     image, verified_digest, pin_ttl,
