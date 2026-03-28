@@ -11,12 +11,10 @@ import json
 import logging
 import os
 import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 from sek8s.config import CosignVerificationConfig
-from sek8s.image_utils import extract_registry
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +56,7 @@ class CosignClient:
     """Client for verifying container image signatures via cosign subprocess."""
 
     def __init__(self) -> None:
-        self._call_count: int = 0
-        self._registry_calls: dict[str, int] = defaultdict(int)
-
-    def get_call_stats(self) -> dict:
-        """Return subprocess call counts (total and per-registry)."""
-        return {
-            "total_calls": self._call_count,
-            "by_registry": dict(self._registry_calls),
-        }
+        pass
 
     async def verify(
         self,
@@ -181,23 +171,6 @@ class CosignClient:
         """Run cosign command. Returns (success, stdout, stderr).
         Raises CosignRateLimitError or CosignVerificationUnavailableError when detected.
         """
-        self._call_count += 1
-        image = cmd[-1] if cmd else "unknown"
-        registry = extract_registry(image)
-        self._registry_calls[registry] += 1
-        call_num = self._call_count
-        docker_hub_num = self._registry_calls.get("docker.io", 0)
-
-        if registry == "docker.io":
-            logger.info(
-                "COSIGN SUBPROCESS #%d (docker.io #%d): image=%s method=%s",
-                call_num, docker_hub_num, image,
-                "key" if "--key" in cmd else "keyless",
-            )
-        else:
-            logger.debug(
-                "COSIGN SUBPROCESS #%d: image=%s registry=%s", call_num, image, registry
-            )
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
