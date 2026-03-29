@@ -11,9 +11,9 @@ Tests cover:
 
 import json
 import time
-import pytest
-from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from sek8s.clients.cosign import _extract_verified_digest
 from sek8s.config import (
@@ -26,10 +26,10 @@ from sek8s.image_utils import strip_tag
 from sek8s.services.admission_controller import AdmissionController
 from sek8s.validators.cosign import CosignValidator, _TagVerification
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def config():
@@ -45,16 +45,21 @@ def config():
 # _extract_verified_digest
 # ---------------------------------------------------------------------------
 
+
 class TestExtractVerifiedDigest:
     def test_valid_cosign_output(self):
-        stdout = json.dumps([{
-            "critical": {
-                "identity": {"docker-reference": "docker.io/parachutes/foo"},
-                "image": {"docker-manifest-digest": "sha256:abcdef1234567890"},
-                "type": "cosign container image signature",
-            },
-            "optional": {},
-        }])
+        stdout = json.dumps(
+            [
+                {
+                    "critical": {
+                        "identity": {"docker-reference": "docker.io/parachutes/foo"},
+                        "image": {"docker-manifest-digest": "sha256:abcdef1234567890"},
+                        "type": "cosign container image signature",
+                    },
+                    "optional": {},
+                }
+            ]
+        )
         assert _extract_verified_digest(stdout) == "sha256:abcdef1234567890"
 
     def test_empty_array(self):
@@ -74,10 +79,12 @@ class TestExtractVerifiedDigest:
         assert _extract_verified_digest("") is None
 
     def test_multiple_signatures_uses_first(self):
-        stdout = json.dumps([
-            {"critical": {"image": {"docker-manifest-digest": "sha256:first"}}},
-            {"critical": {"image": {"docker-manifest-digest": "sha256:second"}}},
-        ])
+        stdout = json.dumps(
+            [
+                {"critical": {"image": {"docker-manifest-digest": "sha256:first"}}},
+                {"critical": {"image": {"docker-manifest-digest": "sha256:second"}}},
+            ]
+        )
         assert _extract_verified_digest(stdout) == "sha256:first"
 
 
@@ -85,12 +92,18 @@ class TestExtractVerifiedDigest:
 # strip_tag
 # ---------------------------------------------------------------------------
 
+
 class TestStripTag:
     def test_with_tag(self):
-        assert strip_tag("docker.io/parachutes/foo:latest") == "docker.io/parachutes/foo"
+        assert (
+            strip_tag("docker.io/parachutes/foo:latest") == "docker.io/parachutes/foo"
+        )
 
     def test_with_digest(self):
-        assert strip_tag("docker.io/parachutes/foo@sha256:abc123") == "docker.io/parachutes/foo"
+        assert (
+            strip_tag("docker.io/parachutes/foo@sha256:abc123")
+            == "docker.io/parachutes/foo"
+        )
 
     def test_short_form(self):
         assert strip_tag("parachutes/foo:v1.2") == "docker.io/parachutes/foo"
@@ -106,11 +119,14 @@ class TestStripTag:
 # DigestPinEntry / CosignConfig.get_pin_ttl
 # ---------------------------------------------------------------------------
 
+
 class TestDigestPinWhitelist:
     def test_get_pin_ttl_match(self):
         cfg = CosignConfig(
             digest_pin_whitelist=[
-                DigestPinEntry(image="docker.io/parachutes/failed-chute-cleanup", ttl=1800),
+                DigestPinEntry(
+                    image="docker.io/parachutes/failed-chute-cleanup", ttl=1800
+                ),
             ]
         )
         assert cfg.get_pin_ttl("docker.io/parachutes/failed-chute-cleanup") == 1800
@@ -118,7 +134,9 @@ class TestDigestPinWhitelist:
     def test_get_pin_ttl_no_match(self):
         cfg = CosignConfig(
             digest_pin_whitelist=[
-                DigestPinEntry(image="docker.io/parachutes/failed-chute-cleanup", ttl=1800),
+                DigestPinEntry(
+                    image="docker.io/parachutes/failed-chute-cleanup", ttl=1800
+                ),
             ]
         )
         assert cfg.get_pin_ttl("docker.io/parachutes/other-image") is None
@@ -135,6 +153,7 @@ class TestDigestPinWhitelist:
 # ---------------------------------------------------------------------------
 # _TagVerification
 # ---------------------------------------------------------------------------
+
 
 class TestTagVerification:
     def test_not_expired(self):
@@ -158,6 +177,7 @@ class TestTagVerification:
 # CosignValidator.get_pinned_digest
 # ---------------------------------------------------------------------------
 
+
 class TestGetPinnedDigest:
     def test_returns_digest_when_cached(self, config):
         validator = CosignValidator(config)
@@ -166,7 +186,10 @@ class TestGetPinnedDigest:
             verified_at=time.monotonic(),
             ttl=3600.0,
         )
-        assert validator.get_pinned_digest("docker.io/parachutes/foo:latest") == "sha256:aaa"
+        assert (
+            validator.get_pinned_digest("docker.io/parachutes/foo:latest")
+            == "sha256:aaa"
+        )
 
     def test_returns_none_when_expired(self, config):
         validator = CosignValidator(config)
@@ -185,6 +208,7 @@ class TestGetPinnedDigest:
 # ---------------------------------------------------------------------------
 # CosignValidator._verify_image_signature populates tag cache for whitelisted
 # ---------------------------------------------------------------------------
+
 
 class TestVerifyPopulatesTagCache:
     @pytest.mark.asyncio
@@ -267,13 +291,16 @@ class TestVerifyPopulatesTagCache:
 # AdmissionController.build_image_pin_patches
 # ---------------------------------------------------------------------------
 
+
 class TestBuildImagePinPatches:
     def test_pod_containers_pinned(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = _TagVerification(
-            digest="sha256:aaa",
-            verified_at=time.monotonic(),
-            ttl=3600.0,
+        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = (
+            _TagVerification(
+                digest="sha256:aaa",
+                verified_at=time.monotonic(),
+                ttl=3600.0,
+            )
         )
         req = {
             "object": {
@@ -310,7 +337,10 @@ class TestBuildImagePinPatches:
             "object": {
                 "spec": {
                     "containers": [
-                        {"name": "main", "image": "docker.io/parachutes/foo@sha256:already"},
+                        {
+                            "name": "main",
+                            "image": "docker.io/parachutes/foo@sha256:already",
+                        },
                     ]
                 }
             }
@@ -320,10 +350,12 @@ class TestBuildImagePinPatches:
 
     def test_deployment_template_containers(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:v1"] = _TagVerification(
-            digest="sha256:bbb",
-            verified_at=time.monotonic(),
-            ttl=3600.0,
+        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:v1"] = (
+            _TagVerification(
+                digest="sha256:bbb",
+                verified_at=time.monotonic(),
+                ttl=3600.0,
+            )
         )
         req = {
             "object": {
@@ -344,7 +376,9 @@ class TestBuildImagePinPatches:
 
     def test_cronjob_nested_template(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/cleanup:latest"] = _TagVerification(
+        controller._cosign_validator._tag_cache[
+            "docker.io/parachutes/cleanup:latest"
+        ] = _TagVerification(
             digest="sha256:ccc",
             verified_at=time.monotonic(),
             ttl=3600.0,
@@ -357,7 +391,10 @@ class TestBuildImagePinPatches:
                             "template": {
                                 "spec": {
                                     "containers": [
-                                        {"name": "job", "image": "docker.io/parachutes/cleanup:latest"},
+                                        {
+                                            "name": "job",
+                                            "image": "docker.io/parachutes/cleanup:latest",
+                                        },
                                     ]
                                 }
                             }
@@ -368,15 +405,20 @@ class TestBuildImagePinPatches:
         }
         patches = controller.build_image_pin_patches(req)
         assert len(patches) == 1
-        assert patches[0]["path"] == "/spec/jobTemplate/spec/template/spec/containers/0/image"
+        assert (
+            patches[0]["path"]
+            == "/spec/jobTemplate/spec/template/spec/containers/0/image"
+        )
         assert patches[0]["value"] == "docker.io/parachutes/cleanup@sha256:ccc"
 
     def test_init_containers_pinned(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/init:v1"] = _TagVerification(
-            digest="sha256:ddd",
-            verified_at=time.monotonic(),
-            ttl=3600.0,
+        controller._cosign_validator._tag_cache["docker.io/parachutes/init:v1"] = (
+            _TagVerification(
+                digest="sha256:ddd",
+                verified_at=time.monotonic(),
+                ttl=3600.0,
+            )
         )
         req = {
             "object": {
@@ -396,10 +438,12 @@ class TestBuildImagePinPatches:
 
     def test_mixed_pinned_and_unpinned(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = _TagVerification(
-            digest="sha256:eee",
-            verified_at=time.monotonic(),
-            ttl=3600.0,
+        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = (
+            _TagVerification(
+                digest="sha256:eee",
+                verified_at=time.monotonic(),
+                ttl=3600.0,
+            )
         )
         req = {
             "object": {
@@ -417,10 +461,12 @@ class TestBuildImagePinPatches:
 
     def test_expired_cache_produces_no_patch(self, config):
         controller = AdmissionController(config)
-        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = _TagVerification(
-            digest="sha256:old",
-            verified_at=time.monotonic() - 7200,
-            ttl=3600.0,
+        controller._cosign_validator._tag_cache["docker.io/parachutes/foo:latest"] = (
+            _TagVerification(
+                digest="sha256:old",
+                verified_at=time.monotonic() - 7200,
+                ttl=3600.0,
+            )
         )
         req = {
             "object": {

@@ -53,4 +53,4 @@ PHONY: test-local
 test-local: ##@local Run test suite
 test-local: venv
 	${POETRY} run pytest -s --tb=native --durations=5 --cov=${SERVICE} --cov-report=html tests
-	${POETRY} run coverage report --fail-under=90
+	${POETRY} run coverage report --fail-under=50

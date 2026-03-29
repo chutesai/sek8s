@@ -1,13 +1,13 @@
 import asyncio
 import json
-import os
-from typing import Optional
 import uuid
+from typing import Optional
 
+import pynvml
 from loguru import logger
 
 from sek8s.exceptions import NvTrustException
-import pynvml
+
 
 class NvEvidenceProvider:
     """Async web server for admission webhook."""
@@ -15,69 +15,83 @@ class NvEvidenceProvider:
     def __enter__(self):
         pynvml.nvmlInit()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
             pynvml.nvmlShutdown()
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"nvmlShutdown failed: {e}")
 
         return False
 
-    async def get_evidence(self, name: str, nonce: str, gpu_ids: list[str] = None) -> str:
+    async def get_evidence(
+        self, name: str, nonce: str, gpu_ids: list[str] | None = None
+    ) -> str:
         try:
             result = await asyncio.create_subprocess_exec(
                 *["chutes-nvevidence", "--name", name, "--nonce", nonce],
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                cwd="/var/log/attestation-service"
+                cwd="/var/log/attestation-service",
             )
 
             await result.wait()
 
             if result.returncode == 0:
+                if result.stdout is None:
+                    raise NvTrustException("No stdout from evidence command")
                 result_output = await result.stdout.read()
                 output_str = result_output.decode()
-                
+
                 # Get the last non-empty line
-                lines = [line for line in output_str.strip().split('\n') if line.strip()]
+                lines = [
+                    line for line in output_str.strip().split("\n") if line.strip()
+                ]
                 if not lines:
                     raise NvTrustException("No output from evidence command")
-                
+
                 evidence_json = lines[-1]
-                logger.info(f"Successfully generated NVTrust evidence")
-                
+                logger.info("Successfully generated NVTrust evidence")
+
                 filtered_evidence = self._filter_evidence(evidence_json, gpu_ids)
                 return filtered_evidence
             else:
+                if result.stderr is None:
+                    raise NvTrustException("No stderr from evidence command")
                 result_output = await result.stderr.read()
-                logger.error(f"Failed to gather GPU evidence:{result_output}")
-                raise NvTrustException(f"Failed to gather evidence.")
+                logger.error(f"Failed to gather GPU evidence:{result_output!r}")
+                raise NvTrustException("Failed to gather evidence.")
         except Exception as e:
             logger.error(f"Unexpected error gathering GPU evidence:{e}")
-            raise NvTrustException(f"Unexpected error gathering GPU evidence.")
+            raise NvTrustException("Unexpected error gathering GPU evidence.")
 
     def _filter_evidence(self, evidence: str, target_gpu_ids: Optional[list[str]]):
         filtered_evidence = evidence
         if target_gpu_ids:
-            formatted_targets = [gpu_id if gpu_id.startswith("GPU") else f"GPU-{str(uuid.UUID(gpu_id))}" for gpu_id in target_gpu_ids]
+            formatted_targets = [
+                gpu_id if gpu_id.startswith("GPU") else f"GPU-{str(uuid.UUID(gpu_id))}"
+                for gpu_id in target_gpu_ids
+            ]
             if formatted_targets:
                 evidence_list = json.loads(evidence)
                 all_gpu_uids = self._get_gpu_ids()
                 if len(formatted_targets) < len(all_gpu_uids):
-                    target_indices = [idx for idx, gpu_id in enumerate(all_gpu_uids) if gpu_id in formatted_targets]
+                    target_indices = [
+                        idx
+                        for idx, gpu_id in enumerate(all_gpu_uids)
+                        if gpu_id in formatted_targets
+                    ]
                     target_evidence = [evidence_list[idx] for idx in target_indices]
                     filtered_evidence = json.dumps(target_evidence)
-        
+
         return filtered_evidence
 
     def _get_gpu_ids(self):
         device_count = pynvml.nvmlDeviceGetCount()
-        
+
         gpu_uids = []
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
             gpu_uids.append(pynvml.nvmlDeviceGetUUID(handle))
 
         return gpu_uids
-    

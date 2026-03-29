@@ -7,8 +7,6 @@ from typing import List
 
 from fastapi import HTTPException
 
-from sek8s.image_utils import extract_registry
-
 from .models import ImageEntry
 
 

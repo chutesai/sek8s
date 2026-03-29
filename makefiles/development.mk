@@ -3,12 +3,15 @@ install-hooks: ##@development Install git hooks (blocks sensitive pushes to publ
 	git config core.hooksPath .githooks
 	@echo "Git hooks installed. Pre-push guard active."
 
-.PHONY: install
-install: ##@development Instal development dependencies
-install: venv
+.PHONY: install-opa
+install-opa: ##@development Install OPA binary
 	mkdir -p bin
 	curl -L -o bin/opa https://openpolicyagent.org/downloads/v1.3.0/opa_linux_amd64_static
 	chmod 755 ./bin/opa
+
+.PHONY: install
+install: ##@development Instal development dependencies
+install: venv install-opa
 
 OPA_POLICIES_DIR ?= ansible/k3s/roles/admission-controller/files/policies
 OPA_TESTS_DIR ?= tests/opa

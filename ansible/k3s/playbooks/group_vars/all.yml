@@ -39,8 +39,12 @@ cuda_version: "13-0"
 nvidia_version: "580"
 # NVIDIA package release suffix (minor.patch-release). This is appended to the
 # major `nvidia_version` to form full package versions like
-# "580.126.20-1ubuntu1". Keep this in sync with the package repository.
-nvidia_pkg_release: "126.20-1ubuntu1"
+# "580.105.08-0ubuntu1". Keep this in sync with the package repository.
+# Pinned to 580.105.08: the 580.126.x Fabric Manager overhaul (multi-tenancy
+# partition modes, FSP reset isolation, ISINK sync) causes NVSwitch instability
+# on H200 nodes with DA-series VBIOS (96.00.DA.00.11). 580.105.08 has the
+# trunk-link reroute resilience fix without the architectural FM changes.
+nvidia_pkg_release: "105.08-0ubuntu1"
 # Flag to skip the cuda install entirely, if the provider already has cuda 12.x+ installed (note some chutes will not work unless 12.6+)
 skip_cuda: false
 # Flag to enable/disable IPv6. Some hosts may require IPv6 to be on.

@@ -761,7 +761,7 @@
           "status"
         ],
         "summary": "Graceful system shutdown",
-        "description": "Initiates a graceful system shutdown (requires miner authentication)",
+        "description": "Initiates a graceful system shutdown (miner-only, validators excluded)",
         "operationId": "shutdown_system_status_system_shutdown_post",
         "parameters": [
           {
@@ -1930,7 +1930,9 @@
             "type": "string",
             "title": "Status",
             "description": "Cleanup status",
-            "example": "completed"
+            "examples": [
+              "completed"
+            ]
           },
           "freed_bytes": {
             "type": "integer",
@@ -2341,7 +2343,9 @@
             "type": "string",
             "title": "Status",
             "description": "Health status",
-            "example": "ok"
+            "examples": [
+              "ok"
+            ]
           }
         },
         "type": "object",
@@ -2472,7 +2476,9 @@
             "type": "string",
             "title": "Status",
             "description": "Status of the command",
-            "example": "ok"
+            "examples": [
+              "ok"
+            ]
           }
         },
         "type": "object",
@@ -2497,7 +2503,9 @@
             "type": "string",
             "title": "Status",
             "description": "Overall system status",
-            "example": "ok"
+            "examples": [
+              "ok"
+            ]
           },
           "services": {
             "items": {
@@ -2532,7 +2540,9 @@
             "type": "string",
             "title": "Status",
             "description": "Prune status",
-            "example": "completed"
+            "examples": [
+              "completed"
+            ]
           },
           "removed_count": {
             "type": "integer",
@@ -2885,7 +2895,9 @@
             "type": "string",
             "title": "Status",
             "description": "Shutdown status",
-            "example": "initiated"
+            "examples": [
+              "initiated"
+            ]
           },
           "message": {
             "type": "string",

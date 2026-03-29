@@ -3,10 +3,7 @@ import importlib
 import pytest
 from fastapi.testclient import TestClient
 
-from sek8s.system_manager.status.models import (
-    CommandResult,
-    SERVICE_ALLOWLIST,
-)
+from sek8s.system_manager.status.models import SERVICE_ALLOWLIST, CommandResult
 
 
 class FakeRunner:
@@ -17,7 +14,9 @@ class FakeRunner:
     def set_response(self, binary: str, result: CommandResult) -> None:
         self.responses[binary] = result
 
-    async def __call__(self, command, timeout, limit, *, keep_tail=False):  # pragma: no cover - interface shim
+    async def __call__(
+        self, command, timeout, limit, *, keep_tail=False
+    ):  # pragma: no cover - interface shim
         self.commands.append(command)
         binary = command[0]
         if binary not in self.responses:

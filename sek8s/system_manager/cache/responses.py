@@ -45,10 +45,16 @@ class CacheChuteStatus(BaseModel):
         None,
         description="Estimated seconds until download completes; omitted when rate or total size is unknown",
     )
-    repo_id: Optional[str] = Field(None, description="HF repo ID when present or in_progress")
-    revision: Optional[str] = Field(None, description="Revision when present or in_progress")
+    repo_id: Optional[str] = Field(
+        None, description="HF repo ID when present or in_progress"
+    )
+    revision: Optional[str] = Field(
+        None, description="Revision when present or in_progress"
+    )
     size_bytes: Optional[int] = Field(None, description="Size in bytes when present")
-    error: Optional[str] = Field(None, description="Error message when status is failed")
+    error: Optional[str] = Field(
+        None, description="Error message when status is failed"
+    )
 
 
 class CacheDownloadStatusResponse(BaseModel):
@@ -73,6 +79,8 @@ class CacheOverviewResponse(BaseModel):
 
 
 class CacheCleanupResponse(BaseModel):
-    status: str = Field(..., description="Cleanup status", example="completed")
+    status: str = Field(..., description="Cleanup status", examples=["completed"])
     freed_bytes: int = Field(0, description="Bytes freed")
-    removed_chutes: List[str] = Field(default_factory=list, description="Chute IDs removed")
+    removed_chutes: List[str] = Field(
+        default_factory=list, description="Chute IDs removed"
+    )

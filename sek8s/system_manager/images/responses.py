@@ -29,7 +29,9 @@ class ImageListEntry(BaseModel):
 class ImageListResponse(BaseModel):
     """Response for GET /images."""
 
-    images: List[ImageListEntry] = Field(..., description="List of images in containerd")
+    images: List[ImageListEntry] = Field(
+        ..., description="List of images in containerd"
+    )
 
 
 class PullStartResponse(BaseModel):
@@ -50,7 +52,9 @@ class PullStatusEntry(BaseModel):
         ...,
         description="One of: pending, in_progress, completed, failed",
     )
-    error: Optional[str] = Field(None, description="Error message when status is failed")
+    error: Optional[str] = Field(
+        None, description="Error message when status is failed"
+    )
 
 
 class PullStatusResponse(BaseModel):
@@ -62,6 +66,6 @@ class PullStatusResponse(BaseModel):
 class PruneResponse(BaseModel):
     """Response for POST /images/prune."""
 
-    status: str = Field(..., description="Prune status", example="completed")
+    status: str = Field(..., description="Prune status", examples=["completed"])
     removed_count: int = Field(0, description="Number of images removed")
     freed_bytes: int = Field(0, description="Bytes freed")

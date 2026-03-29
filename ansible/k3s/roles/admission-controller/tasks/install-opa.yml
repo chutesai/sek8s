@@ -29,17 +29,24 @@
       register: opa_version_check
       changed_when: false
 
+    - name: Create OPA system user
+      ansible.builtin.user:
+        name: opa
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+
     - name: Create OPA directories
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item.path }}"
         state: directory
-        owner: root
-        group: root
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
         mode: '0755'
       loop:
-        - /etc/opa
-        - /etc/opa/policies
-        - /var/log/opa
+        - { path: /etc/opa, owner: root, group: root }
+        - { path: /etc/opa/policies, owner: root, group: root }
+        - { path: /var/log/opa, owner: opa, group: opa }
 
     - name: Create OPA configuration
       ansible.builtin.copy:

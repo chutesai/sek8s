@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 
@@ -14,19 +15,29 @@ def mock_aiohttp_session():
             # mock_response.text=AsyncMock(return_value="Success")
 
             mock_session = MagicMock()
-            mock_session.post.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_session.post.return_value.__aenter__ = AsyncMock(
+                return_value=mock_response
+            )
             mock_session.post.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            mock_session.get.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_session.get.return_value.__aenter__ = AsyncMock(
+                return_value=mock_response
+            )
             mock_session.get.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            mock_session.put.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_session.put.return_value.__aenter__ = AsyncMock(
+                return_value=mock_response
+            )
             mock_session.put.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            mock_session.delete.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_session.delete.return_value.__aenter__ = AsyncMock(
+                return_value=mock_response
+            )
             mock_session.delete.return_value.__aexit__ = AsyncMock(return_value=None)
 
-            mock_session.patch.return_value.__aenter__ = AsyncMock(return_value=mock_response)
+            mock_session.patch.return_value.__aenter__ = AsyncMock(
+                return_value=mock_response
+            )
             mock_session.patch.return_value.__aexit__ = AsyncMock(return_value=None)
 
             mock_client_session.return_value = mock_session

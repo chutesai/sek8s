@@ -24,7 +24,9 @@ class HfInfoResponse(BaseModel):
     """Response from validator hf_info endpoint."""
 
     repo_id: Optional[str] = Field(None, description="Hugging Face repo ID")
-    revision: Optional[str] = Field(None, description="Repo revision; default 'main' if omitted")
+    revision: Optional[str] = Field(
+        None, description="Repo revision; default 'main' if omitted"
+    )
 
     model_config = {"extra": "ignore"}
 
@@ -34,9 +36,13 @@ class DownloadRequest(BaseModel):
 
 
 class CleanupRequest(BaseModel):
-    max_age_days: int = Field(5, ge=0, description="Remove entries older than this many days")
+    max_age_days: int = Field(
+        5, ge=0, description="Remove entries older than this many days"
+    )
     max_size_gb: int = Field(100, ge=0, description="Target max cache size in GB")
-    exclude_pattern: Optional[str] = Field(None, description="Skip repos containing this string")
+    exclude_pattern: Optional[str] = Field(
+        None, description="Skip repos containing this string"
+    )
 
 
 @dataclass

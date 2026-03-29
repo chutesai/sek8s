@@ -24,6 +24,16 @@ test_chutes_is_cache_cleaner_init_false_when_image_wrong if {
 	not chutes_is_cache_cleaner_init(container)
 }
 
+test_chutes_is_cache_cleaner_init_false_prefix_adjacent if {
+	container := {"name": "cache-init", "image": "parachutes/cache-cleaner-evil:latest"}
+	not chutes_is_cache_cleaner_init(container)
+}
+
+test_chutes_is_cache_cleaner_init_true_with_digest if {
+	container := {"name": "cache-init", "image": "parachutes/cache-cleaner@sha256:abc123"}
+	chutes_is_cache_cleaner_init(container)
+}
+
 # =============================================================================
 # Unit tests: chutes_container_runs_root_denied
 # =============================================================================
@@ -299,5 +309,5 @@ test_allow_miner_rollout_restart_attestation_proxy if {
 		},
 		"userInfo": {"username": "miner"}
 	}
-	count(effective_deny) == 0 with input as {"request": req}
+	count(deny) == 0 with input as {"request": req}
 }

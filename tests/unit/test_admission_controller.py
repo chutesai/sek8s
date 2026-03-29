@@ -3,14 +3,11 @@
 Unit tests for async Admission Controller
 """
 
-import asyncio
-import json
-import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, Mock, patch
 
-from sek8s.services.admission_controller import AdmissionController, AdmissionWebhookServer
+import pytest
+
 from sek8s.validators.base import ValidationResult
-from sek8s.metrics import MetricsCollector
 
 
 @pytest.mark.asyncio
@@ -29,13 +26,17 @@ async def test_validate_allowed_pod(admission_controller, valid_admission_review
 
 
 @pytest.mark.asyncio
-async def test_validate_denied_pod_privileged(admission_controller, privileged_pod_review):
+async def test_validate_denied_pod_privileged(
+    admission_controller, privileged_pod_review
+):
     """Test rejection of privileged pod by OPA."""
     # Mock OPA validator to deny
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_opa = AsyncMock()
         mock_opa.validate = AsyncMock(
-            return_value=ValidationResult.deny("Container 'app' has privileged security context")
+            return_value=ValidationResult.deny(
+                "Container 'app' has privileged security context"
+            )
         )
         mock_registry = AsyncMock()
         mock_registry.validate = AsyncMock(return_value=ValidationResult.allow())
@@ -48,7 +49,9 @@ async def test_validate_denied_pod_privileged(admission_controller, privileged_p
 
 
 @pytest.mark.asyncio
-async def test_validate_untrusted_registry(admission_controller, untrusted_registry_review):
+async def test_validate_untrusted_registry(
+    admission_controller, untrusted_registry_review
+):
     """Test rejection of pod from untrusted registry."""
     # Mock registry validator to deny
     with patch.object(admission_controller, "validators") as mock_validators:
@@ -62,7 +65,9 @@ async def test_validate_untrusted_registry(admission_controller, untrusted_regis
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_opa, mock_registry]))
 
-        response = await admission_controller.validate_admission(untrusted_registry_review)
+        response = await admission_controller.validate_admission(
+            untrusted_registry_review
+        )
 
         assert response.response.allowed is False
         assert "disallowed registry" in response.response.status.message
@@ -75,7 +80,9 @@ async def test_validate_with_warnings(admission_controller, valid_admission_revi
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_validator = AsyncMock()
         mock_validator.validate = AsyncMock(
-            return_value=ValidationResult.allow(warning="Policy violation detected (monitor mode)")
+            return_value=ValidationResult.allow(
+                warning="Policy violation detected (monitor mode)"
+            )
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_validator]))
 
@@ -95,11 +102,15 @@ async def test_cache_hit(admission_controller, valid_admission_review):
         mock_validators.__iter__ = Mock(return_value=iter([mock_validator]))
 
         # First request
-        response1 = await admission_controller.validate_admission(valid_admission_review)
+        response1 = await admission_controller.validate_admission(
+            valid_admission_review
+        )
         assert response1.response.allowed is True
 
         # Second request (should hit cache)
-        response2 = await admission_controller.validate_admission(valid_admission_review)
+        response2 = await admission_controller.validate_admission(
+            valid_admission_review
+        )
         assert response2.response.allowed is True
 
         # Validator should only be called once due to caching
@@ -107,7 +118,9 @@ async def test_cache_hit(admission_controller, valid_admission_review):
 
 
 @pytest.mark.asyncio
-async def test_validator_exception_handling(admission_controller, valid_admission_review):
+async def test_validator_exception_handling(
+    admission_controller, valid_admission_review
+):
     """Test handling of validator exceptions (fail closed)."""
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_validator = AsyncMock()
@@ -147,16 +160,22 @@ async def test_cronjob_validation(admission_controller, cronjob_review):
 
 
 @pytest.mark.asyncio
-async def test_namespace_creation_denied(admission_controller, namespace_creation_review):
+async def test_namespace_creation_denied(
+    admission_controller, namespace_creation_review
+):
     """Test that namespace creation is denied."""
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_opa = AsyncMock()
         mock_opa.validate = AsyncMock(
-            return_value=ValidationResult.deny("Creation of new namespaces is prohibited")
+            return_value=ValidationResult.deny(
+                "Creation of new namespaces is prohibited"
+            )
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_opa]))
 
-        response = await admission_controller.validate_admission(namespace_creation_review)
+        response = await admission_controller.validate_admission(
+            namespace_creation_review
+        )
 
         assert response.response.allowed is False
         assert "namespaces is prohibited" in response.response.status.message
@@ -168,11 +187,15 @@ async def test_host_network_denied(admission_controller, host_network_pod_review
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_opa = AsyncMock()
         mock_opa.validate = AsyncMock(
-            return_value=ValidationResult.deny("Pod uses host network which is not allowed")
+            return_value=ValidationResult.deny(
+                "Pod uses host network which is not allowed"
+            )
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_opa]))
 
-        response = await admission_controller.validate_admission(host_network_pod_review)
+        response = await admission_controller.validate_admission(
+            host_network_pod_review
+        )
 
         assert response.response.allowed is False
         assert "host network" in response.response.status.message
@@ -190,21 +213,27 @@ async def test_invalid_hostpath_denied(admission_controller, invalid_hostpath_re
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_opa]))
 
-        response = await admission_controller.validate_admission(invalid_hostpath_review)
+        response = await admission_controller.validate_admission(
+            invalid_hostpath_review
+        )
 
         assert response.response.allowed is False
         assert "/cache paths are permitted" in response.response.status.message
 
 
 @pytest.mark.asyncio
-async def test_valid_cache_mount_allowed(admission_controller, valid_cache_mount_review):
+async def test_valid_cache_mount_allowed(
+    admission_controller, valid_cache_mount_review
+):
     """Test that valid /cache mounts are allowed."""
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_validator = AsyncMock()
         mock_validator.validate = AsyncMock(return_value=ValidationResult.allow())
         mock_validators.__iter__ = Mock(return_value=iter([mock_validator]))
 
-        response = await admission_controller.validate_admission(valid_cache_mount_review)
+        response = await admission_controller.validate_admission(
+            valid_cache_mount_review
+        )
 
         assert response.response.allowed is True
 
@@ -215,7 +244,9 @@ async def test_no_resource_limits_denied(admission_controller, no_limits_pod_rev
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_opa = AsyncMock()
         mock_opa.validate = AsyncMock(
-            return_value=ValidationResult.deny("Container 'app' missing resource limits")
+            return_value=ValidationResult.deny(
+                "Container 'app' missing resource limits"
+            )
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_opa]))
 
@@ -246,23 +277,32 @@ async def test_exempt_namespace(admission_controller, exempt_namespace_review):
         mock_validator = AsyncMock()
         mock_validator.validate = AsyncMock(
             return_value=ValidationResult.allow(
-                warning="Registry violations (monitor mode): Image untrusted-registry.com/app:latest uses disallowed registry"
+                warning=(
+                    "Registry violations (monitor mode): "
+                    "Image untrusted-registry.com/app:latest uses disallowed registry"
+                )
             )
         )
         mock_validators.__iter__ = Mock(return_value=iter([mock_validator]))
 
-        response = await admission_controller.validate_admission(exempt_namespace_review)
+        response = await admission_controller.validate_admission(
+            exempt_namespace_review
+        )
 
         assert response.response.allowed is True
         assert response.response.warnings is not None
 
 
 @pytest.mark.asyncio
-async def test_multiple_validators_combined(admission_controller, valid_admission_review):
+async def test_multiple_validators_combined(
+    admission_controller, valid_admission_review
+):
     """Test multiple validators results are combined correctly."""
     with patch.object(admission_controller, "validators") as mock_validators:
         mock_opa = AsyncMock()
-        mock_opa.validate = AsyncMock(return_value=ValidationResult.allow(warning="OPA warning"))
+        mock_opa.validate = AsyncMock(
+            return_value=ValidationResult.allow(warning="OPA warning")
+        )
         mock_registry = AsyncMock()
         mock_registry.validate = AsyncMock(
             return_value=ValidationResult.allow(warning="Registry warning")
@@ -287,28 +327,12 @@ async def test_health_check(admission_controller):
         mock_unhealthy.health_check = AsyncMock(return_value=False)
         mock_unhealthy.__class__.__name__ = "UnhealthyValidator"
 
-        mock_validators.__iter__ = Mock(return_value=iter([mock_healthy, mock_unhealthy]))
+        mock_validators.__iter__ = Mock(
+            return_value=iter([mock_healthy, mock_unhealthy])
+        )
 
         health_status = await admission_controller.health_check()
 
         assert health_status["healthy"] is False
         assert health_status["validators"]["HealthyValidator"]["healthy"] is True
         assert health_status["validators"]["UnhealthyValidator"]["healthy"] is False
-
-
-@pytest.mark.asyncio
-async def test_metrics_recording(admission_controller, valid_admission_review):
-    """Test that metrics are recorded correctly."""
-    with patch.object(admission_controller, "validators") as mock_validators:
-        mock_validator = AsyncMock()
-        mock_validator.validate = AsyncMock(return_value=ValidationResult.allow())
-        mock_validators.__iter__ = Mock(return_value=iter([mock_validator]))
-
-        # Reset metrics
-        admission_controller.metrics = MetricsCollector()
-
-        response = await admission_controller.validate_admission(valid_admission_review)
-
-        assert admission_controller.metrics.admission_total["allowed"] == 1
-        assert "Pod_allowed" in admission_controller.metrics.admission_by_kind
-        assert "CREATE_allowed" in admission_controller.metrics.admission_by_operation

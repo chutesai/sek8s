@@ -11,10 +11,10 @@ import data.helpers
 # =============================================================================
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check containers in Pod
     input.request.kind.kind == "Pod"
     container := input.request.object.spec.containers[_]
     has_dangerous_capability(container)
@@ -22,26 +22,74 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check containers in templates
+    input.request.kind.kind == "Pod"
+    container := input.request.object.spec.initContainers[_]
+    has_dangerous_capability(container)
+    msg := sprintf("Init container '%s' requests dangerous capability", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind == "Pod"
+    container := input.request.object.spec.ephemeralContainers[_]
+    has_dangerous_capability(container)
+    msg := sprintf("Ephemeral container '%s' requests dangerous capability", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     has_dangerous_capability(container)
     msg := sprintf("Container '%s' requests dangerous capability", [container.name])
 }
 
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    container := input.request.object.spec.template.spec.initContainers[_]
+    has_dangerous_capability(container)
+    msg := sprintf("Init container '%s' requests dangerous capability", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    container := input.request.object.spec.template.spec.ephemeralContainers[_]
+    has_dangerous_capability(container)
+    msg := sprintf("Ephemeral container '%s' requests dangerous capability", [container.name])
+}
+
 # Check for dangerous capabilities
+dangerous_capabilities := {
+    "SYS_ADMIN",
+    "SYS_CHROOT",
+    "SYS_MODULE",
+    "SYS_RAWIO",
+    "SYS_PTRACE",
+    "SYS_BOOT",
+}
+
 has_dangerous_capability(container) if {
-    container.securityContext.capabilities.add[_] in [
-        "CAP_SYS_ADMIN",
-        "CAP_SYS_CHROOT", 
-        "CAP_SYS_MODULE",
-        "CAP_SYS_RAWIO",
-        "CAP_SYS_PTRACE",
-        "CAP_SYS_BOOT"
-    ]
+    cap := container.securityContext.capabilities.add[_]
+    normalized := trim_prefix(cap, "CAP_")
+    normalized in dangerous_capabilities
 }
 
 
@@ -50,8 +98,9 @@ has_dangerous_capability(container) if {
 # =============================================================================
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
     # Check for privileged containers
     input.request.kind.kind == "Pod"
@@ -61,50 +110,136 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check for host network
     input.request.kind.kind == "Pod"
     input.request.object.spec.hostNetwork == true
     msg := "Pod uses host network which is not allowed"
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check for host PID
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    input.request.object.spec.template.spec.hostNetwork == true
+    msg := "Template uses host network which is not allowed"
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
     input.request.kind.kind == "Pod"
     input.request.object.spec.hostPID == true
     msg := "Pod uses host PID namespace which is not allowed"
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check for host IPC
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    input.request.object.spec.template.spec.hostPID == true
+    msg := "Template uses host PID namespace which is not allowed"
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
     input.request.kind.kind == "Pod"
     input.request.object.spec.hostIPC == true
     msg := "Pod uses host IPC namespace which is not allowed"
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
-    # Check for privilege escalation in templates
-    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    input.request.object.spec.template.spec.hostIPC == true
+    msg := "Template uses host IPC namespace which is not allowed"
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind == "Pod"
+    container := input.request.object.spec.containers[_]
+    container.securityContext.allowPrivilegeEscalation == true
+    msg := sprintf("Container '%s' allows privilege escalation", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind == "Pod"
+    container := input.request.object.spec.initContainers[_]
+    container.securityContext.allowPrivilegeEscalation == true
+    msg := sprintf("Init container '%s' allows privilege escalation", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind == "Pod"
+    container := input.request.object.spec.ephemeralContainers[_]
+    container.securityContext.allowPrivilegeEscalation == true
+    msg := sprintf("Ephemeral container '%s' allows privilege escalation", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     container.securityContext.allowPrivilegeEscalation == true
     msg := sprintf("Container '%s' allows privilege escalation", [container.name])
 }
 
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    container := input.request.object.spec.template.spec.initContainers[_]
+    container.securityContext.allowPrivilegeEscalation == true
+    msg := sprintf("Init container '%s' allows privilege escalation", [container.name])
+}
+
+deny contains msg if {
+    input.request.operation == "CREATE"
+    helpers.is_pod_resource
+    not helpers.is_system_or_controller_user
+    
+    input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
+    container := input.request.object.spec.template.spec.ephemeralContainers[_]
+    container.securityContext.allowPrivilegeEscalation == true
+    msg := sprintf("Ephemeral container '%s' allows privilege escalation", [container.name])
+}
+
 # Deny pods with privileged containers
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check containers in pod spec
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.containers[_]
     container.securityContext.privileged == true
     
@@ -112,8 +247,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check init containers in pod spec
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.initContainers[_]
     container.securityContext.privileged == true
     
@@ -121,7 +257,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check ephemeral containers in pod spec
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.ephemeralContainers[_]
     container.securityContext.privileged == true
     
@@ -129,8 +267,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check containers in deployment/replicaset/etc template
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.template.spec.containers[_]
     container.securityContext.privileged == true
     
@@ -138,8 +277,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check init containers in deployment/replicaset/etc template
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.template.spec.initContainers[_]
     container.securityContext.privileged == true
     
@@ -147,7 +287,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     # Check ephemeral containers in deployment/replicaset/etc template
+    not helpers.is_system_or_controller_user
     container := input.request.object.spec.template.spec.ephemeralContainers[_]
     container.securityContext.privileged == true
     
@@ -159,8 +301,9 @@ deny contains msg if {
 # =============================================================================
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
     # Check for missing resource limits
     input.request.kind.kind == "Pod"
@@ -170,8 +313,9 @@ deny contains msg if {
 }
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
     # Check for missing memory limits specifically
     input.request.kind.kind == "Pod"
@@ -186,8 +330,9 @@ deny contains msg if {
 # =============================================================================
 
 deny contains msg if {
+    input.request.operation == "CREATE"
     helpers.is_pod_resource
-    not helpers.is_system_namespace
+    not helpers.is_system_or_controller_user
     
     # Check for forbidden environment variables
     input.request.kind.kind == "Pod"
@@ -211,7 +356,6 @@ is_forbidden_env_var(name) if {
 
 # Allow certain environment variables that are needed
 allowed_env_vars := {
-    "HF_ENDPOINT",
     "HF_TOKEN",
     "CUDA_VISIBLE_DEVICES",
     "NVIDIA_VISIBLE_DEVICES",
@@ -254,29 +398,20 @@ allowed_env_vars := {
 # Block ALL exec operations
 deny contains msg if {
     input.request.kind.kind == "PodExecOptions"
-    not is_exempt_namespace
+    not helpers.is_system_or_controller_user
     msg := "Pod exec operations are not permitted."
 }
 
 # Block ALL attach operations
 deny contains msg if {
     input.request.kind.kind == "PodAttachOptions"
-    not is_exempt_namespace
+    not helpers.is_system_or_controller_user
     msg := "Pod attach operations are not permitted."
 }
 
 # Block ALL port forward operations
 deny contains msg if {
     input.request.kind.kind == "PodPortForwardOptions"
-    not is_exempt_namespace
+    not helpers.is_system_or_controller_user
     msg := "Pod port forward operations are not permitted."
-}
-
-is_exempt_namespace if {
-    input.request.namespace in input.parameters.exemptNamespaces
-}
-
-is_exempt_namespace if {
-    # System namespaces are always exempt
-    input.request.namespace in ["kube-system", "gatekeeper-system", "kube-public", "kube-node-lease"]
 }

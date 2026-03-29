@@ -20,3 +20,4 @@ include makefiles/help.mk
 include makefiles/lint.mk
 include makefiles/local.mk
 include makefiles/test.mk
+-include makefiles/security.mk

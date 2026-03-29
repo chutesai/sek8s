@@ -9,12 +9,17 @@ from typing import Dict, List, Optional
 from fastapi import HTTPException
 from loguru import logger
 
-from sek8s.config import CosignVerificationConfig
 from sek8s.clients.cosign import CosignClient
+from sek8s.config import CosignVerificationConfig
 from sek8s.image_utils import extract_registry, normalize_registry_hostname
 
 from .models import ImageEntry, PullSnapshot, PullStatusEnum
-from .util import is_registry_allowed, parse_ctr_images_list, resolve_to_full_ref, validate_image_ref
+from .util import (
+    is_registry_allowed,
+    parse_ctr_images_list,
+    resolve_to_full_ref,
+    validate_image_ref,
+)
 
 K3S_IMAGES_HELPER = "/usr/local/bin/k3s-images-helper"
 
@@ -67,9 +72,11 @@ class ImageManager:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout_bytes, stderr_bytes = await asyncio.wait_for(process.communicate(), timeout=to)
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(
+            process.communicate(), timeout=to
+        )
         return (
-            process.returncode,
+            process.returncode if process.returncode is not None else -1,
             stdout_bytes.decode("utf-8", errors="replace"),
             stderr_bytes.decode("utf-8", errors="replace"),
         )
@@ -121,7 +128,9 @@ class ImageManager:
         """Start image pull. Returns (status, already_present).
         Accepts short form (repo:tag, org/repo:tag) or full ref.
         """
-        image_ref = resolve_to_full_ref(image, self.allowed_registries, self.default_org)
+        image_ref = resolve_to_full_ref(
+            image, self.allowed_registries, self.default_org
+        )
         validate_image_ref(image_ref)
         registry = extract_registry(image_ref)
         if not is_registry_allowed(registry, self.allowed_registries):
@@ -134,7 +143,12 @@ class ImageManager:
         entries = await self.list_images()
         normalized_ref = normalize_registry_hostname(image_ref)
         for e in entries:
-            if e.ref in (image_ref, image_ref.split("@")[0], normalized_ref, normalized_ref.split("@")[0]):
+            if e.ref in (
+                image_ref,
+                image_ref.split("@")[0],
+                normalized_ref,
+                normalized_ref.split("@")[0],
+            ):
                 return ("present", True)
 
         # Check if already in progress
@@ -158,11 +172,17 @@ class ImageManager:
     def get_pull_status(self, image: Optional[str] = None) -> List[PullSnapshot]:
         """Get pull status for image or all in-progress. Accepts short or full form."""
         if image:
-            image_ref = resolve_to_full_ref(image, self.allowed_registries, self.default_org)
+            image_ref = resolve_to_full_ref(
+                image, self.allowed_registries, self.default_org
+            )
             if image_ref in self._pull_tasks:
                 task = self._pull_tasks[image_ref]
                 if not task.done():
-                    return [PullSnapshot(image_ref=image_ref, status=PullStatusEnum.IN_PROGRESS)]
+                    return [
+                        PullSnapshot(
+                            image_ref=image_ref, status=PullStatusEnum.IN_PROGRESS
+                        )
+                    ]
             if image_ref in self._pull_results:
                 status, err = self._pull_results[image_ref]
                 return [PullSnapshot(image_ref=image_ref, status=status, error=err)]
@@ -172,14 +192,18 @@ class ImageManager:
         snapshots: List[PullSnapshot] = []
         for ref, task in list(self._pull_tasks.items()):
             if not task.done():
-                snapshots.append(PullSnapshot(image_ref=ref, status=PullStatusEnum.IN_PROGRESS))
+                snapshots.append(
+                    PullSnapshot(image_ref=ref, status=PullStatusEnum.IN_PROGRESS)
+                )
         for ref, (status, err) in list(self._pull_results.items()):
             snapshots.append(PullSnapshot(image_ref=ref, status=status, error=err))
         return snapshots
 
     async def delete_image(self, image: str, force: bool = False) -> None:
         """Remove image by reference or ID. Accepts short or full form."""
-        image_ref = resolve_to_full_ref(image, self.allowed_registries, self.default_org)
+        image_ref = resolve_to_full_ref(
+            image, self.allowed_registries, self.default_org
+        )
         validate_image_ref(image_ref)
         rm_ref = normalize_registry_hostname(image_ref)
         code, stdout, stderr = await self._run(

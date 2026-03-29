@@ -4,18 +4,24 @@ Unit tests for individual validators
 """
 
 import asyncio
-import pytest
-from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
-import aiohttp
+from unittest.mock import AsyncMock, patch
 
-from sek8s.config import CosignVerificationConfig
+import pytest
+
+from sek8s.clients.cosign import (
+    CosignRateLimitError,
+    CosignVerificationUnavailableError,
+)
+from sek8s.config import (
+    AdmissionConfig,
+    CosignConfig,
+    CosignVerificationConfig,
+    NamespacePolicy,
+)
 from sek8s.validators.base import ValidationResult
 from sek8s.validators.cosign import CosignValidator, RateLimitError
-from sek8s.clients.cosign import CosignRateLimitError, CosignVerificationUnavailableError
-from sek8s.validators.registry import RegistryValidator
 from sek8s.validators.opa import OPAValidator
-from sek8s.config import AdmissionConfig, CosignConfig, NamespacePolicy
+from sek8s.validators.registry import RegistryValidator
 
 
 @pytest.fixture
@@ -80,7 +86,9 @@ class TestRegistryValidator:
             "request": {
                 "kind": {"kind": "Pod"},
                 "namespace": "default",
-                "object": {"spec": {"containers": [{"image": "localhost:30500/myapp:latest"}]}},
+                "object": {
+                    "spec": {"containers": [{"image": "localhost:30500/myapp:latest"}]}
+                },
             }
         }
 
@@ -108,14 +116,18 @@ class TestRegistryValidator:
     @pytest.mark.asyncio
     async def test_exempt_namespace(self, config):
         """Test that exempt namespaces are handled correctly."""
-        config.namespace_policies["test-exempt"] = NamespacePolicy(mode="warn", exempt=True)
+        config.namespace_policies["test-exempt"] = NamespacePolicy(
+            mode="warn", exempt=True
+        )
 
         review = {
             "request": {
                 "kind": {"kind": "Pod"},
                 "namespace": "test-exempt",
                 "object": {
-                    "spec": {"containers": [{"image": "untrusted-registry.com/app:latest"}]}
+                    "spec": {
+                        "containers": [{"image": "untrusted-registry.com/app:latest"}]
+                    }
                 },
             }
         }
@@ -136,7 +148,9 @@ class TestRegistryValidator:
                 "kind": {"kind": "Pod"},
                 "namespace": "default",
                 "object": {
-                    "spec": {"containers": [{"image": "untrusted-registry.com/app:latest"}]}
+                    "spec": {
+                        "containers": [{"image": "untrusted-registry.com/app:latest"}]
+                    }
                 },
             }
         }
@@ -153,7 +167,9 @@ class TestOPAValidator:
     """Tests for OPAValidator."""
 
     @pytest.mark.asyncio
-    async def test_opa_allow(self, config, valid_admission_review, mock_aiohttp_session):
+    async def test_opa_allow(
+        self, config, valid_admission_review, mock_aiohttp_session
+    ):
         """Test OPA validator when OPA allows the request."""
         validator = OPAValidator(config)
 
@@ -197,12 +213,16 @@ class TestOPAValidator:
         assert "privileged security context" in result.messages[0]
 
     @pytest.mark.asyncio
-    async def test_opa_timeout(self, config, valid_admission_review, mock_aiohttp_session):
+    async def test_opa_timeout(
+        self, config, valid_admission_review, mock_aiohttp_session
+    ):
         """Test OPA validator handles timeout (fail closed)."""
         validator = OPAValidator(config)
 
         mock_session = mock_aiohttp_session(None)
-        mock_session.post.return_value.__aenter__ = AsyncMock(side_effect=asyncio.TimeoutError())
+        mock_session.post.return_value.__aenter__ = AsyncMock(
+            side_effect=asyncio.TimeoutError()
+        )
 
         validator.session = mock_session
 
@@ -212,7 +232,9 @@ class TestOPAValidator:
         assert "timeout" in result.messages[0].lower()
 
     @pytest.mark.asyncio
-    async def test_opa_error_response(self, config, valid_admission_review, mock_aiohttp_session):
+    async def test_opa_error_response(
+        self, config, valid_admission_review, mock_aiohttp_session
+    ):
         """Test OPA validator handles error responses."""
         validator = OPAValidator(config)
 
@@ -259,14 +281,18 @@ class TestOPAValidator:
         assert is_healthy is False
 
     @pytest.mark.asyncio
-    async def test_opa_warn_mode(self, config, privileged_pod_review, mock_aiohttp_session):
+    async def test_opa_warn_mode(
+        self, config, privileged_pod_review, mock_aiohttp_session
+    ):
         """Test OPA validator in warn mode."""
         config.namespace_policies["default"].mode = "warn"
         validator = OPAValidator(config)
 
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={"result": [{"msg": "Policy violation"}]})
+        mock_response.json = AsyncMock(
+            return_value={"result": [{"msg": "Policy violation"}]}
+        )
         mock_session = mock_aiohttp_session(mock_response)
 
         validator.session = mock_session
@@ -323,6 +349,7 @@ class TestValidationResult:
         assert combined.allowed is False
         assert "Denied" in combined.messages
         assert "Warning" in combined.warnings
+
 
 class TestCosignValidator:
     """Tests for CosignValidator."""
@@ -392,47 +419,51 @@ class TestCosignValidator:
         """Test parsing Docker Hub image with organization."""
         from sek8s.image_utils import parse_image_reference
 
-        registry, org, repo, tag = parse_image_reference('parachutes/chutes-agent:k3s-latest')
+        registry, org, repo, tag = parse_image_reference(
+            "parachutes/chutes-agent:k3s-latest"
+        )
 
-        assert registry == 'docker.io'
-        assert org == 'parachutes'
-        assert repo == 'chutes-agent'
-        assert tag == 'k3s-latest'
+        assert registry == "docker.io"
+        assert org == "parachutes"
+        assert repo == "chutes-agent"
+        assert tag == "k3s-latest"
 
     def test_parse_image_reference_official_image(self):
         """Test parsing Docker Hub official image."""
         from sek8s.image_utils import parse_image_reference
 
-        registry, org, repo, tag = parse_image_reference('nginx:latest')
+        registry, org, repo, tag = parse_image_reference("nginx:latest")
 
-        assert registry == 'docker.io'
-        assert org == 'library'
-        assert repo == 'nginx'
-        assert tag == 'latest'
+        assert registry == "docker.io"
+        assert org == "library"
+        assert repo == "nginx"
+        assert tag == "latest"
 
     def test_parse_image_reference_with_registry(self):
         """Test parsing image with explicit registry."""
         from sek8s.image_utils import parse_image_reference
 
-        registry, org, repo, tag = parse_image_reference('gcr.io/google-containers/pause:3.9')
+        registry, org, repo, tag = parse_image_reference(
+            "gcr.io/google-containers/pause:3.9"
+        )
 
-        assert registry == 'gcr.io'
-        assert org == 'google-containers'
-        assert repo == 'pause'
-        assert tag == '3.9'
+        assert registry == "gcr.io"
+        assert org == "google-containers"
+        assert repo == "pause"
+        assert tag == "3.9"
 
     def test_parse_image_reference_with_digest(self):
         """Test parsing image with digest."""
         from sek8s.image_utils import parse_image_reference
 
         registry, org, repo, tag = parse_image_reference(
-            'docker.io/parachutes/app@sha256:abcd1234'
+            "docker.io/parachutes/app@sha256:abcd1234"
         )
 
-        assert registry == 'docker.io'
-        assert org == 'parachutes'
-        assert repo == 'app'
-        assert tag == '@sha256:abcd1234'
+        assert registry == "docker.io"
+        assert org == "parachutes"
+        assert repo == "app"
+        assert tag == "@sha256:abcd1234"
 
     def test_is_digest_pinned_reference(self):
         """Digest-pinned refs are detectable; tag-only refs are not."""
@@ -579,7 +610,9 @@ class TestCosignValidator:
             raise CosignVerificationUnavailableError("connection refused")
 
         digest_img = "docker.io/test/img@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-        with patch.object(validator._cosign_client, "verify", side_effect=fail_transient):
+        with patch.object(
+            validator._cosign_client, "verify", side_effect=fail_transient
+        ):
             with pytest.raises(CosignVerificationUnavailableError):
                 await validator._verify_image_signature(digest_img, vc)
             with pytest.raises(CosignVerificationUnavailableError):
@@ -604,7 +637,9 @@ class TestCosignValidator:
             raise CosignVerificationUnavailableError("connection refused")
 
         tag_img = "docker.io/test/img:latest"
-        with patch.object(validator._cosign_client, "verify", side_effect=fail_transient):
+        with patch.object(
+            validator._cosign_client, "verify", side_effect=fail_transient
+        ):
             with pytest.raises(CosignVerificationUnavailableError):
                 await validator._verify_image_signature(tag_img, vc)
             with pytest.raises(CosignVerificationUnavailableError):

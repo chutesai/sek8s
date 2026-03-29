@@ -3,19 +3,20 @@
 Unit tests for Pydantic configuration
 """
 
-import os
 import json
-import pytest
+import os
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
+
+import pytest
 
 from sek8s.config import (
     AdmissionConfig,
     AttestationProxyConfig,
     CacheConfig,
+    CosignConfig,
     NamespacePolicy,
     OPAConfig,
-    CosignConfig,
     load_config,
 )
 
@@ -23,16 +24,16 @@ from sek8s.config import (
 @pytest.fixture(autouse=True)
 def test_env():
     """Fixture to set up a clean test environment with valid defaults.
-    
+
     Saves the current environment, sets up test defaults, yields for test execution,
     then restores the original environment. Individual tests can override these
     defaults as needed.
-    
+
     This fixture is automatically applied to all tests in this module.
     """
     # Save current environment
     original_env = os.environ.copy()
-    
+
     # Clear test-related vars
     test_vars = [
         "BIND_ADDRESS",
@@ -59,12 +60,12 @@ def test_env():
     ]
     for var in test_vars:
         os.environ.pop(var, None)
-    
+
     # Set valid test defaults that won't cause permission errors
     os.environ["POLICY_PATH"] = "/tmp/test_policies"
-    
+
     yield
-    
+
     # Restore original environment
     os.environ.clear()
     os.environ.update(original_env)
@@ -79,9 +80,32 @@ class TestAdmissionConfig:
 
         assert config.bind_address == "127.0.0.1"
         assert config.port == 8443
-        assert config.allowed_registries == ["docker.io", "gcr.io", "quay.io", "localhost:30500"]
+        assert config.allowed_registries == [
+            "docker.io",
+            "gcr.io",
+            "quay.io",
+            "localhost:30500",
+        ]
         assert config.enforcement_mode == "enforce"
         assert config.debug is False
+
+    def test_default_namespace_policies_all_enforce(self):
+        """All default namespace policies must use enforce mode (SEK8S-023).
+
+        OPA user-based exemptions (is_system_or_controller_user) handle
+        system controllers; namespace-level warn mode is a security bypass.
+        """
+        config = AdmissionConfig()
+
+        for ns, policy in config.namespace_policies.items():
+            assert policy.mode == "enforce", (
+                f"Namespace '{ns}' has mode='{policy.mode}', expected 'enforce'. "
+                "Warn mode bypasses OPA denial enforcement."
+            )
+            assert policy.exempt is False, (
+                f"Namespace '{ns}' is exempt from admission control. "
+                "Use OPA user-based exemptions instead."
+            )
 
     def test_allowed_registries_json_parsing(self):
         """Test parsing of JSON array for allowed_registries."""
@@ -94,11 +118,17 @@ class TestAdmissionConfig:
 
     def test_allowed_registries_with_wildcards(self):
         """Test registry list with wildcards."""
-        os.environ["ALLOWED_REGISTRIES"] = '["docker.io", "*.amazonaws.com", "*.azurecr.io"]'
+        os.environ["ALLOWED_REGISTRIES"] = (
+            '["docker.io", "*.amazonaws.com", "*.azurecr.io"]'
+        )
 
         config = AdmissionConfig()
 
-        assert config.allowed_registries == ["docker.io", "*.amazonaws.com", "*.azurecr.io"]
+        assert config.allowed_registries == [
+            "docker.io",
+            "*.amazonaws.com",
+            "*.azurecr.io",
+        ]
 
     def test_namespace_policies_json_parsing(self):
         """Test parsing of JSON object for namespace_policies."""
@@ -151,7 +181,7 @@ class TestAdmissionConfig:
         os.environ["PORT"] = "0"
         with pytest.raises(ValueError):
             AdmissionConfig()
-        
+
         # Clean up
         os.environ.pop("PORT", None)
 
@@ -244,7 +274,9 @@ class TestOPAConfig:
         assert config.opa_binary_path == Path("/usr/local/bin/opa")
         assert config.opa_log_level == "info"
         assert config.opa_decision_logs is False
-        assert config.opa_diagnostic_addr == "0.0.0.0:8282"
+        assert not hasattr(
+            config, "opa_diagnostic_addr"
+        ), "SEK8S-036: diagnostic address removed — no production use case"
 
     def test_opa_config_env_override(self):
         """Test OPA config environment overrides."""
@@ -290,7 +322,9 @@ class TestCosignConfig:
         assert default_registry.registry == "*"
         assert default_registry.require_signature is True
         assert default_registry.verification_method == "key"
-        assert default_registry.public_key == Path("/etc/admission-controller/.cosign/cosign.pub")
+        assert default_registry.public_key == Path(
+            "/etc/admission-controller/.cosign/cosign.pub"
+        )
 
     def test_cosign_config_from_env(self):
         """Test Cosign config with single COSIGN_* env alias per tunable."""
@@ -391,8 +425,10 @@ class TestCosignConfig:
                 assert gcr_config is not None
                 assert gcr_config.verification_method == "keyless"
                 assert gcr_config.keyless_identity_regex == "^https://github.com/.*"
-                assert gcr_config.keyless_issuer == "https://token.actions.githubusercontent.com"
-
+                assert (
+                    gcr_config.keyless_issuer
+                    == "https://token.actions.githubusercontent.com"
+                )
 
     def test_get_registry_config_exact_match(self):
         """Test getting registry config with exact match."""
@@ -497,7 +533,9 @@ class TestCosignConfig:
 
         # Test disabled config
         config = CosignRegistryConfig(
-            registry="docker.io", require_signature=False, verification_method="disabled"
+            registry="docker.io",
+            require_signature=False,
+            verification_method="disabled",
         )
         assert config.verification_method == "disabled"
         assert config.require_signature is False
@@ -507,7 +545,9 @@ class TestCosignConfig:
         from sek8s.config import CosignRegistryConfig
 
         with pytest.raises(ValueError):
-            CosignRegistryConfig(registry="test.registry", verification_method="invalid")
+            CosignRegistryConfig(
+                registry="test.registry", verification_method="invalid"
+            )
 
 
 class TestLoadConfig:
@@ -522,7 +562,7 @@ class TestLoadConfig:
 
     def test_load_config_with_overrides(self):
         """Test load_config with parameter overrides.
-        
+
         Note: Due to Pydantic Settings source precedence, only fields without
         defaults can be overridden via kwargs. Fields like debug with default
         values cannot be overridden this way - use environment variables instead.
@@ -531,6 +571,7 @@ class TestLoadConfig:
 
         assert config.bind_address == "0.0.0.0"
         assert config.port == 9000
+
 
 class TestProxyConfig:
 

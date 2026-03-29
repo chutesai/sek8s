@@ -9,22 +9,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, field_validator, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from substrateinterface import Keypair
 
 logger = logging.getLogger(__name__)
 
 
-class NamespacePolicy(BaseSettings):
+class NamespacePolicy(BaseModel):
     """Policy configuration for a namespace."""
 
     mode: Literal["enforce", "warn", "monitor"] = "enforce"
     exempt: bool = False
-
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
-    )
 
 
 class ServerConfig(BaseSettings):
@@ -44,10 +40,7 @@ class ServerConfig(BaseSettings):
     debug: bool = Field(default=False, alias="DEBUG")
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        env_prefix="",
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, env_prefix="", extra="ignore"
     )
 
     @field_validator("uds_path", mode="before")
@@ -75,7 +68,7 @@ class ServerConfig(BaseSettings):
         if v and not v.exists():
             raise ValueError(f"Path does not exist: {v}")
         return v
-    
+
     @field_validator("uds_path", mode="after")
     @classmethod
     def validate_uds_directory(cls, v: Optional[Path]) -> Optional[Path]:
@@ -87,14 +80,16 @@ class ServerConfig(BaseSettings):
 
 class AuthConfig(ServerConfig):
     """Base configuration for services that require authentication.
-    
+
     Services can inherit from this to get auth capabilities.
     Auth fields are optional by default - services can make them required if needed.
     """
-    
+
     miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
-    allowed_validators_str: Optional[str] = Field(default=None, alias="ALLOWED_VALIDATORS")
-    
+    allowed_validators_str: Optional[str] = Field(
+        default=None, alias="ALLOWED_VALIDATORS"
+    )
+
     _allowed_validators: Optional[list[str]] = None
 
     @property
@@ -103,8 +98,8 @@ class AuthConfig(ServerConfig):
         if self._allowed_validators is None:
             if self.allowed_validators_str:
                 self._allowed_validators = [
-                    item.strip() 
-                    for item in self.allowed_validators_str.split(',') 
+                    item.strip()
+                    for item in self.allowed_validators_str.split(",")
                     if item.strip()
                 ]
             else:
@@ -112,31 +107,30 @@ class AuthConfig(ServerConfig):
         return self._allowed_validators
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
 
 class AttestationServiceConfig(ServerConfig):
 
-    hostname: str = os.getenv("HOSTNAME")
+    hostname: Optional[str] = os.getenv("HOSTNAME")
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
 
 class SystemStatusConfig(AuthConfig):
     """Configuration for the read-only system status service.
-    
+
     Inherits auth capabilities from AuthConfig for endpoints like shutdown.
     """
 
     require_tls: bool = Field(default=False, alias="REQUIRE_TLS")
 
-    max_output_bytes: int = Field(default=16_384, alias="MAX_OUTPUT_BYTES", ge=1024, le=1_000_000)
+    max_output_bytes: int = Field(
+        default=16_384, alias="MAX_OUTPUT_BYTES", ge=1024, le=1_000_000
+    )
     command_timeout_seconds: float = Field(
         default=10.0,
         alias="COMMAND_TIMEOUT_SECONDS",
@@ -153,9 +147,7 @@ class SystemStatusConfig(AuthConfig):
     )
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
 
@@ -169,9 +161,7 @@ class SystemManagerConfig(ServerConfig):
     require_tls: bool = Field(default=False, alias="REQUIRE_TLS")
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
 
@@ -190,10 +180,9 @@ class CacheConfig(AuthConfig):
     )
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
 
 cache_config = CacheConfig()
 
@@ -255,7 +244,7 @@ image_config = ImageConfig()
 
 class AttestationProxyConfig(AuthConfig):
     """Configuration for attestation proxy service.
-    
+
     Requires auth fields to be configured.
     """
 
@@ -264,19 +253,15 @@ class AttestationProxyConfig(AuthConfig):
     miner_ss58: str = Field(..., alias="MINER_SS58")
 
     model_config = SettingsConfigDict(
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
 
 class AdmissionConfig(ServerConfig):
     """Main configuration for admission controller using Pydantic v2."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=False,
-        extra='ignore'
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     # OPA configuration
@@ -302,16 +287,11 @@ class AdmissionConfig(ServerConfig):
         default="enforce", alias="ENFORCEMENT_MODE"
     )
 
-    # Namespace policies - expects JSON object from environment
+    # Namespace policies - expects JSON object from environment.
+    # All namespaces default to enforce; OPA rules handle user-based
+    # exemptions for system/controller users (SEK8S-023).
     namespace_policies: Dict[str, NamespacePolicy] = Field(
         default={
-            "kube-system": NamespacePolicy(mode="warn", exempt=False),
-            "kube-public": NamespacePolicy(mode="warn", exempt=False),
-            "kube-node-lease": NamespacePolicy(mode="warn", exempt=False),
-            "gpu-operator": NamespacePolicy(mode="warn", exempt=False),
-            "attestation-system": NamespacePolicy(mode="warn", exempt=False),
-            "monitoring": NamespacePolicy(mode="warn", exempt=False),
-            "chutes": NamespacePolicy(mode="enforce", exempt=False),
             "default": NamespacePolicy(mode="enforce", exempt=False),
         },
         alias="NAMESPACE_POLICIES",
@@ -320,6 +300,14 @@ class AdmissionConfig(ServerConfig):
 
     # Metrics configuration
     metrics_enabled: bool = Field(default=True, alias="METRICS_ENABLED")
+
+    # Authorization webhook: pod name prefixes the miner is allowed to read logs
+    # from in the chutes namespace. All other pod logs are denied for the miner.
+    authz_allowed_log_prefixes: List[str] = Field(
+        default=["agent-", "registry-", "failed-chute-cleanup-"],
+        alias="AUTHZ_ALLOWED_LOG_PREFIXES",
+        description="Pod name prefixes the miner may read logs from in chutes namespace",
+    )
 
     # Chutes namespace: path to cosign public key used to enforce signed images in chutes namespace
     chutes_cosign_public_key_path: Optional[Path] = Field(
@@ -378,12 +366,13 @@ class AdmissionConfig(ServerConfig):
 class OPAConfig(BaseSettings):
     """Configuration specific to OPA."""
 
-    opa_binary_path: Path = Field(default=Path("/usr/local/bin/opa"), alias="OPA_BINARY_PATH")
+    opa_binary_path: Path = Field(
+        default=Path("/usr/local/bin/opa"), alias="OPA_BINARY_PATH"
+    )
     opa_log_level: Literal["debug", "info", "warn", "error"] = Field(
         default="info", alias="OPA_LOG_LEVEL"
     )
     opa_decision_logs: bool = Field(default=False, alias="OPA_DECISION_LOGS")
-    opa_diagnostic_addr: str = Field(default="0.0.0.0:8282", alias="OPA_DIAGNOSTIC_ADDR")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -394,48 +383,48 @@ class OPAConfig(BaseSettings):
 
 class CosignVerificationConfig(BaseSettings):
     """Base verification configuration that can be inherited at any level."""
-    
+
     require_signature: bool = True
     verification_method: Literal["key", "keyless", "disabled"] = "key"
-    
+
     # Key-based verification
     public_key: Optional[Path] = None
-    
+
     # Keyless verification
     keyless_identity_regex: Optional[str] = None
     keyless_issuer: Optional[str] = None
-    
+
     # Connection options
     allow_http: bool = False
     allow_insecure: bool = False
-    
+
     # Transparency log
     rekor_url: str = "https://rekor.sigstore.dev"
     fulcio_url: str = "https://fulcio.sigstore.dev"
-    
+
     model_config = SettingsConfigDict(case_sensitive=False)
 
 
 class CosignRepositoryConfig(CosignVerificationConfig):
     """Repository-specific cosign configuration."""
-    
+
     repository: str  # e.g., "chutes-agent" or "myapp"
 
 
 class CosignOrganizationConfig(CosignVerificationConfig):
     """Organization-specific cosign configuration."""
-    
+
     organization: str  # e.g., "parachutes", "bitnami", "library"
-    
+
     # Optional repository-level overrides
     repositories: Dict[str, CosignRepositoryConfig] = Field(default_factory=dict)
 
 
 class CosignRegistryConfig(CosignVerificationConfig):
     """Registry-level cosign configuration with nested org/repo structure."""
-    
+
     registry: str  # e.g., "docker.io", "gcr.io", "registry.k8s.io"
-    
+
     # Optional organization-level configs
     organizations: Dict[str, CosignOrganizationConfig] = Field(default_factory=dict)
 
@@ -449,7 +438,8 @@ class DigestPinEntry(BaseModel):
 
     image: str = Field(
         ...,
-        description="Fully-qualified image name without tag (e.g. 'docker.io/parachutes/failed-chute-cleanup'). Exact match only.",
+        description="Fully-qualified image name without tag (e.g. 'docker.io/parachutes/failed-chute-cleanup')."
+        + " Exact match only.",
     )
     ttl: int = Field(
         default=3600,
@@ -549,7 +539,9 @@ class CosignConfig(BaseSettings):
         """Load registry configurations from file or use defaults."""
         # If configs are already populated, don't override
         if self.registry_configs:
-            logger.info(f"Using {len(self.registry_configs)} pre-configured registry configs")
+            logger.info(
+                f"Using {len(self.registry_configs)} pre-configured registry configs"
+            )
             return
 
         # Try to load from config file
@@ -568,7 +560,9 @@ class CosignConfig(BaseSettings):
                 elif isinstance(config_data, list):
                     registry_data = config_data
                 else:
-                    logger.warning(f"Invalid cosign config format in {config_file_path}")
+                    logger.warning(
+                        f"Invalid cosign config format in {config_file_path}"
+                    )
                     registry_data = []
 
                 # Parse registry configurations
@@ -581,10 +575,15 @@ class CosignConfig(BaseSettings):
                         configs.append(CosignRegistryConfig(**item))
 
                 self.registry_configs = configs
-                logger.info(f"Loaded {len(configs)} registry configs from {config_file_path}")
+                logger.info(
+                    f"Loaded {len(configs)} registry configs from {config_file_path}"
+                )
 
                 # Load digest pin whitelist from the same config file
-                if isinstance(config_data, dict) and "pin_digest_whitelist" in config_data:
+                if (
+                    isinstance(config_data, dict)
+                    and "pin_digest_whitelist" in config_data
+                ):
                     pin_list = config_data["pin_digest_whitelist"]
                     if isinstance(pin_list, list):
                         entries = []
@@ -596,11 +595,14 @@ class CosignConfig(BaseSettings):
                         self.digest_pin_whitelist = entries
                         logger.info(
                             "Loaded %d digest pin whitelist entries from %s",
-                            len(entries), config_file_path,
+                            len(entries),
+                            config_file_path,
                         )
 
             except Exception as e:
-                logger.error(f"Failed to load cosign config from {config_file_path}: {e}")
+                logger.error(
+                    f"Failed to load cosign config from {config_file_path}: {e}"
+                )
         else:
             # Fall back to default configuration
             logger.info("Using default cosign registry configuration")
@@ -629,40 +631,40 @@ class CosignConfig(BaseSettings):
     ) -> Optional[CosignVerificationConfig]:
         """
         Get the most specific verification config for an image.
-        
+
         Precedence (most specific wins):
         1. Repository-level config (if organization and repository specified)
         2. Organization-level config (if organization specified)
         3. Registry-level config (default for that registry)
         4. Wildcard registry (*) config
-        
+
         Args:
             registry: Registry hostname (e.g., "docker.io", "gcr.io")
             organization: Optional organization/namespace (e.g., "parachutes", "library")
             repository: Optional repository name (e.g., "chutes-agent", "nginx")
-        
+
         Returns:
             The most specific CosignVerificationConfig, or None if no config found
-        
+
         Examples:
             # Get registry-level config
             config.get_verification_config("docker.io")
-            
+
             # Get org-level config
             config.get_verification_config("docker.io", "parachutes")
-            
+
             # Get repo-level config
             config.get_verification_config("docker.io", "parachutes", "chutes-agent")
         """
         # Normalize registry name
         registry = self._normalize_registry_name(registry)
-        
+
         logger.debug(f"Looking up config for {registry}/{organization}/{repository}")
-        
+
         # Find matching registry config (exact match or pattern match)
         registry_config = None
         wildcard_config = None
-        
+
         for config in self.registry_configs:
             if config.registry == registry:
                 registry_config = config
@@ -672,18 +674,18 @@ class CosignConfig(BaseSettings):
             elif self._matches_registry_pattern(registry, config.registry):
                 registry_config = config
                 break
-        
+
         # Fall back to wildcard if no specific registry found
         if not registry_config:
             registry_config = wildcard_config
-        
+
         if not registry_config:
             logger.warning(f"No registry config found for {registry}")
             return None
-        
+
         # Start with registry-level defaults
-        verification_config = registry_config
-        
+        verification_config: CosignVerificationConfig = registry_config
+
         # Check for organization-level override
         org_config = None
         if registry_config.organizations:
@@ -692,15 +694,15 @@ class CosignConfig(BaseSettings):
                 org_config = registry_config.organizations[organization]
             else:
                 # Try pattern matching
-                for org_pattern, config in registry_config.organizations.items():
+                for org_pattern, org_cfg in registry_config.organizations.items():
                     if self._matches_pattern(organization, org_pattern):
-                        org_config = config
+                        org_config = org_cfg
                         break
-            
+
             if org_config:
                 logger.debug(f"Found org-level config for {organization}")
                 verification_config = org_config
-                
+
                 # Check for repository-level override within this org
                 if org_config.repositories:
                     # Try exact match first
@@ -710,18 +712,20 @@ class CosignConfig(BaseSettings):
                         verification_config = repo_config
                     else:
                         # Try pattern matching
-                        for repo_pattern, config in org_config.repositories.items():
+                        for repo_pattern, repo_cfg in org_config.repositories.items():
                             if self._matches_pattern(repository, repo_pattern):
-                                logger.debug(f"Found repo-level config for {repository} via pattern {repo_pattern}")
-                                verification_config = config
+                                logger.debug(
+                                    f"Found repo-level config for {repository} via pattern {repo_pattern}"
+                                )
+                                verification_config = repo_cfg
                                 break
-        
+
         logger.debug(
             f"Using {verification_config.__class__.__name__} for {registry}/{organization}/{repository}: "
             f"method={verification_config.verification_method}, "
             f"require_signature={verification_config.require_signature}"
         )
-        
+
         return verification_config
 
     def _normalize_registry_name(self, registry: str) -> str:
@@ -729,16 +733,16 @@ class CosignConfig(BaseSettings):
         # Remove protocol if present
         if registry.startswith(("http://", "https://")):
             registry = urlparse(registry).netloc
-        
+
         # Handle Docker Hub special cases
         if registry in ["docker.io", "registry-1.docker.io", "index.docker.io"]:
             return "docker.io"
-        
+
         return registry.lower()
 
     def _matches_registry_pattern(self, registry: str, pattern: str) -> bool:
         """Match registry against a pattern.
-        
+
         Supports:
         - Exact match: "docker.io" matches "docker.io"
         - Prefix with wildcard: "docker.io/*" matches "docker.io"
@@ -748,10 +752,10 @@ class CosignConfig(BaseSettings):
         """
         if pattern == "*":
             return True
-        
+
         registry = registry.lower()
         pattern = pattern.lower()
-        
+
         # Simple wildcard support
         if "*" in pattern:
             if pattern.endswith("/*"):
@@ -766,13 +770,13 @@ class CosignConfig(BaseSettings):
                 # Suffix match: *.gcr.io matches us.gcr.io, eu.gcr.io, etc.
                 suffix = pattern[1:]
                 return registry.endswith(suffix)
-        
+
         return registry == pattern
 
     def _matches_pattern(self, value: str, pattern: str) -> bool:
         """
         Simple pattern matching for organizations and repositories.
-        
+
         Supports:
         - Exact match: "parachutes" matches "parachutes"
         - Prefix match: "google/*" matches "google/anything"
@@ -781,44 +785,47 @@ class CosignConfig(BaseSettings):
         """
         if pattern == "*":
             return True
-        
+
         value = value.lower()
         pattern = pattern.lower()
-        
+
         if "*" not in pattern:
             # Exact match
             return value == pattern
-        
+
         if pattern.endswith("/*"):
             # Prefix match: "google/*" matches "google/cloud-sdk", "google/anything"
             prefix = pattern[:-2]
             return value.startswith(prefix + "/") or value == prefix
-        
+
         if pattern.startswith("*/"):
             # Suffix match: "*/base" matches "distroless/base", "alpine/base"
             suffix = pattern[2:]
             return value.endswith("/" + suffix) or value == suffix
-        
+
         if pattern == "*/*":
             # Match anything with at least one slash
             return "/" in value
-        
+
         # For more complex patterns, you could use fnmatch or regex
         # For now, just do simple wildcard replacement
         import fnmatch
+
         return fnmatch.fnmatch(value, pattern)
+
+
 class Validator(BaseModel):
     hotkey: str
     registry: str
     api: str
     socket: str
-    
+
+
 class MinerConfig(BaseSettings):
     """
     Miner credentials for signing requests to validators (e.g. cache hf_info).
     Optional: when MINER_SS58/MINER_SEED are not set, signing is unavailable.
     """
-
 
     miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
     miner_seed: Optional[str] = Field(default=None, alias="MINER_SEED")
@@ -844,9 +851,12 @@ class MinerConfig(BaseSettings):
     def validators(self) -> List[Validator]:
         if self._validators:
             return self._validators
+        if self.validators_json is None:
+            raise ValueError("VALIDATORS env var must be set")
         data = json.loads(self.validators_json)
         self._validators = [Validator(**item) for item in data["supported"]]
         return self._validators
+
 
 # For backward compatibility and convenience
 def load_config(**kwargs) -> AdmissionConfig:

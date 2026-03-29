@@ -9,10 +9,10 @@ import base64
 import json
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 
 from sek8s.config import AdmissionConfig
 from sek8s.image_utils import is_digest_pinned_reference, strip_tag
@@ -21,12 +21,13 @@ from sek8s.services.admission_models import (
     AdmissionResponseBody,
     AdmissionReviewResponse,
     AdmissionStatus,
+    SubjectAccessReviewRequest,
+    SubjectAccessReviewResponse,
 )
 from sek8s.validators.base import ValidatorBase
 from sek8s.validators.cosign import CosignValidator
 from sek8s.validators.opa import OPAValidator
 from sek8s.validators.registry import RegistryValidator
-from sek8s.metrics import MetricsCollector
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -37,13 +38,15 @@ _ACCESS_LOG_INTERVAL_SECONDS = 60
 
 
 class _BatchAccessLog(logging.Filter):
-    """Suppress individual 'POST /validate 200' and 'POST /mutate 200' uvicorn
-    access-log lines and instead emit a single count every 60 seconds."""
+    """Suppress individual 'POST /validate 200', 'POST /mutate 200', and
+    'POST /authorize 200' uvicorn access-log lines and instead emit a single
+    count every 60 seconds."""
 
     def __init__(self) -> None:
         super().__init__()
         self._validate_ok: int = 0
         self._mutate_ok: int = 0
+        self._authorize_ok: int = 0
         self._last_flush = time.monotonic()
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -57,6 +60,9 @@ class _BatchAccessLog(logging.Filter):
         elif is_ok and "/mutate" in msg:
             self._mutate_ok += 1
             suppress = True
+        elif is_ok and "/authorize" in msg:
+            self._authorize_ok += 1
+            suppress = True
 
         self._maybe_flush()
         return not suppress
@@ -66,15 +72,19 @@ class _BatchAccessLog(logging.Filter):
         if now - self._last_flush < _ACCESS_LOG_INTERVAL_SECONDS:
             return
         self._last_flush = now
-        total = self._validate_ok + self._mutate_ok
+        total = self._validate_ok + self._mutate_ok + self._authorize_ok
         if total > 0:
             logger.info(
-                "Admission webhooks: %d requests in last %ds (validate=%d, mutate=%d)",
-                total, _ACCESS_LOG_INTERVAL_SECONDS,
-                self._validate_ok, self._mutate_ok,
+                "Webhooks: %d requests in last %ds (validate=%d, mutate=%d, authorize=%d)",
+                total,
+                _ACCESS_LOG_INTERVAL_SECONDS,
+                self._validate_ok,
+                self._mutate_ok,
+                self._authorize_ok,
             )
         self._validate_ok = 0
         self._mutate_ok = 0
+        self._authorize_ok = 0
 
 
 logging.getLogger("uvicorn.access").addFilter(_BatchAccessLog())
@@ -85,13 +95,13 @@ class AdmissionController:
 
     def __init__(self, config: AdmissionConfig):
         self.config = config
-        self.metrics = MetricsCollector()
 
         self.validators: List[ValidatorBase] = []
-        self._cosign_validator: Optional[CosignValidator] = None
         self._init_validators()
 
-        logger.info("Admission controller initialized with %d validators", len(self.validators))
+        logger.info(
+            "Admission controller initialized with %d validators", len(self.validators)
+        )
 
     def _init_validators(self):
         """Initialize all configured validators."""
@@ -102,9 +112,14 @@ class AdmissionController:
         self.validators.append(cosign)
         self._cosign_validator = cosign
 
-        logger.info("Initialized validators: %s", [v.__class__.__name__ for v in self.validators])
+        logger.info(
+            "Initialized validators: %s",
+            [v.__class__.__name__ for v in self.validators],
+        )
 
-    async def validate_admission(self, admission_review: Dict) -> AdmissionReviewResponse:
+    async def validate_admission(
+        self, admission_review: Dict
+    ) -> AdmissionReviewResponse:
         """
         Main validation entry point.
 
@@ -123,7 +138,10 @@ class AdmissionController:
 
         logger.debug(
             "Processing admission request: uid=%s, kind=%s, operation=%s, namespace=%s",
-            uid, kind, operation, namespace,
+            uid,
+            kind,
+            operation,
+            namespace,
         )
 
         try:
@@ -134,13 +152,13 @@ class AdmissionController:
             results = await asyncio.gather(*validation_tasks, return_exceptions=True)
 
             allowed = True
-            messages = []
-            warnings = []
+            messages: list[str] = []
+            warnings: list[str] = []
 
             for i, result in enumerate(results):
                 validator_name = self.validators[i].__class__.__name__
 
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     logger.error("Validator %s failed: %s", validator_name, result)
                     allowed = False
                     messages.append(f"{validator_name}: Internal error")
@@ -165,15 +183,12 @@ class AdmissionController:
             )
 
             elapsed = time.time() - start_time
-            self.metrics.record_admission_decision(
-                allowed=allowed,
-                resource_kind=kind,
-                operation=operation,
-                duration=elapsed,
-            )
 
             logger.debug(
-                "Admission decision for %s: allowed=%s, duration=%.3fs", uid, allowed, elapsed
+                "Admission decision for %s: allowed=%s, duration=%.3fs",
+                uid,
+                allowed,
+                elapsed,
             )
 
             return response
@@ -182,7 +197,10 @@ class AdmissionController:
             logger.exception("Unexpected error processing admission request %s", uid)
 
             return self._build_response(
-                uid=uid, allowed=False, messages=[f"Internal error: {str(e)}"], warnings=[]
+                uid=uid,
+                allowed=False,
+                messages=[f"Internal error: {str(e)}"],
+                warnings=[],
             )
 
     def _build_response(
@@ -199,12 +217,14 @@ class AdmissionController:
 
     async def health_check(self) -> Dict:
         """Check health of all validators."""
-        health_status = {"healthy": True, "validators": {}}
+        health_status: Dict[str, Any] = {"healthy": True, "validators": {}}
 
         for validator in self.validators:
             try:
                 is_healthy = await validator.health_check()
-                health_status["validators"][validator.__class__.__name__] = {"healthy": is_healthy}
+                health_status["validators"][validator.__class__.__name__] = {
+                    "healthy": is_healthy
+                }
                 if not is_healthy:
                     health_status["healthy"] = False
             except Exception as e:
@@ -216,14 +236,50 @@ class AdmissionController:
 
         return health_status
 
+    def evaluate_authorization(
+        self, review: SubjectAccessReviewRequest
+    ) -> SubjectAccessReviewResponse:
+        """Evaluate a SubjectAccessReview for the authorization webhook.
+
+        Enforces an allowlist for miner pod log access in the chutes namespace.
+        Returns NoOpinion for everything outside scope; returns Denied for
+        miner log requests not matching an allowed pod name prefix.
+        """
+        attrs = review.spec.resourceAttributes
+        if attrs:
+            is_miner_chutes_log = (
+                review.spec.user == "miner"
+                and attrs.resource == "pods"
+                and attrs.subresource == "log"
+                and attrs.namespace == "chutes"
+            )
+            is_allowed_pod = is_miner_chutes_log and any(
+                attrs.name.startswith(p) for p in self.config.authz_allowed_log_prefixes
+            )
+
+            should_deny = is_miner_chutes_log and not is_allowed_pod
+
+            if should_deny:
+                logger.info(
+                    f"Authorization denied: miner pods/log for {attrs.namespace}/{attrs.name}"
+                )
+                response = SubjectAccessReviewResponse.denied(
+                    f"Log access denied for pod '{attrs.name}' "
+                    f"in namespace '{attrs.namespace}'"
+                )
+            else:
+                response = SubjectAccessReviewResponse.no_opinion()
+        else:
+            response = SubjectAccessReviewResponse.no_opinion()
+
+        return response
+
     def build_image_pin_patches(self, request: dict) -> List[dict]:
         """Build JSON Patch operations to pin whitelisted tag-only images to their verified digest.
 
         Returns an empty list when there is nothing to mutate (no cosign
         validator, no whitelisted images, or no cached digest).
         """
-        if not self._cosign_validator:
-            return []
 
         obj = request.get("object", {})
         patches: List[dict] = []
@@ -237,11 +293,13 @@ class AdmissionController:
                 if digest:
                     image_no_tag = strip_tag(image)
                     pinned = f"{image_no_tag}@{digest}"
-                    patches.append({
-                        "op": "replace",
-                        "path": f"{json_prefix}/{idx}/image",
-                        "value": pinned,
-                    })
+                    patches.append(
+                        {
+                            "op": "replace",
+                            "path": f"{json_prefix}/{idx}/image",
+                            "value": pinned,
+                        }
+                    )
 
         spec = obj.get("spec", {})
 
@@ -257,15 +315,28 @@ class AdmissionController:
             if "containers" in tpl_spec:
                 _maybe_pin(tpl_spec["containers"], "/spec/template/spec/containers")
             if "initContainers" in tpl_spec:
-                _maybe_pin(tpl_spec["initContainers"], "/spec/template/spec/initContainers")
+                _maybe_pin(
+                    tpl_spec["initContainers"], "/spec/template/spec/initContainers"
+                )
 
         # CronJob extra nesting
-        jt_spec = spec.get("jobTemplate", {}).get("spec", {}).get("template", {}).get("spec", {})
+        jt_spec = (
+            spec.get("jobTemplate", {})
+            .get("spec", {})
+            .get("template", {})
+            .get("spec", {})
+        )
         if jt_spec:
             if "containers" in jt_spec:
-                _maybe_pin(jt_spec["containers"], "/spec/jobTemplate/spec/template/spec/containers")
+                _maybe_pin(
+                    jt_spec["containers"],
+                    "/spec/jobTemplate/spec/template/spec/containers",
+                )
             if "initContainers" in jt_spec:
-                _maybe_pin(jt_spec["initContainers"], "/spec/jobTemplate/spec/template/spec/initContainers")
+                _maybe_pin(
+                    jt_spec["initContainers"],
+                    "/spec/jobTemplate/spec/template/spec/initContainers",
+                )
 
         return patches
 
@@ -281,9 +352,9 @@ class AdmissionWebhookServer(WebServer):
         """Setup web routes."""
         self.app.add_api_route("/validate", self.handle_validate, methods=["POST"])
         self.app.add_api_route("/mutate", self.handle_mutate, methods=["POST"])
+        self.app.add_api_route("/authorize", self.handle_authorize, methods=["POST"])
         self.app.add_api_route("/health", self.handle_health, methods=["GET"])
         self.app.add_api_route("/ready", self.handle_ready, methods=["GET"])
-        self.app.add_api_route("/metrics", self.handle_metrics, methods=["GET"])
 
     async def handle_validate(self, request: Request) -> JSONResponse:
         """Handle validation webhook requests."""
@@ -321,28 +392,37 @@ class AdmissionWebhookServer(WebServer):
     async def handle_mutate(self, request: Request) -> JSONResponse:
         """Handle mutation webhook requests.
 
-        For whitelisted images with a cached verified digest, pin the image
-        reference to that digest via JSON Patch.  All other images pass through
-        unmodified.
+        Currently applies:
+        - Image digest pinning for whitelisted images with a cached verified
+          digest (tag-only references are replaced with their digest).
+        - automountServiceAccountToken: false for all pods in chutes namespace
+          (SEK8S-039: chute workloads have no reason to access the k8s API)
         """
         try:
             request_data = await request.json()
             req = request_data.get("request", {})
             uid = req.get("uid", "unknown")
+            namespace = req.get("namespace", "")
 
             patches = self.controller.build_image_pin_patches(req)
+            if namespace == "chutes":
+                patches.extend(self._build_sa_token_patches(req))
 
             patch_type: Optional[str] = None
             patch_data: Optional[str] = None
             if patches:
                 patch_type = "JSONPatch"
-                patch_data = base64.b64encode(
-                    json.dumps(patches).encode()
-                ).decode()
+                patch_data = base64.b64encode(json.dumps(patches).encode()).decode()
                 logger.info(
-                    "Mutating webhook: pinned %d image(s) for %s/%s",
-                    len(patches), req.get("namespace", "?"),
-                    req.get("name", req.get("object", {}).get("metadata", {}).get("generateName", "?")),
+                    "Mutating webhook: applied %d patch(es) for %s/%s",
+                    len(patches),
+                    namespace or "?",
+                    req.get(
+                        "name",
+                        req.get("object", {})
+                        .get("metadata", {})
+                        .get("generateName", "?"),
+                    ),
                 )
 
             response = AdmissionReviewResponse(
@@ -354,12 +434,105 @@ class AdmissionWebhookServer(WebServer):
                 )
             )
             return JSONResponse(content=response.model_dump(exclude_none=True))
-        except Exception as e:
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON in mutation request: %s", e)
+            return JSONResponse(
+                content={"error": "Invalid JSON"},
+                status_code=400,
+            )
+        except Exception:
             logger.exception("Error handling mutation request")
             error_response = AdmissionReviewResponse(
                 response=AdmissionResponseBody(uid="unknown", allowed=True)
             )
             return JSONResponse(content=error_response.model_dump(exclude_none=True))
+
+    async def handle_authorize(self, request: Request) -> JSONResponse:
+        """Handle authorization webhook requests (SubjectAccessReview)."""
+        try:
+            data = await request.json()
+            review = SubjectAccessReviewRequest.model_validate(data)
+            response = self.controller.evaluate_authorization(review)
+        except Exception:
+            logger.exception("Error handling authorization request")
+            response = SubjectAccessReviewResponse.denied(
+                "Authorization webhook internal error"
+            )
+
+        return JSONResponse(content=response.model_dump(exclude_none=True))
+
+    @staticmethod
+    def _is_agent_workload(labels: dict, containers: list) -> bool:
+        """Check if the workload is the agent (label + image match).
+
+        The OPA validating webhook enforces the full exemption (including
+        userInfo checks at the Pod level); the mutator only needs to avoid
+        clobbering automountServiceAccountToken on the agent.
+        """
+        is_agent_label = labels.get("app.kubernetes.io/name") == "agent"
+        has_agent_image = any(
+            c.get("image", "").startswith("parachutes/chutes-agent") for c in containers
+        )
+        return is_agent_label and has_agent_image
+
+    @staticmethod
+    def _build_sa_token_patches(req: dict) -> list:
+        """Build JSON Patch ops to set automountServiceAccountToken: false.
+
+        Skips the agent Deployment/Pod which legitimately needs a service
+        account token for in-cluster API access.
+        """
+        kind = req.get("kind", {}).get("kind", "")
+        obj = req.get("object", {})
+
+        if kind == "Pod":
+            labels = obj.get("metadata", {}).get("labels", {})
+            spec = obj.get("spec", {})
+            if AdmissionWebhookServer._is_agent_workload(
+                labels, spec.get("containers", [])
+            ):
+                return []
+            if spec.get("automountServiceAccountToken") is not False:
+                return [
+                    {
+                        "op": "add",
+                        "path": "/spec/automountServiceAccountToken",
+                        "value": False,
+                    }
+                ]
+        elif kind in ("Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"):
+            template = obj.get("spec", {}).get("template", {})
+            labels = template.get("metadata", {}).get("labels", {})
+            spec = template.get("spec", {})
+            if kind != "Job" and AdmissionWebhookServer._is_agent_workload(
+                labels, spec.get("containers", [])
+            ):
+                return []
+            if spec.get("automountServiceAccountToken") is not False:
+                return [
+                    {
+                        "op": "add",
+                        "path": "/spec/template/spec/automountServiceAccountToken",
+                        "value": False,
+                    }
+                ]
+        elif kind == "CronJob":
+            spec = (
+                obj.get("spec", {})
+                .get("jobTemplate", {})
+                .get("template", {})
+                .get("spec", {})
+            )
+            if spec.get("automountServiceAccountToken") is not False:
+                return [
+                    {
+                        "op": "add",
+                        "path": "/spec/jobTemplate/spec/template/spec/automountServiceAccountToken",
+                        "value": False,
+                    }
+                ]
+
+        return []
 
     async def handle_health(self, request: Request) -> JSONResponse:
         """Health check endpoint."""
@@ -375,11 +548,6 @@ class AdmissionWebhookServer(WebServer):
             return JSONResponse(content={"ready": True})
         else:
             return JSONResponse(content={"ready": False}, status_code=503)
-
-    async def handle_metrics(self, request: Request) -> PlainTextResponse:
-        """Prometheus metrics endpoint."""
-        metrics = self.controller.metrics.export_prometheus()
-        return PlainTextResponse(content=metrics, media_type="text/plain")
 
 
 def run():

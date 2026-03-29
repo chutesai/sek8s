@@ -162,7 +162,9 @@ def test_nvtrust_endpoint_with_comma_separated_gpu_ids(attestation_client):
     )
 
     assert response.status_code == 200
-    assert response.json() == attestation_client.nvtrust_provider.get_evidence.return_value
+    assert (
+        response.json() == attestation_client.nvtrust_provider.get_evidence.return_value
+    )
 
     attestation_client.nvtrust_provider.get_evidence.assert_awaited_once_with(
         "custom-node",

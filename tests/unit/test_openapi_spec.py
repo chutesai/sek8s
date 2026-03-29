@@ -21,12 +21,14 @@ def test_manager_openapi_schema_is_valid():
 
     # Must be JSON-serializable (no Path or other non-serializable types)
     import json
+
     json_str = json.dumps(schema)
     assert len(json_str) > 0
 
     # Validate with openapi-spec-validator if available
     try:
         from openapi_spec_validator import validate_spec
+
         validate_spec(schema)
     except ImportError:
         pytest.skip("openapi-spec-validator not installed")

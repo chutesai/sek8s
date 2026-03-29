@@ -27,10 +27,6 @@
   ansible.builtin.include_tasks: configure-admission-service.yml
   tags: admission-service
 
-- name: Configure K3s webhook
-  ansible.builtin.include_tasks: configure-k3s-webhook.yml
-  tags: k3s-webhook
-
 - name: Configure cosign
   ansible.builtin.include_tasks: configure-cosign.yml
   tags: cosign

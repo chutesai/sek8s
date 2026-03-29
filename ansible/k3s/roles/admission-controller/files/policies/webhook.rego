@@ -27,6 +27,7 @@ deny contains msg if {
     input.request.operation == "CREATE"
     not input.request.name in [
         "admission-controller-webhook",
+        "admission-controller-mutating-webhook",
         "gatekeeper-validating-webhook-configuration",
         "gatekeeper-mutating-webhook-configuration"
     ]
@@ -36,7 +37,7 @@ deny contains msg if {
     msg := sprintf("Creation of new admission webhooks is not allowed: %s", [input.request.name])
 }
 
-# Protect the admission webhook configuration itself
+# Protect the admission webhook configurations themselves
 deny contains msg if {
     input.request.kind.kind == "ValidatingWebhookConfiguration"
     input.request.name == "admission-controller-webhook"
@@ -44,8 +45,16 @@ deny contains msg if {
     msg := "The admission-controller-webhook is protected and cannot be modified"
 }
 
+deny contains msg if {
+    input.request.kind.kind == "MutatingWebhookConfiguration"
+    input.request.name == "admission-controller-mutating-webhook"
+    protected_operations[input.request.operation]
+    msg := "The admission-controller-mutating-webhook is protected and cannot be modified"
+}
+
 # Prevent disabling of admission plugins via ConfigMap modifications
 deny contains msg if {
+    not helpers.is_system_or_controller_user
     input.request.kind.kind == "ConfigMap"
     input.request.namespace == "kube-system"
     input.request.name == "k3s-config"
@@ -57,7 +66,7 @@ deny contains msg if {
 deny contains msg if {
     webhook_kinds[input.request.kind.kind]
     input.request.operation == "CREATE"
-    input.request.name != "admission-controller-webhook"
+    not input.request.name in ["admission-controller-webhook", "admission-controller-mutating-webhook"]
     msg := sprintf("New webhook configurations are not allowed: %s", [input.request.name])
 }
 

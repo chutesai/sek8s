@@ -2,14 +2,13 @@
 OPA (Open Policy Agent) validator.
 """
 
-import aiohttp
 import asyncio
-import json
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-from sek8s.validators.base import ValidatorBase, ValidationResult
+import aiohttp
 
+from sek8s.validators.base import ValidationResult, ValidatorBase
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +71,9 @@ class OPAValidator(ValidatorBase):
                 )
             else:  # enforce
                 # Block the request
-                return ValidationResult.deny(f"Policy violations: {'; '.join(violations)}")
+                return ValidationResult.deny(
+                    f"Policy violations: {'; '.join(violations)}"
+                )
 
         except asyncio.TimeoutError:
             logger.error("OPA request timed out")
@@ -87,8 +88,7 @@ class OPAValidator(ValidatorBase):
         """Query OPA and return list of violations."""
         violations = []
 
-        # Query effective_deny (filters deny for system/controller users)
-        url = f"{self.opa_url}/v1/data/kubernetes/admission/effective_deny"
+        url = f"{self.opa_url}/v1/data/kubernetes/admission/deny"
 
         async with self.session.post(url, json={"input": opa_input}) as response:
             if response.status != 200:

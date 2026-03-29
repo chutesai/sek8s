@@ -1,18 +1,16 @@
 #!/bin/bash
 # /usr/local/bin/k3s-config-init.sh
-# k3s-config-init: Generate k3s configuration before service starts
+# k3s-config-init: Generate k3s configuration before service starts.
+# Runs every boot so new image versions can inject updated API server args
+# (e.g. authorization webhook) without manual migration. The CA and existing
+# certs on the storage volume are untouched; k3s only regenerates leaf certs
+# when TLS SANs actually change.
 set -e
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-config-init.log
 }
 
-# Check if already initialized
-INIT_MARKER="/var/lib/rancher/k3s/.initialized"
-if [ -f "$INIT_MARKER" ]; then
-    log "k3s configuration already initialized (marker file exists), skipping"
-    exit 0
-fi
 
 # Public IP detection configuration
 INCLUDE_PUBLIC_IP="${INCLUDE_PUBLIC_IP:-true}"
@@ -116,6 +114,7 @@ for san in "${TLS_SANS[@]}"; do
 done
 
 # Continue with the rest of the config
+AUTHZ_WEBHOOK_CONFIG="/etc/admission-controller/authorization-webhook-config.yaml"
 cat >> /etc/rancher/k3s/config.yaml << EOF
 write-kubeconfig-mode: "0600"
 disable:
@@ -124,6 +123,21 @@ disable:
 cluster-cidr: 10.42.0.0/16
 service-cidr: 10.43.0.0/16
 EOF
+
+# Enable authorization webhook if config file exists (deployed by cleanup role at build time)
+if [ -f "$AUTHZ_WEBHOOK_CONFIG" ]; then
+    cat >> /etc/rancher/k3s/config.yaml << EOF
+kube-apiserver-arg:
+  - "authorization-mode=Node,Webhook,RBAC"
+  - "authorization-webhook-config-file=${AUTHZ_WEBHOOK_CONFIG}"
+  - "authorization-webhook-version=v1"
+  - "authorization-webhook-cache-authorized-ttl=30s"
+  - "authorization-webhook-cache-unauthorized-ttl=5s"
+EOF
+    log "Authorization webhook enabled: $AUTHZ_WEBHOOK_CONFIG"
+else
+    log "Authorization webhook config not found, using default authorization (Node,RBAC)"
+fi
 
 # Log the configuration for debugging
 log "k3s configuration created with the following settings:"
@@ -151,7 +165,4 @@ fi
 log "TLS SANs: ${TLS_SANS[*]}"
 log "======================================="
 
-# Create configuration marker
-mkdir -p "$(dirname "$INIT_MARKER")"
-touch "$INIT_MARKER"
 log "k3s configuration generation complete - ready for k3s.service to start"
