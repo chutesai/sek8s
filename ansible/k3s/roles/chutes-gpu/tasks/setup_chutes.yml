@@ -39,6 +39,13 @@
     mode: '0644'
   when: (chutes_gpu_values | default({}) | length) > 0
 
+- name: Ensure attestation-system namespace exists
+  kubernetes.core.k8s:
+    name: attestation-system
+    api_version: v1
+    kind: Namespace
+    state: present
+
 - name: Install or upgrade Chutes GPU charts
   ansible.builtin.shell: |
     helm upgrade --install chutes chutes/chutes-miner-gpu \
