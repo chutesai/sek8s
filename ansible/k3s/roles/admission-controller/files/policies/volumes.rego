@@ -73,15 +73,17 @@ is_cache_hostpath(path) if { startswith(path, "/var/snap/cache/") }
 # Image from the validator registry (cosign-verified chute images).
 # data.config.validator_registry is set at deploy time via config.json
 # (e.g. "myvalidator.localregistry.chutes.ai:30500").
+# lower() is required because k8s/containerd normalise registry hostnames
+# to lowercase while the Ansible config may carry a mixed-case SS58 address.
 has_validator_registry_image(pod_spec) if {
     container := pod_spec.containers[_]
-    startswith(container.image, data.config.validator_registry)
+    startswith(lower(container.image), lower(data.config.validator_registry))
 }
 
 # Image from parachutes/chutes-agent (cosign-verified via parachutes org key)
 has_agent_image(pod_spec) if {
     container := pod_spec.containers[_]
-    startswith(container.image, "parachutes/chutes-agent")
+    startswith(lower(container.image), "parachutes/chutes-agent")
 }
 
 # =============================================================================

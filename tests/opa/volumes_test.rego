@@ -113,6 +113,55 @@ test_allow_cache_hostpath_for_chute_job if {
 	not deny["Job hostPath volume '/var/snap/cache' not allowed. Use emptyDir for temporary storage."] with input as {"request": req}
 }
 
+# SS58 addresses are mixed-case but k8s/containerd lowercase registry hostnames.
+# The policy must do a case-insensitive comparison.
+test_allow_cache_hostpath_for_chute_job_mixed_case_registry if {
+	req := {
+		"operation": "CREATE",
+		"namespace": "chutes",
+		"kind": {"kind": "Job"},
+		"object": {
+			"metadata": {},
+			"spec": {
+				"template": {
+					"metadata": {"labels": {"chutes/chute": "true"}},
+					"spec": {
+						"securityContext": {"runAsUser": 1000},
+						"containers": [{"name": "chute", "image": "5dt7hz7zpw4dpppxfm7ke3cm7sdawhszxmm5zame7dsvjbcq.localregistry.chutes.ai:30500/chutes/vllm:latest", "command": ["chutes", "run", "x:y"]}],
+						"initContainers": [{"name": "cache-init", "image": "parachutes/cache-cleaner:latest", "securityContext": {"runAsUser": 0}}],
+						"volumes": [
+							{"name": "cache", "hostPath": {"path": "/var/snap/cache/579ca543-dda4-51d0-83ef-5667d1a5ed5f"}},
+							{"name": "raw-cache", "hostPath": {"path": "/var/snap/cache"}}
+						]
+					}
+				}
+			}
+		}
+	}
+	not deny["Job hostPath volume '/var/snap/cache' not allowed. Use emptyDir for temporary storage."] with input as {"request": req}
+		with data.config.validator_registry as "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ.localregistry.chutes.ai:30500"
+	not deny["Job hostPath volume '/var/snap/cache/579ca543-dda4-51d0-83ef-5667d1a5ed5f' not allowed. Use emptyDir for temporary storage."] with input as {"request": req}
+		with data.config.validator_registry as "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ.localregistry.chutes.ai:30500"
+}
+
+test_allow_cache_hostpath_for_chute_pod_mixed_case_registry if {
+	req := {
+		"operation": "CREATE",
+		"namespace": "chutes",
+		"kind": {"kind": "Pod"},
+		"object": {
+			"metadata": {"labels": {"chutes/chute": "true"}},
+			"spec": {
+				"securityContext": {"runAsUser": 1000},
+				"containers": [{"name": "chute", "image": "5dt7hz7zpw4dpppxfm7ke3cm7sdawhszxmm5zame7dsvjbcq.localregistry.chutes.ai:30500/chutes/vllm:latest"}],
+				"volumes": [{"name": "cache", "hostPath": {"path": "/var/snap/cache/abc123"}}]
+			}
+		}
+	}
+	not deny["hostPath volume '/var/snap/cache/abc123' not allowed."] with input as {"request": req}
+		with data.config.validator_registry as "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ.localregistry.chutes.ai:30500"
+}
+
 # =============================================================================
 # Cache hostPath: denied without chute label
 # =============================================================================
