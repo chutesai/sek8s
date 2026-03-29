@@ -4,22 +4,22 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 
 from sek8s.services.util import authorize
 
 from .manager import ImageManager
 from .models import PullRequest
-from .util import resolve_to_full_ref
 from .responses import (
     ImageListEntry,
     ImageListResponse,
+    PruneResponse,
     PullStartResponse,
     PullStartStatus,
     PullStatusEntry,
     PullStatusResponse,
-    PruneResponse,
 )
+from .util import resolve_to_full_ref
 
 router = APIRouter()
 
@@ -36,7 +36,9 @@ def get_image_manager(request: Request) -> ImageManager:
 )
 async def list_images(
     mgr: ImageManager = Depends(get_image_manager),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="images")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="images")
+    ),
 ) -> ImageListResponse:
     """List all images in containerd. Validator can access (read-only)."""
     entries = await mgr.list_images()
@@ -56,12 +58,16 @@ async def list_images(
 async def pull_image(
     request: PullRequest,
     mgr: ImageManager = Depends(get_image_manager),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=False, purpose="images")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=False, purpose="images")
+    ),
 ) -> PullStartResponse:
     """Start image pull (validator registry only, cosign-verified). Miner only."""
     status, _ = await mgr.start_pull(request.image)
     # Resolve to full ref for response (manager resolves short form internally)
-    full_ref = resolve_to_full_ref(request.image, mgr.allowed_registries, mgr.default_org)
+    full_ref = resolve_to_full_ref(
+        request.image, mgr.allowed_registries, mgr.default_org
+    )
     if status == "present":
         return PullStartResponse(image_ref=full_ref, status=PullStartStatus.PRESENT)
     if status == "in_progress":
@@ -75,9 +81,13 @@ async def pull_image(
     summary="Get pull status",
 )
 async def pull_status(
-    image: Optional[str] = Query(None, description="Optional image to filter (short or full form)"),
+    image: Optional[str] = Query(
+        None, description="Optional image to filter (short or full form)"
+    ),
     mgr: ImageManager = Depends(get_image_manager),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=False, purpose="images")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=False, purpose="images")
+    ),
 ) -> PullStatusResponse:
     """Get pull status by image or all. Miner only."""
     snapshots = mgr.get_pull_status(image)
@@ -101,7 +111,9 @@ async def delete_image(
     image: str,
     force: bool = Query(False, description="Force delete even if in use"),
     mgr: ImageManager = Depends(get_image_manager),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=False, purpose="images")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=False, purpose="images")
+    ),
 ) -> dict:
     """Remove image by reference or ID. Miner only. Accepts short or full form."""
     await mgr.delete_image(image, force=force)
@@ -115,7 +127,9 @@ async def delete_image(
 )
 async def prune_images(
     mgr: ImageManager = Depends(get_image_manager),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=False, purpose="images")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=False, purpose="images")
+    ),
 ) -> PruneResponse:
     """Prune unused/dangling images. Miner only."""
     removed, freed = await mgr.prune()

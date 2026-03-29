@@ -10,7 +10,7 @@ spec:
     securityContext:
       capabilities:
         add:
-        - CAP_SYS_ADMIN  # Should be rejected
+        - SYS_ADMIN
     resources:
       limits:
         memory: "256Mi"

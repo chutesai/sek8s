@@ -4,10 +4,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable, Dict, List, Optional
 
-from sek8s.validators.base import ValidatorBase, ValidationResult
+from sek8s.clients.cosign import (
+    CosignClient,
+    CosignRateLimitError,
+    CosignVerificationUnavailableError,
+)
 from sek8s.config import AdmissionConfig, CosignConfig, CosignVerificationConfig
-from sek8s.clients.cosign import CosignClient, CosignRateLimitError, CosignVerificationUnavailableError
-from sek8s.image_utils import is_digest_pinned_reference, parse_image_reference, strip_tag
+from sek8s.image_utils import (
+    is_digest_pinned_reference,
+    parse_image_reference,
+    strip_tag,
+)
+from sek8s.validators.base import ValidationResult, ValidatorBase
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +81,8 @@ class ValidationContext:
     required_key_path: Optional[Path] = None
 
 
-# Rule type: async (validator, ctx) -> list of violation strings (empty if none)
-Rule = Callable[["CosignValidator", ValidationContext], Awaitable[List[str]]]
+# Rule type: async bound method (ctx) -> list of violation strings (empty if none)
+Rule = Callable[[ValidationContext], Awaitable[List[str]]]
 
 
 class CosignValidator(ValidatorBase):
@@ -146,7 +154,8 @@ class CosignValidator(ValidatorBase):
     # ------------------------------------------------------------------
 
     async def validate(self, admission_review: Dict) -> ValidationResult:
-        """Validate admission request: for pod-like resources with images, require valid cosign signatures; allow otherwise."""
+        """Validate admission request: for pod-like resources with images,
+        require valid cosign signatures; allow otherwise."""
         request = admission_review.get("request", {})
 
         kind = request.get("kind", {}).get("kind", "")
@@ -249,14 +258,13 @@ class CosignValidator(ValidatorBase):
             seen.add(image)
             registry, org, repo, _ = parse_image_reference(image)
             vc = ctx.cosign_config.get_verification_config(registry, org, repo)
-            if vc and (
-                vc.verification_method != "key" or vc.public_key is None
-            ):
+            if vc and (vc.verification_method != "key" or vc.public_key is None):
                 violations.append(f"Image {image} must use key-based verification")
         return violations
 
     async def _require_ctx_key(self, ctx: ValidationContext) -> List[str]:
-        """Report any image whose cosign key path does not match ctx.required_key_path. Raises if required_key_path is not set."""
+        """Report any image whose cosign key path does not match ctx.required_key_path.
+        Raises if required_key_path is not set."""
         if not ctx.required_key_path:
             raise RuntimeError(
                 f"You can not use the require context key rule without providing a key path.\n"
@@ -270,12 +278,17 @@ class CosignValidator(ValidatorBase):
             seen.add(image)
             registry, org, repo, _ = parse_image_reference(image)
             vc = ctx.cosign_config.get_verification_config(registry, org, repo)
-            if vc and vc.public_key is not None and str(vc.public_key) != str(ctx.required_key_path):
+            if (
+                vc
+                and vc.public_key is not None
+                and str(vc.public_key) != str(ctx.required_key_path)
+            ):
                 violations.append(f"Image {image} uses a different cosign key")
         return violations
 
     async def _verify_cosign_config(self, ctx: ValidationContext) -> List[str]:
-        """Verify signatures for images that have verification config enabled; skip images with no config or verification disabled."""
+        """Verify signatures for images that have verification config enabled;
+        skip images with no config or verification disabled."""
         violations: List[str] = []
         seen: set = set()
         obj_meta = ctx.request.get("object", {}).get("metadata", {})
@@ -287,7 +300,9 @@ class CosignValidator(ValidatorBase):
                 continue
             seen.add(image)
             registry, org, repo, _ = parse_image_reference(image)
-            logger.debug(f"Parsed image {image} -> registry={registry}, org={org}, repo={repo}")
+            logger.debug(
+                f"Parsed image {image} -> registry={registry}, org={org}, repo={repo}"
+            )
             vc = ctx.cosign_config.get_verification_config(registry, org, repo)
             if not vc:
                 logger.warning(
@@ -295,11 +310,14 @@ class CosignValidator(ValidatorBase):
                 )
                 continue
             if vc.verification_method == "disabled" or not vc.require_signature:
-                logger.debug(f"Signature verification disabled for {registry}/{org}/{repo}")
+                logger.debug(
+                    f"Signature verification disabled for {registry}/{org}/{repo}"
+                )
                 continue
             try:
                 is_valid = await ctx.validator._verify_image_signature(
-                    image, vc,
+                    image,
+                    vc,
                     resource_kind=resource_kind,
                     resource_name=resource_name,
                     namespace=ctx.namespace,
@@ -395,7 +413,9 @@ class CosignValidator(ValidatorBase):
                 self._put(digest_ref, True, None, float(pin_ttl))
                 logger.info(
                     "Cached tag pin: %s -> %s (TTL %ds)",
-                    image, verified_digest, pin_ttl,
+                    image,
+                    verified_digest,
+                    pin_ttl,
                 )
 
         return valid
@@ -415,7 +435,10 @@ class CosignValidator(ValidatorBase):
     def get_stats(self) -> dict:
         """Return cache and tag-pin stats."""
         active_pins = {
-            img: {"digest": tv.digest, "remaining_s": round(tv.ttl - (time.monotonic() - tv.verified_at), 1)}
+            img: {
+                "digest": tv.digest,
+                "remaining_s": round(tv.ttl - (time.monotonic() - tv.verified_at), 1),
+            }
             for img, tv in self._tag_cache.items()
             if not tv.expired
         }
@@ -425,7 +448,8 @@ class CosignValidator(ValidatorBase):
             "active_tag_pins": active_pins,
             "rate_limited_until": (
                 self._rate_limited_until - time.monotonic()
-                if self._rate_limited_until and time.monotonic() < self._rate_limited_until
+                if self._rate_limited_until
+                and time.monotonic() < self._rate_limited_until
                 else 0
             ),
         }

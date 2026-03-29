@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import re
-from pathlib import Path
 from typing import Optional
 
 from sek8s.config import CosignVerificationConfig
@@ -204,7 +203,9 @@ class CosignClient:
                 )
             if process.returncode != 0:
                 combined_lower = combined.lower()
-                if any(ind in combined_lower for ind in self._CONNECTION_FAILURE_INDICATORS):
+                if any(
+                    ind in combined_lower for ind in self._CONNECTION_FAILURE_INDICATORS
+                ):
                     raise CosignVerificationUnavailableError(
                         stderr or stdout or "Registry/network unavailable"
                     )

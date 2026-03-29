@@ -89,7 +89,7 @@ fi
 
 # Generate private key
 log "Generating private key..."
-openssl genrsa -out "$TEMP_DIR/$CERT_NAME.key" 2048
+openssl genrsa -out "$TEMP_DIR/$CERT_NAME.key" 4096
 
 # Create OpenSSL configuration with Subject Alternative Names including public IP
 log "Creating OpenSSL configuration with SANs..."

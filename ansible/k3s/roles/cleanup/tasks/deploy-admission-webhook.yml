@@ -1,0 +1,70 @@
+---
+# Deploy the ValidatingWebhookConfiguration and MutatingWebhookConfiguration
+# manifests at cleanup (not build time). This ensures k3s never routes admission
+# requests during the build pipeline — the webhook doesn't exist until the image
+# is finalized. On first boot, k3s picks up the manifest and starts enforcing
+# policies. (SEK8S-009)
+#
+# admission_webhook_ca_bundle is set as a host fact during the admission-controller
+# role's setup-tls.yml and persists across plays.
+- name: Ensure K3s manifests directory exists
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deploy validating webhook manifest
+  ansible.builtin.template:
+    src: validating-webhook.yaml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/validating-webhook.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  vars:
+    admission_webhook_config:
+      webhook_name: admission-controller-webhook
+      port: "{{ admission_port | default(8443) }}"
+      localhost: true
+
+- name: Protect validating webhook manifest from modifications
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests/validating-webhook.yaml
+    owner: root
+    group: root
+    mode: '0400'
+    attributes: '+i'
+
+- name: Deploy mutating webhook manifest
+  ansible.builtin.template:
+    src: mutation-webhook.yaml.j2
+    dest: /var/lib/rancher/k3s/server/manifests/mutation-webhook.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  vars:
+    mutation_webhook_config:
+      webhook_name: admission-controller-mutating-webhook
+      port: "{{ admission_port | default(8443) }}"
+      localhost: true
+
+- name: Protect mutating webhook manifest from modifications
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/server/manifests/mutation-webhook.yaml
+    owner: root
+    group: root
+    mode: '0400'
+    attributes: '+i'
+
+# Authorization webhook kubeconfig — read by kube-apiserver at startup via
+# --authorization-webhook-config-file (added by k3s-config-init.sh on first
+# boot).  Deployed at cleanup alongside the admission webhooks so it doesn't
+# exist during the build pipeline.
+- name: Deploy authorization webhook kubeconfig
+  ansible.builtin.template:
+    src: authorization-webhook-config.yaml.j2
+    dest: /etc/admission-controller/authorization-webhook-config.yaml
+    owner: root
+    group: root
+    mode: '0644'

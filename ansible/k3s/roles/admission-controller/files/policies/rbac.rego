@@ -55,3 +55,9 @@ allow_rbac_modification if {
     # Allow other system service accounts
     startswith(input.request.userInfo.username, "system:serviceaccount:kube-system:")
 }
+
+allow_rbac_modification if {
+    # Allow cluster admins (e.g. Helm upgrades via the k3s admin kubeconfig).
+    # system:masters already bypasses all native K8s RBAC; only OPA blocks them.
+    "system:masters" in input.request.userInfo.groups
+}

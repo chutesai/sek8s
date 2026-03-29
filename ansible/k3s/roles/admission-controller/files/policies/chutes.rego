@@ -25,7 +25,7 @@ chutes_apply_pod_spec_rules if {
 # Image from Docker Hub is e.g. parachutes/cache-cleaner:release-next-latest (no docker.io prefix in spec).
 chutes_is_cache_cleaner_init(container) if {
 	container.name == "cache-init"
-	regex.match("^parachutes/cache-cleaner", container.image)
+	regex.match("^parachutes/cache-cleaner[:@]", container.image)
 }
 
 # Effective runAsUser for a container: container override or pod-level default
@@ -280,6 +280,280 @@ deny contains msg if {
 
 
 # =============================================================================
+# CHUTES NAMESPACE: NO SERVICE ACCOUNT TOKEN
+# =============================================================================
+# Defense-in-depth: the mutating webhook sets automountServiceAccountToken: false
+# before validation runs. These rules catch anything the mutator misses.
+#
+# Exception: the agent Deployment needs in-cluster API access. At the Pod level
+# we verify the request originates from a system controller (replicaset-controller),
+# not the miner, to prevent a miner from creating a bare pod that mimics the agent.
+
+chutes_agent_sa_token_exempt if {
+	input.request.kind.kind == "Pod"
+	helpers.is_system_or_controller_user
+	input.request.object.metadata.labels["app.kubernetes.io/name"] == "agent"
+	has_agent_image(input.request.object.spec)
+}
+
+chutes_agent_sa_token_exempt if {
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	input.request.object.spec.template.metadata.labels["app.kubernetes.io/name"] == "agent"
+	has_agent_image(input.request.object.spec.template.spec)
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	not chutes_agent_sa_token_exempt
+	not input.request.object.spec.automountServiceAccountToken == false
+	msg := "Chutes namespace: pod spec must set automountServiceAccountToken: false"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	not chutes_agent_sa_token_exempt
+	not input.request.object.spec.template.spec.automountServiceAccountToken == false
+	msg := "Chutes namespace: pod spec must set automountServiceAccountToken: false"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	not input.request.object.spec.template.spec.automountServiceAccountToken == false
+	msg := "Chutes namespace: pod spec must set automountServiceAccountToken: false"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "CronJob"
+	helpers.is_pod_resource
+	not input.request.object.spec.jobTemplate.spec.template.spec.automountServiceAccountToken == false
+	msg := "Chutes namespace: pod spec must set automountServiceAccountToken: false"
+}
+
+# =============================================================================
+# CHUTES NAMESPACE: NO envFrom
+# =============================================================================
+# envFrom bulk-injects all keys from a ConfigMap/Secret as env vars, bypassing
+# the per-name allowlist in pods.rego. All env vars must use explicit env[]
+# entries so each name is validated.
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	container := input.request.object.spec.containers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	container := input.request.object.spec.initContainers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: init container '%s' must not use envFrom", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.containers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.containers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.initContainers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: init container '%s' must not use envFrom", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "CronJob"
+	helpers.is_pod_resource
+	container := input.request.object.spec.jobTemplate.spec.template.spec.containers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+# =============================================================================
+# CHUTES NAMESPACE: SECCOMP PROFILE ENFORCEMENT
+# =============================================================================
+# Containerd defaults to user-workload.json (set at VM build time). Any
+# explicit seccompProfile override — even RuntimeDefault or Localhost —
+# would weaken or replace it. Deny all seccompProfile specifications.
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	input.request.object.spec.securityContext.seccompProfile
+	msg := "Chutes namespace: seccompProfile must not be specified (containerd default is enforced at build time)"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	container := input.request.object.spec.containers[_]
+	container.securityContext.seccompProfile
+	msg := sprintf("Chutes namespace: container '%s' must not specify seccompProfile", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	container := input.request.object.spec.initContainers[_]
+	container.securityContext.seccompProfile
+	msg := sprintf("Chutes namespace: init container '%s' must not specify seccompProfile", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	input.request.object.spec.template.spec.securityContext.seccompProfile
+	msg := "Chutes namespace: seccompProfile must not be specified (containerd default is enforced at build time)"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.containers[_]
+	container.securityContext.seccompProfile
+	msg := sprintf("Chutes namespace: container '%s' must not specify seccompProfile", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	input.request.object.spec.template.spec.securityContext.seccompProfile
+	msg := "Chutes namespace: seccompProfile must not be specified (containerd default is enforced at build time)"
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.containers[_]
+	container.securityContext.seccompProfile
+	msg := sprintf("Chutes namespace: container '%s' must not specify seccompProfile", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "CronJob"
+	helpers.is_pod_resource
+	input.request.object.spec.jobTemplate.spec.template.spec.securityContext.seccompProfile
+	msg := "Chutes namespace: seccompProfile must not be specified (containerd default is enforced at build time)"
+}
+
+# =============================================================================
+# CHUTES NAMESPACE: VOLUME TYPE ALLOWLIST
+# =============================================================================
+# Prevent code injection via filesystem overlays (e.g. mounting a ConfigMap over
+# a Python package directory to replace cosign-verified image code).
+#
+# Allowed types:
+#   - hostPath  (validated separately by volumes.rego)
+#   - emptyDir  (starts empty, safe)
+#   - projected (auto-injected by k8s for SA token, kube-root-ca.crt, downwardAPI)
+#
+# Denied: configMap, secret, persistentVolumeClaim, nfs, csi, etc.
+#
+# Pod-level checks exempt system/controller users (e.g. kube-system:daemon-set-controller
+# creating registry pods). We use userInfo.username — set by the API server after
+# authentication — NOT ownerReferences, which are user-settable metadata and could be
+# forged by a miner to bypass this policy.
+
+chutes_is_allowed_volume_type(volume) if { volume.hostPath }
+chutes_is_allowed_volume_type(volume) if { volume.emptyDir != null }
+chutes_is_allowed_volume_type(volume) if { volume.projected }
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	not helpers.is_system_or_controller_user
+	volume := input.request.object.spec.volumes[_]
+	not chutes_is_allowed_volume_type(volume)
+	msg := sprintf("Chutes namespace: volume '%s' uses a forbidden type (only hostPath, emptyDir, and projected allowed)", [volume.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	volume := input.request.object.spec.template.spec.volumes[_]
+	not chutes_is_allowed_volume_type(volume)
+	msg := sprintf("Chutes namespace: volume '%s' uses a forbidden type (only hostPath, emptyDir, and projected allowed)", [volume.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "Job"
+	helpers.is_pod_resource
+	volume := input.request.object.spec.template.spec.volumes[_]
+	not chutes_is_allowed_volume_type(volume)
+	msg := sprintf("Chutes namespace: volume '%s' uses a forbidden type (only hostPath, emptyDir, and projected allowed)", [volume.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "CronJob"
+	helpers.is_pod_resource
+	volume := input.request.object.spec.jobTemplate.spec.template.spec.volumes[_]
+	not chutes_is_allowed_volume_type(volume)
+	msg := sprintf("Chutes namespace: volume '%s' uses a forbidden type (only hostPath, emptyDir, and projected allowed)", [volume.name])
+}
+
+# =============================================================================
 # CHUTES NAMESPACE: COMMAND RESTRICTIONS
 # =============================================================================
 # In chutes namespace:
@@ -414,4 +688,24 @@ chutes_deny_message(container) := msg if {
 chutes_deny_message(container) := msg if {
 	container.name != "chute"
 	msg := sprintf("Chutes namespace: container '%s' must not override command (use image entrypoint)", [container.name])
+}
+
+# =============================================================================
+# CHUTES NAMESPACE: CONFIGMAP MUTATIONS RESTRICTED TO SYSTEM CONTROLLERS
+# =============================================================================
+# The miner has RBAC for ConfigMaps (backwards compat with non-TEE deploys),
+# but OPA denies all mutations from non-system users. This prevents:
+#   - Modifying kube-root-ca.crt (CA injection for MITM)
+#   - Modifying registry-nginx-config (registry traffic manipulation)
+#   - Creating ConfigMaps for code injection (volume mount separately blocked)
+#
+# Only system/controller users (identified by userInfo.username, set by the
+# API server after authentication) may create, update, or delete ConfigMaps.
+
+deny contains msg if {
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "ConfigMap"
+	input.request.operation in ["CREATE", "UPDATE", "DELETE"]
+	not helpers.is_system_or_controller_user
+	msg := sprintf("Chutes namespace: ConfigMap operations restricted to system controllers (user '%s' denied)", [input.request.userInfo.username])
 }

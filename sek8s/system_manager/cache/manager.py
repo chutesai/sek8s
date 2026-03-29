@@ -60,7 +60,9 @@ class HuggingFaceSnapshot:
         self._started_at: Optional[float] = None
         self._initial_bytes: Optional[int] = None
         self._reconciled: bool = False
-        self._scan_cache: Optional[tuple[int, Optional[str], Optional[str], Optional[float]]] = None
+        self._scan_cache: Optional[
+            tuple[int, Optional[str], Optional[str], Optional[float]]
+        ] = None
         self._scan_cache_at: float = 0.0
 
     # ------------------------------------------------------------------
@@ -133,7 +135,11 @@ class HuggingFaceSnapshot:
 
     @property
     def percent_complete(self) -> Optional[float]:
-        if not self.is_in_progress or self._total_bytes is None or self._total_bytes <= 0:
+        if (
+            not self.is_in_progress
+            or self._total_bytes is None
+            or self._total_bytes <= 0
+        ):
             return None
         size = self.size_bytes
         if size is not None:
@@ -187,7 +193,9 @@ class HuggingFaceSnapshot:
         """
         try:
             proc = await asyncio.create_subprocess_exec(
-                "du", "-sb", str(path),
+                "du",
+                "-sb",
+                str(path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -199,7 +207,9 @@ class HuggingFaceSnapshot:
         except Exception:
             return None
 
-    async def _scan_hub(self) -> tuple[int, Optional[str], Optional[str], Optional[float]]:
+    async def _scan_hub(
+        self,
+    ) -> tuple[int, Optional[str], Optional[str], Optional[float]]:
         """Scan HF cache directory off the event loop.
 
         Returns ``(size_bytes, repo_id, revision, last_accessed)``
@@ -209,7 +219,10 @@ class HuggingFaceSnapshot:
         Results are cached per-instance; TTL varies by download status.
         """
         now = time.monotonic()
-        if self._scan_cache is not None and (now - self._scan_cache_at) < self._scan_ttl:
+        if (
+            self._scan_cache is not None
+            and (now - self._scan_cache_at) < self._scan_ttl
+        ):
             return self._scan_cache
 
         if not self.hub_path.exists():
@@ -282,10 +295,9 @@ class HuggingFaceSnapshot:
         self._scan_cache = None
 
         self.path.mkdir(parents=True, exist_ok=True)
-        # Only chmod when we created it; externally-created dirs (cache-init, pod) use 777
-        _chmod_if_owned(self.path, 0o2775)
+        _chmod_if_owned(self.path, 0o2775)  # nosec B103
         self.hub_path.mkdir(exist_ok=True)
-        _chmod_if_owned(self.hub_path, 0o2775)
+        _chmod_if_owned(self.hub_path, 0o2775)  # nosec B103
 
         total_bytes = await fetch_repo_total_size(repo_id, revision)
         if total_bytes > 0:
@@ -293,7 +305,9 @@ class HuggingFaceSnapshot:
 
         if self.hub_path.exists():
             try:
-                info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
+                info = await asyncio.to_thread(
+                    scan_cache_dir, cache_dir=str(self.hub_path)
+                )
                 self._initial_bytes = info.size_on_disk
             except Exception:
                 self._initial_bytes = 0
@@ -322,6 +336,7 @@ class HuggingFaceSnapshot:
         """Execute snapshot_download, verify, chmod, and write markers."""
         hub_cache_dir = str(self.hub_path)
         try:
+
             def do_download() -> str:
                 return snapshot_download(
                     repo_id=self.repo_id,
@@ -333,11 +348,11 @@ class HuggingFaceSnapshot:
 
             await verify_cache(
                 repo_id=self.repo_id,
-                revision=self.revision,
+                revision=self.revision or "main",
                 cache_dir=str(self.path),
             )
 
-            self._chmod_tree(self.path, 0o2775)
+            self._chmod_tree(self.path, 0o2775)  # nosec B103
 
             (self.path / CACHE_COMPLETE_MARKER).write_text(
                 f"{self.repo_id}\n{self.revision or 'main'}", encoding="utf-8"
@@ -351,7 +366,9 @@ class HuggingFaceSnapshot:
                 await self.delete()
             except OSError as cleanup_err:
                 logger.warning(
-                    "Failed to clean up cache dir for chute_id={}: {}", self.chute_id, cleanup_err
+                    "Failed to clean up cache dir for chute_id={}: {}",
+                    self.chute_id,
+                    cleanup_err,
                 )
             raise
 
@@ -394,25 +411,37 @@ class HuggingFaceSnapshot:
         """
         if not self.is_present_on_disk:
             self._reconciled = True
-            logger.debug("Reconcile {}: nothing on disk, marking reconciled", self.chute_id)
+            logger.debug(
+                "Reconcile {}: nothing on disk, marking reconciled", self.chute_id
+            )
             return
 
         try:
             info = await fetch_hf_info(self.chute_id)
         except Exception as e:
-            logger.warning("Skipping reconciliation for {}: validator unavailable ({})", self.chute_id, e)
+            logger.warning(
+                "Skipping reconciliation for {}: validator unavailable ({})",
+                self.chute_id,
+                e,
+            )
             return
 
         repo_id = info.repo_id
         revision = info.revision or "main"
         if not repo_id:
-            logger.warning("Skipping reconciliation for {}: validator returned no repo_id", self.chute_id)
+            logger.warning(
+                "Skipping reconciliation for {}: validator returned no repo_id",
+                self.chute_id,
+            )
             return
 
         logger.debug(
             "Reconcile {}: validator says repo={}, rev={} (was repo={}, rev={})",
-            self.chute_id, repo_id, revision[:12],
-            self.repo_id or "<unset>", (self.revision or "<unset>")[:12],
+            self.chute_id,
+            repo_id,
+            revision[:12],
+            self.repo_id or "<unset>",
+            (self.revision or "<unset>")[:12],
         )
         self.repo_id = repo_id
         self.revision = revision
@@ -428,40 +457,62 @@ class HuggingFaceSnapshot:
 
         logger.info(
             "Verifying cache for {}: repo={}, rev={}, path={}",
-            self.chute_id, repo_id, revision[:12], self.path,
+            self.chute_id,
+            repo_id,
+            revision[:12],
+            self.path,
         )
         try:
-            result = await verify_cache(repo_id=repo_id, revision=revision, cache_dir=str(self.path))
+            result = await verify_cache(
+                repo_id=repo_id, revision=revision, cache_dir=str(self.path)
+            )
             complete_marker.write_text(f"{repo_id}\n{revision}", encoding="utf-8")
             self._reconciled = True
             logger.info(
                 "Reconciled {}: PRESENT (repo={}, rev={}, verified={}, skipped={})",
-                self.chute_id, repo_id, revision[:12],
-                result.get("verified", 0), result.get("skipped", 0),
+                self.chute_id,
+                repo_id,
+                revision[:12],
+                result.get("verified", 0),
+                result.get("skipped", 0),
             )
         except ValueError as e:
             error_msg = str(e)
             if "Missing file" in error_msg or "not found" in error_msg:
                 logger.info(
                     "Reconciled {}: INCOMPLETE — repo={}, rev={}, reason={}",
-                    self.chute_id, repo_id, revision[:12], error_msg,
+                    self.chute_id,
+                    repo_id,
+                    revision[:12],
+                    error_msg,
                 )
             elif "verification failed" in error_msg:
                 logger.warning(
                     "Reconciled {}: SKIPPED (could not fetch manifest) — repo={}, rev={}, reason={}",
-                    self.chute_id, repo_id, revision[:12], error_msg,
+                    self.chute_id,
+                    repo_id,
+                    revision[:12],
+                    error_msg,
                 )
             else:
-                stale_marker.write_text(f"{repo_id}\n{revision}\n{error_msg}", encoding="utf-8")
+                stale_marker.write_text(
+                    f"{repo_id}\n{revision}\n{error_msg}", encoding="utf-8"
+                )
                 self._reconciled = True
                 logger.warning(
                     "Reconciled {}: STALE — repo={}, rev={}, reason={}",
-                    self.chute_id, repo_id, revision[:12], error_msg,
+                    self.chute_id,
+                    repo_id,
+                    revision[:12],
+                    error_msg,
                 )
         except Exception as e:
             logger.warning(
                 "Reconciliation error for {}: repo={}, rev={}, error={}",
-                self.chute_id, repo_id, revision[:12], e,
+                self.chute_id,
+                repo_id,
+                revision[:12],
+                e,
             )
 
     async def delete(self) -> None:
@@ -474,7 +525,9 @@ class HuggingFaceSnapshot:
             path.relative_to(cache_base)
         except ValueError:
             logger.error("Refusing to delete path outside cache_base: {}", path)
-            raise PermissionError(f"Path {path} is not under cache_base {cache_base}") from None
+            raise PermissionError(
+                f"Path {path} is not under cache_base {cache_base}"
+            ) from None
         try:
             shutil.rmtree(path)
         except OSError as e:
@@ -485,7 +538,10 @@ class HuggingFaceSnapshot:
                 self.chute_id,
             )
             proc = await asyncio.create_subprocess_exec(
-                "sudo", "rm", "-rf", str(path),
+                "sudo",
+                "rm",
+                "-rf",
+                str(path),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -493,7 +549,9 @@ class HuggingFaceSnapshot:
             if proc.returncode != 0:
                 err_msg = stderr.decode("utf-8", errors="replace").strip()
                 logger.error("sudo rm -rf failed for {}: {}", path, err_msg)
-                raise OSError(e.errno, f"Failed to delete cache dir: {err_msg}", str(path)) from e
+                raise OSError(
+                    e.errno, f"Failed to delete cache dir: {err_msg}", str(path)
+                ) from e
 
 
 # ======================================================================
@@ -519,18 +577,23 @@ class CacheManager:
         """Scan disk and reconcile all chute cache directories."""
         cache_base = Path(cache_config.cache_base).resolve()
         if not cache_base.exists():
-            logger.info("Cache base {} does not exist, skipping initialization", cache_base)
+            logger.info(
+                "Cache base {} does not exist, skipping initialization", cache_base
+            )
             return
 
         chute_dirs = [
-            item for item in cache_base.iterdir()
+            item
+            for item in cache_base.iterdir()
             if item.is_dir() and len(item.name) == 36
         ]
         if not chute_dirs:
             logger.info("No chute cache directories found")
             return
 
-        logger.info("Initializing cache manager with {} directories...", len(chute_dirs))
+        logger.info(
+            "Initializing cache manager with {} directories...", len(chute_dirs)
+        )
         for item in chute_dirs:
             hub = item / "hub"
             if not hub.exists() or not any(hub.glob("models--*")):
@@ -578,7 +641,9 @@ class CacheManager:
             hub = item / "hub"
             if not hub.exists() or not any(hub.glob("models--*")):
                 continue
-            new_snaps.append(HuggingFaceSnapshot(chute_id=item.name, externally_managed=True))
+            new_snaps.append(
+                HuggingFaceSnapshot(chute_id=item.name, externally_managed=True)
+            )
         return new_snaps
 
     async def _reconcile_pending(self) -> None:
@@ -649,7 +714,11 @@ class CacheManager:
         for chute, size, scan_repo_id, last_acc in scanned:
             if size == 0:
                 continue
-            if exclude_pattern and scan_repo_id and exclude_pattern.lower() in scan_repo_id.lower():
+            if (
+                exclude_pattern
+                and scan_repo_id
+                and exclude_pattern.lower() in scan_repo_id.lower()
+            ):
                 continue
             candidates.append((chute, size, last_acc or 0))
 
@@ -662,7 +731,9 @@ class CacheManager:
                 freed += size
 
         removed_set = set(removed_list)
-        candidates = [(c, s, la) for c, s, la in candidates if c.chute_id not in removed_set]
+        candidates = [
+            (c, s, la) for c, s, la in candidates if c.chute_id not in removed_set
+        ]
 
         total_now = sum(s for _, s, _ in candidates)
         if total_now > max_size_bytes:

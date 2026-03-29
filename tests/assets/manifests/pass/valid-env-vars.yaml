@@ -8,8 +8,8 @@ spec:
   - name: app
     image: docker.io/library/python:3.11-slim
     env:
-    - name: HF_ENDPOINT
-      value: "https://huggingface.co"
+    - name: HF_TOKEN
+      value: "hf_abc123"
     - name: CUDA_VISIBLE_DEVICES
       value: "0,1"
     - name: APP_CONFIG

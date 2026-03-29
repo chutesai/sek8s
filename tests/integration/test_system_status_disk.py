@@ -27,9 +27,7 @@ def _can_use_sudo_du():
     """Check if current user can run sudo du without password."""
     try:
         result = subprocess.run(
-            ["sudo", "-n", "du", "--version"],
-            capture_output=True,
-            timeout=2
+            ["sudo", "-n", "du", "--version"], capture_output=True, timeout=2
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -39,7 +37,7 @@ def _can_use_sudo_du():
 # Skip tests if sudo is not available
 pytestmark = pytest.mark.skipif(
     not _can_use_sudo_du(),
-    reason="sudo access required for du command. Run in Docker or configure sudoers."
+    reason="sudo access required for du command. Run in Docker or configure sudoers.",
 )
 
 
@@ -64,8 +62,8 @@ def test_dir_structure():
         # Helper to create a file of specific size
         def create_file(path: Path, size_kb: int):
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, 'wb') as f:
-                f.write(b'0' * (size_kb * 1024))
+            with open(path, "wb") as f:
+                f.write(b"0" * (size_kb * 1024))
 
         root = Path(temp_root)
 
@@ -152,9 +150,18 @@ async def test_disk_space_simple_mode(status_client, test_dir_structure):
     assert isinstance(filesystems, list), "filesystems should be a list"
     assert len(filesystems) == 1, "non-root path should return one filesystem"
     fs = filesystems[0]
-    for key in ("source", "target", "total_bytes", "used_bytes", "available_bytes", "used_percent"):
+    for key in (
+        "source",
+        "target",
+        "total_bytes",
+        "used_bytes",
+        "available_bytes",
+        "used_percent",
+    ):
         assert key in fs, f"filesystem entry should have {key}"
-    assert fs["total_bytes"] >= 0 and fs["used_bytes"] >= 0 and fs["available_bytes"] >= 0
+    assert (
+        fs["total_bytes"] >= 0 and fs["used_bytes"] >= 0 and fs["available_bytes"] >= 0
+    )
     assert 0 <= fs["used_percent"] <= 100
 
 
@@ -224,7 +231,9 @@ async def test_disk_space_diagnostic_mode_depth_3(status_client, test_dir_struct
 
 
 @pytest.mark.asyncio
-async def test_disk_space_diagnostic_mode_top_n_limit(status_client, test_dir_structure):
+async def test_disk_space_diagnostic_mode_top_n_limit(
+    status_client, test_dir_structure
+):
     """Test that top_n limits results per level."""
     response = status_client.get(
         f"/status/disk/space?path={test_dir_structure}&diagnostic=true&max_depth=2&top_n=2"
@@ -249,7 +258,9 @@ async def test_disk_space_diagnostic_mode_top_n_limit(status_client, test_dir_st
 
 
 @pytest.mark.asyncio
-async def test_disk_space_diagnostic_mode_top_n_ordering(status_client, test_dir_structure):
+async def test_disk_space_diagnostic_mode_top_n_ordering(
+    status_client, test_dir_structure
+):
     """Test that results are properly ordered by size across all depths."""
     response = status_client.get(
         f"/status/disk/space?path={test_dir_structure}&diagnostic=true&max_depth=3&top_n=10"
@@ -262,13 +273,18 @@ async def test_disk_space_diagnostic_mode_top_n_ordering(status_client, test_dir
     assert sizes == sorted(sizes, reverse=True)
 
     # The largest directory overall should be first
-    assert result["directories"][0]["size_bytes"] >= result["directories"][-1]["size_bytes"]
+    assert (
+        result["directories"][0]["size_bytes"]
+        >= result["directories"][-1]["size_bytes"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_disk_space_invalid_path(status_client):
     """Test that invalid paths are rejected."""
-    response = status_client.get("/status/disk/space?path=/nonexistent/path/that/does/not/exist")
+    response = status_client.get(
+        "/status/disk/space?path=/nonexistent/path/that/does/not/exist"
+    )
     assert response.status_code == 404
 
 
@@ -321,7 +337,9 @@ async def test_disk_space_human_readable_format(status_client, test_dir_structur
 
     # Total should also have human-readable format
     assert result.get("total_size_human") is not None
-    assert any(unit in result["total_size_human"] for unit in ["B", "KB", "MB", "GB", "TB"])
+    assert any(
+        unit in result["total_size_human"] for unit in ["B", "KB", "MB", "GB", "TB"]
+    )
 
 
 @pytest.mark.asyncio
@@ -347,7 +365,11 @@ async def test_disk_space_empty_directory(status_client):
             assert len(filesystems) >= 1
             for fs in filesystems:
                 assert "source" in fs and "target" in fs
-                assert "total_bytes" in fs and "used_bytes" in fs and "available_bytes" in fs
+                assert (
+                    "total_bytes" in fs
+                    and "used_bytes" in fs
+                    and "available_bytes" in fs
+                )
                 assert "used_percent" in fs
 
     finally:
@@ -357,7 +379,49 @@ async def test_disk_space_empty_directory(status_client):
 @pytest.mark.asyncio
 async def test_disk_space_filesystems_root_path(status_client):
     """Test that path=/ returns filesystems list (one or more mounts)."""
-    response = status_client.get("/status/disk/space?path=/")
+    from unittest.mock import AsyncMock, patch
+
+    from sek8s.system_manager.status.models import CommandResult
+
+    du_output = "1000\t/proc\n2000\t/home\n50000\t/"
+    df_output = (
+        "Filesystem     1K-blocks    Used Available Use% Mounted on\n"
+        "/dev/sda1       50000000 20000000  28000000  42% /\n"
+        "tmpfs            4000000    1000   3999000   1% /tmp\n"
+    )
+
+    async def mock_run_command(command, timeout, limit, **kwargs):
+        cmd_str = " ".join(command)
+        if "du" in cmd_str:
+            return CommandResult(
+                exit_code=0,
+                stdout=du_output,
+                stderr="",
+                stdout_truncated=False,
+                stderr_truncated=False,
+            )
+        if "df" in cmd_str:
+            return CommandResult(
+                exit_code=0,
+                stdout=df_output,
+                stderr="",
+                stdout_truncated=False,
+                stderr_truncated=False,
+            )
+        return CommandResult(
+            exit_code=1,
+            stdout="",
+            stderr="unknown",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+
+    with patch(
+        "sek8s.system_manager.status.util.run_command",
+        new=AsyncMock(side_effect=mock_run_command),
+    ):
+        response = status_client.get("/status/disk/space?path=/")
+
     assert response.status_code == 200
     result = response.json()
 
@@ -366,7 +430,18 @@ async def test_disk_space_filesystems_root_path(status_client):
     assert isinstance(filesystems, list), "filesystems should be a list"
     assert len(filesystems) >= 1, "path=/ should return at least one filesystem"
     for fs in filesystems:
-        for key in ("source", "target", "total_bytes", "used_bytes", "available_bytes", "used_percent"):
+        for key in (
+            "source",
+            "target",
+            "total_bytes",
+            "used_bytes",
+            "available_bytes",
+            "used_percent",
+        ):
             assert key in fs, f"filesystem entry should have {key}"
-        assert fs["total_bytes"] >= 0 and fs["used_bytes"] >= 0 and fs["available_bytes"] >= 0
+        assert (
+            fs["total_bytes"] >= 0
+            and fs["used_bytes"] >= 0
+            and fs["available_bytes"] >= 0
+        )
         assert 0 <= fs["used_percent"] <= 100

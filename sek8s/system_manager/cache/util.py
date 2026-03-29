@@ -29,7 +29,9 @@ async def fetch_repo_info(repo_id: str, revision: str) -> Optional[dict]:
         if key in _repo_info_cache:
             return _repo_info_cache[key]
         params = {"repo_id": repo_id, "repo_type": "model", "revision": rev}
-        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get(
+            "HUGGING_FACE_HUB_TOKEN"
+        )
         if hf_token:
             params["hf_token"] = hf_token
         base = (cache_config.validator_base_url or "").strip().rstrip("/")
@@ -37,7 +39,9 @@ async def fetch_repo_info(repo_id: str, revision: str) -> Optional[dict]:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    repo_info_url, params=params, timeout=aiohttp.ClientTimeout(total=30)
+                    repo_info_url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=30),
                 ) as resp:
                     if resp.status != 200:
                         return None
@@ -72,7 +76,11 @@ async def fetch_hf_info(chute_id: str) -> HfInfoResponse:
                     text = await resp.text()
                     raise HTTPException(
                         status_code=502,
-                        detail={"error": "validator_error", "status": resp.status, "body": text},
+                        detail={
+                            "error": "validator_error",
+                            "status": resp.status,
+                            "body": text,
+                        },
                     )
                 data = await resp.json()
                 return HfInfoResponse.model_validate(data)
@@ -131,7 +139,9 @@ async def verify_cache(
     if not snapshot_dir.exists():
         logger.warning(
             "verify_cache: snapshot dir missing — repo={}, rev={}, expected={}",
-            repo_id, revision[:12], snapshot_dir,
+            repo_id,
+            revision[:12],
+            snapshot_dir,
         )
         raise ValueError(f"Cache directory not found: {snapshot_dir}")
 
@@ -144,7 +154,10 @@ async def verify_cache(
 
     logger.debug(
         "verify_cache: repo={}, rev={}, remote_files={}, local_files={}",
-        repo_id, revision[:12], len(remote_files), len(local_files),
+        repo_id,
+        revision[:12],
+        len(remote_files),
+        len(local_files),
     )
 
     verified = 0
@@ -154,7 +167,9 @@ async def verify_cache(
         if not local_path or (not local_path.exists() and not local_path.is_symlink()):
             logger.info(
                 "verify_cache: missing file — repo={}, rev={}, file={}",
-                repo_id, revision[:12], remote_path,
+                repo_id,
+                revision[:12],
+                remote_path,
             )
             raise ValueError(f"Missing file: {remote_path}")
         if remote_hash is None or len(str(remote_hash)) == 40:
@@ -164,16 +179,33 @@ async def verify_cache(
         if remote_size is not None and resolved.stat().st_size != remote_size:
             logger.warning(
                 "verify_cache: size mismatch — repo={}, rev={}, file={}, expected={}, actual={}",
-                repo_id, revision[:12], remote_path, remote_size, resolved.stat().st_size,
+                repo_id,
+                revision[:12],
+                remote_path,
+                remote_size,
+                resolved.stat().st_size,
             )
-            raise ValueError(f"Size mismatch: {remote_path} (expected={remote_size}, actual={resolved.stat().st_size})")
+            raise ValueError(
+                f"Size mismatch: {remote_path} (expected={remote_size}, actual={resolved.stat().st_size})"
+            )
         symlink_hash = get_symlink_hash(local_path)
         if symlink_hash and symlink_hash != remote_hash:
             logger.warning(
                 "verify_cache: hash mismatch — repo={}, rev={}, file={}, expected={}, actual={}",
-                repo_id, revision[:12], remote_path, remote_hash[:12], symlink_hash[:12],
+                repo_id,
+                revision[:12],
+                remote_path,
+                remote_hash[:12],
+                symlink_hash[:12],
             )
-            raise ValueError(f"Hash mismatch: {remote_path} (expected={remote_hash[:12]}, actual={symlink_hash[:12]})")
+            raise ValueError(
+                f"Hash mismatch: {remote_path} (expected={remote_hash[:12]}, actual={symlink_hash[:12]})"
+            )
         verified += 1
 
-    return {"verified": verified, "skipped": skipped, "total": len(remote_files), "skipped_api_error": False}
+    return {
+        "verified": verified,
+        "skipped": skipped,
+        "total": len(remote_files),
+        "skipped_api_error": False,
+    }

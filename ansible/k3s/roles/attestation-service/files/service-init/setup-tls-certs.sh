@@ -222,7 +222,7 @@ generate_certificates() {
     # Generate private key
     if [[ ! -f "$CERT_KEY" ]]; then
         log "Generating private key"
-        openssl genrsa -out "$CERT_KEY" 2048
+        openssl genrsa -out "$CERT_KEY" 4096
     else
         log "Private key already exists"
     fi

@@ -3,10 +3,9 @@
 Unit tests for metrics collection
 """
 
-import time
-import json
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from sek8s.metrics import MetricsCollector
 
@@ -100,13 +99,17 @@ class TestMetricsCollector:
         assert 'admission_requests_total{decision="denied"} 1' in prometheus_output
         assert "admission_requests_by_kind_total" in prometheus_output
         assert (
-            'admission_requests_by_kind_total{kind="Pod",decision="allowed"} 1' in prometheus_output
+            'admission_requests_by_kind_total{kind="Pod",decision="allowed"} 1'
+            in prometheus_output
         )
         assert "admission_request_duration_seconds_sum 0.8" in prometheus_output
         assert "admission_request_duration_seconds_count 2" in prometheus_output
         assert "admission_cache_hits_total 1" in prometheus_output
         assert "admission_cache_misses_total 1" in prometheus_output
-        assert 'admission_validator_errors_total{validator="OPAValidator"} 1' in prometheus_output
+        assert (
+            'admission_validator_errors_total{validator="OPAValidator"} 1'
+            in prometheus_output
+        )
 
     def test_export_json_format(self, metrics):
         """Test exporting metrics as JSON."""

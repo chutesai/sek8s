@@ -1,8 +1,5 @@
 ---
 # MutatingWebhookConfiguration - loaded by K3s at startup
-# Pins whitelisted tag-only images to their cosign-verified digest to reduce
-# Docker Hub API calls.  This is an optimisation; the validating webhook remains
-# the security gate (failurePolicy: Fail).
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
@@ -27,13 +24,6 @@ webhooks:
           - jobs
           - cronjobs
           - replicasets
-    namespaceSelector:
-      matchExpressions:
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values:
-            - kube-system
-            - gatekeeper-system
     failurePolicy: Ignore
     reinvocationPolicy: IfNeeded
     admissionReviewVersions: ["v1", "v1beta1"]

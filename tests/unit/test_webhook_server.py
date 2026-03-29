@@ -4,17 +4,18 @@ Unit tests for Admission Webhook Server
 """
 
 import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, AsyncMock
 
+from sek8s.config import AdmissionConfig
 from sek8s.services.admission_controller import AdmissionWebhookServer
 from sek8s.services.admission_models import (
     AdmissionResponseBody,
     AdmissionReviewResponse,
     AdmissionStatus,
 )
-from sek8s.config import AdmissionConfig
 
 
 @pytest.fixture
@@ -32,7 +33,9 @@ def client(webhook_server):
 
 def test_health_endpoint(client, webhook_server):
     """Test /health endpoint."""
-    with patch.object(webhook_server.controller, "health_check", new_callable=AsyncMock) as mock_health:
+    with patch.object(
+        webhook_server.controller, "health_check", new_callable=AsyncMock
+    ) as mock_health:
         mock_health.return_value = {
             "healthy": True,
             "validators": {
@@ -50,10 +53,14 @@ def test_health_endpoint(client, webhook_server):
 
 def test_health_endpoint_unhealthy(client, webhook_server):
     """Test /health endpoint when unhealthy."""
-    with patch.object(webhook_server.controller, "health_check", new_callable=AsyncMock) as mock_health:
+    with patch.object(
+        webhook_server.controller, "health_check", new_callable=AsyncMock
+    ) as mock_health:
         mock_health.return_value = {
             "healthy": False,
-            "validators": {"OPAValidator": {"healthy": False, "error": "Connection failed"}},
+            "validators": {
+                "OPAValidator": {"healthy": False, "error": "Connection failed"}
+            },
         }
 
         resp = client.get("/health")
@@ -65,7 +72,9 @@ def test_health_endpoint_unhealthy(client, webhook_server):
 
 def test_ready_endpoint(client, webhook_server):
     """Test /ready endpoint."""
-    with patch.object(webhook_server.controller, "health_check", new_callable=AsyncMock) as mock_health:
+    with patch.object(
+        webhook_server.controller, "health_check", new_callable=AsyncMock
+    ) as mock_health:
         mock_health.return_value = {"healthy": True, "validators": {}}
 
         resp = client.get("/ready")
@@ -77,7 +86,9 @@ def test_ready_endpoint(client, webhook_server):
 
 def test_ready_endpoint_not_ready(client, webhook_server):
     """Test /ready endpoint when not ready."""
-    with patch.object(webhook_server.controller, "health_check", new_callable=AsyncMock) as mock_health:
+    with patch.object(
+        webhook_server.controller, "health_check", new_callable=AsyncMock
+    ) as mock_health:
         mock_health.return_value = {"healthy": False, "validators": {}}
 
         resp = client.get("/ready")
@@ -85,16 +96,6 @@ def test_ready_endpoint_not_ready(client, webhook_server):
         assert resp.status_code == 503
         data = resp.json()
         assert data["ready"] is False
-
-
-def test_metrics_endpoint(client):
-    """Test /metrics endpoint."""
-    resp = client.get("/metrics")
-
-    assert resp.status_code == 200
-    text = resp.text
-    assert "admission_controller_info" in text
-    assert "admission_controller_uptime_seconds" in text
 
 
 def test_validate_endpoint_success(client, webhook_server):
@@ -109,7 +110,9 @@ def test_validate_endpoint_success(client, webhook_server):
         },
     }
 
-    with patch.object(webhook_server.controller, "validate_admission", new_callable=AsyncMock) as mock_validate:
+    with patch.object(
+        webhook_server.controller, "validate_admission", new_callable=AsyncMock
+    ) as mock_validate:
         mock_validate.return_value = AdmissionReviewResponse(
             response=AdmissionResponseBody(uid="test-123", allowed=True),
         )
@@ -134,7 +137,9 @@ def test_validate_endpoint_denial(client, webhook_server):
         },
     }
 
-    with patch.object(webhook_server.controller, "validate_admission", new_callable=AsyncMock) as mock_validate:
+    with patch.object(
+        webhook_server.controller, "validate_admission", new_callable=AsyncMock
+    ) as mock_validate:
         mock_validate.return_value = AdmissionReviewResponse(
             response=AdmissionResponseBody(
                 uid="test-456",
@@ -153,7 +158,9 @@ def test_validate_endpoint_denial(client, webhook_server):
 
 def test_validate_endpoint_invalid_json(client):
     """Test /validate endpoint with invalid JSON."""
-    resp = client.post("/validate", data="invalid json", headers={"Content-Type": "application/json"})
+    resp = client.post(
+        "/validate", data="invalid json", headers={"Content-Type": "application/json"}
+    )
 
     assert resp.status_code == 400
     data = resp.json()
@@ -180,10 +187,16 @@ def test_validate_endpoint_exception_handling(client, webhook_server):
     admission_review = {
         "apiVersion": "admission.k8s.io/v1",
         "kind": "AdmissionReview",
-        "request": {"uid": "test-error", "operation": "CREATE", "object": {"kind": "Pod"}},
+        "request": {
+            "uid": "test-error",
+            "operation": "CREATE",
+            "object": {"kind": "Pod"},
+        },
     }
 
-    with patch.object(webhook_server.controller, "validate_admission", new_callable=AsyncMock) as mock_validate:
+    with patch.object(
+        webhook_server.controller, "validate_admission", new_callable=AsyncMock
+    ) as mock_validate:
         mock_validate.side_effect = Exception("Unexpected error")
 
         resp = client.post("/validate", json=admission_review)
@@ -197,17 +210,186 @@ def test_validate_endpoint_exception_handling(client, webhook_server):
         assert "Internal server error" in data["response"]["status"]["message"]
 
 
-def test_mutate_endpoint_placeholder(client):
-    """Test /mutate endpoint (placeholder for future)."""
-    admission_review = {
+def _decode_mutate_patch(resp_json):
+    import base64
+
+    patch_b64 = resp_json["response"].get("patch")
+    if patch_b64 is None:
+        return []
+    return json.loads(base64.b64decode(patch_b64))
+
+
+def test_mutate_pod_in_chutes_adds_patch(client):
+    """Pod in chutes namespace without automountServiceAccountToken gets patched."""
+    review = {
         "apiVersion": "admission.k8s.io/v1",
         "kind": "AdmissionReview",
-        "request": {"uid": "test-mutate", "operation": "CREATE", "object": {"kind": "Pod"}},
+        "request": {
+            "uid": "sa-pod-1",
+            "operation": "CREATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Pod"},
+            "object": {"spec": {"containers": [{"name": "app", "image": "busybox"}]}},
+        },
     }
-
-    resp = client.post("/mutate", json=admission_review)
-
+    resp = client.post("/mutate", json=review)
     assert resp.status_code == 200
     data = resp.json()
     assert data["response"]["allowed"] is True
-    assert data["response"]["uid"] == "test-mutate"
+    patches = _decode_mutate_patch(data)
+    assert any(
+        p["path"] == "/spec/automountServiceAccountToken" and p["value"] is False
+        for p in patches
+    )
+
+
+def test_mutate_pod_already_false_no_patch(client):
+    """Pod with automountServiceAccountToken: false gets no patch."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-pod-2",
+            "operation": "CREATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Pod"},
+            "object": {
+                "spec": {
+                    "automountServiceAccountToken": False,
+                    "containers": [{"name": "app", "image": "busybox"}],
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["response"]["allowed"] is True
+    assert data["response"].get("patch") is None
+
+
+def test_mutate_job_in_chutes_adds_patch(client):
+    """Job in chutes namespace gets template spec patched."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-job-1",
+            "operation": "CREATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Job"},
+            "object": {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"name": "app", "image": "busybox"}],
+                        }
+                    }
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    patches = _decode_mutate_patch(resp.json())
+    assert any(
+        p["path"] == "/spec/template/spec/automountServiceAccountToken"
+        and p["value"] is False
+        for p in patches
+    )
+
+
+def test_mutate_deployment_in_chutes_adds_patch(client):
+    """Deployment in chutes namespace gets template spec patched."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-deploy-1",
+            "operation": "CREATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Deployment"},
+            "object": {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"name": "app", "image": "busybox"}],
+                        }
+                    }
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    patches = _decode_mutate_patch(resp.json())
+    assert any(
+        p["path"] == "/spec/template/spec/automountServiceAccountToken"
+        and p["value"] is False
+        for p in patches
+    )
+
+
+def test_mutate_cronjob_in_chutes_adds_patch(client):
+    """CronJob in chutes namespace gets nested spec patched."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-cron-1",
+            "operation": "CREATE",
+            "namespace": "chutes",
+            "kind": {"kind": "CronJob"},
+            "object": {
+                "spec": {
+                    "jobTemplate": {
+                        "spec": {
+                            "template": {
+                                "spec": {
+                                    "containers": [{"name": "app", "image": "busybox"}],
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    patches = _decode_mutate_patch(resp.json())
+    assert any(
+        p["path"] == "/spec/jobTemplate/spec/template/spec/automountServiceAccountToken"
+        and p["value"] is False
+        for p in patches
+    )
+
+
+def test_mutate_non_chutes_namespace_no_patch(client):
+    """Pod in a non-chutes namespace gets no patch."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-sys-1",
+            "operation": "CREATE",
+            "namespace": "kube-system",
+            "kind": {"kind": "Pod"},
+            "object": {
+                "spec": {"containers": [{"name": "coredns", "image": "coredns"}]}
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["response"]["allowed"] is True
+    assert data["response"].get("patch") is None
+
+
+def test_mutate_invalid_json(client):
+    """SEK8S-047: Invalid JSON on /mutate returns 400 (not allowed=true)."""
+    resp = client.post(
+        "/mutate", data="not json", headers={"Content-Type": "application/json"}
+    )
+    assert resp.status_code == 400

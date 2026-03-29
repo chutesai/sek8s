@@ -3,13 +3,16 @@
 Shared test fixtures for TEE Admission Controller tests
 """
 
-import os
-import pytest
-from unittest.mock import Mock, AsyncMock
 from pathlib import Path
+from unittest.mock import AsyncMock
 
-from sek8s.services.admission_controller import AdmissionController, AdmissionWebhookServer
+import pytest
+
 from sek8s.config import AdmissionConfig, NamespacePolicy
+from sek8s.services.admission_controller import (
+    AdmissionController,
+    AdmissionWebhookServer,
+)
 from sek8s.validators.base import ValidationResult
 
 
@@ -231,7 +234,9 @@ def invalid_hostpath_review():
                             "name": "app",
                             "image": "docker.io/library/nginx:latest",
                             "resources": {"limits": {"memory": "256Mi"}},
-                            "volumeMounts": [{"name": "host-etc", "mountPath": "/host-etc"}],
+                            "volumeMounts": [
+                                {"name": "host-etc", "mountPath": "/host-etc"}
+                            ],
                         }
                     ],
                     "volumes": [
@@ -276,7 +281,10 @@ def valid_cache_mount_review():
                     "volumes": [
                         {
                             "name": "cache",
-                            "hostPath": {"path": "/cache/app-data", "type": "DirectoryOrCreate"},
+                            "hostPath": {
+                                "path": "/cache/app-data",
+                                "type": "DirectoryOrCreate",
+                            },
                         }
                     ],
                 },
@@ -309,7 +317,9 @@ def deployment_review():
                                 {
                                     "name": "app",
                                     "image": "docker.io/library/nginx:latest",
-                                    "resources": {"limits": {"memory": "256Mi", "cpu": "500m"}},
+                                    "resources": {
+                                        "limits": {"memory": "256Mi", "cpu": "500m"}
+                                    },
                                 }
                             ]
                         },
@@ -347,7 +357,10 @@ def cronjob_review():
                                             "image": "docker.io/library/busybox:latest",
                                             "command": ["echo", "hello"],
                                             "resources": {
-                                                "limits": {"memory": "128Mi", "cpu": "100m"}
+                                                "limits": {
+                                                    "memory": "128Mi",
+                                                    "cpu": "100m",
+                                                }
                                             },
                                         }
                                     ],
@@ -396,7 +409,10 @@ def service_review():
                 "apiVersion": "v1",
                 "kind": "Service",
                 "metadata": {"name": "test-service", "namespace": "default"},
-                "spec": {"selector": {"app": "test"}, "ports": [{"port": 80, "targetPort": 8080}]},
+                "spec": {
+                    "selector": {"app": "test"},
+                    "ports": [{"port": 80, "targetPort": 8080}],
+                },
             },
         },
     }

@@ -5,17 +5,26 @@ from functools import lru_cache
 from typing import Any, Dict, Optional, Tuple
 
 from bittensor_wallet import Keypair
-
-from sek8s.config import MinerConfig
-from fastapi import HTTPException, Header, Request, status
+from fastapi import Header, HTTPException, Request, status
 from loguru import logger
 from substrateinterface import KeypairType
-from sek8s.services._shared import HOTKEY_HEADER, MINER_HEADER, NONCE_HEADER, NONCE_MAX_AGE_SECONDS, SIGNATURE_HEADER, VALIDATOR_HEADER
+
+from sek8s.config import MinerConfig
+from sek8s.services._shared import (
+    HOTKEY_HEADER,
+    MINER_HEADER,
+    NONCE_HEADER,
+    NONCE_MAX_AGE_SECONDS,
+    SIGNATURE_HEADER,
+    VALIDATOR_HEADER,
+)
+
 
 @lru_cache(maxsize=2)
 def get_keypair(ss58: str) -> Keypair:
     """Helper to load keypairs efficiently."""
     return Keypair(ss58_address=ss58, crypto_type=KeypairType.SR25519)
+
 
 async def verify_validator_signature(
     request: Request,
@@ -25,17 +34,18 @@ async def verify_validator_signature(
 ) -> bool:
     """
     Verify Bittensor validator signature - optional authentication.
-    
+
     Uses public-key cryptography (SR25519):
     - Validator signs with their private key
     - Server verifies with public key (derived from validator's SS58 address)
-    
+
     This ensures only authorized validators can access the external endpoints.
     """
     # Lazy import to avoid loading config at module import time
     from sek8s.config import AuthConfig
+
     settings = AuthConfig()
-    
+
     logger.info(f"Checking external request: {validator}:{nonce} - {signature}")
 
     # If some but not all headers provided, reject
@@ -46,23 +56,23 @@ async def verify_validator_signature(
         )
         raise HTTPException(
             status_code=401,
-            detail="Incomplete authentication: requires X-Chutes-Validator, X-Chutes-Nonce, X-Chutes-Signature"
+            detail="Incomplete authentication: requires X-Chutes-Validator, X-Chutes-Nonce, X-Chutes-Signature",
         )
-    
+
     # Verify validator is allowed
     if validator not in settings.allowed_validators:
         logger.warning(f"Unauthorized validator attempted access: {validator}")
-        raise HTTPException(
-            status_code=403,
-            detail="Validator not authorized"
-        )
-    
+        raise HTTPException(status_code=403, detail="Validator not authorized")
+
+    if validator is None or nonce is None or signature is None:
+        raise HTTPException(status_code=401, detail="Missing authentication headers")
+
     # Verify nonce is recent (prevent replay attacks)
     try:
         nonce_timestamp = int(nonce)
         current_time = int(time.time())
         age = current_time - nonce_timestamp
-        
+
         if age >= NONCE_MAX_AGE_SECONDS:
             logger.warning(
                 f"Expired nonce from validator {validator}: "
@@ -70,82 +80,75 @@ async def verify_validator_signature(
             )
             raise HTTPException(
                 status_code=401,
-                detail=f"Nonce expired (age: {age}s, max: {NONCE_MAX_AGE_SECONDS}s)"
+                detail=f"Nonce expired (age: {age}s, max: {NONCE_MAX_AGE_SECONDS}s)",
             )
-        
+
         if age < 0:
             logger.warning(f"Future nonce from validator {validator}: {nonce}")
             raise HTTPException(
-                status_code=401,
-                detail="Invalid nonce (future timestamp)"
+                status_code=401, detail="Invalid nonce (future timestamp)"
             )
-            
+
     except ValueError:
         logger.warning(f"Invalid nonce format from validator {validator}: {nonce}")
         raise HTTPException(
-            status_code=401,
-            detail="Invalid nonce format (must be Unix timestamp)"
+            status_code=401, detail="Invalid nonce format (must be Unix timestamp)"
         )
-    
+
     # Build signature string: validator:nonce:payload_hash
-    if hasattr(request.state, 'body_sha256') and request.state.body_sha256:
+    if hasattr(request.state, "body_sha256") and request.state.body_sha256:
         payload_hash = request.state.body_sha256
     else:
         # For GET requests with no body, use the URL path as the purpose
         payload_hash = request.url.path
-    
+
     # Format: validator:nonce:payload_hash
     signature_string = f"{validator}:{nonce}:{payload_hash}"
-    
+
     # Verify signature using public-key cryptography
     # get_keypair creates a keypair from SS58 address (contains only public key)
     # The verify() method checks if signature was created by the matching private key
     try:
         keypair = get_keypair(validator)
         signature_bytes = bytes.fromhex(signature)
-        
+
         if not keypair.verify(signature_string, signature_bytes):
             logger.warning(
                 f"Invalid signature from validator {validator}: "
                 f"signature_string='{signature_string}'"
             )
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid signature"
-            )
-        
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
         logger.info(f"Successfully authenticated validator {validator}")
         return True
-        
+
     except ValueError as e:
         logger.error(f"Signature hex decode error for validator {validator}: {e}")
         raise HTTPException(
-            status_code=401,
-            detail="Invalid signature format (must be hex)"
+            status_code=401, detail="Invalid signature format (must be hex)"
         )
     except Exception as e:
         logger.error(f"Signature verification error for validator {validator}: {e}")
-        raise HTTPException(
-            status_code=401,
-            detail="Signature verification failed"
-        )
-    
+        raise HTTPException(status_code=401, detail="Signature verification failed")
+
+
 def authorize(
     allow_miner: bool = False,
     allow_validator: bool = False,
-    purpose: Optional[str] = None
+    purpose: Optional[str] = None,
 ):
     """
     Create an authorization dependency for FastAPI routes.
-    
+
     Args:
         allow_miner: Whether to allow miner authentication
         allow_validator: Whether to allow validator authentication
         purpose: Purpose string for signature verification (used when no body)
-    
+
     Returns:
         FastAPI dependency function that validates signatures
     """
+
     def _authorize(
         request: Request,
         hotkey: str | None = Header(None, alias=HOTKEY_HEADER),
@@ -157,49 +160,62 @@ def authorize(
         """
         # Lazy import to avoid loading config at module import time
         from sek8s.config import AuthConfig
+
         settings = AuthConfig()
-        
-        logger.info(f"Authorizing {request.url.path}: {hotkey=} {nonce=} {signature=} {purpose=} {request.state.body_sha256=}")
+
+        logger.info(
+            f"Authorizing {request.url.path}: {hotkey=} {nonce=} {signature=} {purpose=} {request.state.body_sha256=}"
+        )
 
         allowed_signers = []
         if allow_miner:
             if not settings.miner_ss58:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Server misconfiguration: miner_ss58 not configured"
+                    detail="Server misconfiguration: miner_ss58 not configured",
                 )
             allowed_signers.append(settings.miner_ss58)
         if allow_validator:
             if not settings.allowed_validators:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Server misconfiguration: allowed_validators not configured"
+                    detail="Server misconfiguration: allowed_validators not configured",
                 )
             allowed_signers += settings.allowed_validators
         logger.info(f"{allowed_signers=}")
         if (
             any(not v for v in [hotkey, nonce, signature])
             or hotkey not in allowed_signers
-            or int(time.time()) - int(nonce) >= 30
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
             )
-        signature_string = ":".join(
-            [
-                hotkey,
-                nonce,
-                request.state.body_sha256 if request.state.body_sha256 else purpose,
-            ]
+        if hotkey is None or nonce is None or signature is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
+            )
+        if int(time.time()) - int(nonce) >= 30:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
+            )
+        payload_id: str | None = (
+            request.state.body_sha256 if request.state.body_sha256 else purpose
         )
+        if payload_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing payload identifier",
+            )
+        signature_string = ":".join([hotkey, nonce, payload_id])
         logger.info(f"Signature string: {signature_string}")
         if not get_keypair(hotkey).verify(signature_string, bytes.fromhex(signature)):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"go away: (sig): {request.state.body_sha256=} {signature_string=}",
+                detail="Invalid signature",
             )
 
     return _authorize
+
 
 def _get_signing_message(
     hotkey: str,
@@ -225,7 +241,7 @@ def _get_signing_message(
 
 def sign_request(
     payload: Dict[str, Any] | str | None = None,
-    purpose: str = None,
+    purpose: str | None = None,
     management: bool = False,
 ) -> Tuple[Dict[str, str], Optional[str]]:
     """
@@ -233,13 +249,17 @@ def sign_request(
     Uses purpose for GET (no body); uses payload for POST. Returns (headers, payload_str or None).
     """
     miner_settings = MinerConfig()
+    if miner_settings.miner_ss58 is None:
+        raise ValueError("MINER_SS58 must be configured")
+    if miner_settings.miner_keypair is None:
+        raise ValueError("miner_keypair must be configured")
     nonce = str(int(time.time()))
-    headers = {
+    headers: Dict[str, str] = {
         HOTKEY_HEADER: miner_settings.miner_ss58,
         NONCE_HEADER: nonce,
     }
-    signature_string = None
-    payload_string = None
+    signature_string: str | None = None
+    payload_string: str | None = None
     if payload is not None:
         if isinstance(payload, (list, dict)):
             headers["Content-Type"] = "application/json"
@@ -256,10 +276,14 @@ def sign_request(
         signature_string = _get_signing_message(
             miner_settings.miner_ss58, nonce, payload_str=None, purpose=purpose
         )
+    if signature_string is None:
+        raise ValueError("Failed to generate signature string")
     if management:
         signature_string = miner_settings.miner_ss58 + ":" + signature_string
         headers[MINER_HEADER] = headers.pop(HOTKEY_HEADER)
         headers[VALIDATOR_HEADER] = headers[MINER_HEADER]
     logger.debug(f"Signing message: {signature_string}")
-    headers[SIGNATURE_HEADER] = miner_settings.miner_keypair.sign(signature_string.encode()).hex()
-    return headers, payload_string
+    headers[SIGNATURE_HEADER] = miner_settings.miner_keypair.sign(
+        signature_string.encode()
+    ).hex()
+    return (headers, payload_string)

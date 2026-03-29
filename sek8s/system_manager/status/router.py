@@ -22,8 +22,8 @@ from .responses import (
     OverviewResponse,
     ServiceInfo,
     ServiceLogsResponse,
-    ServiceStatusResponse,
     ServicesListResponse,
+    ServiceStatusResponse,
     ShutdownResponse,
 )
 from .util import (
@@ -64,7 +64,9 @@ async def health() -> HealthResponse:
 )
 @aiocache_cached(ttl=30)
 async def list_services(
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ) -> ServicesListResponse:
     return ServicesListResponse(
         services=[
@@ -88,7 +90,9 @@ async def list_services(
 async def get_service_status(
     service_id: str,
     config: SystemStatusConfig = Depends(get_config),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ) -> ServiceStatusResponse:
     service = resolve_service(service_id)
     return await collect_service_status(service, config)
@@ -104,8 +108,12 @@ async def get_service_logs(
     service_id: str,
     config: SystemStatusConfig = Depends(get_config),
     lines: int = Query(200, ge=1, description="Number of recent log lines to return"),
-    since_minutes: int = Query(0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    since_minutes: int = Query(
+        0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"
+    ),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ) -> ServiceLogsResponse:
     service = resolve_service(service_id)
     clamped_lines = max(1, min(lines, config.log_tail_max))
@@ -124,7 +132,9 @@ async def get_service_logs(
         command.append(f"--since={since_time.isoformat()}")
 
     result = await run_command(
-        command, config.command_timeout_seconds, config.max_output_bytes,
+        command,
+        config.command_timeout_seconds,
+        config.max_output_bytes,
         keep_tail=True,
     )
 
@@ -150,8 +160,12 @@ async def get_service_logs(
 async def stream_service_logs(
     service_id: str,
     config: SystemStatusConfig = Depends(get_config),
-    since_minutes: int = Query(0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    since_minutes: int = Query(
+        0, ge=0, le=1440, description="Only logs from last N minutes (0 = no filter)"
+    ),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ):
     service = resolve_service(service_id)
     return StreamingResponse(
@@ -182,6 +196,8 @@ async def _stream_journal(service, since_minutes: int, config: SystemStatusConfi
     )
 
     try:
+        if process.stdout is None:
+            return
         async for raw_line in process.stdout:
             yield raw_line.decode("utf-8", errors="replace")
     except (asyncio.CancelledError, GeneratorExit):
@@ -204,7 +220,9 @@ async def _stream_journal(service, since_minutes: int, config: SystemStatusConfi
 async def nvidia_smi(
     detail: bool = Query(False, description="Return detailed (-q) output"),
     gpu: str = Query("all", description="GPU index or 'all'"),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ) -> NvidiaSmiResponse:
     return await nvidia_smi_impl(detail, gpu, get_config)
 
@@ -218,7 +236,9 @@ async def nvidia_smi(
 @aiocache_cached(ttl=30)
 async def overview(
     config: SystemStatusConfig = Depends(get_config),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ) -> OverviewResponse:
     services = await asyncio.gather(
         *(
@@ -263,7 +283,9 @@ async def get_disk_space(
         False,
         description="Cross filesystem boundaries (include mounted volumes)",
     ),
-    _auth: bool = Depends(authorize(allow_miner=True, allow_validator=True, purpose="status")),
+    _auth: bool = Depends(
+        authorize(allow_miner=True, allow_validator=True, purpose="status")
+    ),
 ):
     validated_path = validate_path(path)
 
@@ -278,8 +300,10 @@ async def get_disk_space(
     "/system/shutdown",
     response_model=ShutdownResponse,
     summary="Graceful system shutdown",
-    description="Initiates a graceful system shutdown (requires miner authentication)",
-    dependencies=[Depends(authorize(allow_miner=True, allow_validator=True, purpose="status"))],
+    description="Initiates a graceful system shutdown (miner-only, validators excluded)",
+    dependencies=[
+        Depends(authorize(allow_miner=True, allow_validator=False, purpose="status"))
+    ],
 )
 async def shutdown_system() -> ShutdownResponse:
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -290,7 +314,10 @@ async def shutdown_system() -> ShutdownResponse:
         logger.critical("Executing graceful shutdown...")
         try:
             process = await asyncio.create_subprocess_exec(
-                "sudo", "/sbin/shutdown", "-h", "now",
+                "sudo",
+                "/sbin/shutdown",
+                "-h",
+                "now",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

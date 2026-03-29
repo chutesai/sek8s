@@ -18,7 +18,7 @@ class ValidationResult:
     warnings: List[str] = field(default_factory=list)
 
     @classmethod
-    def allow(cls, message: str = None, warning: str = None):
+    def allow(cls, message: Optional[str] = None, warning: Optional[str] = None):
         """Create an allowed result."""
         result = cls(allowed=True)
         if message:
@@ -63,7 +63,6 @@ class ValidatorBase(ABC):
         Returns:
             ValidationResult with decision and messages
         """
-        pass
 
     async def health_check(self) -> bool:
         """
@@ -85,16 +84,25 @@ class ValidatorBase(ABC):
         if "containers" in spec:
             images.extend([c.get("image", "") for c in spec.get("containers", [])])
             images.extend([c.get("image", "") for c in spec.get("initContainers", [])])
-            images.extend([c.get("image", "") for c in spec.get("ephemeralContainers", [])])
+            images.extend(
+                [c.get("image", "") for c in spec.get("ephemeralContainers", [])]
+            )
 
         # Deployment, StatefulSet, DaemonSet, Job, CronJob
         template = spec.get("template", {})
         if template:
             template_spec = template.get("spec", {})
-            images.extend([c.get("image", "") for c in template_spec.get("containers", [])])
-            images.extend([c.get("image", "") for c in template_spec.get("initContainers", [])])
             images.extend(
-                [c.get("image", "") for c in template_spec.get("ephemeralContainers", [])]
+                [c.get("image", "") for c in template_spec.get("containers", [])]
+            )
+            images.extend(
+                [c.get("image", "") for c in template_spec.get("initContainers", [])]
+            )
+            images.extend(
+                [
+                    c.get("image", "")
+                    for c in template_spec.get("ephemeralContainers", [])
+                ]
             )
 
         # CronJob has an additional level
@@ -102,7 +110,14 @@ class ValidatorBase(ABC):
         if job_template:
             job_spec = job_template.get("spec", {})
             job_template_spec = job_spec.get("template", {}).get("spec", {})
-            images.extend([c.get("image", "") for c in job_template_spec.get("containers", [])])
-            images.extend([c.get("image", "") for c in job_template_spec.get("initContainers", [])])
+            images.extend(
+                [c.get("image", "") for c in job_template_spec.get("containers", [])]
+            )
+            images.extend(
+                [
+                    c.get("image", "")
+                    for c in job_template_spec.get("initContainers", [])
+                ]
+            )
 
         return [img for img in images if img]  # Filter out empty strings

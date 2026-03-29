@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -12,7 +11,7 @@ from loguru import logger
 
 from sek8s.config import SystemStatusConfig
 
-from .models import CommandResult, ServiceDefinition, SERVICE_ALLOWLIST
+from .models import SERVICE_ALLOWLIST, CommandResult, ServiceDefinition
 from .responses import (
     DirectoryInfo,
     DiskSpaceResponse,
@@ -85,14 +84,18 @@ async def run_command(
         ) from exc
 
     stdout, stdout_truncated = truncate(
-        stdout_bytes.decode("utf-8", errors="replace"), limit, keep_tail=keep_tail,
+        stdout_bytes.decode("utf-8", errors="replace"),
+        limit,
+        keep_tail=keep_tail,
     )
     stderr, stderr_truncated = truncate(
-        stderr_bytes.decode("utf-8", errors="replace"), limit, keep_tail=keep_tail,
+        stderr_bytes.decode("utf-8", errors="replace"),
+        limit,
+        keep_tail=keep_tail,
     )
 
     result = CommandResult(
-        exit_code=process.returncode,
+        exit_code=process.returncode if process.returncode is not None else -1,
         stdout=stdout,
         stderr=stderr,
         stdout_truncated=stdout_truncated,
@@ -100,7 +103,9 @@ async def run_command(
     )
 
     if result.exit_code != 0:
-        logger.warning("Command {} returned exit code {}", command_name, result.exit_code)
+        logger.warning(
+            "Command {} returned exit code {}", command_name, result.exit_code
+        )
 
     return result
 
@@ -148,6 +153,11 @@ async def collect_service_status(
         )
     except HTTPException as exc:
         if tolerate_errors:
+            error_value = (
+                exc.detail
+                if isinstance(exc.detail, dict)
+                else {"error": str(exc.detail)}
+            )
             return ServiceStatusResponse(
                 service=ServiceInfo(
                     id=service.service_id,
@@ -156,7 +166,7 @@ async def collect_service_status(
                 ),
                 status=None,
                 healthy=False,
-                error=exc.detail,
+                error=error_value,
             )
         raise
 
@@ -199,6 +209,7 @@ async def collect_service_status(
         ),
         status=status,
         healthy=is_service_healthy(status),
+        error=None,
     )
 
 
@@ -247,11 +258,12 @@ def parse_du_line(line: str) -> tuple[int, str]:
 
 def human_readable_size(size_bytes: int) -> str:
     """Convert bytes to human-readable format."""
+    size: float = size_bytes
     for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if size_bytes < 1024.0:
-            return f"{size_bytes:.1f} {unit}"
-        size_bytes /= 1024.0
-    return f"{size_bytes:.1f} PB"
+        if size < 1024.0:
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} PB"
 
 
 def _parse_df_line(line: str) -> Optional[FilesystemInfo]:
@@ -364,7 +376,9 @@ async def get_disk_space_simple(
         )
 
     directories.sort(key=lambda d: d.size_bytes, reverse=True)
-    total_bytes = parent_size if parent_size > 0 else sum(d.size_bytes for d in directories)
+    total_bytes = (
+        parent_size if parent_size > 0 else sum(d.size_bytes for d in directories)
+    )
 
     if total_bytes > 0:
         for d in directories:
@@ -378,6 +392,8 @@ async def get_disk_space_simple(
         total_size_human=human_readable_size(total_bytes),
         stdout_truncated=result.stdout_truncated,
         diagnostic_mode=False,
+        max_depth=None,
+        top_n=None,
         filesystems=filesystems,
     )
 

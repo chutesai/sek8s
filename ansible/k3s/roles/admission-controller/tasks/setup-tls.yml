@@ -11,7 +11,7 @@
       block:
         - name: Generate private key
           ansible.builtin.command:
-            cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 2048
+            cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 4096
             creates: /etc/admission-controller/certs/server.key
 
         - name: Create OpenSSL config for certificate with SANs

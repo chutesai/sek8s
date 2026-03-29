@@ -1,0 +1,18 @@
+# Authorization webhook kubeconfig — used by kube-apiserver to send
+# SubjectAccessReview requests to the admission controller's /authorize endpoint.
+apiVersion: v1
+kind: Config
+clusters:
+  - name: authz-webhook
+    cluster:
+      server: https://127.0.0.1:{{ admission_port | default(8443) }}/authorize
+      certificate-authority: /etc/admission-controller/certs/server.crt
+users:
+  - name: apiserver
+    user: {}
+current-context: authz-webhook
+contexts:
+  - name: authz-webhook
+    context:
+      cluster: authz-webhook
+      user: apiserver

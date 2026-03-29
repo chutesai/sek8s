@@ -1,8 +1,8 @@
 import logging
 from typing import Dict
 
-from sek8s.validators.base import ValidatorBase, ValidationResult
 from sek8s.image_utils import extract_registry
+from sek8s.validators.base import ValidationResult, ValidatorBase
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,9 @@ class RegistryValidator(ValidatorBase):
         if violations:
             # Check enforcement mode
             ns_policy = self.config.get_namespace_policy(namespace)
-            enforcement_mode = ns_policy.mode if ns_policy else self.config.enforcement_mode
+            enforcement_mode = (
+                ns_policy.mode if ns_policy else self.config.enforcement_mode
+            )
 
             if enforcement_mode == "monitor":
                 logger.info("Registry violations (monitor mode): %s", violations)

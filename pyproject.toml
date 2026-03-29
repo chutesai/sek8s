@@ -44,6 +44,10 @@ mypy = "^1.9.0"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+norecursedirs = ["tests/security"]
+asyncio_mode = "strict"
+
 [tool.poetry.scripts]
 admission-controller = 'sek8s.services.admission_controller:run'
 attestation-service = 'sek8s.services.attestation:run'
@@ -74,3 +78,15 @@ exclude_also = [
 ]
 omit = [
 ]
+
+[tool.mypy]
+ignore_missing_imports = false
+
+[[tool.mypy.overrides]]
+module = [
+    "pynvml",
+    "substrateinterface",
+    "aiocache",
+    "bittensor_wallet",
+]
+ignore_missing_imports = true

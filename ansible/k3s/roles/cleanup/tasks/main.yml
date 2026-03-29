@@ -15,6 +15,10 @@
   ansible.builtin.include_tasks: admission-controller-drop-ins.yml
   when: inventory_hostname in groups['vm']
 
+- name: Deploy admission webhook manifest
+  ansible.builtin.include_tasks: deploy-admission-webhook.yml
+  when: inventory_hostname in groups['vm']
+
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
   when: inventory_hostname in groups['vm']

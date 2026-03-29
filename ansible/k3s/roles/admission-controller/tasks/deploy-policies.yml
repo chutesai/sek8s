@@ -12,6 +12,14 @@
         - "files/policies/*.rego"
       register: policy_files
 
+    - name: Deploy OPA config data (validator registry for policy rules)
+      ansible.builtin.template:
+        src: opa-config-data.json.j2
+        dest: /etc/opa/policies/config.json
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Validate OPA policies (opa check; policy tests live in tests/opa, run locally)
       ansible.builtin.command:
         cmd: opa check /etc/opa/policies

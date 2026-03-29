@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
-    status: str = Field(..., description="Health status", example="ok")
+    status: str = Field(..., description="Health status", examples=["ok"])
 
 
 class ServiceInfo(BaseModel):
@@ -35,7 +35,9 @@ class ServiceStatusResponse(BaseModel):
     service: ServiceInfo
     status: Optional[ServiceStatus] = Field(None, description="Service status details")
     healthy: bool = Field(..., description="Whether service is healthy")
-    error: Optional[Dict[str, Any]] = Field(None, description="Error details if status check failed")
+    error: Optional[Dict[str, Any]] = Field(
+        None, description="Error details if status check failed"
+    )
 
 
 class ServiceLogsResponse(BaseModel):
@@ -57,12 +59,14 @@ class NvidiaSmiResponse(BaseModel):
     stderr_truncated: bool = Field(..., description="Whether stderr was truncated")
     detail: bool = Field(..., description="Whether detailed output was requested")
     gpu: str = Field(..., description="GPU index or 'all'")
-    status: str = Field(..., description="Status of the command", example="ok")
+    status: str = Field(..., description="Status of the command", examples=["ok"])
 
 
 class OverviewResponse(BaseModel):
-    status: str = Field(..., description="Overall system status", example="ok")
-    services: List[ServiceStatusResponse] = Field(..., description="Status of all monitored services")
+    status: str = Field(..., description="Overall system status", examples=["ok"])
+    services: List[ServiceStatusResponse] = Field(
+        ..., description="Status of all monitored services"
+    )
     gpu: NvidiaSmiResponse = Field(..., description="GPU status from nvidia-smi")
     timestamp: str = Field(..., description="ISO 8601 timestamp of the report")
 
@@ -87,19 +91,35 @@ class FilesystemInfo(BaseModel):
     available_bytes: int = Field(..., description="Available size in bytes")
     total_human: str = Field(..., description="Total size in human-readable format")
     used_human: str = Field(..., description="Used size in human-readable format")
-    available_human: str = Field(..., description="Available size in human-readable format")
-    used_percent: float = Field(..., description="Percentage of filesystem capacity used")
+    available_human: str = Field(
+        ..., description="Available size in human-readable format"
+    )
+    used_percent: float = Field(
+        ..., description="Percentage of filesystem capacity used"
+    )
 
 
 class DiskSpaceResponse(BaseModel):
     path: str = Field(..., description="Parent directory path")
-    directories: List[DirectoryInfo] = Field(..., description="List of immediate subdirectories with sizes")
-    total_size_bytes: int = Field(..., description="Total size of all directories in bytes")
-    total_size_human: str = Field(..., description="Total size in human-readable format")
+    directories: List[DirectoryInfo] = Field(
+        ..., description="List of immediate subdirectories with sizes"
+    )
+    total_size_bytes: int = Field(
+        ..., description="Total size of all directories in bytes"
+    )
+    total_size_human: str = Field(
+        ..., description="Total size in human-readable format"
+    )
     stdout_truncated: bool = Field(..., description="Whether output was truncated")
-    diagnostic_mode: bool = Field(False, description="Whether diagnostic mode was enabled")
-    max_depth: Optional[int] = Field(None, description="Maximum depth analyzed in diagnostic mode")
-    top_n: Optional[int] = Field(None, description="Number of top offenders shown per level")
+    diagnostic_mode: bool = Field(
+        False, description="Whether diagnostic mode was enabled"
+    )
+    max_depth: Optional[int] = Field(
+        None, description="Maximum depth analyzed in diagnostic mode"
+    )
+    top_n: Optional[int] = Field(
+        None, description="Number of top offenders shown per level"
+    )
     filesystems: Optional[List[FilesystemInfo]] = Field(
         None,
         description="Filesystem capacity (one entry for path's mount, or all mounts when path is /)",
@@ -107,6 +127,6 @@ class DiskSpaceResponse(BaseModel):
 
 
 class ShutdownResponse(BaseModel):
-    status: str = Field(..., description="Shutdown status", example="initiated")
+    status: str = Field(..., description="Shutdown status", examples=["initiated"])
     message: str = Field(..., description="Shutdown message")
     timestamp: str = Field(..., description="ISO 8601 timestamp of shutdown request")

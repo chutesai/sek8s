@@ -141,11 +141,6 @@
       ansible.builtin.shell: |
         find /var/lib/rancher/k3s -name "*.kubeconfig" -delete
 
-    - name: Delete k3s config marker (will be recreated on first boot)
-      ansible.builtin.file:
-        path: /var/lib/rancher/k3s/.initialized
-        state: absent
-
     - name: Delete k3s config.yaml (will be recreated on first boot)
       ansible.builtin.file:
         path: /etc/rancher/k3s/config.yaml

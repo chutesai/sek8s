@@ -7,6 +7,7 @@ Every endpoint delegates to CacheManager / ChuteModel via
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -14,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sek8s.services.util import authorize
 
 from .manager import CacheManager
-from .models import CacheChuteStatusEnum, CleanupRequest, ChuteSnapshot, DownloadRequest
+from .models import CacheChuteStatusEnum, ChuteSnapshot, CleanupRequest, DownloadRequest
 from .responses import (
     CacheChuteStatus,
     CacheCleanupResponse,
@@ -27,6 +28,15 @@ from .responses import (
 from .util import fetch_hf_info
 
 router = APIRouter()
+
+
+def _validate_chute_id(chute_id: str) -> str:
+    """Validate chute_id is a well-formed UUID. Raises HTTPException if not."""
+    try:
+        uuid.UUID(chute_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=400, detail="chute_id must be a valid UUID")
+    return chute_id
 
 
 def _snap_to_status(snap: ChuteSnapshot) -> CacheChuteStatus:
@@ -70,18 +80,20 @@ async def download(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadResponse:
-    chute_id = request.chute_id
-    if not chute_id or len(chute_id) != 36:
-        raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
+    chute_id = _validate_chute_id(request.chute_id)
 
     await mgr.sync_from_disk()
     chute = await mgr.get_or_create(chute_id)
 
     if chute.is_in_progress:
-        return CacheDownloadResponse(chute_id=chute_id, status=CacheDownloadStatus.IN_PROGRESS)
+        return CacheDownloadResponse(
+            chute_id=chute_id, status=CacheDownloadStatus.IN_PROGRESS
+        )
 
     if chute.status == CacheChuteStatusEnum.PRESENT and not force:
-        return CacheDownloadResponse(chute_id=chute_id, status=CacheDownloadStatus.PRESENT)
+        return CacheDownloadResponse(
+            chute_id=chute_id, status=CacheDownloadStatus.PRESENT
+        )
 
     try:
         info = await fetch_hf_info(chute_id)
@@ -111,9 +123,23 @@ async def download_status(
         chute = await mgr.get(chute_id)
         if chute is None:
             return CacheDownloadStatusResponse(
-                chutes=[CacheChuteStatus(chute_id=chute_id, status=CacheChuteStatusEnum.MISSING)]
+                chutes=[
+                    CacheChuteStatus(
+                        chute_id=chute_id,
+                        status=CacheChuteStatusEnum.MISSING,
+                        percent_complete=None,
+                        download_rate=None,
+                        eta_seconds=None,
+                        repo_id=None,
+                        revision=None,
+                        size_bytes=None,
+                        error=None,
+                    )
+                ]
             )
-        return CacheDownloadStatusResponse(chutes=[_snap_to_status(await chute.snapshot())])
+        return CacheDownloadStatusResponse(
+            chutes=[_snap_to_status(await chute.snapshot())]
+        )
 
     snapshots = await mgr.all_snapshots()
     return CacheDownloadStatusResponse(chutes=[_snap_to_status(s) for s in snapshots])
@@ -125,19 +151,22 @@ async def download_status(
 )
 async def delete_chute(
     chute_id: str,
-    force: bool = Query(False, description="Force delete even if download is in progress"),
+    force: bool = Query(
+        False, description="Force delete even if download is in progress"
+    ),
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> dict:
-    if len(chute_id) != 36:
-        raise HTTPException(status_code=400, detail="chute_id must be a 36-char UUID")
+    _validate_chute_id(chute_id)
 
     await mgr.sync_from_disk()
     chute = await mgr.get(chute_id)
     if chute is None:
         return {"status": "ok", "message": "not found"}
     if chute.is_in_progress and not force:
-        raise HTTPException(status_code=409, detail="Download in progress for this chute")
+        raise HTTPException(
+            status_code=409, detail="Download in progress for this chute"
+        )
 
     await mgr.remove(chute_id)
     return {"status": "ok", "message": "deleted"}
@@ -158,7 +187,9 @@ async def cleanup(
     await mgr.sync_from_disk()
     age = body.max_age_days if body else max_age_days
     size = body.max_size_gb if body else max_size_gb
-    exclude = (body.exclude_pattern if body else None) or os.environ.get("CLEANUP_EXCLUDE")
+    exclude = (body.exclude_pattern if body else None) or os.environ.get(
+        "CLEANUP_EXCLUDE"
+    )
 
     result = await mgr.cleanup(age, size, exclude)
     return CacheCleanupResponse(

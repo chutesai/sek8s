@@ -31,6 +31,26 @@
       "names": ["init_module", "finit_module", "delete_module"],
       "action": "SCMP_ACT_ERRNO",
       "errno": "EPERM"
+    },
+    {
+      "names": ["process_vm_readv", "process_vm_writev", "ptrace"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["io_uring_setup", "io_uring_enter", "io_uring_register"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["userfaultfd"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
+    },
+    {
+      "names": ["perf_event_open"],
+      "action": "SCMP_ACT_ERRNO",
+      "errno": "EPERM"
     }
   ]
 }

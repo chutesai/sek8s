@@ -5,12 +5,11 @@ Before=admission-controller.service
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=opa
+Group=opa
 ExecStart=/usr/local/bin/opa run --server \
     --config-file=/etc/opa/opa.yaml \
     --addr=localhost:8181 \
-    --diagnostic-addr=0.0.0.0:8282 \
     --log-level=info \
     /etc/opa/policies
 Restart=always

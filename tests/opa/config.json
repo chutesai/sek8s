@@ -1,0 +1,5 @@
+{
+  "config": {
+    "validator_registry": "testvalidator.localregistry.chutes.ai:30500"
+  }
+}

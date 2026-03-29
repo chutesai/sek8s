@@ -56,9 +56,11 @@ class MetricsCollector:
         lines = []
 
         # Info metric
-        lines.append("# HELP admission_controller_info Admission controller information")
+        lines.append(
+            "# HELP admission_controller_info Admission controller information"
+        )
         lines.append("# TYPE admission_controller_info gauge")
-        lines.append(f'admission_controller_info{{version="1.0.0"}} 1')
+        lines.append('admission_controller_info{version="1.0.0"} 1')
 
         # Uptime
         uptime = time.time() - self.start_time
@@ -73,7 +75,9 @@ class MetricsCollector:
             lines.append(f'admission_requests_total{{decision="{decision}"}} {count}')
 
         # By kind
-        lines.append("# HELP admission_requests_by_kind_total Admission requests by kind")
+        lines.append(
+            "# HELP admission_requests_by_kind_total Admission requests by kind"
+        )
         lines.append("# TYPE admission_requests_by_kind_total counter")
         for kind_decision, count in self.admission_by_kind.items():
             parts = kind_decision.rsplit("_", 1)
@@ -84,7 +88,9 @@ class MetricsCollector:
                 )
 
         # By operation
-        lines.append("# HELP admission_requests_by_operation_total Admission requests by operation")
+        lines.append(
+            "# HELP admission_requests_by_operation_total Admission requests by operation"
+        )
         lines.append("# TYPE admission_requests_by_operation_total counter")
         for op_decision, count in self.admission_by_operation.items():
             parts = op_decision.rsplit("_", 1)
@@ -96,8 +102,9 @@ class MetricsCollector:
 
         # Duration
         if self.admission_duration_count > 0:
-            avg_duration = self.admission_duration_sum / self.admission_duration_count
-            lines.append("# HELP admission_request_duration_seconds Request processing duration")
+            lines.append(
+                "# HELP admission_request_duration_seconds Request processing duration"
+            )
             lines.append("# TYPE admission_request_duration_seconds summary")
             lines.append(
                 f"admission_request_duration_seconds_sum {self.admission_duration_sum:.4f}"
@@ -120,7 +127,9 @@ class MetricsCollector:
             lines.append("# HELP admission_validator_errors_total Validator errors")
             lines.append("# TYPE admission_validator_errors_total counter")
             for validator, count in self.validator_errors.items():
-                lines.append(f'admission_validator_errors_total{{validator="{validator}"}} {count}')
+                lines.append(
+                    f'admission_validator_errors_total{{validator="{validator}"}} {count}'
+                )
 
         return "\n".join(lines) + "\n"
 
@@ -134,9 +143,11 @@ class MetricsCollector:
             "admission_duration": {
                 "sum": self.admission_duration_sum,
                 "count": self.admission_duration_count,
-                "average": self.admission_duration_sum / self.admission_duration_count
-                if self.admission_duration_count > 0
-                else 0,
+                "average": (
+                    self.admission_duration_sum / self.admission_duration_count
+                    if self.admission_duration_count > 0
+                    else 0
+                ),
             },
             "cache": {"hits": self.cache_hits, "misses": self.cache_misses},
             "validator_errors": dict(self.validator_errors),

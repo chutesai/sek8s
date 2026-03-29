@@ -11,14 +11,14 @@ Prerequisites:
 
 import json
 import subprocess
-import pytest
 import tempfile
 from pathlib import Path
 
-from sek8s.config import AdmissionConfig, CosignConfig
-from sek8s.validators.cosign import CosignValidator
-from sek8s.validators.base import ValidationResult
+import pytest
 
+from sek8s.config import AdmissionConfig, CosignConfig
+from sek8s.validators.base import ValidationResult
+from sek8s.validators.cosign import CosignValidator
 
 # Test configuration
 REGISTRY_URL = "localhost:5000"
@@ -35,7 +35,13 @@ def check_prerequisites():
     # Check registry
     try:
         subprocess.run(
-            ["curl", "-f", "--connect-timeout", str(CURL_TIMEOUT), f"http://{REGISTRY_URL}/v2/"],
+            [
+                "curl",
+                "-f",
+                "--connect-timeout",
+                str(CURL_TIMEOUT),
+                f"http://{REGISTRY_URL}/v2/",
+            ],
             check=True,
             capture_output=True,
             timeout=CURL_TIMEOUT + 2,
@@ -48,18 +54,32 @@ def check_prerequisites():
     # Check OPA
     try:
         subprocess.run(
-            ["curl", "-f", "--connect-timeout", str(CURL_TIMEOUT), "http://localhost:8181/health"],
+            [
+                "curl",
+                "-f",
+                "--connect-timeout",
+                str(CURL_TIMEOUT),
+                "http://localhost:8181/health",
+            ],
             check=True,
             capture_output=True,
             timeout=CURL_TIMEOUT + 2,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        pytest.skip("OPA not available at localhost:8181. Run 'make integration-setup' first.")
+        pytest.skip(
+            "OPA not available at localhost:8181. Run 'make integration-setup' first."
+        )
 
     # Check test images exist
     try:
         result = subprocess.run(
-            ["curl", "-s", "--connect-timeout", str(CURL_TIMEOUT), f"http://{REGISTRY_URL}/v2/test-app/tags/list"],
+            [
+                "curl",
+                "-s",
+                "--connect-timeout",
+                str(CURL_TIMEOUT),
+                f"http://{REGISTRY_URL}/v2/test-app/tags/list",
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -73,7 +93,9 @@ def check_prerequisites():
         missing_tags = [tag for tag in expected_tags if tag not in tags]
 
         if missing_tags:
-            pytest.skip(f"Missing test images: {missing_tags}. Run 'make integration-setup' first.")
+            pytest.skip(
+                f"Missing test images: {missing_tags}. Run 'make integration-setup' first."
+            )
 
     except (subprocess.CalledProcessError, json.JSONDecodeError):
         pytest.skip("Test images not available. Run 'make integration-setup' first.")
@@ -247,9 +269,9 @@ def test_registry_extraction():
 
     for image, expected_registry in test_cases:
         actual_registry = extract_registry(image)
-        assert actual_registry == expected_registry, (
-            f"Expected {expected_registry} for image {image}, got {actual_registry}"
-        )
+        assert (
+            actual_registry == expected_registry
+        ), f"Expected {expected_registry} for image {image}, got {actual_registry}"
 
 
 # Configuration-based tests
@@ -263,9 +285,9 @@ async def test_signed_image_with_key_verification(config, default_cosign_config)
     result = await validator.validate(admission_review)
 
     assert isinstance(result, ValidationResult)
-    assert result.allowed is True, (
-        f"Expected signed image to be allowed, but got: {result.messages}"
-    )
+    assert (
+        result.allowed is True
+    ), f"Expected signed image to be allowed, but got: {result.messages}"
 
 
 @pytest.mark.asyncio
@@ -280,13 +302,15 @@ async def test_unsigned_image_with_key_verification(config, default_cosign_confi
     assert isinstance(result, ValidationResult)
     assert result.allowed is False, "Expected unsigned image to be rejected"
     assert len(result.messages) > 0
-    assert any("invalid or missing signature" in msg.lower() for msg in result.messages), (
-        f"Expected verification failure message, got: {result.messages}"
-    )
+    assert any(
+        "invalid or missing signature" in msg.lower() for msg in result.messages
+    ), f"Expected verification failure message, got: {result.messages}"
 
 
 @pytest.mark.asyncio
-async def test_unsigned_image_with_disabled_verification(config, disabled_cosign_config):
+async def test_unsigned_image_with_disabled_verification(
+    config, disabled_cosign_config
+):
     """Test that unsigned images are allowed when verification is disabled."""
     validator = create_cosign_validator_with_config(config, disabled_cosign_config)
     image_name = f"{REGISTRY_URL}/test-app:unsigned"
@@ -295,27 +319,33 @@ async def test_unsigned_image_with_disabled_verification(config, disabled_cosign
     result = await validator.validate(admission_review)
 
     assert isinstance(result, ValidationResult)
-    assert result.allowed is True, (
-        "Expected unsigned image to be allowed when verification disabled"
-    )
+    assert (
+        result.allowed is True
+    ), "Expected unsigned image to be allowed when verification disabled"
 
 
 @pytest.mark.asyncio
 async def test_mixed_registry_configuration(config, mixed_registry_cosign_config):
     """Test different verification methods for different registries."""
-    validator = create_cosign_validator_with_config(config, mixed_registry_cosign_config)
+    validator = create_cosign_validator_with_config(
+        config, mixed_registry_cosign_config
+    )
 
     # Test local registry (key verification required)
     local_image = f"{REGISTRY_URL}/test-app:signed"
     local_review = create_admission_review(local_image)
     result = await validator.validate(local_review)
-    assert result.allowed is True, f"Expected signed local image to be allowed: {result.messages}"
+    assert (
+        result.allowed is True
+    ), f"Expected signed local image to be allowed: {result.messages}"
 
     # Test Docker Hub image (verification disabled)
     docker_image = "nginx:latest"
     docker_review = create_admission_review(docker_image)
     result = await validator.validate(docker_review)
-    assert result.allowed is True, "Expected Docker Hub image to be allowed (verification disabled)"
+    assert (
+        result.allowed is True
+    ), "Expected Docker Hub image to be allowed (verification disabled)"
 
 
 @pytest.mark.asyncio
@@ -330,9 +360,9 @@ async def test_wrong_signature_with_key_verification(config, default_cosign_conf
     assert isinstance(result, ValidationResult)
     assert result.allowed is False, "Expected image with wrong signature to be rejected"
     assert len(result.messages) > 0
-    assert any("invalid or missing signature" in msg.lower() for msg in result.messages), (
-        f"Expected signature verification failure, got: {result.messages}"
-    )
+    assert any(
+        "invalid or missing signature" in msg.lower() for msg in result.messages
+    ), f"Expected signature verification failure, got: {result.messages}"
 
 
 @pytest.mark.asyncio
@@ -368,7 +398,11 @@ async def test_no_registry_configuration_match(config):
     # Create config with only docker.io registry
     config_data = {
         "registries": [
-            {"registry": "docker.io", "require_signature": False, "verification_method": "disabled"}
+            {
+                "registry": "docker.io",
+                "require_signature": False,
+                "verification_method": "disabled",
+            }
         ]
     }
     config_file = create_cosign_config_file(config_data)
@@ -384,7 +418,9 @@ async def test_no_registry_configuration_match(config):
 
     # Should be allowed since no configuration means skip verification
     assert isinstance(result, ValidationResult)
-    assert result.allowed is True, "Expected image to be allowed when no registry config matches"
+    assert (
+        result.allowed is True
+    ), "Expected image to be allowed when no registry config matches"
 
 
 @pytest.mark.asyncio
@@ -409,7 +445,9 @@ async def test_keyless_verification_configuration():
     assert registry_config is not None
     assert registry_config.verification_method == "keyless"
     assert registry_config.keyless_identity_regex == "^https://github.com/myorg/.*"
-    assert registry_config.keyless_issuer == "https://token.actions.githubusercontent.com"
+    assert (
+        registry_config.keyless_issuer == "https://token.actions.githubusercontent.com"
+    )
 
 
 @pytest.mark.asyncio
@@ -417,7 +455,9 @@ async def test_mixed_containers_with_different_registry_policies(
     config, mixed_registry_cosign_config
 ):
     """Test pod with containers from different registries with different policies."""
-    validator = create_cosign_validator_with_config(config, mixed_registry_cosign_config)
+    validator = create_cosign_validator_with_config(
+        config, mixed_registry_cosign_config
+    )
 
     admission_review = {
         "apiVersion": "admission.k8s.io/v1",
@@ -590,9 +630,9 @@ def test_prerequisites_verification():
     repositories = catalog.get("repositories", [])
 
     # Check that our test images are available
-    assert "test-app" in repositories, (
-        f"Expected repository test-app not found in catalog: {repositories}"
-    )
+    assert (
+        "test-app" in repositories
+    ), f"Expected repository test-app not found in catalog: {repositories}"
 
     # Check tags for test-app
     result = subprocess.run(
@@ -611,10 +651,12 @@ def test_prerequisites_verification():
 
     # Check cosign keys
     assert COSIGN_KEY_PATH.exists(), f"Cosign public key not found at {COSIGN_KEY_PATH}"
-    assert WRONG_KEY_PATH.exists(), f"Wrong cosign public key not found at {WRONG_KEY_PATH}"
+    assert (
+        WRONG_KEY_PATH.exists()
+    ), f"Wrong cosign public key not found at {WRONG_KEY_PATH}"
 
-    print(f"✓ All prerequisites verified:")
+    print("✓ All prerequisites verified:")
     print(f"  - Registry: {REGISTRY_URL}")
-    print(f"  - OPA: localhost:8181")
+    print("  - OPA: localhost:8181")
     print(f"  - Test images: {tags}")
     print(f"  - Cosign keys: {COSIGN_KEY_PATH.parent}")

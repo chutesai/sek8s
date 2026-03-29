@@ -378,9 +378,16 @@ spec:
     - protocol: UDP
       port: 53
   
-  # Allow other necessary egress (adjust as needed for your workloads)
+  # Allow external internet egress, block intra-cluster traffic.
+  # Chute workloads need internet (model downloads, API calls) but should
+  # not reach any other cluster services. Attestation access is handled
+  # by the explicit rule above.
   - to:
-    - namespaceSelector: {}
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - {{ cluster_cidr | default('10.42.0.0/16') }}
+        - {{ service_cidr | default('10.43.0.0/16') }}
     ports:
     - protocol: TCP
 
