@@ -259,10 +259,15 @@ def setup_host(profile: HostProfile):
     kernel_version = _get_kernel_version(profile.kernel_package)
     print(f"  Kernel version resolved: {kernel_version}")
 
-    # linux-modules-extra may not be pulled in by the metapackage
+    # linux-modules-extra may not be pulled in by the metapackage;
+    # not all kernel builds ship it as a separate package (e.g. 25.10 generic).
     modules_extra = f"linux-modules-extra-{kernel_version}"
     print(f"  Ensuring {modules_extra} is installed...")
-    _run(["apt", "install", "--yes", "--allow-downgrades", modules_extra])
+    result = subprocess.run(
+        ["apt", "install", "--yes", "--allow-downgrades", modules_extra],
+    )
+    if result.returncode != 0:
+        print(f"  {modules_extra} not available (may be built into the kernel package)")
 
     # 4. Set kernel as default boot
     print(f"\nStep 4: Setting kernel {kernel_version} as default boot target...")
