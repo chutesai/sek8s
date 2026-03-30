@@ -73,6 +73,36 @@ always_sync_admission_certs() {
     fi
 }
 
+# Evict admission webhooks from kine so k3s can bootstrap without the admission controller
+# blocking internal operations (the service isn't running yet at boot). k3s will re-create
+# them from the static manifests after startup completes.
+evict_stale_webhooks() {
+    local db="${STORAGE_BASE}/k3s/server/db/state.db"
+    if [[ -f "$db" ]]; then
+        if python3 - "$db" <<'PYEOF'
+import sqlite3
+import sys
+db = sys.argv[1]
+conn = sqlite3.connect(db)
+for resource_type, name in [
+    ("validatingwebhookconfigurations", "admission-controller-webhook"),
+    ("mutatingwebhookconfigurations", "admission-controller-mutating-webhook"),
+]:
+    key = f"/registry/{resource_type}/{name}"
+    cur = conn.execute("DELETE FROM kine WHERE name = ?", (key,))
+    if cur.rowcount:
+        print(f"Evicted {key}")
+conn.commit()
+conn.close()
+PYEOF
+        then
+            log "Evicted stale admission webhooks from kine"
+        else
+            log "WARNING: Failed to evict admission webhooks from kine"
+        fi
+    fi
+}
+
 # Evict k3s addon tracking entries from kine so the deploy controller re-applies all static
 # manifests on every boot. k3s tracks applied manifests via Addon CRs with content hashes;
 # deleting these forces a fresh apply on next start. Running unconditionally is safe because
@@ -165,7 +195,8 @@ always_sync_manifests
 always_sync_registries
 always_sync_admission_certs
 
-# Evict addon tracking so k3s re-applies all static manifests from disk on next start.
+# Evict webhooks so k3s can bootstrap, then evict addon tracking so it re-applies all manifests.
+evict_stale_webhooks
 evict_stale_addons
 
 for entry in "${MOUNTS[@]}"; do
