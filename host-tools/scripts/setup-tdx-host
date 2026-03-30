@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""TDX host setup. Replaces canonical/tdx setup-tdx-host.sh.
+
+Detects the Ubuntu version, resolves the matching host profile, and
+executes the setup steps (PPAs, kernel, packages, GRUB, kvm group).
+
+Usage:
+    sudo ./setup-tdx-host              # auto-detect OS version
+    sudo ./setup-tdx-host --version 25.10   # override version
+"""
+
+import argparse
+import sys
+
+from chutes.host.profiles import HOST_PROFILES, resolve_profile
+from chutes.host.setup import setup_host
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Set up TDX host for confidential GPU computing"
+    )
+    parser.add_argument(
+        "--version",
+        type=str,
+        default=None,
+        help=(
+            f"Ubuntu version to configure for (auto-detected if omitted). "
+            f"Supported: {', '.join(HOST_PROFILES.keys())}"
+        ),
+    )
+    args = parser.parse_args()
+
+    try:
+        profile = resolve_profile(args.version)
+    except (ValueError, RuntimeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    setup_host(profile)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

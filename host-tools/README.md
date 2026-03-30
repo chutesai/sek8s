@@ -6,8 +6,8 @@ This guide walks you through setting up a baremetal host to launch TDX-enabled V
 
 ## Prerequisites
 
-- **Hardware**: Intel TDX-capable CPU, NVIDIA H100/H200 GPUs, NVSwitch (optional)
-- **OS**: Ubuntu 25.04 (required for TDX host support)
+- **Hardware**: Intel TDX-capable CPU, NVIDIA GPUs (H100/H200/RTX Pro 6000), NVSwitch (optional)
+- **OS**: Ubuntu 25.04 (H200) or 25.10 (RTX Pro 6000)
 - **Access**: Root/sudo privileges
 - **Network**: Public network interface (e.g., `ens9f0np0`)
 - **Python**: Python 3 with PyYAML (`pip3 install pyyaml`)
@@ -34,9 +34,9 @@ Internet ←→ Public Interface ←→ Bridge ←→ TAP ←→ TDX VM
 
 For those familiar with the setup, here's the complete sequence:
 ```bash
-# 1. Setup TDX host (one-time)
-nano tdx/setup-tdx-config   # set TDX_SETUP_ATTESTATION=1
-cd tdx/setup-tdx-host && sudo ./setup-tdx-host.sh && sudo reboot
+# 1. Setup TDX host (one-time, auto-detects Ubuntu version)
+cd host-tools/scripts
+sudo ./setup-tdx-host && sudo reboot
 
 # 2. Configure PCCS
 pccs-configure
@@ -59,22 +59,23 @@ cd host-tools/scripts
 
 ### Step 1: Install TDX Host Prerequisites
 
-The TDX submodule provides host setup scripts that configure the kernel, QEMU, and firmware for TDX support.
+The host setup script configures the kernel, QEMU, attestation services, and firmware for TDX support. It auto-detects the Ubuntu version and applies the correct profile (PPAs, kernel, packages, GRUB config).
+
+**Supported OS versions:**
+- **Ubuntu 25.04** — TDX via kobuk-team PPA (used for H200 hosts)
+- **Ubuntu 25.10** — native TDX kernel (used for RTX Pro 6000)
+
 ```bash
 # Clone the repository
 git clone https://github.com/chutesai/sek8s.git
 cd sek8s
 
-# Initialize the TDX submodule
-git submodule update --init --recursive
+# Run the TDX host setup script (auto-detects OS version)
+cd host-tools/scripts
+sudo ./setup-tdx-host
 
-# Run the TDX host setup script
-cd tdx
-# Edit setup-tdx-config
-nano setup-tdx-config
-TDX_SETUP_ATTESTATION=1
-
-sudo ./setup-tdx-host.sh
+# Or override the version explicitly
+sudo ./setup-tdx-host --version 25.10
 
 # Reboot to load TDX-enabled kernel
 sudo reboot

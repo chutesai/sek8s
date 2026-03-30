@@ -1,0 +1,211 @@
+"""TDX host setup orchestration.
+
+Consumes a HostProfile and executes the setup steps: PPAs, packages,
+kernel selection, GRUB configuration, and kvm group membership.
+All OS-version differences are encoded in the profile — this module
+contains no version-specific branching.
+"""
+
+import os
+import re
+import subprocess
+import sys
+
+from chutes.host.profiles import HostProfile, PPA
+
+
+def _run(cmd: list[str], **kwargs):
+    """Run a command, printing it first. Raises on failure."""
+    print(f"  $ {' '.join(cmd)}")
+    subprocess.check_call(cmd, **kwargs)
+
+
+def _add_ppa(ppa: PPA, codename: str):
+    """Add an APT PPA and pin its packages at the configured priority."""
+    print(f"  Adding PPA: {ppa.uri}")
+    _run(["sudo", "add-apt-repository", "-y", ppa.uri])
+
+    distro_id = f"LP-PPA-{ppa.team}-{ppa.name}"
+    pin_file = f"/etc/apt/preferences.d/kobuk-tdx-{ppa.team}-{ppa.name}-pin-{ppa.pin_priority}"
+    pin_content = (
+        f"Package: *\n"
+        f"Pin: release o={distro_id}\n"
+        f"Pin-Priority: {ppa.pin_priority}\n"
+    )
+    _write_system_file(pin_file, pin_content)
+
+    unattended_file = f"/etc/apt/apt.conf.d/99unattended-upgrades-kobuk-{ppa.name}"
+    unattended_content = (
+        f'Unattended-Upgrade::Allowed-Origins {{\n'
+        f'  "{distro_id}:{codename}";\n'
+        f'}};\n'
+        f'Unattended-Upgrade::Allow-downgrade "true";\n'
+    )
+    _write_system_file(unattended_file, unattended_content)
+
+
+def _write_system_file(path: str, content: str):
+    """Write content to a root-owned system file via tee."""
+    _run(
+        ["sudo", "tee", path],
+        input=content.encode(),
+        stdout=subprocess.DEVNULL,
+    )
+
+
+def _get_kernel_version(kernel_package: str) -> str:
+    """Resolve the concrete kernel version from a metapackage name.
+
+    Parses `apt show <metapackage>` for the Depends line to extract
+    the actual kernel version string (e.g. '6.17.0-15-generic').
+    """
+    result = subprocess.run(
+        ["apt", "show", kernel_package],
+        capture_output=True,
+        text=True,
+    )
+    match = re.search(
+        r"Depends:.*linux-image-([^,\s]+)",
+        result.stdout,
+    )
+    if not match:
+        raise RuntimeError(
+            f"Could not determine kernel version from {kernel_package}. "
+            f"apt show output:\n{result.stdout}"
+        )
+    return match.group(1)
+
+
+def _grub_set_kernel(kernel_version: str):
+    """Set the given kernel as the default boot entry via grub-editenv."""
+    print(f"  Setting default kernel: {kernel_version}")
+
+    result = subprocess.run(
+        ["grep", "-E", "Advanced options for Ubuntu", "/boot/grub/grub.cfg"],
+        capture_output=True,
+        text=True,
+    )
+    mid_match = re.search(r"'(gnulinux-advanced-[^']+)'", result.stdout)
+    if not mid_match:
+        raise RuntimeError("Could not find Advanced options menu entry in grub.cfg")
+    mid = mid_match.group(1)
+
+    result = subprocess.run(
+        ["grep", "-E", f"with Linux {re.escape(kernel_version)}", "/boot/grub/grub.cfg"],
+        capture_output=True,
+        text=True,
+    )
+    kid_match = re.search(r"'(gnulinux-[^']+)'", result.stdout)
+    if not kid_match:
+        raise RuntimeError(
+            f"Could not find kernel {kernel_version} in grub.cfg menu entries"
+        )
+    kid = kid_match.group(1)
+
+    grub_default_cfg = "/etc/default/grub.d/99-tdx-kernel.cfg"
+    _write_system_file(
+        grub_default_cfg,
+        'GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n',
+    )
+    _run(["sudo", "grub-editenv", "/boot/grub/grubenv", "set", f"saved_entry={mid}>{kid}"])
+    _run(["sudo", "update-grub"])
+
+
+def _grub_update_cmdline(additions: list[str]):
+    """Append parameters to GRUB_CMDLINE_LINUX if not already present."""
+    grub_file = "/etc/default/grub"
+    with open(grub_file, "r") as f:
+        content = f.read()
+
+    modified = False
+    for param in additions:
+        if param in content:
+            print(f"  GRUB cmdline already contains '{param}', skipping")
+            continue
+        print(f"  Adding '{param}' to GRUB cmdline")
+        content = re.sub(
+            r'(GRUB_CMDLINE_LINUX="[^"]*)',
+            rf'\1 {param}',
+            content,
+        )
+        modified = True
+
+    if modified:
+        _write_system_file(grub_file, content)
+        _run(["sudo", "update-grub"])
+        # --no-nvram prevents grub-install from updating EFI boot order
+        # (important for MAAS-managed machines that expect PXE boot)
+        _run(["sudo", "grub-install", "--no-nvram"])
+
+
+def _add_user_to_kvm():
+    """Add the invoking (non-root) user to the kvm group."""
+    user = os.environ.get("SUDO_USER") or os.environ.get("USER")
+    if not user or user == "root":
+        print("  Skipping kvm group (running as root with no SUDO_USER)")
+        return
+    print(f"  Adding {user} to kvm group")
+    _run(["sudo", "usermod", "-aG", "kvm", user])
+
+
+def setup_host(profile: HostProfile):
+    """Execute TDX host setup using the given profile.
+
+    Must be run as root (or via sudo). Steps:
+    1. Add PPAs with apt pinning
+    2. apt update
+    3. Install kernel + packages
+    4. Set kernel as default boot target
+    5. Update GRUB cmdline
+    6. Add user to kvm group
+    """
+    print(f"\n{'=' * 60}")
+    print(f"  TDX Host Setup: {profile.describe()}")
+    print(f"{'=' * 60}\n")
+
+    if os.geteuid() != 0:
+        print("Error: this script must be run as root (sudo).", file=sys.stderr)
+        sys.exit(1)
+
+    # 1. PPAs
+    if profile.ppas:
+        print("Step 1: Adding APT PPAs...")
+        _run(["apt", "update"])
+        _run(["apt", "install", "--yes", "software-properties-common", "gawk"])
+        for ppa in profile.ppas:
+            _add_ppa(ppa, profile.codename)
+    else:
+        print("Step 1: No PPAs needed for this profile")
+
+    # 2. apt update
+    print("\nStep 2: Updating package index...")
+    _run(["apt", "update"])
+
+    # 3. Install kernel + packages
+    print(f"\nStep 3: Installing kernel ({profile.kernel_package}) and packages...")
+    all_packages = [profile.kernel_package] + profile.packages
+    _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
+
+    kernel_version = _get_kernel_version(profile.kernel_package)
+    print(f"  Kernel version resolved: {kernel_version}")
+
+    # linux-modules-extra may not be pulled in by the metapackage
+    modules_extra = f"linux-modules-extra-{kernel_version}"
+    print(f"  Ensuring {modules_extra} is installed...")
+    _run(["apt", "install", "--yes", "--allow-downgrades", modules_extra])
+
+    # 4. Set kernel as default boot
+    print(f"\nStep 4: Setting kernel {kernel_version} as default boot target...")
+    _grub_set_kernel(kernel_version)
+
+    # 5. GRUB cmdline
+    print("\nStep 5: Updating GRUB cmdline...")
+    _grub_update_cmdline(profile.grub_cmdline_additions)
+
+    # 6. kvm group
+    print("\nStep 6: Configuring kvm group...")
+    _add_user_to_kvm()
+
+    print(f"\n{'=' * 60}")
+    print("  TDX host setup complete. Reboot to load the new kernel.")
+    print(f"{'=' * 60}\n")

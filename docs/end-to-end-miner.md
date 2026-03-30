@@ -20,7 +20,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 
 ## ✅ Pre-flight Checklist
 
-- Intel TDX-capable server (Ubuntu 25.04 host, NVIDIA H100/H200 GPUs, NVSwitch optional)
+- Intel TDX-capable server (Ubuntu 25.04 or 25.10 host, NVIDIA H100/H200/RTX Pro 6000 GPUs, NVSwitch optional)
 - Intel PCCS access + API key (for PCK cert registration)
 - The VM image downloaded via `./quick-launch.sh --download` (requires `aria2`)
 - Miner credentials: SS58 address and secret seed without `0x`
@@ -59,8 +59,8 @@ Each step is detailed in the following sections.
 
 Follow the dedicated [TDX VM Host Setup Guide](../host-tools/README.md). High-level tasks:
 
-1. Clone this repository and initialize the `tdx/` submodule.
-2. Edit `tdx/setup-tdx-config` (set `TDX_SETUP_ATTESTATION=1`) and run `tdx/setup-tdx-host.sh`.
+1. Clone this repository.
+2. Run `cd host-tools/scripts && sudo ./setup-tdx-host` (auto-detects Ubuntu version, installs kernel, QEMU, attestation services).
 3. Reboot into the TDX-enabled kernel and verify `dmesg | grep -i tdx`.
 4. Configure PCCS (`pccs-configure`, restart the service, run `PCKIDRetrievalTool`).
 5. Install Python + PyYAML (`pip3 install pyyaml`) and aria2 (`sudo apt install aria2`) for the orchestration scripts.
