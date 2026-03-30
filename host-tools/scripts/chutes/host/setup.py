@@ -17,7 +17,7 @@ from chutes.host.profiles import HostProfile, PPA
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
     print(f"  $ {' '.join(cmd)}")
-    subprocess.check_call(cmd, **kwargs)
+    subprocess.run(cmd, check=True, **kwargs)
 
 
 def _add_ppa(ppa: PPA, codename: str):
