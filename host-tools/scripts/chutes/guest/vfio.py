@@ -96,7 +96,7 @@ def virsh_bind_device(device_bdf: str):
 
 def install_udev_rules(scripts_dir: str):
     """Install vfio-passthrough udev rules if not already present."""
-    udev_rules_src = os.path.join(scripts_dir, 'vfio-passthrough.rules')
+    udev_rules_src = os.path.join(scripts_dir, 'devices', 'vfio-passthrough.rules')
     udev_rules_dst = '/etc/udev/rules.d/vfio-passthrough.rules'
     if not os.path.exists(udev_rules_src):
         raise FileNotFoundError(

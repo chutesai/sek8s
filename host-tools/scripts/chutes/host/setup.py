@@ -206,6 +206,34 @@ def setup_host(profile: HostProfile):
     print("\nStep 6: Configuring kvm group...")
     _add_user_to_kvm()
 
+    # 7. CLI tools
+    print("\nStep 7: Installing CLI tools...")
+    _install_cli_tools()
+
     print(f"\n{'=' * 60}")
     print("  TDX host setup complete. Reboot to load the new kernel.")
     print(f"{'=' * 60}\n")
+
+
+def _install_cli_tools():
+    """Symlink host-tools/bin/ CLI tools into /usr/local/bin/."""
+    scripts_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    bin_dir = os.path.join(os.path.dirname(scripts_dir), "bin")
+
+    if not os.path.isdir(bin_dir):
+        print(f"  Warning: {bin_dir} not found, skipping CLI tool installation")
+        return
+
+    for tool in os.listdir(bin_dir):
+        src = os.path.join(bin_dir, tool)
+        dst = f"/usr/local/bin/{tool}"
+        if not os.access(src, os.X_OK):
+            continue
+        if os.path.exists(dst):
+            if os.path.islink(dst):
+                os.remove(dst)
+            else:
+                print(f"  Warning: {dst} exists and is not a symlink, skipping")
+                continue
+        print(f"  Linking {tool} -> {dst}")
+        os.symlink(os.path.abspath(src), dst)

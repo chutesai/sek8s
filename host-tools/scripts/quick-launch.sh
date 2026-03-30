@@ -163,7 +163,7 @@ while [[ $# -gt 0 ]]; do
         sleep 1
       done
 
-      ./setup-bridge.sh --clean 2>/dev/null || true
+      ./network/setup-bridge.sh --clean 2>/dev/null || true
       exit 0
       ;;
 
@@ -520,7 +520,7 @@ echo ""
 NET_IFACE=""
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
   echo "Step 5: Setting up bridge networking..."
-  BRIDGE_OUTPUT=$(./setup-bridge.sh \
+  BRIDGE_OUTPUT=$(./network/setup-bridge.sh \
     --bridge-ip "$BRIDGE_IP" \
     --vm-ip "${VM_IP}/24" \
     --vm-dns "$VM_DNS" \

@@ -303,7 +303,10 @@ dmesg | grep -i tdx
 lspci -nn -d 10de:
 
 # Check VFIO bindings
-./show-passthrough-devices.sh
+ls /sys/bus/pci/drivers/vfio-pci/ | grep '^0'
+
+# Query GPU CC/PPCIe mode
+sudo nvidia-gpu-tools --query-cc-mode
 ```
 
 ### Verify Network Configuration
@@ -346,12 +349,15 @@ Relaunch the VM -- `run-td` automatically detects, configures, and binds GPUs on
 
 **Issue: "GPU appears stuck or unhealthy"**
 
-`nvidia-gpu-tools` is bundled and installed automatically by `run-td`. No host NVIDIA driver is needed.
+`nvidia-gpu-tools` is bundled and installed automatically by `run-td`. No host NVIDIA driver is needed. GPUs are also SBR-reset automatically on every VM launch.
 ```bash
 # Recover a broken GPU
 sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>
 
-# Secondary Bus Reset (more aggressive)
+# Secondary Bus Reset (all GPUs -- stop VM first)
+chutes-reset-gpus
+
+# Or target a single GPU
 sudo nvidia-gpu-tools --reset-with-sbr --gpu-bdf=<bdf>
 
 # Query current CC/PPCIe mode

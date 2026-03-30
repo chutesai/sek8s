@@ -25,17 +25,42 @@ from chutes.guest.vfio import (
     virsh_bind_device,
 )
 
+_gpu_tools_cmd: str | None = None
+
+
+def _run_gpu_tools(*args: str):
+    """Run an nvidia-gpu-tools command with sudo.
+
+    Resolves and caches the tool path on first call via ensure_gpu_tools_available().
+    """
+    global _gpu_tools_cmd
+    if _gpu_tools_cmd is None:
+        print('  Ensuring GPU admin tools are available...')
+        _gpu_tools_cmd = ensure_gpu_tools_available()
+    subprocess.check_call(
+        ['sudo', _gpu_tools_cmd, *args],
+        stderr=subprocess.STDOUT,
+    )
+
 
 def _scripts_dir() -> str:
     """Return the host-tools/scripts/ directory."""
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _sbr_reset_gpus():
+    """SBR reset all GPUs to ensure clean state before mode configuration."""
+    print('  Performing SBR reset of GPUs...')
+    try:
+        _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+    except subprocess.CalledProcessError as e:
+        print(f'  Warning: SBR reset failed (exit {e.returncode}), proceeding with mode config')
+
+
 def _configure_nvswitches(
     nvswitches: list[str],
     profile: GpuProfile,
     total_gpus: int,
-    cmd_base: list[str],
 ):
     """Configure NVSwitches before VFIO binding (PPCIe mode only)."""
     if not (profile.should_passthrough_nvswitches(total_gpus) and nvswitches):
@@ -43,21 +68,14 @@ def _configure_nvswitches(
     print('  Configuring NVSwitches for PPCIe mode...')
     for nvsw in nvswitches:
         print(f'  Preparing NVSwitch {nvsw} for PPCIe')
-        subprocess.check_call(
-            cmd_base + ['--set-cc-mode=off', '--reset-after-cc-mode-switch', f'--gpu-bdf={nvsw}'],
-            stderr=subprocess.STDOUT,
-        )
-        subprocess.check_call(
-            cmd_base + ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch', f'--gpu-bdf={nvsw}'],
-            stderr=subprocess.STDOUT,
-        )
+        _run_gpu_tools('--set-cc-mode=off', '--reset-after-cc-mode-switch', f'--gpu-bdf={nvsw}')
+        _run_gpu_tools('--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch', f'--gpu-bdf={nvsw}')
 
 
 def _configure_gpus(
     gpus: list[str],
     profile: GpuProfile,
     total_gpus: int,
-    cmd_base: list[str],
 ):
     """Configure each GPU's CC/PPCIe mode before VFIO binding."""
     print('  Configuring GPUs...')
@@ -66,10 +84,7 @@ def _configure_gpus(
         print(f'  Preparing GPU {gpu} ({profile.name}) for {mode_str}')
 
         for tool_args in profile.get_cc_mode_args(total_gpus):
-            subprocess.check_call(
-                cmd_base + tool_args + [f'--gpu-bdf={gpu}'],
-                stderr=subprocess.STDOUT,
-            )
+            _run_gpu_tools(*tool_args, f'--gpu-bdf={gpu}')
 
 
 def _prepare_devices(
@@ -78,18 +93,17 @@ def _prepare_devices(
     ib_devices: list[str],
     profile: GpuProfile,
 ):
-    """Configure modes, bind to VFIO, and install udev rules.
+    """SBR reset, configure modes, bind to VFIO, and install udev rules.
 
-    Order: configure GPU modes with nvidia-gpu-tools BEFORE binding to vfio-pci.
-    Binding first would prevent the tools from accessing the devices.
+    Order: SBR reset -> configure GPU modes -> bind to vfio-pci.
+    SBR first ensures clean GPU/fabric state. Mode config must happen
+    before VFIO binding (tools need driver access).
     """
-    print('  Ensuring GPU admin tools are available...')
-    nvidia_tools_cmd = ensure_gpu_tools_available()
-    cmd_base = ['sudo', nvidia_tools_cmd]
     total_gpus = len(gpus)
 
-    _configure_nvswitches(nvswitches, profile, total_gpus, cmd_base)
-    _configure_gpus(gpus, profile, total_gpus, cmd_base)
+    _sbr_reset_gpus()
+    _configure_nvswitches(nvswitches, profile, total_gpus)
+    _configure_gpus(gpus, profile, total_gpus)
 
     devices_to_bind = list(gpus)
     if profile.should_passthrough_nvswitches(total_gpus) and nvswitches:
