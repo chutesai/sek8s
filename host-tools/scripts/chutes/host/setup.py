@@ -21,9 +21,19 @@ def _run(cmd: list[str], **kwargs):
 
 
 def _add_ppa(ppa: PPA, codename: str):
-    """Add an APT PPA and pin its packages at the configured priority."""
-    print(f"  Adding PPA: {ppa.uri}")
-    _run(["sudo", "add-apt-repository", "-y", ppa.uri])
+    """Add an APT PPA and pin its packages at the configured priority.
+
+    When ppa.suite is set, the sources entry is written manually instead of
+    using add-apt-repository (which would auto-detect the wrong suite).
+    """
+    suite = ppa.suite or codename
+
+    if ppa.suite:
+        print(f"  Adding PPA: {ppa.uri} (pinned to suite {suite})")
+        _add_ppa_manual(ppa, suite)
+    else:
+        print(f"  Adding PPA: {ppa.uri}")
+        _run(["sudo", "add-apt-repository", "-y", ppa.uri])
 
     distro_id = f"LP-PPA-{ppa.team}-{ppa.name}"
     pin_file = f"/etc/apt/preferences.d/kobuk-tdx-{ppa.team}-{ppa.name}-pin-{ppa.pin_priority}"
@@ -37,11 +47,40 @@ def _add_ppa(ppa: PPA, codename: str):
     unattended_file = f"/etc/apt/apt.conf.d/99unattended-upgrades-kobuk-{ppa.name}"
     unattended_content = (
         f'Unattended-Upgrade::Allowed-Origins {{\n'
-        f'  "{distro_id}:{codename}";\n'
+        f'  "{distro_id}:{suite}";\n'
         f'}};\n'
         f'Unattended-Upgrade::Allow-downgrade "true";\n'
     )
     _write_system_file(unattended_file, unattended_content)
+
+
+def _add_ppa_manual(ppa: PPA, suite: str):
+    """Write a DEB822 sources entry for a PPA with a specific suite.
+
+    Used when add-apt-repository would pick the wrong suite (e.g. the PPA
+    hasn't published packages for the running release).
+    """
+    sources_file = f"/etc/apt/sources.list.d/kobuk-{ppa.team}-{ppa.name}.sources"
+    keyring_path = f"/etc/apt/keyrings/kobuk-{ppa.team}-{ppa.name}.gpg"
+
+    _run([
+        "sudo", "mkdir", "-p", "/etc/apt/keyrings",
+    ])
+    _run([
+        "sudo", "gpg", "--no-default-keyring",
+        "--keyring", keyring_path,
+        "--keyserver", "keyserver.ubuntu.com",
+        "--recv-keys", "0C0E6AF955CE463C03FC51574D098D70AFBE5E1F",
+    ])
+
+    sources_content = (
+        f"Types: deb\n"
+        f"URIs: https://ppa.launchpadcontent.net/{ppa.team}/{ppa.name}/ubuntu/\n"
+        f"Suites: {suite}\n"
+        f"Components: main\n"
+        f"Signed-By: {keyring_path}\n"
+    )
+    _write_system_file(sources_file, sources_content)
 
 
 def _write_system_file(path: str, content: str):

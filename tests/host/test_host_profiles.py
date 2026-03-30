@@ -39,6 +39,16 @@ def test_ppa_custom_pin_priority():
     assert ppa.pin_priority == 500
 
 
+def test_ppa_suite_defaults_to_none():
+    ppa = PPA("team", "name")
+    assert ppa.suite is None
+
+
+def test_ppa_suite_override():
+    ppa = PPA("team", "name", suite="oracular")
+    assert ppa.suite == "oracular"
+
+
 # ---------------------------------------------------------------------------
 # Registry integrity
 # ---------------------------------------------------------------------------
@@ -124,6 +134,21 @@ def test_2510_does_not_need_tdx_release_ppa():
     profile = Ubuntu2510Profile()
     ppa_names = {ppa.name for ppa in profile.ppas}
     assert "tdx-release" not in ppa_names
+
+
+def test_2510_attestation_ppa_pinned_to_oracular():
+    """25.10 attestation PPA must use oracular suite (no questing packages)."""
+    profile = Ubuntu2510Profile()
+    attestation_ppas = [p for p in profile.ppas if "attestation" in p.name]
+    assert len(attestation_ppas) == 1
+    assert attestation_ppas[0].suite == "oracular"
+
+
+def test_2504_ppas_use_native_suite():
+    """25.04 PPAs should not override suite (packages published for plucky)."""
+    profile = Ubuntu2504Profile()
+    for ppa in profile.ppas:
+        assert ppa.suite is None
 
 
 def test_2510_uses_generic_kernel():

@@ -13,11 +13,18 @@ from dataclasses import dataclass
 
 @dataclass
 class PPA:
-    """APT PPA descriptor with pinning priority."""
+    """APT PPA descriptor with pinning priority.
+
+    When suite is set, the PPA sources entry uses that suite instead of the
+    host codename.  This is needed when a PPA hasn't published packages for
+    the running release (e.g. attestation packages only available for oracular
+    but needed on questing).
+    """
 
     team: str
     name: str
     pin_priority: int = 4000
+    suite: str | None = None
 
     @property
     def uri(self) -> str:
@@ -118,10 +125,10 @@ class Ubuntu2510Profile(HostProfile):
 
     @property
     def ppas(self) -> list[PPA]:
-        # TDX kernel/QEMU are native in 25.10; only attestation needs PPA
-        # (not yet in standard repos per https://launchpad.net/bugs/2131022)
+        # TDX kernel/QEMU are native in 25.10; only attestation needs PPA.
+        # PPA has no questing packages yet (LP#2131022), so pin to oracular.
         return [
-            PPA("kobuk-team", "tdx-attestation-release"),
+            PPA("kobuk-team", "tdx-attestation-release", suite="oracular"),
         ]
 
     @property
