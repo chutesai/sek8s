@@ -163,7 +163,7 @@ class RTXPro6000Profile(GpuProfile):
 
     @property
     def host_cpus(self) -> int:
-        return 96  # placeholder; validate on reference RTX Pro 6000 host SKU
+        return 128
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
