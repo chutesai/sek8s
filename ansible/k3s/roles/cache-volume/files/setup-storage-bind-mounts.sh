@@ -11,6 +11,7 @@ log() {
 }
 
 STORAGE_BASE="/cache/storage"
+MARKER_DIR="${STORAGE_BASE}/.sync-markers"
 
 # Ensure storage volume is mounted
 if ! mountpoint -q "$STORAGE_BASE"; then
@@ -20,25 +21,30 @@ fi
 
 # --- Helpers ---
 
-# Sync root filesystem content to storage if the storage directory is empty.
-# Args: $1 = root fs path (source), $2 = storage path (destination)
-sync_if_empty() {
+# One-time sync from root filesystem to storage, protected by a completion marker.
+# If no marker exists the storage dir is wiped first to handle partially-interrupted syncs.
+# Args: $1 = root fs path (source), $2 = storage path (destination), $3 = marker name
+sync_once() {
     local root_path="$1"
     local storage_path="$2"
+    local name="$3"
+    local marker="${MARKER_DIR}/${name}.done"
 
-    mkdir -p "$storage_path"
-    mkdir -p "$root_path"
+    mkdir -p "$storage_path" "$root_path" "$MARKER_DIR"
 
-    local file_count
-    file_count=$(find "$storage_path" -mindepth 1 -maxdepth 1 ! -name "lost+found" 2>/dev/null | wc -l)
-    if [[ "$file_count" -eq 0 ]]; then
-        log "Storage dir $storage_path is empty, syncing from $root_path"
-        if rsync -a --exclude='lost+found' "$root_path/" "$storage_path/"; then
-            log "Synced $root_path -> $storage_path ($(du -sh "$storage_path" 2>/dev/null | cut -f1))"
-        else
-            log "ERROR: Failed to sync $root_path to $storage_path"
-            exit 1
-        fi
+    if [[ -f "$marker" ]]; then
+        log "Sync marker exists for $name, skipping"
+        return 0
+    fi
+
+    log "No sync marker for $name, cleaning and syncing from $root_path"
+    find "$storage_path" -mindepth 1 ! -name "lost+found" -delete 2>/dev/null || true
+    if rsync -a --exclude='lost+found' "$root_path/" "$storage_path/"; then
+        touch "$marker"
+        log "Synced $root_path -> $storage_path ($(du -sh "$storage_path" 2>/dev/null | cut -f1)), marker written"
+    else
+        log "ERROR: Failed to sync $root_path to $storage_path"
+        exit 1
     fi
 }
 
@@ -172,22 +178,29 @@ create_bind_mount() {
 
 # --- Storage volume layout ---
 #
-# Each entry: storage_subdir root_fs_path
-#
-# On first boot (storage empty), root_fs_path is synced to storage_subdir.
-# Then storage_subdir is bind-mounted over root_fs_path so all runtime writes go to storage.
+# SYNC_MOUNTS: one-time sync from root FS on first boot (marker-protected).
+# MOUNT_ONLY:  no initial sync; content comes from always-sync helpers or runtime.
+# Both get bind-mounted so all runtime writes go to storage.
 
-MOUNTS=(
-    "k3s                        /var/lib/rancher/k3s"
+SYNC_MOUNTS=(
+    "k3s       /var/lib/rancher/k3s"
+    "kubelet   /var/lib/kubelet"
+)
+
+MOUNT_ONLY=(
     "rancher-config             /etc/rancher/k3s"
-    "kubelet                    /var/lib/kubelet"
     "admission-controller-certs /etc/admission-controller/certs"
     "chutes-agent               /var/lib/chutes/agent"
 )
 
-for entry in "${MOUNTS[@]}"; do
+for entry in "${SYNC_MOUNTS[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
-    sync_if_empty "$root_path" "${STORAGE_BASE}/${storage_subdir}"
+    sync_once "$root_path" "${STORAGE_BASE}/${storage_subdir}" "$storage_subdir"
+done
+
+for entry in "${MOUNT_ONLY[@]}"; do
+    read -r storage_subdir root_path <<< "$entry"
+    mkdir -p "${STORAGE_BASE}/${storage_subdir}" "$root_path"
 done
 
 # Refresh static image files on every boot so new VM images update manifests/registries/certs.
@@ -199,7 +212,7 @@ always_sync_admission_certs
 evict_stale_webhooks
 evict_stale_addons
 
-for entry in "${MOUNTS[@]}"; do
+for entry in "${SYNC_MOUNTS[@]}" "${MOUNT_ONLY[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
     create_bind_mount "${STORAGE_BASE}/${storage_subdir}" "$root_path"
 done
@@ -209,6 +222,7 @@ done
 # k3s: ensure required subdirectories exist
 mkdir -p "${STORAGE_BASE}/k3s/init-markers"
 mkdir -p "${STORAGE_BASE}/k3s/credentials"
+mkdir -p "$MARKER_DIR"
 
 # chutes-agent: pod-friendly ownership (must match runAsUser/runAsGroup in pod spec)
 chown -R 1000:1000 "${STORAGE_BASE}/chutes-agent"
