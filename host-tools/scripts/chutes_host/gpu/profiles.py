@@ -7,7 +7,7 @@ Adding a new GPU type requires one subclass and one GPU_PROFILES entry.
 
 from abc import ABC, abstractmethod
 
-HOST_RESERVED_CPUS = 8
+HOST_RESERVED_CPUS = 4
 
 
 class GpuProfile(ABC):
