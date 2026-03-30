@@ -146,8 +146,8 @@ class H200Profile(GpuProfile):
 
 
 class RTXPro6000Profile(GpuProfile):
-    # Workstation Edition only; Server Edition ID TBD (hardware validation required).
-    pci_device_ids = ["2bb1"]
+    # 2bb1 = Workstation Edition, 2bb5 = Server Edition
+    pci_device_ids = ["2bb1", "2bb5"]
 
     @property
     def name(self) -> str:
