@@ -6,7 +6,7 @@
 **/image/*.qcow2
 **/*.log
 .idea
-bin/
+/bin/
 
 tests/integration/keys
 tests/integration/test-data
