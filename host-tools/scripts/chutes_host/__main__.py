@@ -11,20 +11,24 @@ import subprocess
 import sys
 import time
 
-from chutes_host.detection import detect_nvidia_gpus, get_gpu_bdfs, get_gpu_models_from_lspci
+from chutes_host.detection import (
+    detect_nvidia_gpus,
+    get_gpu_bdfs,
+    get_gpu_models_from_lspci,
+)
 from chutes_host.gpu.profiles import resolve_profile
 from chutes_host.passthrough import setup_passthrough
 from chutes_host.qemu import add_volumes, add_vsock, build_base_cmd, build_network
 
-PIDFILE = '/tmp/tdx-td-pid.pid'
-LOGFILE = '/tmp/tdx-guest-td.log'
-PROCESS_NAME = 'chutes-td'
+PIDFILE = "/tmp/tdx-td-pid.pid"
+LOGFILE = "/tmp/tdx-guest-td.log"
+PROCESS_NAME = "chutes-td"
 
-DEFAULT_MEM = '100G'
-DEFAULT_VCPUS = '32'
+DEFAULT_MEM = "100G"
+DEFAULT_VCPUS = "32"
 
 # TDVF MUST NOT be overridden (MRTD depends on it)
-_FIRMWARE_REL = '../../firmware/TDVF.fd'
+_FIRMWARE_REL = "../../firmware/TDVF.fd"
 
 
 def _firmware_path() -> str:
@@ -36,16 +40,16 @@ def print_vm_status(ssh_port: int):
     try:
         with open(PIDFILE) as pid_file:
             pid = int(pid_file.read())
-            print(f'TDX VM running with PID: {pid}')
-            print(f'Login:')
-            print(f'   ssh -p {ssh_port} tdx@localhost   (default: tdx/123456)')
-            print(f'   ssh -p {ssh_port} root@localhost  (password: 123456)')
+            print(f"TDX VM running with PID: {pid}")
+            print(f"Login:")
+            print(f"   ssh -p {ssh_port} tdx@localhost   (default: tdx/123456)")
+            print(f"   ssh -p {ssh_port} root@localhost  (password: 123456)")
     except Exception:
         pass
 
 
 def stop_existing_vm():
-    print('Clean VM')
+    print("Clean VM")
     try:
         with open(PIDFILE) as pid_file:
             pid = int(pid_file.read())
@@ -70,13 +74,18 @@ def launch_vm(args):
             profile = resolve_profile(gpu_models)
             total_gpus = len(gpus)
             mem = f"{total_gpus * profile.vram_gb}G"
-            print(f'  GPU passthrough: {total_gpus}x {profile.name} ({profile.vram_gb}GB VRAM each) → {mem} RAM')
+            vcpus = str(profile.vcpus)
+            print(
+                f"  GPU passthrough: {total_gpus}x {profile.name}"
+                f" ({profile.vram_gb}GB VRAM each)"
+                f" → {vcpus} vCPUs, {mem} RAM"
+            )
 
-    print(f'Launching TDX VM: {vcpus} vCPUs, {mem} RAM')
-    print(f'Image: {args.image}')
+    print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
+    print(f"Image: {args.image}")
 
-    ubuntu_version = platform.freedesktop_os_release().get('VERSION_ID')
-    cpu_args = 'host' if ubuntu_version == '24.04' else 'host,-avx10'
+    ubuntu_version = platform.freedesktop_os_release().get("VERSION_ID")
+    cpu_args = "host" if ubuntu_version == "24.04" else "host,-avx10"
 
     qemu_cmds = build_base_cmd(
         mem=mem,
@@ -110,26 +119,31 @@ def launch_vm(args):
     if args.pass_gpus:
         setup_passthrough(qemu_cmds)
 
-    print('Launching QEMU...')
-    subprocess.run(['numactl', '--interleave=all'] + qemu_cmds, stderr=subprocess.STDOUT)
+    print("Launching QEMU...")
+    subprocess.run(
+        ["numactl", "--interleave=all"] + qemu_cmds, stderr=subprocess.STDOUT
+    )
 
     if not args.foreground:
-        print(f'Log file: {LOGFILE}')
+        print(f"Log file: {LOGFILE}")
     print_vm_status(args.ssh_port)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description='Launch a TDX VM with GPU passthrough')
+    parser = argparse.ArgumentParser(description="Launch a TDX VM with GPU passthrough")
 
     parser.add_argument("--image", type=str, help="Path to VM image")
-    parser.add_argument("--pass-gpus", action='store_true')
-    parser.add_argument("--foreground", action='store_true')
-    parser.add_argument("--clean", action='store_true')
+    parser.add_argument("--pass-gpus", action="store_true")
+    parser.add_argument("--foreground", action="store_true")
+    parser.add_argument("--clean", action="store_true")
 
     parser.add_argument("--config-volume", type=str)
     parser.add_argument("--cache-volume", type=str)
-    parser.add_argument("--storage-volume", type=str,
-                        help="Storage volume for VM storage (containerd and kubelet-pods)")
+    parser.add_argument(
+        "--storage-volume",
+        type=str,
+        help="Storage volume for VM storage (containerd and kubelet-pods)",
+    )
     parser.add_argument("--ssh-port", type=int, default=10022)
 
     parser.add_argument("--network-type", choices=["tap", "user"], default="user")
@@ -159,5 +173,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     sys.exit(main())

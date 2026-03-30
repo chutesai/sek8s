@@ -7,6 +7,8 @@ Adding a new GPU type requires one subclass and one GPU_PROFILES entry.
 
 from abc import ABC, abstractmethod
 
+HOST_RESERVED_CPUS = 8
+
 
 class GpuProfile(ABC):
     """Base class for GPU-type-specific passthrough behavior."""
@@ -37,6 +39,17 @@ class GpuProfile(ABC):
         """VRAM per GPU in GB. Used to size VM RAM as gpu_count * vram_gb."""
         ...
 
+    @property
+    @abstractmethod
+    def host_cpus(self) -> int:
+        """Total physical CPU count for this server type."""
+        ...
+
+    @property
+    def vcpus(self) -> int:
+        """vCPUs allocated to the VM (host CPUs minus reserve)."""
+        return self.host_cpus - HOST_RESERVED_CPUS
+
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         """Return nvidia-gpu-tools argument lists for CC/PPCIe mode configuration.
@@ -57,15 +70,15 @@ class GpuProfile(ABC):
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
-        return f'{self.name} passthrough'
+        return f"{self.name} passthrough"
 
 
 class B200Profile(GpuProfile):
-    pci_device_ids = ['2901']
+    pci_device_ids = ["2901"]
 
     @property
     def name(self) -> str:
-        return 'B200'
+        return "B200"
 
     @property
     def bar_size_mb(self) -> int:
@@ -75,8 +88,12 @@ class B200Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 192  # B200 HBM3e
 
+    @property
+    def host_cpus(self) -> int:
+        return 112  # 2x Xeon 8570
+
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
-        return [['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return False
@@ -86,15 +103,15 @@ class B200Profile(GpuProfile):
         return True
 
     def describe_mode(self, total_gpus: int) -> str:
-        return 'CC mode (B200)'
+        return "CC mode (B200)"
 
 
 class H200Profile(GpuProfile):
-    pci_device_ids = ['2335']  # H200 SXM (GH100)
+    pci_device_ids = ["2335"]  # H200 SXM (GH100)
 
     @property
     def name(self) -> str:
-        return 'H200'
+        return "H200"
 
     @property
     def bar_size_mb(self) -> int:
@@ -104,15 +121,19 @@ class H200Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 141  # H200 HBM3e
 
+    @property
+    def host_cpus(self) -> int:
+        return 128
+
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         if total_gpus == 8:
             return [
-                ['--set-cc-mode=off', '--reset-after-cc-mode-switch'],
-                ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch'],
+                ["--set-cc-mode=off", "--reset-after-cc-mode-switch"],
+                ["--set-ppcie-mode=on", "--reset-after-ppcie-mode-switch"],
             ]
         return [
-            ['--set-ppcie-mode=off', '--reset-after-ppcie-mode-switch'],
-            ['--set-cc-mode=on', '--reset-after-cc-mode-switch'],
+            ["--set-ppcie-mode=off", "--reset-after-ppcie-mode-switch"],
+            ["--set-cc-mode=on", "--reset-after-cc-mode-switch"],
         ]
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
@@ -120,13 +141,13 @@ class H200Profile(GpuProfile):
 
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
-            return 'PPCIe mode (8 GPUs, H200)'
-        return 'CC mode (H200)'
+            return "PPCIe mode (8 GPUs, H200)"
+        return "CC mode (H200)"
 
 
 GPU_PROFILES: dict[str, GpuProfile] = {
-    'B200': B200Profile(),
-    'H200': H200Profile(),
+    "B200": B200Profile(),
+    "H200": H200Profile(),
 }
 
 
@@ -136,7 +157,7 @@ def resolve_profile(gpu_models: dict[str, str]) -> GpuProfile:
     All GPUs must be the same supported model. Raises ValueError on mixed
     or unsupported types.
     """
-    model_names = set(gpu_models.values()) - {'default'}
+    model_names = set(gpu_models.values()) - {"default"}
     if not model_names:
         raise ValueError(
             "No supported GPU models detected. "
