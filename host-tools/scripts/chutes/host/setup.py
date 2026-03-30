@@ -58,10 +58,14 @@ def _add_ppa_manual(ppa: PPA, suite: str):
     """Write a DEB822 sources entry for a PPA with a specific suite.
 
     Used when add-apt-repository would pick the wrong suite (e.g. the PPA
-    hasn't published packages for the running release).
+    hasn't published packages for the running release).  Removes any stale
+    sources entries for this PPA first (e.g. from a prior add-apt-repository
+    that auto-detected the wrong suite).
     """
     sources_file = f"/etc/apt/sources.list.d/kobuk-{ppa.team}-{ppa.name}.sources"
     keyring_path = f"/etc/apt/keyrings/kobuk-{ppa.team}-{ppa.name}.gpg"
+
+    _remove_stale_ppa_sources(ppa)
 
     _run([
         "sudo", "mkdir", "-p", "/etc/apt/keyrings",
@@ -81,6 +85,23 @@ def _add_ppa_manual(ppa: PPA, suite: str):
         f"Signed-By: {keyring_path}\n"
     )
     _write_system_file(sources_file, sources_content)
+
+
+def _remove_stale_ppa_sources(ppa: PPA):
+    """Remove any existing apt sources entries for this PPA.
+
+    Cleans up entries left by add-apt-repository or prior manual installs
+    so that our suite-pinned entry is the only one.
+    """
+    import glob as globmod
+
+    patterns = [
+        f"/etc/apt/sources.list.d/*{ppa.team}*{ppa.name}*",
+    ]
+    for pattern in patterns:
+        for path in globmod.glob(pattern):
+            print(f"  Removing stale PPA source: {path}")
+            _run(["sudo", "rm", "-f", path])
 
 
 def _write_system_file(path: str, content: str):
