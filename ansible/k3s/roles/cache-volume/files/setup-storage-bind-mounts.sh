@@ -73,11 +73,12 @@ always_sync_admission_certs() {
     fi
 }
 
-# Evict stale admission webhook from kine so k3s re-creates it from the manifest on disk.
-# K8s static manifests are not forcefully resynced; some fields (e.g. caBundle) cannot be
-# updated in place. After we sync manifest+certs from the image, we delete the webhook so
-# k3s creates it fresh with the correct caBundle. Expand to other resources as needed.
-evict_stale_admission_webhook() {
+# Evict k3s addon tracking entries from kine so the deploy controller re-applies all static
+# manifests on every boot. k3s tracks applied manifests via Addon CRs with content hashes;
+# deleting these forces a fresh apply on next start. Running unconditionally is safe because
+# re-applying manifests is idempotent, and it avoids edge cases where file sync completed on
+# a prior boot but addon tracking was never cleared.
+evict_stale_addons() {
     local db="${STORAGE_BASE}/k3s/server/db/state.db"
     if [[ -f "$db" ]]; then
         if python3 - "$db" <<'PYEOF'
@@ -85,15 +86,15 @@ import sqlite3
 import sys
 db = sys.argv[1]
 conn = sqlite3.connect(db)
-conn.execute("DELETE FROM kine WHERE name = ?",
-    ('/registry/validatingwebhookconfigurations/admission-controller-webhook',))
+cur = conn.execute("DELETE FROM kine WHERE name LIKE '/registry/k3s.cattle.io/addons/%'")
+print(f"Evicted {cur.rowcount} addon tracking entries")
 conn.commit()
 conn.close()
 PYEOF
         then
-            log "Evicted stale admission webhook from kine (k3s will re-create from manifest)"
+            log "Evicted stale addon tracking from kine (k3s will re-apply all static manifests)"
         else
-            log "WARNING: Failed to evict admission webhook from kine"
+            log "WARNING: Failed to evict addon tracking from kine"
         fi
     fi
 }
@@ -164,8 +165,8 @@ always_sync_manifests
 always_sync_registries
 always_sync_admission_certs
 
-# Evict stale admission webhook so k3s re-creates it from the synced manifest.
-evict_stale_admission_webhook
+# Evict addon tracking so k3s re-applies all static manifests from disk on next start.
+evict_stale_addons
 
 for entry in "${MOUNTS[@]}"; do
     read -r storage_subdir root_path <<< "$entry"
