@@ -30,6 +30,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **OPA policies** in `ansible/k3s/roles/admission-controller/files/policies/`
 - **Environment variables** go in config files (pydantic-settings, Ansible vars) — never hardcoded
 - **90% test coverage target** — if you change code, add tests for it
+- **No class-based tests** — use plain functions (`def test_*`) with fixtures, not `class Test*` groupings
 - **Run `make lint-local` and `make reformat`** before committing
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**

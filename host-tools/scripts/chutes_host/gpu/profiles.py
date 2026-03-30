@@ -147,11 +147,11 @@ class H200Profile(GpuProfile):
 
 class RTXPro6000Profile(GpuProfile):
     # Workstation Edition only; Server Edition ID TBD (hardware validation required).
-    pci_device_ids = ['2bb1']
+    pci_device_ids = ["2bb1"]
 
     @property
     def name(self) -> str:
-        return 'RTX_PRO_6000'
+        return "RTX_PRO_6000"
 
     @property
     def bar_size_mb(self) -> int:
@@ -161,46 +161,24 @@ class RTXPro6000Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 96  # GDDR7
 
+    @property
+    def host_cpus(self) -> int:
+        return 96  # placeholder; validate on reference RTX Pro 6000 host SKU
+
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
-        return [['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return False
 
     def describe_mode(self, total_gpus: int) -> str:
-        return 'CC mode (RTX Pro 6000)'
-
-
-class RTXPro6000Profile(GpuProfile):
-    # Workstation Edition only; Server Edition ID TBD (hardware validation required).
-    pci_device_ids = ['2bb1']
-
-    @property
-    def name(self) -> str:
-        return 'RTX_PRO_6000'
-
-    @property
-    def bar_size_mb(self) -> int:
-        return 131072  # 128GB estimated; validate on hardware
-
-    @property
-    def vram_gb(self) -> int:
-        return 96  # GDDR7
-
-    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
-        return [['--set-cc-mode=on', '--reset-after-cc-mode-switch']]
-
-    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
-        return False
-
-    def describe_mode(self, total_gpus: int) -> str:
-        return 'CC mode (RTX Pro 6000)'
+        return "CC mode (RTX Pro 6000)"
 
 
 GPU_PROFILES: dict[str, GpuProfile] = {
-    'B200': B200Profile(),
-    'H200': H200Profile(),
-    'RTX_PRO_6000': RTXPro6000Profile(),
+    "B200": B200Profile(),
+    "H200": H200Profile(),
+    "RTX_PRO_6000": RTXPro6000Profile(),
 }
 
 

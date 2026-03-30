@@ -18,10 +18,10 @@ from chutes_host.gpu.profiles import (
 
 @pytest.mark.parametrize(
     "device_id",
-    ["2901", "2901"],
+    ["2bb1", "2BB1", "2Bb1"],
 )
 def test_device_id_matching_is_case_insensitive(device_id):
-    profile = GPU_PROFILES["B200"]
+    profile = GPU_PROFILES["RTX_PRO_6000"]
     assert profile.matches_device_id(device_id)
 
 
@@ -56,6 +56,35 @@ def test_no_duplicate_pci_device_ids_across_profiles():
 def test_all_registered_profiles_are_gpu_profile_subclasses():
     for key, profile in GPU_PROFILES.items():
         assert isinstance(profile, GpuProfile), f"{key} is not a GpuProfile"
+
+
+# ---------------------------------------------------------------------------
+# RTX Pro 6000 behavioral contracts (no NVSwitch, no PPCIe, no IB)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_rtx_pro_6000_never_uses_ppcie(gpu_count):
+    """RTX Pro 6000 has no NVSwitch fabric, so PPCIe is never applicable."""
+    profile = GPU_PROFILES["RTX_PRO_6000"]
+    for arg_list in profile.get_cc_mode_args(gpu_count):
+        joined = " ".join(arg_list).lower()
+        assert "ppcie" not in joined
+
+
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_rtx_pro_6000_cc_mode_is_count_independent(gpu_count):
+    """Unlike H200, RTX Pro 6000 CC args don't change with GPU count."""
+    profile = GPU_PROFILES["RTX_PRO_6000"]
+    args = profile.get_cc_mode_args(gpu_count)
+    assert len(args) == 1, "Should be a single nvidia-gpu-tools invocation"
+    assert "--set-cc-mode=on" in args[0]
+
+
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
+    profile = GPU_PROFILES["RTX_PRO_6000"]
+    assert profile.should_passthrough_nvswitches(gpu_count) is False
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +135,12 @@ def test_resolve_profile_returns_correct_type(model_key):
     models = {"0000:41:00.0": model_key}
     profile = resolve_profile(models)
     assert profile is GPU_PROFILES[model_key]
+
+
+def test_resolve_profile_with_multiple_identical_gpus():
+    models = {f"0000:4{i}:00.0": "RTX_PRO_6000" for i in range(8)}
+    profile = resolve_profile(models)
+    assert profile is GPU_PROFILES["RTX_PRO_6000"]
 
 
 def test_resolve_profile_filters_out_default_entries():
