@@ -63,19 +63,12 @@ def _add_ppa_manual(ppa: PPA, suite: str):
     that auto-detected the wrong suite).
     """
     sources_file = f"/etc/apt/sources.list.d/kobuk-{ppa.team}-{ppa.name}.sources"
-    keyring_path = f"/etc/apt/keyrings/kobuk-{ppa.team}-{ppa.name}.gpg"
+    keyring_path = f"/etc/apt/keyrings/kobuk-{ppa.team}-{ppa.name}.asc"
 
     _remove_stale_ppa_sources(ppa)
 
-    _run([
-        "sudo", "mkdir", "-p", "/etc/apt/keyrings",
-    ])
-    _run([
-        "sudo", "gpg", "--no-default-keyring",
-        "--keyring", keyring_path,
-        "--keyserver", "keyserver.ubuntu.com",
-        "--recv-keys", "0C0E6AF955CE463C03FC51574D098D70AFBE5E1F",
-    ])
+    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+    _fetch_signing_key(ppa.signing_key, keyring_path)
 
     sources_content = (
         f"Types: deb\n"
@@ -85,6 +78,23 @@ def _add_ppa_manual(ppa: PPA, suite: str):
         f"Signed-By: {keyring_path}\n"
     )
     _write_system_file(sources_file, sources_content)
+
+
+def _fetch_signing_key(fingerprint: str, dest: str):
+    """Download a GPG signing key from keyserver.ubuntu.com.
+
+    Saves the ASCII-armored key directly -- modern apt (2.4+, i.e. Ubuntu
+    24.04+) accepts armored keys in Signed-By without dearmoring.
+    """
+    url = (
+        f"https://keyserver.ubuntu.com/pks/lookup"
+        f"?op=get&search=0x{fingerprint}"
+    )
+    print(f"  Fetching signing key {fingerprint[:16]}...")
+    subprocess.run(
+        ["sudo", "curl", "-fsSL", "-o", dest, url],
+        check=True,
+    )
 
 
 def _remove_stale_ppa_sources(ppa: PPA):

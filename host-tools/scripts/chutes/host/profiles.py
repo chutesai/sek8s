@@ -11,6 +11,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 
+KOBUK_TEAM_KEY = "0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
+
+
 @dataclass
 class PPA:
     """APT PPA descriptor with pinning priority.
@@ -23,6 +26,7 @@ class PPA:
 
     team: str
     name: str
+    signing_key: str
     pin_priority: int = 4000
     suite: str | None = None
 
@@ -87,8 +91,8 @@ class Ubuntu2504Profile(HostProfile):
     @property
     def ppas(self) -> list[PPA]:
         return [
-            PPA("kobuk-team", "tdx-release"),
-            PPA("kobuk-team", "tdx-attestation-release"),
+            PPA("kobuk-team", "tdx-release", signing_key=KOBUK_TEAM_KEY),
+            PPA("kobuk-team", "tdx-attestation-release", signing_key=KOBUK_TEAM_KEY),
         ]
 
     @property
@@ -128,7 +132,8 @@ class Ubuntu2510Profile(HostProfile):
         # TDX kernel/QEMU are native in 25.10; only attestation needs PPA.
         # PPA has no questing packages yet (LP#2131022), so pin to oracular.
         return [
-            PPA("kobuk-team", "tdx-attestation-release", suite="oracular"),
+            PPA("kobuk-team", "tdx-attestation-release",
+                signing_key=KOBUK_TEAM_KEY, suite="oracular"),
         ]
 
     @property

@@ -25,28 +25,37 @@ from chutes.host.setup import _get_kernel_version, setup_host
 
 
 def test_ppa_uri_format():
-    ppa = PPA("kobuk-team", "tdx-release")
+    ppa = PPA("kobuk-team", "tdx-release", signing_key="AABBCCDD")
     assert ppa.uri == "ppa:kobuk-team/tdx-release"
 
 
 def test_ppa_default_pin_priority():
-    ppa = PPA("team", "name")
+    ppa = PPA("team", "name", signing_key="AABB")
     assert ppa.pin_priority == 4000
 
 
 def test_ppa_custom_pin_priority():
-    ppa = PPA("team", "name", pin_priority=500)
+    ppa = PPA("team", "name", signing_key="AABB", pin_priority=500)
     assert ppa.pin_priority == 500
 
 
 def test_ppa_suite_defaults_to_none():
-    ppa = PPA("team", "name")
+    ppa = PPA("team", "name", signing_key="AABB")
     assert ppa.suite is None
 
 
 def test_ppa_suite_override():
-    ppa = PPA("team", "name", suite="oracular")
+    ppa = PPA("team", "name", signing_key="AABB", suite="oracular")
     assert ppa.suite == "oracular"
+
+
+def test_ppa_signing_key_required():
+    """Every PPA in every profile must declare a signing key."""
+    for version, profile in HOST_PROFILES.items():
+        for ppa in profile.ppas:
+            assert ppa.signing_key, (
+                f"{version} PPA {ppa.name} missing signing_key"
+            )
 
 
 # ---------------------------------------------------------------------------
