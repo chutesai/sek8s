@@ -2,7 +2,7 @@ import hashlib
 import os
 import ssl
 from abc import abstractmethod
-from typing import Optional
+from typing import FrozenSet, Optional
 
 import uvicorn
 from fastapi import FastAPI
@@ -28,12 +28,19 @@ class WebServer:
         self._add_body_sha256_middleware()
         self._setup_routes()
 
+    body_hash_skip_paths: FrozenSet[str] = frozenset()
+    """Paths to skip body SHA256 hashing for (set by subclasses)."""
+
     def _add_body_sha256_middleware(self) -> None:
         """Set request.state.body_sha256 for POST/PUT/PATCH so authorize() can verify payload signatures."""
+        skip = self.body_hash_skip_paths
 
         @self.app.middleware("http")
         async def add_body_sha256(request: Request, call_next):
-            if request.method in ("POST", "PUT", "PATCH"):
+            if (
+                request.method in ("POST", "PUT", "PATCH")
+                and request.url.path not in skip
+            ):
                 body = await request.body()
                 request.state.body_sha256 = (
                     hashlib.sha256(body).hexdigest() if body else None

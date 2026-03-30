@@ -131,8 +131,8 @@ kube-apiserver-arg:
   - "authorization-mode=Node,Webhook,RBAC"
   - "authorization-webhook-config-file=${AUTHZ_WEBHOOK_CONFIG}"
   - "authorization-webhook-version=v1"
-  - "authorization-webhook-cache-authorized-ttl=30s"
-  - "authorization-webhook-cache-unauthorized-ttl=5s"
+  - "authorization-webhook-cache-authorized-ttl=5m"
+  - "authorization-webhook-cache-unauthorized-ttl=2m"
 EOF
     log "Authorization webhook enabled: $AUTHZ_WEBHOOK_CONFIG"
 else

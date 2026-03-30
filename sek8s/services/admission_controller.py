@@ -11,8 +11,10 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+import orjson
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from sek8s.config import AdmissionConfig
 from sek8s.image_utils import is_digest_pinned_reference, strip_tag
@@ -21,7 +23,6 @@ from sek8s.services.admission_models import (
     AdmissionResponseBody,
     AdmissionReviewResponse,
     AdmissionStatus,
-    SubjectAccessReviewRequest,
     SubjectAccessReviewResponse,
 )
 from sek8s.validators.base import ValidatorBase
@@ -35,6 +36,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _ACCESS_LOG_INTERVAL_SECONDS = 60
+
+# Pre-serialized SubjectAccessReview "no opinion" response.  Returned for the
+# vast majority of authorize requests; avoids Pydantic validation/serialization
+# and JSON encoding on every call (~16 req/s at steady state).
+_NO_OPINION_BODY: bytes = orjson.dumps(
+    {
+        "apiVersion": "authorization.k8s.io/v1",
+        "kind": "SubjectAccessReview",
+        "status": {"allowed": False, "denied": False},
+    }
+)
 
 
 class _BatchAccessLog(logging.Filter):
@@ -236,43 +248,50 @@ class AdmissionController:
 
         return health_status
 
-    def evaluate_authorization(
-        self, review: SubjectAccessReviewRequest
+    def evaluate_authorization_raw(
+        self,
+        spec: Dict[str, Any],
+        resource_attrs: Optional[Dict[str, Any]],
     ) -> SubjectAccessReviewResponse:
-        """Evaluate a SubjectAccessReview for the authorization webhook.
+        """Core authorization logic operating on plain dicts.
 
         Enforces an allowlist for miner pod log access in the chutes namespace.
         Returns NoOpinion for everything outside scope; returns Denied for
         miner log requests not matching an allowed pod name prefix.
+
+        The handler calls this directly with orjson-parsed dicts to avoid
+        Pydantic model construction on the hot path.
         """
-        attrs = review.spec.resourceAttributes
-        if attrs:
-            is_miner_chutes_log = (
-                review.spec.user == "miner"
-                and attrs.resource == "pods"
-                and attrs.subresource == "log"
-                and attrs.namespace == "chutes"
-            )
-            is_allowed_pod = is_miner_chutes_log and any(
-                attrs.name.startswith(p) for p in self.config.authz_allowed_log_prefixes
-            )
+        if not resource_attrs:
+            return SubjectAccessReviewResponse.no_opinion()
 
-            should_deny = is_miner_chutes_log and not is_allowed_pod
+        is_miner_chutes_log = (
+            spec.get("user") == "miner"
+            and resource_attrs.get("resource") == "pods"
+            and resource_attrs.get("subresource") == "log"
+            and resource_attrs.get("namespace") == "chutes"
+        )
 
-            if should_deny:
-                logger.info(
-                    f"Authorization denied: miner pods/log for {attrs.namespace}/{attrs.name}"
-                )
-                response = SubjectAccessReviewResponse.denied(
-                    f"Log access denied for pod '{attrs.name}' "
-                    f"in namespace '{attrs.namespace}'"
-                )
-            else:
-                response = SubjectAccessReviewResponse.no_opinion()
-        else:
-            response = SubjectAccessReviewResponse.no_opinion()
+        if not is_miner_chutes_log:
+            return SubjectAccessReviewResponse.no_opinion()
 
-        return response
+        name = resource_attrs.get("name", "")
+        is_allowed_pod = any(
+            name.startswith(p) for p in self.config.authz_allowed_log_prefixes
+        )
+
+        if is_allowed_pod:
+            return SubjectAccessReviewResponse.no_opinion()
+
+        logger.info(
+            "Authorization denied: miner pods/log for %s/%s",
+            resource_attrs.get("namespace"),
+            name,
+        )
+        return SubjectAccessReviewResponse.denied(
+            f"Log access denied for pod '{name}' "
+            f"in namespace '{resource_attrs.get('namespace')}'"
+        )
 
     def build_image_pin_patches(self, request: dict) -> List[dict]:
         """Build JSON Patch operations to pin whitelisted tag-only images to their verified digest.
@@ -343,6 +362,8 @@ class AdmissionController:
 
 class AdmissionWebhookServer(WebServer):
     """Async web server for admission webhook."""
+
+    body_hash_skip_paths = frozenset({"/authorize"})
 
     def __init__(self, config: AdmissionConfig):
         self.controller = AdmissionController(config)
@@ -447,19 +468,33 @@ class AdmissionWebhookServer(WebServer):
             )
             return JSONResponse(content=error_response.model_dump(exclude_none=True))
 
-    async def handle_authorize(self, request: Request) -> JSONResponse:
-        """Handle authorization webhook requests (SubjectAccessReview)."""
+    async def handle_authorize(self, request: Request) -> Response:
+        """Handle authorization webhook requests (SubjectAccessReview).
+
+        Uses orjson for parsing and a pre-serialized no_opinion response for
+        the common path.  All decision logic lives in the controller's
+        ``evaluate_authorization_raw``.
+        """
         try:
-            data = await request.json()
-            review = SubjectAccessReviewRequest.model_validate(data)
-            response = self.controller.evaluate_authorization(review)
+            data = orjson.loads(await request.body())
+            spec = data.get("spec") or {}
+            attrs = spec.get("resourceAttributes")
+
+            response = self.controller.evaluate_authorization_raw(spec, attrs)
+
+            if not response.status.denied:
+                return Response(
+                    content=_NO_OPINION_BODY, media_type="application/json"
+                )
+
+            return JSONResponse(content=response.model_dump(exclude_none=True))
+
         except Exception:
             logger.exception("Error handling authorization request")
-            response = SubjectAccessReviewResponse.denied(
+            denied = SubjectAccessReviewResponse.denied(
                 "Authorization webhook internal error"
             )
-
-        return JSONResponse(content=response.model_dump(exclude_none=True))
+            return JSONResponse(content=denied.model_dump(exclude_none=True))
 
     @staticmethod
     def _is_agent_workload(labels: dict, containers: list) -> bool:
