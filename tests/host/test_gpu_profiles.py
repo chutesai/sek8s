@@ -4,7 +4,7 @@ Tests focus on behavioral contracts and logic branches, not static values.
 """
 
 import pytest
-from chutes_host.gpu.profiles import (
+from chutes.guest.gpu.profiles import (
     GPU_PROFILES,
     HOST_RESERVED_CPUS,
     GpuProfile,

@@ -12,12 +12,12 @@ pipeline. The RTX Pro 6000 is a PCIe Gen 5 workstation/server GPU with 96 GB
 GDDR7 and NVIDIA Confidential Computing support. Unlike H200/B200, it has **no
 NVSwitch and no NVLink** -- inter-GPU communication is PCIe-only.
 
-- **Packages affected**: `host-tools/scripts/chutes_host`
+- **Packages affected**: `host-tools/scripts/chutes/guest`
 - **Key files**:
-  - `host-tools/scripts/chutes_host/gpu/profiles.py` (new profile)
-  - `host-tools/scripts/chutes_host/gpu/tools.py` (nvidia-gpu-tools compat)
-  - `host-tools/scripts/chutes_host/detection.py` (detection driven by profile)
-  - `host-tools/scripts/chutes_host/passthrough.py` (orchestration driven by profile)
+  - `host-tools/scripts/chutes/guest/gpu/profiles.py` (new profile)
+  - `host-tools/scripts/chutes/guest/gpu/tools.py` (nvidia-gpu-tools compat)
+  - `host-tools/scripts/chutes/guest/detection.py` (detection driven by profile)
+  - `host-tools/scripts/chutes/guest/passthrough.py` (orchestration driven by profile)
   - `ansible/k3s/roles/gpu/files/nvidia-fabricmanager-mask.sh` (no changes, already handles no-NVSwitch)
   - `ansible/k3s/roles/gpu/files/nvidia-persistenced-config.sh` (no changes, already handles no-NVSwitch)
 - **Dependencies**: `nvidia-gpu-tools` (bundled wheel from NVIDIA/gpu-admin-tools) must support GB202 CC mode
@@ -67,7 +67,7 @@ Success = TDX VM launches with RTX Pro 6000 GPU(s) passed through in CC mode, wi
 
 ## Output Format
 
-1. New `RTXPro6000Profile` class in `host-tools/scripts/chutes_host/gpu/profiles.py`
+1. New `RTXPro6000Profile` class in `host-tools/scripts/chutes/guest/gpu/profiles.py`
 2. New entry in `GPU_PROFILES` dict keyed as `'RTX_PRO_6000'`
 3. Unit tests in `tests/` covering profile resolution, CC mode args, NVSwitch=False, IB=False, mixed-model rejection, and RAM sizing (`N * 96G`)
 

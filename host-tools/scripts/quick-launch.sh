@@ -263,13 +263,13 @@ if [[ -n "$CONFIG_FILE" ]]; then
     exit 1
   fi
 
-  if [[ ! -d "./chutes_host" ]]; then
-    echo "Error: chutes_host package not found in current directory"
+  if [[ ! -d "./chutes" ]]; then
+    echo "Error: chutes package not found in current directory"
     exit 1
   fi
 
   set +e
-  CONFIG_OUTPUT=$(python3 -m chutes_host.config "$CONFIG_FILE" 2>&1)
+  CONFIG_OUTPUT=$(python3 -m chutes.guest.config "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
   set -e
 
@@ -421,7 +421,7 @@ echo "✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)"
 echo "✓ Host configuration verified"
 echo ""
 
-# Device binding to vfio-pci is handled inside run-td (chutes_host.passthrough)
+# Device binding to vfio-pci is handled inside run-td (chutes.guest.passthrough)
 echo ""
 
 

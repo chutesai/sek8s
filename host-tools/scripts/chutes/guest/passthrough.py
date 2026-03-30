@@ -7,7 +7,7 @@ entry point that uses GpuProfile to drive all type-specific decisions.
 import os
 import subprocess
 
-from chutes_host.detection import (
+from chutes.guest.detection import (
     detect_infiniband_pfs,
     detect_infiniband_vfs,
     detect_nvidia_gpus,
@@ -15,10 +15,10 @@ from chutes_host.detection import (
     get_gpu_bdfs,
     get_gpu_models_from_lspci,
 )
-from chutes_host.gpu.profiles import GpuProfile, resolve_profile
-from chutes_host.gpu.tools import ensure_gpu_tools_available
-from chutes_host.qemu import PciTopologyState
-from chutes_host.vfio import (
+from chutes.guest.gpu.profiles import GpuProfile, resolve_profile
+from chutes.guest.gpu.tools import ensure_gpu_tools_available
+from chutes.guest.qemu import PciTopologyState
+from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
     install_udev_rules,
@@ -28,7 +28,7 @@ from chutes_host.vfio import (
 
 def _scripts_dir() -> str:
     """Return the host-tools/scripts/ directory."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _configure_nvswitches(

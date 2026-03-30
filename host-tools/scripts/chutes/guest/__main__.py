@@ -11,14 +11,14 @@ import subprocess
 import sys
 import time
 
-from chutes_host.detection import (
+from chutes.guest.detection import (
     detect_nvidia_gpus,
     get_gpu_bdfs,
     get_gpu_models_from_lspci,
 )
-from chutes_host.gpu.profiles import resolve_profile
-from chutes_host.passthrough import setup_passthrough
-from chutes_host.qemu import add_volumes, add_vsock, build_base_cmd, build_network
+from chutes.guest.gpu.profiles import resolve_profile
+from chutes.guest.passthrough import setup_passthrough
+from chutes.guest.qemu import add_volumes, add_vsock, build_base_cmd, build_network
 
 PIDFILE = "/tmp/tdx-td-pid.pid"
 LOGFILE = "/tmp/tdx-guest-td.log"
@@ -32,7 +32,7 @@ _FIRMWARE_REL = "../../firmware/TDVF.fd"
 
 
 def _firmware_path() -> str:
-    scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    scripts_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return os.path.join(scripts_dir, _FIRMWARE_REL)
 
 
