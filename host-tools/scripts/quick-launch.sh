@@ -17,7 +17,7 @@ run_create_config() {
 # VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
 # Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
 # --------------------------------------------------------------------
-EXPECTED_BASE_SHA256="d91d32b5a32643aaaac06b0c713d3f26645135cc86a25ab799e0ab2dc6bc5bc2"
+EXPECTED_BASE_SHA256="9a151eb9a94113b5680100729488e166cd5b2c8f6f00caf482dd223bcde8d3df"
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
