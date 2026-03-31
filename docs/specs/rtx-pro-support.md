@@ -103,6 +103,6 @@ once validated.
 |------|---------------|-----------------|
 | Server Edition PCI device ID | `2bb5` (confirmed via `lspci` on server hardware) | **RESOLVED** |
 | BAR size (MMIO) | 131072 MB (128 GiB) | **RESOLVED** — `lspci -vvv -d 10de:`: Physical Resizable BAR, BAR 2 current size 128GB on Server Edition (2bb5) |
-| `nvidia-gpu-tools` CC mode | Likely works (Blackwell arch, same as B200) | Run `nvidia-gpu-tools --query-cc-mode` and `--set-cc-mode=on` on RTX Pro 6000 |
+| `nvidia-gpu-tools` / GB202 | Bundled wheel **v2025.11.21** | **`--query-cc-mode` RESOLVED** on Server Edition (8× `0x2bb5`, reported as RTX-PRO-6000). Confirm **`--set-cc-mode=on`** during a real `run-td` / VFIO bind cycle when convenient |
 | Host ACS configuration | GPU endpoints: ARI shows `ACS-` on each `[10de:2bb5]` function in sample `lspci -vvv` | If NCCL P2P still misbehaves, inspect **parent PCIe bridges / root ports** (ACS often lives upstream, not on the GPU); use `pcie_acs_override=...` or BIOS if needed |
 
