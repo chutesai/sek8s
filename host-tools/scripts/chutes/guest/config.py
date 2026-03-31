@@ -3,7 +3,7 @@
 Parses a YAML config file, validates it against the JSON schema, and outputs
 shell variable assignments to stdout for consumption by quick-launch.sh.
 
-Can be invoked as: python3 -m chutes_host.config <config.yaml>
+Can be invoked as: python3 -m chutes.guest.config <config.yaml>
 """
 
 import json
@@ -15,8 +15,8 @@ import yaml
 
 
 def _scripts_dir() -> str:
-    """Return the host-tools/scripts/ directory (parent of the chutes_host package)."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    """Return the host-tools/scripts/ directory (parent of the chutes.guest package)."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def validate_config(config, schema_path):
@@ -49,7 +49,7 @@ def validate_config(config, schema_path):
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python3 -m chutes_host.config <config.yaml>", file=sys.stderr)
+        print("Usage: python3 -m chutes.guest.config <config.yaml>", file=sys.stderr)
         sys.exit(1)
 
     config_file = sys.argv[1]

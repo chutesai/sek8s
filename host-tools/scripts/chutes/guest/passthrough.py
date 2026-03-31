@@ -7,7 +7,7 @@ entry point that uses GpuProfile to drive all type-specific decisions.
 import os
 import subprocess
 
-from chutes_host.detection import (
+from chutes.guest.detection import (
     detect_infiniband_pfs,
     detect_infiniband_vfs,
     detect_nvidia_gpus,
@@ -15,27 +15,51 @@ from chutes_host.detection import (
     get_gpu_bdfs,
     get_gpu_models_from_lspci,
 )
-from chutes_host.gpu.profiles import GpuProfile, resolve_profile
-from chutes_host.gpu.tools import ensure_gpu_tools_available
-from chutes_host.qemu import PciTopologyState
-from chutes_host.vfio import (
+from chutes.guest.gpu.profiles import GpuProfile, resolve_profile
+from chutes.guest.gpu.tools import ensure_gpu_tools_available
+from chutes.guest.qemu import PciTopologyState
+from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
     install_udev_rules,
-    virsh_bind_device,
 )
+
+_gpu_tools_cmd: str | None = None
+
+
+def _run_gpu_tools(*args: str):
+    """Run an nvidia-gpu-tools command with sudo.
+
+    Resolves and caches the tool path on first call via ensure_gpu_tools_available().
+    """
+    global _gpu_tools_cmd
+    if _gpu_tools_cmd is None:
+        print('  Ensuring GPU admin tools are available...')
+        _gpu_tools_cmd = ensure_gpu_tools_available()
+    subprocess.check_call(
+        ['sudo', _gpu_tools_cmd, *args],
+        stderr=subprocess.STDOUT,
+    )
 
 
 def _scripts_dir() -> str:
     """Return the host-tools/scripts/ directory."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _sbr_reset_gpus():
+    """SBR reset all GPUs to ensure clean state before mode configuration."""
+    print('  Performing SBR reset of GPUs...')
+    try:
+        _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+    except subprocess.CalledProcessError as e:
+        print(f'  Warning: SBR reset failed (exit {e.returncode}), proceeding with mode config')
 
 
 def _configure_nvswitches(
     nvswitches: list[str],
     profile: GpuProfile,
     total_gpus: int,
-    cmd_base: list[str],
 ):
     """Configure NVSwitches before VFIO binding (PPCIe mode only)."""
     if not (profile.should_passthrough_nvswitches(total_gpus) and nvswitches):
@@ -43,21 +67,14 @@ def _configure_nvswitches(
     print('  Configuring NVSwitches for PPCIe mode...')
     for nvsw in nvswitches:
         print(f'  Preparing NVSwitch {nvsw} for PPCIe')
-        subprocess.check_call(
-            cmd_base + ['--set-cc-mode=off', '--reset-after-cc-mode-switch', f'--gpu-bdf={nvsw}'],
-            stderr=subprocess.STDOUT,
-        )
-        subprocess.check_call(
-            cmd_base + ['--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch', f'--gpu-bdf={nvsw}'],
-            stderr=subprocess.STDOUT,
-        )
+        _run_gpu_tools('--set-cc-mode=off', '--reset-after-cc-mode-switch', f'--gpu-bdf={nvsw}')
+        _run_gpu_tools('--set-ppcie-mode=on', '--reset-after-ppcie-mode-switch', f'--gpu-bdf={nvsw}')
 
 
 def _configure_gpus(
     gpus: list[str],
     profile: GpuProfile,
     total_gpus: int,
-    cmd_base: list[str],
 ):
     """Configure each GPU's CC/PPCIe mode before VFIO binding."""
     print('  Configuring GPUs...')
@@ -66,10 +83,7 @@ def _configure_gpus(
         print(f'  Preparing GPU {gpu} ({profile.name}) for {mode_str}')
 
         for tool_args in profile.get_cc_mode_args(total_gpus):
-            subprocess.check_call(
-                cmd_base + tool_args + [f'--gpu-bdf={gpu}'],
-                stderr=subprocess.STDOUT,
-            )
+            _run_gpu_tools(*tool_args, f'--gpu-bdf={gpu}')
 
 
 def _prepare_devices(
@@ -78,18 +92,25 @@ def _prepare_devices(
     ib_devices: list[str],
     profile: GpuProfile,
 ):
-    """Configure modes, bind to VFIO, and install udev rules.
+    """SBR reset, configure modes, bind to VFIO, and install udev rules.
 
-    Order: configure GPU modes with nvidia-gpu-tools BEFORE binding to vfio-pci.
-    Binding first would prevent the tools from accessing the devices.
+    Order: SBR -> configure modes (nvidia-gpu-tools) -> sysfs vfio bind.
+
+    TDX hosts intentionally do **not** install the proprietary NVIDIA driver
+    (incompatible with the TDX kernel). ``nvidia-gpu-tools`` is used for CC/PPCIe
+    and SBR without that stack. We therefore do **not** use ``virsh
+    nodedev-reattach`` (that path assumes a normal host driver such as ``nvidia``).
+    QEMU + iommufd only needs devices on ``vfio-pci`` via sysfs.
+
+    Canonical ``setup-gpus.sh`` differs: it targets hosts where the GPU stays on
+    the NVIDIA driver until libvirt detach. Relaunch edge cases here are handled
+    by SBR / gpu-tools recovery per host-tools README, not libvirt.
     """
-    print('  Ensuring GPU admin tools are available...')
-    nvidia_tools_cmd = ensure_gpu_tools_available()
-    cmd_base = ['sudo', nvidia_tools_cmd]
     total_gpus = len(gpus)
 
-    _configure_nvswitches(nvswitches, profile, total_gpus, cmd_base)
-    _configure_gpus(gpus, profile, total_gpus, cmd_base)
+    _sbr_reset_gpus()
+    _configure_nvswitches(nvswitches, profile, total_gpus)
+    _configure_gpus(gpus, profile, total_gpus)
 
     devices_to_bind = list(gpus)
     if profile.should_passthrough_nvswitches(total_gpus) and nvswitches:
@@ -99,11 +120,6 @@ def _prepare_devices(
 
     print('  Binding devices to vfio-pci (explicit BDF list)...')
     bind_explicit_devices_to_vfio(devices_to_bind)
-
-    for gpu in gpus:
-        virsh_bind_device(gpu)
-    for ib_dev in ib_devices:
-        virsh_bind_device(ib_dev)
 
     install_udev_rules(_scripts_dir())
 

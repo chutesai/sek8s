@@ -145,9 +145,41 @@ class H200Profile(GpuProfile):
         return "CC mode (H200)"
 
 
+class RTXPro6000Profile(GpuProfile):
+    # 2bb1 = Workstation Edition, 2bb5 = Server Edition
+    pci_device_ids = ["2bb1", "2bb5"]
+
+    @property
+    def name(self) -> str:
+        return "RTX_PRO_6000"
+
+    @property
+    def bar_size_mb(self) -> int:
+        # 128 GiB: matches lspci "Physical Resizable BAR / BAR 2: current size: 128GB" on 2bb5 Server Edition.
+        return 131072
+
+    @property
+    def vram_gb(self) -> int:
+        return 96  # GDDR7
+
+    @property
+    def host_cpus(self) -> int:
+        return 128
+
+    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
+
+    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
+        return False
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (RTX Pro 6000)"
+
+
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
     "H200": H200Profile(),
+    "RTX_PRO_6000": RTXPro6000Profile(),
 }
 
 

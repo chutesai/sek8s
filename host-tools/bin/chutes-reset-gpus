@@ -1,0 +1,5 @@
+#!/bin/bash
+# PATH-accessible wrapper for GPU reset.
+# Delegates to host-tools/scripts/devices/reset-gpus.sh
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+exec "${SCRIPT_DIR}/../scripts/devices/reset-gpus.sh" "$@"

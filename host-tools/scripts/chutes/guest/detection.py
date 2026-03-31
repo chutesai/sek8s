@@ -8,8 +8,8 @@ import os
 import re
 import subprocess
 
-from chutes_host.gpu.profiles import GPU_PROFILES
-from chutes_host.gpu.tools import ensure_gpu_tools_available
+from chutes.guest.gpu.profiles import GPU_PROFILES
+from chutes.guest.gpu.tools import ensure_gpu_tools_available
 
 _NVIDIA_VENDOR = '10de'
 _MELLANOX_VENDOR = '15b3'

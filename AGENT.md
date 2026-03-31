@@ -30,6 +30,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **OPA policies** in `ansible/k3s/roles/admission-controller/files/policies/`
 - **Environment variables** go in config files (pydantic-settings, Ansible vars) — never hardcoded
 - **90% test coverage target** — if you change code, add tests for it
+- **No class-based tests** — use plain functions (`def test_*`) with fixtures, not `class Test*` groupings
 - **Run `make lint-local` and `make reformat`** before committing
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
@@ -56,11 +57,11 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **sek8s/validators/** | Admission validators: OPA, cosign, registry |
 | **sek8s/system_manager/** | System manager sub-routers: images, status, cache |
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
-| **host-tools/** | Host setup, GPU binding, networking, VM launch (`quick-launch.sh`) |
+| **host-tools/** | Host setup (`chutes.host`), GPU binding/VM launch (`chutes.guest`), networking, orchestration (`quick-launch.sh`) |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
 | **ansible/k3s/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **opa/** | OPA policy files for admission controller |
-| **tdx/** | Git submodule: Intel TDX host enablement (Canonical) |
+| **tdx/** | Git submodule: Intel TDX guest image creation (Canonical). Host setup is handled by `host-tools/scripts/setup-tdx-host` |
 
 ## Development Commands
 

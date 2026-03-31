@@ -9,7 +9,7 @@ The build process creates a hardened Ubuntu VM image with:
 - **Intel TDX confidential computing** - Hardware-isolated execution environment
 - **Full-disk LUKS encryption** - Root filesystem encrypted, unlocked via TDX attestation API
 - **Kubernetes (k3s)** - Lightweight container orchestration
-- **NVIDIA GPU support** - H200 GPU passthrough with attestation (PPCIe mode)
+- **NVIDIA GPU support** - H200 GPU passthrough with attestation (PPCIe with NVSwitch; **NVSwitch required** for validated 8-GPU TDX)
 - **Admission control** - OPA-based policy enforcement preventing privilege escalation
 - **Attestation services** - TDX quote generation and GPU evidence verification
 - **Dynamic configuration** - Node identity and network config loaded from verified volumes at boot
@@ -171,7 +171,7 @@ This Ansible playbook builds the VM image only. The following are handled by hos
 
 - ❌ TDX-enabled host system setup → See `tdx/setup-tdx-host/`
 - ❌ GPU passthrough configuration → Handled automatically by `run-td`
-- ❌ Network infrastructure → See `host-tools/scripts/setup-bridge.sh`
+- ❌ Network infrastructure → See `host-tools/scripts/network/setup-bridge.sh`
 - ❌ Config/cache/storage volume creation → See `host-tools/scripts/volumes/create-*.sh`
 - ❌ VM launch and orchestration → See `host-tools/scripts/quick-launch.sh`
 - ✅ Guest OS and k3s installation

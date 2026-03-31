@@ -9,8 +9,8 @@ import subprocess
 
 
 def _scripts_dir() -> str:
-    """Return the host-tools/scripts/ directory (parent of the chutes_host package)."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    """Return the host-tools/scripts/ directory (parent of the chutes.guest package)."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 def ensure_gpu_tools_available() -> str:
