@@ -9,7 +9,7 @@ The build process creates a hardened Ubuntu VM image with:
 - **Intel TDX confidential computing** - Hardware-isolated execution environment
 - **Full-disk LUKS encryption** - Root filesystem encrypted, unlocked via TDX attestation API
 - **Kubernetes (k3s)** - Lightweight container orchestration
-- **NVIDIA GPU support** - H200 GPU passthrough with attestation (PPCIe mode)
+- **NVIDIA GPU support** - H200 GPU passthrough with attestation (PPCIe with NVSwitch; **NVSwitch required** for validated 8-GPU TDX)
 - **Admission control** - OPA-based policy enforcement preventing privilege escalation
 - **Attestation services** - TDX quote generation and GPU evidence verification
 - **Dynamic configuration** - Node identity and network config loaded from verified volumes at boot

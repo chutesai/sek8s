@@ -6,8 +6,25 @@ This guide walks you through setting up a baremetal host to launch TDX-enabled V
 
 ## Prerequisites
 
-- **Hardware**: Intel TDX-capable CPU, NVIDIA GPUs (H100/H200/RTX Pro 6000), NVSwitch (optional)
-- **OS**: Ubuntu 25.04 (H200) or 25.10 (RTX Pro 6000)
+- **Hardware**: Intel TDX-capable CPU and NVIDIA GPUs. **8× H200: NVSwitch required** (validated stack). **RTX Pro 6000** has no NVSwitch. See [Validated host topologies](#validated-host-topologies).
+- **OS**: Host profiles exist for Ubuntu **25.04** and **25.10**; **lab-validated** topologies are narrower (see below).
+
+### Validated host topologies
+
+**Host profile support** (what `setup-tdx-host` configures) is per **Ubuntu version**. **Validated** means we have **end-to-end** tested that OS + GPU SKU + GPU count (TDX host, VM, passthrough). Other mixes may work but are not marked validated until someone adds a row in `chutes/host/support_matrix.py`.
+
+| Ubuntu | GPU SKU      | GPU count | Status    | Notes |
+|--------|--------------|-----------|-----------|-------|
+| 25.04  | H200         | 8         | Validated | NVSwitch required. |
+| 25.10  | RTX Pro 6000 | 8         | Validated | No NVSwitch (this SKU). |
+
+Print the canonical matrix from the repo (no sudo):
+
+```bash
+cd host-tools/scripts
+./setup-tdx-host --topology-matrix
+```
+
 - **Access**: Root/sudo privileges
 - **Network**: Public network interface (e.g., `ens9f0np0`)
 - **Python**: Python 3 with PyYAML (`pip3 install pyyaml`)
@@ -26,7 +43,7 @@ Internet ←→ Public Interface ←→ Bridge ←→ TAP ←→ TDX VM
                                       k3s Cluster
 ```
 
-**Note**: GPUs run in PPCIe (Protected PCIe) mode to support multi-GPU passthrough in TDX environments. Full Confidential Computing mode does not support multiple GPU passthrough.
+**Note**: **8× H200** uses **PPCIe** with **NVSwitch** (required for the validated topology). **RTX Pro 6000** uses **CC mode** without NVSwitch.
 
 ---
 
@@ -59,23 +76,22 @@ cd host-tools/scripts
 
 ### Step 1: Install TDX Host Prerequisites
 
-The host setup script configures the kernel, QEMU, attestation services, and firmware for TDX support. It auto-detects the Ubuntu version and applies the correct profile (PPAs, kernel, packages, GRUB config).
+The host setup script configures the kernel, QEMU, attestation services, and firmware for TDX support. It reads the **running** Ubuntu release from `lsb_release` and selects the matching profile (PPAs, kernel, packages, GRUB config). There is **no** CLI flag to force a different OS version—use the correct Ubuntu install for your hardware (e.g. 25.04 vs 25.10) before running setup.
 
-**Supported OS versions:**
-- **Ubuntu 25.04** — TDX via kobuk-team PPA (used for H200 hosts)
-- **Ubuntu 25.10** — native TDX kernel (used for RTX Pro 6000)
+**Supported OS versions (host profile):**
+- **Ubuntu 25.04** — TDX via kobuk-team PPA (typical for H200-class hosts)
+- **Ubuntu 25.10** — native TDX kernel (typical for RTX Pro 6000–class hosts)
+
+Which **(OS × GPU × count)** pairs are **lab-validated** is separate; see [Validated host topologies](#validated-host-topologies) or `./setup-tdx-host --topology-matrix`.
 
 ```bash
 # Clone the repository
 git clone https://github.com/chutesai/sek8s.git
 cd sek8s
 
-# Run the TDX host setup script (auto-detects OS version)
+# Run the TDX host setup script (Ubuntu version from lsb_release only)
 cd host-tools/scripts
 sudo ./setup-tdx-host
-
-# Or override the version explicitly
-sudo ./setup-tdx-host --version 25.10
 
 # Reboot to load TDX-enabled kernel
 sudo reboot

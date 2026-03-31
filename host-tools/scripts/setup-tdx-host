@@ -5,15 +5,16 @@ Detects the Ubuntu version, resolves the matching host profile, and
 executes the setup steps (PPAs, kernel, packages, GRUB, kvm group).
 
 Usage:
-    sudo ./setup-tdx-host              # auto-detect OS version
-    sudo ./setup-tdx-host --version 25.10   # override version
+    sudo ./setup-tdx-host              # auto-detect Ubuntu from lsb_release
+    ./setup-tdx-host --topology-matrix # print lab-validated Ubuntu × GPU × count
 """
 
 import argparse
 import sys
 
-from chutes.host.profiles import HOST_PROFILES, resolve_profile
+from chutes.host.profiles import resolve_profile
 from chutes.host.setup import setup_host
+from chutes.host.support_matrix import format_topology_matrix
 
 
 def main() -> int:
@@ -21,23 +22,29 @@ def main() -> int:
         description="Set up TDX host for confidential GPU computing"
     )
     parser.add_argument(
-        "--version",
-        type=str,
-        default=None,
-        help=(
-            f"Ubuntu version to configure for (auto-detected if omitted). "
-            f"Supported: {', '.join(HOST_PROFILES.keys())}"
-        ),
+        "--topology-matrix",
+        action="store_true",
+        help="Print lab-validated Ubuntu × GPU × count combinations and exit",
     )
     args = parser.parse_args()
 
+    if args.topology_matrix:
+        print(format_topology_matrix())
+        return 0
+
     try:
-        profile = resolve_profile(args.version)
+        profile = resolve_profile()
     except (ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
     setup_host(profile)
+    print()
+    print(
+        "Validated hardware topologies are listed in the support matrix "
+        "(not every OS profile × GPU SKU has been lab-tested):"
+    )
+    print("  ./setup-tdx-host --topology-matrix")
     return 0
 
 
