@@ -483,9 +483,7 @@ class AdmissionWebhookServer(WebServer):
             response = self.controller.evaluate_authorization_raw(spec, attrs)
 
             if not response.status.denied:
-                return Response(
-                    content=_NO_OPINION_BODY, media_type="application/json"
-                )
+                return Response(content=_NO_OPINION_BODY, media_type="application/json")
 
             return JSONResponse(content=response.model_dump(exclude_none=True))
 

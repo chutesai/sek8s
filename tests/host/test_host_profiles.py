@@ -7,7 +7,6 @@ orchestration logic (mocking all subprocess/OS calls).
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from chutes.host.profiles import (
     HOST_PROFILES,
     PPA,
@@ -17,7 +16,6 @@ from chutes.host.profiles import (
     resolve_profile,
 )
 from chutes.host.setup import _get_kernel_version, setup_host
-
 
 # ---------------------------------------------------------------------------
 # PPA dataclass
@@ -53,9 +51,7 @@ def test_ppa_signing_key_required():
     """Every PPA in every profile must declare a signing key."""
     for version, profile in HOST_PROFILES.items():
         for ppa in profile.ppas:
-            assert ppa.signing_key, (
-                f"{version} PPA {ppa.name} missing signing_key"
-            )
+            assert ppa.signing_key, f"{version} PPA {ppa.name} missing signing_key"
 
 
 # ---------------------------------------------------------------------------
@@ -70,9 +66,9 @@ def test_all_registered_profiles_are_host_profile_subclasses():
 
 def test_registry_keys_match_profile_names():
     for key, profile in HOST_PROFILES.items():
-        assert key == profile.name, (
-            f"Registry key '{key}' does not match profile.name '{profile.name}'"
-        )
+        assert (
+            key == profile.name
+        ), f"Registry key '{key}' does not match profile.name '{profile.name}'"
 
 
 def test_no_duplicate_codenames():
@@ -97,9 +93,9 @@ def test_every_profile_includes_attestation_packages(version):
     """Attestation is mandatory on every host -- packages must be present."""
     profile = HOST_PROFILES[version]
     required = {"sgx-dcap-pccs", "tdx-qgs", "libsgx-dcap-default-qpl"}
-    assert required.issubset(set(profile.packages)), (
-        f"{version} missing attestation packages: {required - set(profile.packages)}"
-    )
+    assert required.issubset(
+        set(profile.packages)
+    ), f"{version} missing attestation packages: {required - set(profile.packages)}"
 
 
 @pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
@@ -243,8 +239,13 @@ def test_get_kernel_version_raises_on_no_match(mock_run):
 @patch("chutes.host.setup._run")
 @patch("os.geteuid", return_value=0)
 def test_setup_host_calls_all_steps(
-    mock_euid, mock_run, mock_kver, mock_grub_kernel,
-    mock_grub_cmdline, mock_kvm, mock_cli,
+    mock_euid,
+    mock_run,
+    mock_kver,
+    mock_grub_kernel,
+    mock_grub_cmdline,
+    mock_kvm,
+    mock_cli,
 ):
     profile = Ubuntu2510Profile()
     setup_host(profile)
@@ -256,8 +257,7 @@ def test_setup_host_calls_all_steps(
     mock_cli.assert_called_once()
 
     install_calls = [
-        c for c in mock_run.call_args_list
-        if len(c[0]) > 0 and "install" in c[0][0]
+        c for c in mock_run.call_args_list if len(c[0]) > 0 and "install" in c[0][0]
     ]
     assert len(install_calls) > 0, "apt install should have been called"
 
