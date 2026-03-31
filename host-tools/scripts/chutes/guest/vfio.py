@@ -1,4 +1,4 @@
-"""VFIO device binding, virsh helpers, SR-IOV VF creation, and udev rule installation."""
+"""VFIO device binding, SR-IOV VF creation, and udev rule installation."""
 
 import os
 import subprocess
@@ -78,20 +78,6 @@ def bind_explicit_devices_to_vfio(devices: list[str]):
     for device in devices:
         bind_device_to_vfio(device)
         print(f'    {device} → vfio-pci')
-
-
-def virsh_bind_device(device_bdf: str):
-    """Reattach then detach a PCI device via virsh (matches setup-gpus.sh behavior)."""
-    virsh_bdf = device_bdf.replace(':', '_').replace('.', '_')
-    print(f'  Binding {device_bdf} to vfio-pci via virsh')
-    subprocess.check_call(
-        ['sudo', 'virsh', 'nodedev-reattach', f'pci_{virsh_bdf}'],
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.check_call(
-        ['sudo', 'virsh', 'nodedev-detach', f'pci_{virsh_bdf}'],
-        stderr=subprocess.STDOUT,
-    )
 
 
 def install_udev_rules(scripts_dir: str):

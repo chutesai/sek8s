@@ -22,7 +22,6 @@ from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
     install_udev_rules,
-    virsh_bind_device,
 )
 
 _gpu_tools_cmd: str | None = None
@@ -95,9 +94,17 @@ def _prepare_devices(
 ):
     """SBR reset, configure modes, bind to VFIO, and install udev rules.
 
-    Order: SBR reset -> configure GPU modes -> bind to vfio-pci.
-    SBR first ensures clean GPU/fabric state. Mode config must happen
-    before VFIO binding (tools need driver access).
+    Order: SBR -> configure modes (nvidia-gpu-tools) -> sysfs vfio bind.
+
+    TDX hosts intentionally do **not** install the proprietary NVIDIA driver
+    (incompatible with the TDX kernel). ``nvidia-gpu-tools`` is used for CC/PPCIe
+    and SBR without that stack. We therefore do **not** use ``virsh
+    nodedev-reattach`` (that path assumes a normal host driver such as ``nvidia``).
+    QEMU + iommufd only needs devices on ``vfio-pci`` via sysfs.
+
+    Canonical ``setup-gpus.sh`` differs: it targets hosts where the GPU stays on
+    the NVIDIA driver until libvirt detach. Relaunch edge cases here are handled
+    by SBR / gpu-tools recovery per host-tools README, not libvirt.
     """
     total_gpus = len(gpus)
 
@@ -113,11 +120,6 @@ def _prepare_devices(
 
     print('  Binding devices to vfio-pci (explicit BDF list)...')
     bind_explicit_devices_to_vfio(devices_to_bind)
-
-    for gpu in gpus:
-        virsh_bind_device(gpu)
-    for ib_dev in ib_devices:
-        virsh_bind_device(ib_dev)
 
     install_udev_rules(_scripts_dir())
 
