@@ -27,10 +27,10 @@
       register: nvidia_packages
       changed_when: false
 
-    - name: Check whether target NVIDIA driver package is already installed
+    - name: Check whether target NVIDIA driver metapackage is already installed
       ansible.builtin.shell:
         cmd: |
-          if dpkg -s nvidia-driver-{{ nvidia_version }}-open >/dev/null 2>&1; then
+          if dpkg -s nvidia-headless-no-dkms-{{ nvidia_version }}-open >/dev/null 2>&1; then
             echo installed
           else
             echo missing
@@ -129,67 +129,84 @@
             name: cuda-toolkit-{{ cuda_version }}
             state: present
 
-        - name: Install NVIDIA {{ nvidia_version }} driver packages
+        # Prebuilt linux-modules-nvidia-* uses the kernel/ABI deb version (e.g. 6.8.0-106.106), not
+        # nvidia_pkg_release_ubuntu (590.48.01-0ubuntu0...). The ABI suffix changes on archive
+        # rebuilds; the package name also depends on ansible_kernel. We query apt (madison) so the
+        # pin stays correct per host without hand-maintaining a kernel→version map. To skip this,
+        # omit the version on the linux-modules line and let apt pick the candidate (less reproducible).
+        - name: Resolve prebuilt linux-modules-nvidia version for running kernel
+          ansible.builtin.shell:
+            cmd: |
+              set +o pipefail
+              apt-cache madison "linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }}" 2>/dev/null | head -1 | awk '{print $3}'
+            executable: /bin/bash
+          register: nvidia_linux_modules_ver
+          changed_when: false
+
+        - name: Require matching linux-modules-nvidia package in apt cache
+          ansible.builtin.assert:
+            that:
+              - nvidia_linux_modules_ver.stdout | trim | length > 0
+            fail_msg: >-
+              No linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }} in apt;
+              install a kernel that has a matching prebuilt package (or switch to DKMS-only layout).
+
+        # No allow_downgrade: with apt's default, installing an older pin than what is already on disk
+        # fails loudly instead of silently replacing a newer security build. The purge above should
+        # clear prior NVIDIA/CUDA debs before this block; if install still errors on version conflicts,
+        # refresh pins in group_vars or fix host state—do not paper over with downgrade-to-pin.
+        # install_recommends: false avoids e.g. Ubuntu nvidia-settings / nvidia-prime / i386 stacks; we
+        # install nvidia-settings from CUDA in the next task. Omit on server images unless a workload
+        # proves a Recommend is required—then add that package by name.
+        - name: Install NVIDIA {{ nvidia_version }} Ubuntu stack (headless-no-dkms + prebuilt modules)
           ansible.builtin.apt:
             name:
-              - libnvidia-cfg1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-compute-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-decode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-encode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-extra-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-fbc1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-gl-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - libnvidia-gpucomp-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-dkms-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-driver-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-firmware-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-kernel-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-kernel-source-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-modprobe={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-open-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-persistenced={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - nvidia-settings={{ nvidia_version }}.{{ nvidia_pkg_release }}
-              - xserver-xorg-video-nvidia-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release }}
+              - libnvidia-cfg1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-compute-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-decode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-encode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-extra-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-fbc1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - libnvidia-gl-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - nvidia-headless-no-dkms-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - "{{ nvidia_firmware_pkg }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}"
+              - nvidia-kernel-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - nvidia-kernel-source-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - xserver-xorg-video-nvidia-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - nvidia-utils-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - nvidia-compute-utils-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
+              - linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }}={{ nvidia_linux_modules_ver.stdout | trim }}
+            install_recommends: false
             state: present
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
           register: driver_install
           changed_when: driver_install.changed
 
-        - name: Download Fabric Manager {{ nvidia_version }} from NVIDIA redist
-          ansible.builtin.get_url:
-            url: "https://developer.download.nvidia.com/compute/nvidia-driver/redist/fabricmanager/linux-x86_64/fabricmanager-linux-x86_64-{{ nvidia_version }}.{{ nvidia_pkg_release | regex_replace('-.*$', '') }}-archive.tar.xz"
-            dest: "/tmp/fabricmanager-{{ nvidia_version }}.tar.xz"
-            mode: "0644"
-
-        - name: Extract Fabric Manager archive
-          ansible.builtin.unarchive:
-            src: "/tmp/fabricmanager-{{ nvidia_version }}.tar.xz"
-            dest: /tmp
-            remote_src: true
-
-        - name: Install Fabric Manager binaries, config, and topology data
-          ansible.builtin.shell:
-            cmd: |
-              set -euo pipefail
-              FM_DIR=$(find /tmp -maxdepth 1 -type d -name 'fabricmanager-*' | head -1)
-              [ -d "$FM_DIR" ] || exit 1
-              mkdir -p /usr/share/nvidia/nvswitch
-              cp -f "$FM_DIR"/bin/* /usr/bin/
-              cp -f "$FM_DIR"/lib/* /usr/lib/x86_64-linux-gnu/
-              # Tarball ships fabricmanager.cfg under etc/; systemd start script expects /usr/share/nvidia/nvswitch/
-              if [ -d "$FM_DIR/etc" ]; then cp -f "$FM_DIR"/etc/* /usr/share/nvidia/nvswitch/; fi
-              if [ -d "$FM_DIR/share/nvidia/nvswitch" ]; then cp -f "$FM_DIR/share/nvidia/nvswitch/"* /usr/share/nvidia/nvswitch/; fi
-              if [ -f "$FM_DIR/systemd/nvidia-fabricmanager.service" ]; then cp -f "$FM_DIR/systemd/nvidia-fabricmanager.service" /lib/systemd/system/; fi
-              ldconfig
-              rm -rf "$FM_DIR" /tmp/fabricmanager-{{ nvidia_version }}.tar.xz
-            executable: /bin/bash
-          changed_when: true
+        # Ubuntu multiverse nvidia-fabricmanager-590 pulls nvidia-kernel-common-590-server (conflicts with open stack).
+        - name: Install Fabric Manager, modprobe, and settings from CUDA repo
+          ansible.builtin.apt:
+            name:
+              - nvidia-fabricmanager={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
+              - nvidia-modprobe={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
+              - nvidia-settings={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
+            install_recommends: false
+            state: present
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
 
         - name: Install NVIDIA Container Toolkit
           ansible.builtin.apt:
             name: nvidia-container-toolkit
+            install_recommends: false
             state: present
             update_cache: true
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
 
         - name: Configure NVIDIA Fabric Manager
           ansible.builtin.systemd:
@@ -296,7 +313,6 @@
             name: nvidia-persistenced
             enabled: true
             state: stopped
-
 
         - name: Reboot if driver install updated kernel modules and reboot is requested
           ansible.builtin.reboot:
