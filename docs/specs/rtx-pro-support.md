@@ -58,7 +58,7 @@ Success = TDX VM launches with RTX Pro 6000 GPU(s) passed through in CC mode, wi
 ## Constraints
 
 - PCI device ID `2bb1` is the Workstation Edition, `2bb5` is the Server Edition (confirmed on hardware). Both are in `pci_device_ids`.
-- BAR size (`bar_size_mb`) is estimated at 131072 (128 GB). Must be validated via `nvidia-smi -q -d BAR1` or sysfs `resource` on actual hardware.
+- BAR size (`bar_size_mb`) is **131072 MB (128 GiB)**, validated on Server Edition hardware: `lspci -vvv -d 10de:` reports **Physical Resizable BAR / BAR 2: current size: 128GB** on each GPU. (Optional cross-check: `nvidia-smi -q -d BAR1` in a VM with driver.)
 - Do not modify passthrough orchestration (`passthrough.py`, `detection.py`, `vfio.py`) -- all behavior must be driven by the profile.
 - Single guest image for all GPU topologies -- no topology-specific Ansible changes.
 - `nvidia-gpu-tools` bundled wheel must support Blackwell GB202. If not, re-bundle from latest `gpu-admin-tools` main via `host-tools/scripts/gpu-tools/bundle-tools.sh`.
@@ -75,7 +75,7 @@ Success = TDX VM launches with RTX Pro 6000 GPU(s) passed through in CC mode, wi
 
 ## Failure Conditions
 
-- Profile is not detected from `lspci` output containing `[10de:2bb1]`
+- Profile is not detected from `lspci` output containing `[10de:2bb1]` or `[10de:2bb5]`
 - CC mode args include PPCIe flags or NVSwitch configuration
 - `should_passthrough_nvswitches()` ever returns `True`
 - Guest image requires topology-specific changes to support RTX Pro 6000
@@ -102,7 +102,7 @@ once validated.
 | Item | Current Value | How to Validate |
 |------|---------------|-----------------|
 | Server Edition PCI device ID | `2bb5` (confirmed via `lspci` on server hardware) | **RESOLVED** |
-| BAR size (MMIO) | Estimated 131072 MB (128 GB) | Run `nvidia-smi -q -d BAR1` or check sysfs `resource` file sizes on actual GPU |
+| BAR size (MMIO) | 131072 MB (128 GiB) | **RESOLVED** — `lspci -vvv -d 10de:`: Physical Resizable BAR, BAR 2 current size 128GB on Server Edition (2bb5) |
 | `nvidia-gpu-tools` CC mode | Likely works (Blackwell arch, same as B200) | Run `nvidia-gpu-tools --query-cc-mode` and `--set-cc-mode=on` on RTX Pro 6000 |
-| Host ACS configuration | Not in repo host config | Check `lspci -vvv` for ACS flags; set kernel param `pcie_acs_override=downstream,multifunction` if needed |
+| Host ACS configuration | GPU endpoints: ARI shows `ACS-` on each `[10de:2bb5]` function in sample `lspci -vvv` | If NCCL P2P still misbehaves, inspect **parent PCIe bridges / root ports** (ACS often lives upstream, not on the GPU); use `pcie_acs_override=...` or BIOS if needed |
 

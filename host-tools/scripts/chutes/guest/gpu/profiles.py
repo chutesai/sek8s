@@ -155,7 +155,8 @@ class RTXPro6000Profile(GpuProfile):
 
     @property
     def bar_size_mb(self) -> int:
-        return 131072  # 128GB estimated; validate on hardware
+        # 128 GiB: matches lspci "Physical Resizable BAR / BAR 2: current size: 128GB" on 2bb5 Server Edition.
+        return 131072
 
     @property
     def vram_gb(self) -> int:
