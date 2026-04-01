@@ -147,37 +147,68 @@ def _get_kernel_version(kernel_package: str) -> str:
 
 
 def _grub_set_kernel(kernel_version: str):
-    """Set the given kernel as the default boot entry via grub-editenv."""
+    """Set the given kernel as the default boot entry via grub-editenv.
+
+    Same logic as tdx/setup-tdx-common grub_switch_kernel() (awk + cut on
+    /boot/grub/grub.cfg). Newer Ubuntu sometimes omits the Advanced options
+    submenu (flat kernel list); then MID is empty and saved_entry is just KID.
+    """
     print(f"  Setting default kernel: {kernel_version}")
+    grub_cfg = "/boot/grub/grub.cfg"
 
-    result = subprocess.run(
-        ["grep", "-E", "Advanced options for Ubuntu", "/boot/grub/grub.cfg"],
+    # MID: awk '/Advanced options for Ubuntu/{print $(NF-1)}' | cut -d\' -f2
+    mid_raw = subprocess.run(
+        ["awk", "/Advanced options for Ubuntu/{print $(NF-1)}", grub_cfg],
         capture_output=True,
         text=True,
-    )
-    mid_match = re.search(r"'(gnulinux-advanced-[^']+)'", result.stdout)
-    if not mid_match:
-        raise RuntimeError("Could not find Advanced options menu entry in grub.cfg")
-    mid = mid_match.group(1)
+        check=False,
+    ).stdout.strip()
+    first_mid_line = mid_raw.split("\n", 1)[0] if mid_raw else ""
+    if first_mid_line:
+        mid = subprocess.run(
+            ["cut", "-d'", "-f2"],
+            input=first_mid_line,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    else:
+        mid = ""
 
-    result = subprocess.run(
-        ["grep", "-E", f"with Linux {re.escape(kernel_version)}", "/boot/grub/grub.cfg"],
+    # KID: awk "/with Linux $KERNELVER/"'{print $(NF-1)}' | cut -d\' -f2 | head -n1
+    kid_raw = subprocess.run(
+        ["awk", f"/with Linux {kernel_version}/{{print $(NF-1)}}", grub_cfg],
         capture_output=True,
         text=True,
-    )
-    kid_match = re.search(r"'(gnulinux-[^']+)'", result.stdout)
-    if not kid_match:
+        check=False,
+    ).stdout.strip()
+    first_kid_line = kid_raw.split("\n", 1)[0] if kid_raw else ""
+    if not first_kid_line:
         raise RuntimeError(
             f"Could not find kernel {kernel_version} in grub.cfg menu entries"
         )
-    kid = kid_match.group(1)
+    kid = subprocess.run(
+        ["cut", "-d'", "-f2"],
+        input=first_kid_line,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    if not kid:
+        raise RuntimeError(
+            f"Could not parse grub menu id for kernel {kernel_version}"
+        )
+
+    saved_entry = f"{mid}>{kid}" if mid else kid
 
     grub_default_cfg = "/etc/default/grub.d/99-tdx-kernel.cfg"
     _write_system_file(
         grub_default_cfg,
         'GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n',
     )
-    _run(["sudo", "grub-editenv", "/boot/grub/grubenv", "set", f"saved_entry={mid}>{kid}"])
+    _run(
+        ["sudo", "grub-editenv", "/boot/grub/grubenv", "set", f"saved_entry={saved_entry}"],
+    )
     _run(["sudo", "update-grub"])
 
 
