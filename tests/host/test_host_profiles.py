@@ -15,11 +15,7 @@ from chutes.host.profiles import (
     Ubuntu2510Profile,
     resolve_profile,
 )
-from chutes.host.setup import (
-    _get_kernel_version,
-    install_dependencies,
-    setup_host,
-)
+from chutes.host.setup import _get_kernel_version, install_dependencies, setup_host
 
 # ---------------------------------------------------------------------------
 # PPA dataclass
