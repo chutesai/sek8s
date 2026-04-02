@@ -1,12 +1,12 @@
 name: Security Docs Guard
 
+# Sensitive path patterns: repo root .security-sensitive-paths only (no duplicated
+# path lists in this file). Push runs on all branches; the job scans the tree and
+# no-ops when nothing matches.
+
 on:
   push:
-    paths:
-      - 'docs/security/**'
-      - 'SECURITY.md'
-      - 'scripts/security/**'
-      - 'makefiles/security.mk'
+    branches: ['**']
   pull_request:
     branches: [main, 'release/**']
 
@@ -15,26 +15,57 @@ permissions:
 
 jobs:
   scrub-push:
-    if: github.event_name == 'push' && github.repository == 'chutesai/sek8s'
+    if: github.event_name == 'push' && github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Scan tree against .security-sensitive-paths
+        id: scan
+        run: |
+          set -euo pipefail
+          sensitive_paths_file=".security-sensitive-paths"
+          if [[ ! -f "$sensitive_paths_file" ]]; then
+            echo "::error::${sensitive_paths_file} is missing; cannot verify the tree."
+            exit 1
+          fi
+
+          found=""
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+            pattern="$(echo "$pattern" | sed 's:/*$::')"
+            matches=$(find . -path "./.git" -prune -o -path "./${pattern}*" -print 2>/dev/null || true)
+            if [[ -n "$matches" ]]; then
+              found="${found}${matches}\n"
+            fi
+          done < "$sensitive_paths_file"
+
+          if [[ -n "$found" ]]; then
+            echo "::error::Sensitive paths are present in the repository:"
+            echo -e "$found"
+            echo "has_sensitive=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_sensitive=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Delete branch with sensitive files
-        if: github.ref_name != github.event.repository.default_branch
+        if: steps.scan.outputs.has_sensitive == 'true' && github.ref_name != github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::error::Sensitive security documents detected on branch ${{ github.ref_name }}. Deleting branch."
+          echo "::error::Sensitive paths detected on branch ${{ github.ref_name }}. Deleting branch."
           gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${{ github.ref_name }}" || true
           exit 1
 
       - name: Fail on protected branch
-        if: github.ref_name == github.event.repository.default_branch
+        if: steps.scan.outputs.has_sensitive == 'true' && github.ref_name == github.event.repository.default_branch
         run: |
-          echo "::error::Sensitive security documents pushed to ${{ github.ref_name }}. This should never happen -- investigate immediately."
+          echo "::error::Sensitive paths are present on ${{ github.ref_name }}. Investigate immediately."
           exit 1
 
   check-pr:
-    if: github.event_name == 'pull_request' && github.repository == 'chutesai/sek8s'
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,26 +73,29 @@ jobs:
 
       - name: Check for sensitive files
         run: |
+          set -euo pipefail
           sensitive_paths_file=".security-sensitive-paths"
-          found=""
-
-          if [[ -f "$sensitive_paths_file" ]]; then
-            while IFS= read -r pattern; do
-              [[ -z "$pattern" || "$pattern" == \#* ]] && continue
-              pattern="$(echo "$pattern" | sed 's:/*$::')"
-              matches=$(find . -path "./.git" -prune -o -path "./${pattern}*" -print 2>/dev/null || true)
-              if [[ -n "$matches" ]]; then
-                found="${found}${matches}\n"
-              fi
-            done < "$sensitive_paths_file"
-          fi
-
-          if [[ -n "$found" ]]; then
-            echo "::error::Sensitive security documents found in this PR:"
-            echo -e "$found"
-            echo ""
-            echo "Security documents must remain in the private repository only."
+          if [[ ! -f "$sensitive_paths_file" ]]; then
+            echo "::error::${sensitive_paths_file} is missing; cannot verify the PR tree."
             exit 1
           fi
 
-          echo "No sensitive files detected."
+          found=""
+          while IFS= read -r pattern; do
+            [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+            pattern="$(echo "$pattern" | sed 's:/*$::')"
+            matches=$(find . -path "./.git" -prune -o -path "./${pattern}*" -print 2>/dev/null || true)
+            if [[ -n "$matches" ]]; then
+              found="${found}${matches}\n"
+            fi
+          done < "$sensitive_paths_file"
+
+          if [[ -n "$found" ]]; then
+            echo "::error::Sensitive paths found in this PR:"
+            echo -e "$found"
+            echo ""
+            echo "Remove or relocate these paths; they are listed in ${sensitive_paths_file}."
+            exit 1
+          fi
+
+          echo "No sensitive paths detected."

@@ -56,4 +56,3 @@ The `config.yaml` defines your deployment: VM identity, miner credentials, netwo
 
 - File an issue or PR in this repo for host tooling, image builds, or docs
 - Use the [chutes-miner](https://github.com/chutesai/chutes-miner) repo for chart-specific issues
-
