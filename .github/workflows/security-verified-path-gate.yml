@@ -1,0 +1,55 @@
+# Branch protection can require context "security-verified". Private CI posts that
+# status after live tests. For PRs that only touch docs, workflows, tests, etc.,
+# this job posts the same context as success so merges are not blocked.
+#
+# When ansible/, sek8s/, nvevidence/, or root pyproject.toml / poetry.lock change,
+# this job does nothing—status stays unset until private
+# verification posts success (or you merge with the check disabled).
+#
+# Future hardening: assert VM-under-test reports a build id matching the release
+# (e.g. system-status or system-manager exposes VERSION) inside verify-public-pr.
+
+name: Security verified path gate
+
+on:
+  pull_request:
+    branches: [main, 'release/**']
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  auto-skip-security-verified:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Post security-verified when release-scoped paths are untouched
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
+          if [ -z "$changed_files" ]; then
+            echo "No changed files; posting skip status."
+          elif echo "$changed_files" | grep -qE '^(ansible/|sek8s/|nvevidence/)|^pyproject\.toml$|^poetry\.lock$'; then
+            echo "Release-scoped paths changed; not posting security-verified (private verification must post it)."
+            exit 0
+          else
+            echo "Only non-release paths changed; posting skip status."
+          fi
+
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/statuses/${head}" \
+            -f state=success \
+            -f context=security-verified \
+            -f description="Skipped: no guest image or sek8s package path changes in this PR." \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

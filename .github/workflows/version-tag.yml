@@ -56,7 +56,7 @@ jobs:
           done <<< "$changed_files"
 
           if [ "$needs_version" != true ]; then
-            echo "No changes under ansible/, guest-tools/, sek8s/, nvevidence/, pyproject.toml, or poetry.lock."
+            echo "No changes under ansible/, sek8s/, nvevidence/, pyproject.toml, or poetry.lock."
             echo "VERSION bump not required for this merge."
             exit 0
           fi
