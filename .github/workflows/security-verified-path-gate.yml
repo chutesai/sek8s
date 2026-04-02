@@ -5,9 +5,6 @@
 # When ansible/, sek8s/, nvevidence/, or root pyproject.toml / poetry.lock change,
 # this job does nothing—status stays unset until private
 # verification posts success (or you merge with the check disabled).
-#
-# Future hardening: assert VM-under-test reports a build id matching the release
-# (e.g. system-status or system-manager exposes VERSION) inside verify-public-pr.
 
 name: Security verified path gate
 
