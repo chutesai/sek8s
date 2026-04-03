@@ -8,7 +8,7 @@ sek8s is confidential GPU infrastructure for Chutes miners and zero-trust worklo
 
 ## Stack (Non-Negotiable)
 
-- **Language**: Python 3.10+ (sek8s services), Bash (host-tools, guest-tools scripts)
+- **Language**: Python 3.12+ (sek8s packages under `src/`), Bash (host-tools, guest-tools scripts)
 - **Package manager**: Poetry 2.x
 - **HTTP services**: FastAPI + Uvicorn (admission controller, attestation, system manager/status)
 - **Policy engine**: OPA (admission controller policies in `ansible/k3s/roles/admission-controller/files/policies/`)
@@ -24,7 +24,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 - **Never install a new dependency** without discussion first
 - **Never modify database schemas** without showing the migration plan (sek8s has no DB; this applies if one is added)
-- **Python services live under `sek8s/`**, tests under `tests/`
+- **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`) and `src/sek8s-common/` (`sek8s_common`); tests under `tests/`
 - **Shell scripts** in `host-tools/scripts/` and `guest-tools/`
 - **Ansible roles** in `ansible/k3s/roles/`
 - **OPA policies** in `ansible/k3s/roles/admission-controller/files/policies/`
@@ -32,9 +32,10 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **90% test coverage target** — if you change code, add tests for it
 - **No class-based tests** — use plain functions (`def test_*`) with fixtures, not `class Test*` groupings
 - **Run `make lint-local` and `make reformat`** before committing
+- **Never commit or alter git history** without explicit human approval for that specific action — including `git commit`, `git commit --amend`, rebase, history-changing `reset`, `cherry-pick`, branch delete, or force-push. Leave changes for the author to review and commit unless they clearly asked you to perform a named git operation.
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
-- **Version bumps** — `VERSION` file at root tracks the release version; update when releasing
+- **Version bumps** — Guest / VM image line: `ansible/k3s/VERSION`. Python packages: `src/sek8s/VERSION` and `src/sek8s-common/VERSION` must match `[tool.poetry] version` (see `scripts/sync_pyproject_versions.py` and CI). Update the relevant file(s) when releasing or changing those surfaces.
 
 ## Patterns
 
@@ -65,14 +66,30 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 ## Development Commands
 
+Python tooling uses an optional **second make goal** = package directory under `src/` (`sek8s`, `sek8s-common`, future `attestation-proxy`). Omit it to run **every** package.
+
+```bash
+make list-packages     # Show packages under src/
+make lint-local                    # Lint all packages
+make lint-local sek8s            # Lint only sek8s (black/flake8/isort include tests/ for sek8s)
+make lint-local sek8s-common     # Lint only sek8s-common
+make test-local                  # pytest with --cov for each package import
+make test-local sek8s            # pytest with --cov=sek8s only
+make reformat sek8s              # Format one package (+ tests when sek8s)
+make generate-openapi            # Requires sek8s in selection (default “all” includes it)
+```
+
+Other targets:
+
 ```bash
 make help              # List all targets
 make venv              # Create virtual environment (poetry install)
 make install           # Install dev dependencies (venv + OPA binary)
-make test-local        # Run pytest with coverage
-make lint-local        # Run bandit, black, flake8, isort, mypy
-make reformat          # Format code (autoflake + isort + black)
+make lint              # Same as lint-local but inside Docker (per-package loop)
+make test              # Same as test-local but inside Docker
 make test-opa-policies # Run OPA policy tests
-make build             # Build Docker images
+make build             # Build Docker images (PROJECT=sek8s by default)
 make ci                # Full CI: clean, build, infrastructure, lint, test, clean
 ```
+
+Package layout convention: `src/<name>/` with Python import path `src/<name>/<name_with_hyphens_as_underscores>/`.
