@@ -6,8 +6,6 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
-
-from sek8s.config import MinerConfig
 from sek8s_common.auth import authorize, get_keypair, verify_validator_signature
 from sek8s_common.constants import (
     HOTKEY_HEADER,
@@ -16,6 +14,8 @@ from sek8s_common.constants import (
     SIGNATURE_HEADER,
     VALIDATOR_HEADER,
 )
+
+from sek8s.config import MinerConfig
 
 __all__ = [
     "authorize",

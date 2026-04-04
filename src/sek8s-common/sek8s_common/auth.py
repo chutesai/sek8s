@@ -7,8 +7,6 @@ from typing import Optional
 from bittensor_wallet import Keypair
 from fastapi import Header, HTTPException, Request, status
 from loguru import logger
-from substrateinterface import KeypairType
-
 from sek8s_common.config import AuthConfig
 from sek8s_common.constants import (
     HOTKEY_HEADER,
@@ -17,6 +15,7 @@ from sek8s_common.constants import (
     SIGNATURE_HEADER,
     VALIDATOR_HEADER,
 )
+from substrateinterface import KeypairType
 
 
 @lru_cache(maxsize=2)

@@ -9,10 +9,9 @@ from fastapi import FastAPI
 from fastapi.applications import AppType
 from fastapi.responses import ORJSONResponse
 from loguru import logger
+from sek8s_common.config import ServerConfig
 from starlette.requests import Request
 from starlette.types import Lifespan
-
-from sek8s_common.config import ServerConfig
 
 
 class WebServer:

@@ -8,10 +8,9 @@ from urllib.parse import urljoin
 
 import backoff
 import httpx
+from attestation_proxy.config import AttestationProxyConfig
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
-
-from attestation_proxy.config import AttestationProxyConfig
 from sek8s_common.auth import authorize
 from sek8s_common.server import WebServer
 
