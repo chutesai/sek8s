@@ -118,16 +118,20 @@ push:
 images: ##@images Build all docker images
 images: args ?= --network=host --build-arg BUILDKIT_INLINE_CACHE=1
 images:
-	@images=$$(find docker -maxdepth 1 -type d ! -path docker | sort); \
+	@all_dirs=$$(find docker -maxdepth 1 -type d ! -path docker | sort); \
 	filtered_images=""; \
-	for image_dir in $$images; do \
+	for image_dir in $$all_dirs; do \
 		pkg_name=$$(basename $$image_dir); \
-		if ! echo "$(TARGET_NAMES)" | grep -q "$$pkg_name"; then \
+		if [ ! -d "src/$$pkg_name" ]; then \
 			filtered_images="$$filtered_images $$image_dir"; \
 		fi; \
 	done; \
+	if [ -z "$$filtered_images" ]; then \
+		echo "No standalone (non-source-package) docker images to build."; \
+		exit 0; \
+	fi; \
 	image_names=$$(echo $$filtered_images | xargs -n1 basename | tr '\n' ' '); \
-	echo "Building images for: $$image_names"; \
+	echo "Building standalone images: $$image_names"; \
 	for image_dir in $$filtered_images; do \
 		pkg_name=$$(basename $$image_dir); \
 		pkg_version=$$(if [ -f "src/$$pkg_name/VERSION" ]; then head "src/$$pkg_name/VERSION"; elif [ -f "$$image_dir/VERSION" ]; then head "$$image_dir/VERSION"; else echo "dev"; fi); \

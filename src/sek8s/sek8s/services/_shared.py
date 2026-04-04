@@ -1,7 +1,19 @@
-# Header names
-VALIDATOR_HEADER = "X-Chutes-Validator"
-HOTKEY_HEADER = "X-Chutes-Hotkey"
-MINER_HEADER = "X-Chutes-Miner"
-NONCE_HEADER = "X-Chutes-Nonce"
-SIGNATURE_HEADER = "X-Chutes-Signature"
-NONCE_MAX_AGE_SECONDS = 30
+"""Re-export header constants from sek8s-common for backward compatibility."""
+
+from sek8s_common.constants import (
+    HOTKEY_HEADER,
+    MINER_HEADER,
+    NONCE_HEADER,
+    NONCE_MAX_AGE_SECONDS,
+    SIGNATURE_HEADER,
+    VALIDATOR_HEADER,
+)
+
+__all__ = [
+    "HOTKEY_HEADER",
+    "MINER_HEADER",
+    "NONCE_HEADER",
+    "NONCE_MAX_AGE_SECONDS",
+    "SIGNATURE_HEADER",
+    "VALIDATOR_HEADER",
+]

@@ -8,6 +8,14 @@ packages = [{include = "sek8s_common"}]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.15"
+pydantic = "^2.11.7"
+pydantic-settings = "^2.10.1"
+fastapi = ">=0.110.1,<0.111.0"
+uvicorn = "^0.37.0"
+loguru = "^0.7.3"
+orjson = "^3.11.3"
+bittensor-wallet = "^4.0.1"
+substrate-interface = "^1.7.11"
 
 [build-system]
 requires = ["poetry-core"]

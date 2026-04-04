@@ -36,7 +36,7 @@ jobs:
           changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
           if [ -z "$changed_files" ]; then
             echo "No changed files; posting skip status."
-          elif echo "$changed_files" | grep -qE '^(ansible/|src/sek8s/|src/sek8s-common/|nvevidence/)|^pyproject\.toml$|^poetry\.lock$'; then
+          elif echo "$changed_files" | grep -qE '^(ansible/|src/sek8s/|src/sek8s-common/|src/attestation-proxy/|nvevidence/)|^pyproject\.toml$|^poetry\.lock$'; then
             echo "Release-scoped paths changed; not posting security-verified (private verification must post it)."
             exit 0
           else

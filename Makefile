@@ -1,6 +1,6 @@
 SHELL := /bin/bash -e -o pipefail
 export PATH := $(HOME)/.local/bin:$(PATH)
-PROJECT ?= sek8s
+PROJECT ?=
 BRANCH_NAME ?= $(shell git rev-parse --abbrev-ref HEAD | tr '/' '-')
 BUILD_NUMBER ?= 0
 IMAGE ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
@@ -16,6 +16,13 @@ VERSION := $(shell head ansible/k3s/VERSION | grep -Eo "\d+.\d+.\d+")
 # Package filter: "make <target> sek8s" selects one package
 PKG_FILTER := $(filter $(PACKAGES),$(MAKECMDGOALS))
 SELECTED_PKGS := $(or $(PKG_FILTER),$(PACKAGES))
+
+# Wire package goal into PROJECT for docker targets (build/tag/push/sign)
+ifeq ($(PROJECT),)
+ifneq ($(PKG_FILTER),)
+override PROJECT := $(firstword $(PKG_FILTER))
+endif
+endif
 
 pkg_to_import = $(subst -,_,$(1))
 

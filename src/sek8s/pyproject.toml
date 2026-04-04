@@ -34,7 +34,6 @@ sek8s-common = {path = "../sek8s-common", develop = true}
 [tool.poetry.scripts]
 admission-controller = 'sek8s.services.admission_controller:run'
 attestation-service = 'sek8s.services.attestation:run'
-attestation-proxy = 'sek8s.services.attestation_proxy:run'
 system-manager = 'sek8s.services.manager:run'
 
 [build-system]

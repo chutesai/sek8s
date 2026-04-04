@@ -43,7 +43,7 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              ansible/*|src/sek8s/*|src/sek8s-common/*|nvevidence/*)
+              ansible/*|src/sek8s/*|src/sek8s-common/*|src/attestation-proxy/*|nvevidence/*)
                 needs_version=true
                 break
                 ;;
@@ -55,7 +55,7 @@ jobs:
           done <<< "$changed_files"
 
           if [ "$needs_version" != true ]; then
-            echo "No changes under ansible/, src/sek8s/, src/sek8s-common/, nvevidence/, pyproject.toml, or poetry.lock."
+            echo "No changes under ansible/, src/sek8s/, src/sek8s-common/, src/attestation-proxy/, nvevidence/, pyproject.toml, or poetry.lock."
             echo "VERSION bump not required for this merge."
             exit 0
           fi

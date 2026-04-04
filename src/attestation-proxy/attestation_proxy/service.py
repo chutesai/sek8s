@@ -11,20 +11,17 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
 
-from sek8s.config import AttestationProxyConfig
-from sek8s.server import WebServer
-from sek8s.services.util import authorize
+from attestation_proxy.config import AttestationProxyConfig
+from sek8s_common.auth import authorize
+from sek8s_common.server import WebServer
 
-# Configuration
 SERVICE_NAMESPACE = os.getenv("WORKLOAD_NAMESPACE", "chutes")
 CLUSTER_DOMAIN = "svc.cluster.local"
 SOCKET_PATH = "/var/run/attestation/attestation.sock"
 MAX_CONSECUTIVE_FAILURES = 5
 
-# Port configuration
 EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT", "8443"))
 INTERNAL_PORT = int(os.getenv("INTERNAL_PORT", "8444"))
-# Dedicated port for chute proxy services (restricted via network policies)
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8002"))
 
 
@@ -106,7 +103,6 @@ class BaseProxyServer(WebServer):
         self.shared = shared_resources
         self.server_name = server_name
 
-        # Create lifespan that initializes shared resources
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             logger.info(f"[{self.server_name}] Lifespan starting...")
@@ -114,7 +110,6 @@ class BaseProxyServer(WebServer):
             logger.info(f"[{self.server_name}] Lifespan startup complete")
             yield
             logger.info(f"[{self.server_name}] Lifespan shutdown...")
-            # Don't cleanup here - let orchestrator handle it
 
         super().__init__(config, lifespan=lifespan)
 
@@ -146,7 +141,6 @@ class BaseProxyServer(WebServer):
         client = self.shared.unix_client if use_unix_socket else self.shared.http_client
         full_url = urljoin(target_url, path)
 
-        # Filter hop-by-hop headers
         filtered_headers = {
             k: v
             for k, v in headers.items()
@@ -180,11 +174,9 @@ class BaseProxyServer(WebServer):
                 follow_redirects=False,
             )
 
-            # Reset failure counter on success
             if use_unix_socket:
                 self.shared.consecutive_socket_failures = 0
 
-            # Filter response headers
             response_headers = {
                 k: v
                 for k, v in response.headers.items()
@@ -215,7 +207,7 @@ class BaseProxyServer(WebServer):
                     f"Unix socket connection failed ({self.shared.consecutive_socket_failures} consecutive failures). "
                     f"Health check will trigger pod restart at {MAX_CONSECUTIVE_FAILURES} failures."
                 )
-            raise  # Let backoff handle retry
+            raise
         except httpx.RequestError as e:
             logger.error(f"Request failed to {full_url}: {e}")
             if use_unix_socket:
@@ -278,7 +270,6 @@ class BaseProxyServer(WebServer):
         params = dict(request.query_params)
         headers = self.extract_client_cert_info(request)
 
-        # Add original request headers
         for key, value in request.headers.items():
             if key.lower() not in ["host", "content-length"]:
                 headers[key] = value
@@ -295,7 +286,6 @@ class BaseProxyServer(WebServer):
 
     async def proxy_to_service(self, service_name: str, path: str, request: Request):
         """Proxy requests to K8s workload services"""
-        # Validate service name (basic security)
         if not service_name.replace("-", "").replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="Invalid service name")
 
@@ -304,12 +294,10 @@ class BaseProxyServer(WebServer):
         params = dict(request.query_params)
         headers = self.extract_client_cert_info(request)
 
-        # Add original request headers
         for key, value in request.headers.items():
             if key.lower() not in ["host", "content-length"]:
                 headers[key] = value
 
-        # Build K8s service URL with dedicated proxy port (8002)
         service_url = (
             f"http://{service_name}.{SERVICE_NAMESPACE}.{CLUSTER_DOMAIN}:{SERVICE_PORT}"
         )
@@ -335,20 +323,16 @@ class ExternalProxyServer(BaseProxyServer):
 
     def _setup_routes(self):
         """Setup routes with validator authentication."""
-        # Health check (no auth)
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
 
-        # Server health check (no auth)
         self.app.add_api_route(
             "/server/health", self.proxy_to_host_service_health, methods=["GET"]
         )
 
-        # Allow miner and validator to retrieve devices
         self.app.add_api_route(
             "/server/devices", self.proxy_devices_authenticated, methods=["GET"]
         )
 
-        # Protected routes with validator auth
         self.app.add_api_route(
             "/server/{path:path}",
             self.proxy_to_host_service_authenticated,
@@ -410,10 +394,8 @@ class InternalProxyServer(BaseProxyServer):
     def _setup_routes(self):
         """Setup routes with no authentication."""
 
-        # Health check
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
 
-        # Unprotected routes (NetworkPolicy enforces access control)
         self.app.add_api_route(
             "/server/{path:path}",
             self.proxy_to_host_service,
@@ -458,25 +440,20 @@ async def run_server_async(
 def run():
     """Main entry point."""
     try:
-        # Suppress OpenBLAS warning
         os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-        # Load configuration
         config = AttestationProxyConfig()
 
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)
             logger.debug("Debug mode enabled")
 
-        # Create shared resources
         shared_resources = SharedProxyResources()
 
-        # Create external server config (port 8443)
         external_config = AttestationProxyConfig()
         external_config.port = EXTERNAL_PORT
         external_server = ExternalProxyServer(external_config, shared_resources)
 
-        # Create internal server config (port 8444)
         internal_config = AttestationProxyConfig()
         internal_config.port = INTERNAL_PORT
         internal_server = InternalProxyServer(internal_config, shared_resources)
@@ -487,11 +464,9 @@ def run():
             f"  - Internal port {INTERNAL_PORT}: NetworkPolicy enforced, no auth"
         )
 
-        # Run both servers concurrently
         async def run_both():
             try:
                 logger.info("Launching both servers concurrently...")
-                # Run both servers concurrently
                 await asyncio.gather(
                     run_server_async(external_server, EXTERNAL_PORT, external_config),
                     run_server_async(internal_server, INTERNAL_PORT, internal_config),
@@ -500,7 +475,6 @@ def run():
                 logger.exception(f"Error running servers: {e}")
                 raise
             finally:
-                # Cleanup shared resources
                 await shared_resources.cleanup()
                 logger.info("Attestation proxy shutdown complete")
 

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sek8s_common.config import AuthConfig, ServerConfig
 from substrateinterface import Keypair
 
 logger = logging.getLogger(__name__)
@@ -21,94 +22,6 @@ class NamespacePolicy(BaseModel):
 
     mode: Literal["enforce", "warn", "monitor"] = "enforce"
     exempt: bool = False
-
-
-class ServerConfig(BaseSettings):
-    # Server configuration
-    bind_address: str = Field(default="127.0.0.1")
-    port: int = Field(default=8443, ge=1, le=65535)
-    uds_path: Optional[Path] = Field(default=None)
-    require_tls: bool = Field(default=True, alias="REQUIRE_TLS")
-
-    # TLS configuration
-    tls_cert_path: Optional[Path] = Field(default=None, alias="TLS_CERT_PATH")
-    tls_key_path: Optional[Path] = Field(default=None, alias="TLS_KEY_PATH")
-    client_ca_path: Optional[Path] = Field(default=None, alias="CLIENT_CA_PATH")
-    mtls_required: bool = Field(default=False, alias="MTLS_REQUIRED")
-
-    # Debug mode
-    debug: bool = Field(default=False, alias="DEBUG")
-
-    model_config = SettingsConfigDict(
-        env_file_encoding="utf-8", case_sensitive=False, env_prefix="", extra="ignore"
-    )
-
-    @field_validator("uds_path", mode="before")
-    @classmethod
-    def normalize_empty_uds(cls, v: Optional[str | Path]) -> Optional[Path | str]:
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
-
-    @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="before")
-    @classmethod
-    def normalize_empty_tls(cls, v: Optional[str | Path]) -> Optional[str | Path]:
-        if v is None:
-            return None
-        if isinstance(v, str):
-            if not v.strip():
-                return None
-            return v
-        return v
-
-    @field_validator("tls_cert_path", "tls_key_path", "client_ca_path", mode="after")
-    @classmethod
-    def validate_paths(cls, v: Optional[Path]) -> Optional[Path]:
-        """Validate that paths exist if specified."""
-        if v and not v.exists():
-            raise ValueError(f"Path does not exist: {v}")
-        return v
-
-    @field_validator("uds_path", mode="after")
-    @classmethod
-    def validate_uds_directory(cls, v: Optional[Path]) -> Optional[Path]:
-        """Validate that parent dir exist if specified."""
-        if v and not v.parent.exists():
-            raise ValueError(f"Directory for UDS path does not exist: {v}")
-        return v
-
-
-class AuthConfig(ServerConfig):
-    """Base configuration for services that require authentication.
-
-    Services can inherit from this to get auth capabilities.
-    Auth fields are optional by default - services can make them required if needed.
-    """
-
-    miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
-    allowed_validators_str: Optional[str] = Field(
-        default=None, alias="ALLOWED_VALIDATORS"
-    )
-
-    _allowed_validators: Optional[list[str]] = None
-
-    @property
-    def allowed_validators(self) -> list[str]:
-        """Parse comma-separated validator list."""
-        if self._allowed_validators is None:
-            if self.allowed_validators_str:
-                self._allowed_validators = [
-                    item.strip()
-                    for item in self.allowed_validators_str.split(",")
-                    if item.strip()
-                ]
-            else:
-                self._allowed_validators = []
-        return self._allowed_validators
-
-    model_config = SettingsConfigDict(
-        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
-    )
 
 
 class AttestationServiceConfig(ServerConfig):
@@ -240,21 +153,6 @@ class ImageConfig(AuthConfig):
 
 
 image_config = ImageConfig()
-
-
-class AttestationProxyConfig(AuthConfig):
-    """Configuration for attestation proxy service.
-
-    Requires auth fields to be configured.
-    """
-
-    # Override to make these required
-    allowed_validators_str: str = Field(..., alias="ALLOWED_VALIDATORS")
-    miner_ss58: str = Field(..., alias="MINER_SS58")
-
-    model_config = SettingsConfigDict(
-        env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
-    )
 
 
 class AdmissionConfig(ServerConfig):

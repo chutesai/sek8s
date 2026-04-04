@@ -245,6 +245,26 @@ test = ["black ; implementation_name == \"cpython\"", "coverage", "flake8", "fla
 typetest = ["mypy ; implementation_name == \"cpython\"", "pyright", "typing-extensions"]
 
 [[package]]
+name = "attestation-proxy"
+version = "0.1.0"
+description = "Dual-port attestation proxy for sek8s"
+optional = false
+python-versions = ">=3.12,<3.15"
+groups = ["main"]
+files = []
+develop = true
+
+[package.dependencies]
+backoff = "^2.2.1"
+httpx = "^0.28.1"
+loguru = "^0.7.3"
+sek8s-common = {path = "../sek8s-common", develop = true}
+
+[package.source]
+type = "directory"
+url = "src/attestation-proxy"
+
+[[package]]
 name = "attrs"
 version = "25.3.0"
 description = "Classes Without Boilerplate"
@@ -3888,6 +3908,16 @@ groups = ["main"]
 files = []
 develop = true
 
+[package.dependencies]
+bittensor-wallet = "^4.0.1"
+fastapi = ">=0.110.1,<0.111.0"
+loguru = "^0.7.3"
+orjson = "^3.11.3"
+pydantic = "^2.11.7"
+pydantic-settings = "^2.10.1"
+substrate-interface = "^1.7.11"
+uvicorn = "^0.37.0"
+
 [package.source]
 type = "directory"
 url = "src/sek8s-common"
@@ -4525,4 +4555,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.15"
-content-hash = "c4ae2348fadcf86e1062fb625c612d796599103c18ee603ac9ff10f1de0e3766"
+content-hash = "72e07805f45c2a7c355b1c9f4512bfd5d3ac54ce6487caa80caa6b6336b616b3"

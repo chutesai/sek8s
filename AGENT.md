@@ -24,7 +24,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 - **Never install a new dependency** without discussion first
 - **Never modify database schemas** without showing the migration plan (sek8s has no DB; this applies if one is added)
-- **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`) and `src/sek8s-common/` (`sek8s_common`); tests under `tests/`
+- **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`), `src/sek8s-common/` (`sek8s_common`), and `src/attestation-proxy/` (`attestation_proxy`); tests under `tests/`
 - **Shell scripts** in `host-tools/scripts/` and `guest-tools/`
 - **Ansible roles** in `ansible/k3s/roles/`
 - **OPA policies** in `ansible/k3s/roles/admission-controller/files/policies/`
@@ -35,7 +35,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **Never commit or alter git history** without explicit human approval for that specific action — including `git commit`, `git commit --amend`, rebase, history-changing `reset`, `cherry-pick`, branch delete, or force-push. Leave changes for the author to review and commit unless they clearly asked you to perform a named git operation.
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
-- **Version bumps** — Guest / VM image line: `ansible/k3s/VERSION`. Python packages: `src/sek8s/VERSION` and `src/sek8s-common/VERSION` must match `[tool.poetry] version` (see `scripts/sync_pyproject_versions.py` and CI). Update the relevant file(s) when releasing or changing those surfaces.
+- **Version bumps** — Guest / VM image line: `ansible/k3s/VERSION`. Python packages: `src/sek8s/VERSION`, `src/sek8s-common/VERSION`, and `src/attestation-proxy/VERSION` must match `[tool.poetry] version` (see `scripts/sync_pyproject_versions.py` and CI). Update the relevant file(s) when releasing or changing those surfaces.
 
 ## Patterns
 
@@ -53,11 +53,12 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 | Component | Purpose |
 |-----------|---------|
-| **src/sek8s/sek8s/services/** | FastAPI services: admission-controller, attestation, attestation-proxy, system-manager |
+| **src/sek8s/sek8s/services/** | FastAPI services: admission-controller, attestation, system-manager |
 | **src/sek8s/sek8s/providers/** | Hardware abstraction: TDX quotes, GPU info (nvidia-ml-py), NVIDIA trust |
 | **src/sek8s/sek8s/validators/** | Admission validators: OPA, cosign, registry |
 | **src/sek8s/sek8s/system_manager/** | System manager sub-routers: images, status, cache |
-| **src/sek8s-common/sek8s_common/** | Shared utilities for sek8s packages |
+| **src/sek8s-common/sek8s_common/** | Shared config, server, auth, and constants for all sek8s packages |
+| **src/attestation-proxy/attestation_proxy/** | Dual-port attestation proxy (separate lean Docker image) |
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
 | **host-tools/** | Host setup (`chutes.host`), GPU binding/VM launch (`chutes.guest`), networking, orchestration (`quick-launch.sh`) |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
@@ -81,7 +82,7 @@ source .venv/bin/activate
 
 ## Development Commands
 
-Python tooling uses an optional **second make goal** = package directory under `src/` (`sek8s`, `sek8s-common`, future `attestation-proxy`). Omit it to run **every** package.
+Python tooling uses an optional **second make goal** = package directory under `src/` (`sek8s`, `sek8s-common`, `attestation-proxy`). Omit it to run **every** package.
 
 ```bash
 make list-packages     # Show packages under src/
