@@ -18,7 +18,7 @@
     suffix: sek8s
   register: build_dir
 
-- name: Copy sek8s build artifacts
+- name: Copy root build artifacts
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../../../{{ item }}"
     dest: "{{ build_dir.path }}"
@@ -27,14 +27,30 @@
     - poetry.lock
     - README.md
 
-- name: Copy sek8s source to temp directory
+- name: Create src directory in build dir
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}/src"
+    state: directory
+
+- name: Copy sek8s source packages to temp directory
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../../../sek8s"
-    dest: "{{ build_dir.path }}"
+    src: "{{ playbook_dir }}/../../../src/{{ item }}"
+    dest: "{{ build_dir.path }}/src/"
+  loop:
+    - sek8s
+    - sek8s-common
 
 - name: Create application directory
   ansible.builtin.file:
     path: /opt/sek8s
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create application src directory
+  ansible.builtin.file:
+    path: /opt/sek8s/src
     state: directory
     owner: root
     group: root
@@ -49,7 +65,8 @@
     group: root
     mode: preserve
   loop:
-    - sek8s/
+    - src/sek8s/
+    - src/sek8s-common/
     - pyproject.toml
   ignore_errors: yes
 
@@ -85,10 +102,10 @@
 
 - name: Install sek8s package with pip
   ansible.builtin.pip:
-    name: /opt/sek8s/
+    name: /opt/sek8s/src/sek8s/
     virtualenv: /opt/sek8s/venv
     state: present
-    extra_args: "-e"  # Editable install since we're installing from local directory
+    extra_args: "-e"
 
 - name: Clean up temporary build directory
   ansible.builtin.file:

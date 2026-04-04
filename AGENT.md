@@ -40,11 +40,11 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 ## Patterns
 
 - **Async-first**: Use `async def`, `aiohttp`, etc. for FastAPI services. Avoid blocking calls in request handlers
-- **Pydantic models** for request/response schemas (in `sek8s/models.py`, `sek8s/responses.py`, per-module `models.py`)
-- **Provider pattern** for hardware abstraction (`sek8s/providers/tdx.py`, `gpu.py`, `nvtrust.py`)
-- **Validator pattern** for admission control (`sek8s/validators/base.py`, `opa.py`, `cosign.py`, `registry.py`)
-- **Config via pydantic-settings** (`sek8s/config.py`)
-- **Custom exceptions** in `sek8s/exceptions.py`
+- **Pydantic models** for request/response schemas (in `src/sek8s/sek8s/models.py`, `src/sek8s/sek8s/responses.py`, per-module `models.py`)
+- **Provider pattern** for hardware abstraction (`src/sek8s/sek8s/providers/tdx.py`, `gpu.py`, `nvtrust.py`)
+- **Validator pattern** for admission control (`src/sek8s/sek8s/validators/base.py`, `opa.py`, `cosign.py`, `registry.py`)
+- **Config via pydantic-settings** (`src/sek8s/sek8s/config.py`)
+- **Custom exceptions** in `src/sek8s/sek8s/exceptions.py`
 - **Shell scripts**: use `set -euo pipefail`, quote variables, use functions for reusable logic
 - **One concern per module** — keep files focused; split when they grow large
 - **Follow existing naming** — check neighboring files and packages for conventions
@@ -53,16 +53,31 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 | Component | Purpose |
 |-----------|---------|
-| **sek8s/services/** | FastAPI services: admission-controller, attestation, attestation-proxy, system-manager, system-status |
-| **sek8s/providers/** | Hardware abstraction: TDX quotes, GPU info (nvidia-ml-py), NVIDIA trust |
-| **sek8s/validators/** | Admission validators: OPA, cosign, registry |
-| **sek8s/system_manager/** | System manager sub-routers: images, status, cache |
+| **src/sek8s/sek8s/services/** | FastAPI services: admission-controller, attestation, attestation-proxy, system-manager |
+| **src/sek8s/sek8s/providers/** | Hardware abstraction: TDX quotes, GPU info (nvidia-ml-py), NVIDIA trust |
+| **src/sek8s/sek8s/validators/** | Admission validators: OPA, cosign, registry |
+| **src/sek8s/sek8s/system_manager/** | System manager sub-routers: images, status, cache |
+| **src/sek8s-common/sek8s_common/** | Shared utilities for sek8s packages |
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
 | **host-tools/** | Host setup (`chutes.host`), GPU binding/VM launch (`chutes.guest`), networking, orchestration (`quick-launch.sh`) |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
 | **ansible/k3s/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **opa/** | OPA policy files for admission controller |
 | **tdx/** | Git submodule: Intel TDX guest image creation (Canonical). Host setup is handled by `host-tools/scripts/setup-tdx-host` |
+
+## Environment Setup
+
+Poetry is installed via `pipx` at `~/.local/bin/poetry` (not in the project virtualenv). Before running any shell commands, ensure `~/.local/bin` is on your `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The project virtualenv lives at `.venv/` (created by `poetry install`). To activate it for ad-hoc commands:
+
+```bash
+source .venv/bin/activate
+```
 
 ## Development Commands
 

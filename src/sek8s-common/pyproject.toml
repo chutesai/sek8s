@@ -1,0 +1,14 @@
+[tool.poetry]
+name = "sek8s-common"
+version = "0.1.0"
+description = "Shared utilities for sek8s packages"
+authors = ["Kyle Widmann <kyle@chutes.ai>"]
+readme = "README.md"
+packages = [{include = "sek8s_common"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.15"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

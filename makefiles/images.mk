@@ -3,19 +3,19 @@ tag: ##@images Tag docker images from the build step for Parachutes repo
 tag:
 	@echo "Tagging images for:$$PROJECT"; \
     pkg_name=$$PROJECT; \
-	image_dir="docker"; \
-    if [ -f "$$pkg_name/VERSION" ]; then \
-        pkg_version=$$(head "$$pkg_name/VERSION"); \
+	image_dir="docker/$$pkg_name"; \
+    if [ -f "src/$$pkg_name/VERSION" ]; then \
+        pkg_version=$$(head "src/$$pkg_name/VERSION"); \
     elif [ -f "$$image_dir/VERSION" ]; then \
         pkg_version=$$(head "$$image_dir/VERSION"); \
     fi; \
     echo "--------------------------------------------------------"; \
     echo "Tagging $$pkg_name (version: $$pkg_version)"; \
     echo "--------------------------------------------------------"; \
-    if [ -d "docker" ]; then \
-        if [ -f "docker/Dockerfile" ]; then \
-            if [ -f "docker/image.conf" ]; then \
-                dockerfile="docker/Dockerfile"; \
+    if [ -d "$$image_dir" ]; then \
+        if [ -f "$$image_dir/Dockerfile" ]; then \
+            if [ -f "$$image_dir/image.conf" ]; then \
+                dockerfile="$$image_dir/Dockerfile"; \
                 available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \
                 image_conf=$$(cat $$image_dir/image.conf); \
                 registry=$$(echo "$$image_conf" | cut -d'/' -f1); \
@@ -49,34 +49,33 @@ tag:
                     fi; \
                 done; \
             else \
-                echo "Skipping $$pkg_name: docker/image.conf not found"; \
+                echo "Skipping $$pkg_name: $$image_dir/image.conf not found"; \
             fi; \
         else \
-            echo "Skipping $$pkg_name: docker/Dockerfile not found"; \
+            echo "Skipping $$pkg_name: $$image_dir/Dockerfile not found"; \
         fi; \
     else \
-        echo "Skipping $$pkg_name: docker directory not found"; \
+        echo "Skipping $$pkg_name: $$image_dir directory not found"; \
     fi; \
     echo ; \
 
 .PHONY: push
-push: ##@images Tag docker images from the build step for Parachutes repo
-push:
+push: ##@images Push docker images to registry
 push:
 	@echo "Pushing images for:$$PROJECT"; \
 	pkg_name=$$PROJECT; \
-	image_dir=docker; \
-	if [ -f "$$pkg_name/VERSION" ]; then \
-		pkg_version=$$(head "$$pkg_name/VERSION"); \
+	image_dir=docker/$$pkg_name; \
+	if [ -f "src/$$pkg_name/VERSION" ]; then \
+		pkg_version=$$(head "src/$$pkg_name/VERSION"); \
 	elif [ -f "$$image_dir/VERSION" ]; then \
 		pkg_version=$$(head "$$image_dir/VERSION"); \
 	fi; \
 	echo "--------------------------------------------------------"; \
 	echo "Pushing $$pkg_name (version: $$pkg_version)"; \
 	echo "--------------------------------------------------------"; \
-	if [ -f "docker/Dockerfile" ]; then \
-		if [ -f "docker/image.conf" ]; then \
-			dockerfile="docker/Dockerfile"; \
+	if [ -f "$$image_dir/Dockerfile" ]; then \
+		if [ -f "$$image_dir/image.conf" ]; then \
+			dockerfile="$$image_dir/Dockerfile"; \
 			available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \
 			image_conf=$$(cat $$image_dir/image.conf); \
 			registry=$$(echo "$$image_conf" | cut -d'/' -f1); \
@@ -108,10 +107,10 @@ push:
 				fi; \
 			done; \
 		else \
-			echo "Skipping $$pkg_name: docker/$$pkg_name/image.conf not found"; \
+			echo "Skipping $$pkg_name: $$image_dir/image.conf not found"; \
 		fi; \
 	else \
-		echo "Skipping $$pkg_name: docker/$$pkg_name/Dockerfile not found"; \
+		echo "Skipping $$pkg_name: $$image_dir/Dockerfile not found"; \
 	fi; \
 	echo ;
 
@@ -131,7 +130,7 @@ images:
 	echo "Building images for: $$image_names"; \
 	for image_dir in $$filtered_images; do \
 		pkg_name=$$(basename $$image_dir); \
-		pkg_version=$$(if [ -f "$$image_dir/VERSION" ]; then head "$$image_dir/VERSION"; else echo "dev"; fi); \
+		pkg_version=$$(if [ -f "src/$$pkg_name/VERSION" ]; then head "src/$$pkg_name/VERSION"; elif [ -f "$$image_dir/VERSION" ]; then head "$$image_dir/VERSION"; else echo "dev"; fi); \
 		if [ -f "$$image_dir/Dockerfile" ]; then \
 			echo "Building images for $$pkg_name (version: $$pkg_version)"; \
 			DOCKER_BUILDKIT=1 docker build --progress=plain --target production \
@@ -175,18 +174,18 @@ sign:
 	fi; \
 	export COSIGN_PASSWORD; \
 	pkg_name=$$PROJECT; \
-	image_dir=docker; \
-	if [ -f "$$pkg_name/VERSION" ]; then \
-		pkg_version=$$(head "$$pkg_name/VERSION"); \
+	image_dir=docker/$$pkg_name; \
+	if [ -f "src/$$pkg_name/VERSION" ]; then \
+		pkg_version=$$(head "src/$$pkg_name/VERSION"); \
 	elif [ -f "$$image_dir/VERSION" ]; then \
 		pkg_version=$$(head "$$image_dir/VERSION"); \
 	fi; \
 	echo "--------------------------------------------------------"; \
 	echo "Signing $$pkg_name (version: $$pkg_version)"; \
 	echo "--------------------------------------------------------"; \
-	if [ -f "docker/Dockerfile" ]; then \
-		if [ -f "docker/image.conf" ]; then \
-			dockerfile="docker/Dockerfile"; \
+	if [ -f "$$image_dir/Dockerfile" ]; then \
+		if [ -f "$$image_dir/image.conf" ]; then \
+			dockerfile="$$image_dir/Dockerfile"; \
 			available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \
 			image_conf=$$(cat $$image_dir/image.conf); \
 			registry=$$(echo "$$image_conf" | cut -d'/' -f1); \
@@ -237,9 +236,9 @@ sign:
 				fi; \
 			done; \
 		else \
-			echo "Skipping $$pkg_name: docker/$$pkg_name/image.conf not found"; \
+			echo "Skipping $$pkg_name: $$image_dir/image.conf not found"; \
 		fi; \
 	else \
-		echo "Skipping $$pkg_name: docker/$$pkg_name/Dockerfile not found"; \
+		echo "Skipping $$pkg_name: $$image_dir/Dockerfile not found"; \
 	fi; \
 	echo ;

@@ -2,6 +2,7 @@
 **/.mypy_cache
 **/.pytest_cache
 **/.venv
+**/__pycache__
 **/docker
 **/*.code-workspace
 **/.dockerignore

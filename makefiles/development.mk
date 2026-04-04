@@ -25,18 +25,22 @@ venv: ##@development Set up virtual environment
 venv:
 	${POETRY} install
 
+.PHONY: list-packages
+list-packages: ##@development Show packages under src/
+	@echo $(PACKAGES)
+
 .PHONY: build
 buid: ##@development Build the docker images
 build: prod_image ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
 build: dev_image ?= ${PROJECT}_development:${BRANCH_NAME}-${BUILD_NUMBER}
-build: args ?= -f docker/Dockerfile --build-arg PROJECT_DIR=${PROJECT} --network=host --build-arg BUILDKIT_INLINE_CACHE=1
+build: args ?= -f docker/${PROJECT}/Dockerfile --build-arg PROJECT_DIR=${PROJECT} --build-arg PROJECT=${PROJECT} --network=host --build-arg BUILDKIT_INLINE_CACHE=1
 build:
 	@echo "Building images for: $$PROJECT"; \
 	pkg_name="$$PROJECT"; \
-	pkg_version=$$(if [ -f "$$pkg_name/VERSION" ]; then head $$pkg_name/VERSION; else echo "dev"; fi); \
-	if [ -f "docker/Dockerfile" ]; then \
+	pkg_version=$$(if [ -f "src/$$pkg_name/VERSION" ]; then head src/$$pkg_name/VERSION; else echo "dev"; fi); \
+	if [ -f "docker/$$pkg_name/Dockerfile" ]; then \
 		echo "Building images for $$pkg_name (version: $$pkg_version)"; \
-		dockerfile="docker/Dockerfile"; \
+		dockerfile="docker/$$pkg_name/Dockerfile"; \
 		available_targets=$$(docker build --progress=plain -f $$dockerfile --target help . 2>/dev/null | grep "^FROM" | sed 's/.*AS \([^[:space:]]*\).*/\1/' || echo ""); \
 		if [ -z "$$available_targets" ]; then \
 			available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \

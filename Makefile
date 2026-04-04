@@ -1,4 +1,5 @@
 SHELL := /bin/bash -e -o pipefail
+export PATH := $(HOME)/.local/bin:$(PATH)
 PROJECT ?= sek8s
 BRANCH_NAME ?= $(shell git rev-parse --abbrev-ref HEAD | tr '/' '-')
 BUILD_NUMBER ?= 0
@@ -6,9 +7,36 @@ IMAGE ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
 COMPOSE_FILE=docker/docker-compose.yaml
 COMPOSE_BASE_FILE=docker/docker-compose.base.yaml
 DC=docker compose -p ${PROJECT} -f ${COMPOSE_FILE} -f ${COMPOSE_BASE_FILE}
-SERVICE := sek8s
 POETRY ?= "poetry"
-VERSION := $(shell head VERSION | grep -Eo "\d+.\d+.\d+")
+
+SRC_DIR := src
+PACKAGES := $(shell ls $(SRC_DIR))
+VERSION := $(shell head ansible/k3s/VERSION | grep -Eo "\d+.\d+.\d+")
+
+# Package filter: "make <target> sek8s" selects one package
+PKG_FILTER := $(filter $(PACKAGES),$(MAKECMDGOALS))
+SELECTED_PKGS := $(or $(PKG_FILTER),$(PACKAGES))
+
+pkg_to_import = $(subst -,_,$(1))
+
+# Source dirs for selected packages: src/<pkg>/<import>/
+SRC_DIRS := $(foreach pkg,$(SELECTED_PKGS),$(SRC_DIR)/$(pkg)/$(call pkg_to_import,$(pkg)))
+
+# Include tests/ when sek8s is selected (tests live at root)
+ifneq ($(filter sek8s,$(SELECTED_PKGS)),)
+LINT_DIRS := $(SRC_DIRS) tests
+else
+LINT_DIRS := $(SRC_DIRS)
+endif
+
+COV_ARGS := $(foreach pkg,$(SELECTED_PKGS),--cov=$(call pkg_to_import,$(pkg)))
+MYPY_ARGS := $(foreach pkg,$(SELECTED_PKGS),-p $(call pkg_to_import,$(pkg)))
+
+# Allow package names as make goals (no-op targets)
+ifneq ($(PKG_FILTER),)
+$(PKG_FILTER):
+	@:
+endif
 
 .DEFAULT_GOAL := help
 

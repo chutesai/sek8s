@@ -12,17 +12,19 @@ ENV \
 ENV PATH="$POETRY_HOME/bin:$PATH"
 
 ARG PROJECT_DIR
+ARG PROJECT
 
 USER root
 
 FROM base AS build
-# Install poetry
 RUN curl -sSL https://install.python-poetry.org | python3 - \
     && chmod a+x /opt/poetry/bin/poetry
 
+ARG PROJECT_DIR
+
 WORKDIR /app
 COPY pyproject.toml poetry.lock README.md ./
-COPY ${PROJECT_DIR} ${PROJECT_DIR}/
+COPY src/ src/
 RUN poetry install --only main
 
 ##################################################
@@ -49,6 +51,7 @@ USER ${APP_USER}
 ##################################################
 
 FROM build AS development
+ARG PROJECT_DIR
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV APP_USER=chutes
@@ -61,7 +64,7 @@ RUN useradd ${APP_USER} -s /bin/bash -d /home/${APP_USER} && mkdir -p /home/${AP
 USER root
 
 WORKDIR /app
-COPY --chown=${APP_USER}:${APP_GROUP} ./${PROJECT_DIR} ./
+COPY --chown=${APP_USER}:${APP_GROUP} ./src/ ./src/
 RUN poetry install
 RUN chown ${APP_USER}:${APP_GROUP} .
 
