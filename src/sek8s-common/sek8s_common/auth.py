@@ -1,23 +1,21 @@
-import hashlib
-import json
+"""Shared authentication utilities for sek8s services."""
+
 import time
 from functools import lru_cache
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional
 
 from bittensor_wallet import Keypair
 from fastapi import Header, HTTPException, Request, status
 from loguru import logger
-from substrateinterface import KeypairType
-
-from sek8s.config import MinerConfig
-from sek8s.services._shared import (
+from sek8s_common.config import AuthConfig
+from sek8s_common.constants import (
     HOTKEY_HEADER,
-    MINER_HEADER,
     NONCE_HEADER,
     NONCE_MAX_AGE_SECONDS,
     SIGNATURE_HEADER,
     VALIDATOR_HEADER,
 )
+from substrateinterface import KeypairType
 
 
 @lru_cache(maxsize=2)
@@ -41,14 +39,10 @@ async def verify_validator_signature(
 
     This ensures only authorized validators can access the external endpoints.
     """
-    # Lazy import to avoid loading config at module import time
-    from sek8s.config import AuthConfig
-
     settings = AuthConfig()
 
     logger.info(f"Checking external request: {validator}:{nonce} - {signature}")
 
-    # If some but not all headers provided, reject
     if not all([validator, nonce, signature]):
         logger.warning(
             f"Partial authentication headers provided: "
@@ -59,7 +53,6 @@ async def verify_validator_signature(
             detail="Incomplete authentication: requires X-Chutes-Validator, X-Chutes-Nonce, X-Chutes-Signature",
         )
 
-    # Verify validator is allowed
     if validator not in settings.allowed_validators:
         logger.warning(f"Unauthorized validator attempted access: {validator}")
         raise HTTPException(status_code=403, detail="Validator not authorized")
@@ -67,7 +60,6 @@ async def verify_validator_signature(
     if validator is None or nonce is None or signature is None:
         raise HTTPException(status_code=401, detail="Missing authentication headers")
 
-    # Verify nonce is recent (prevent replay attacks)
     try:
         nonce_timestamp = int(nonce)
         current_time = int(time.time())
@@ -95,19 +87,13 @@ async def verify_validator_signature(
             status_code=401, detail="Invalid nonce format (must be Unix timestamp)"
         )
 
-    # Build signature string: validator:nonce:payload_hash
     if hasattr(request.state, "body_sha256") and request.state.body_sha256:
         payload_hash = request.state.body_sha256
     else:
-        # For GET requests with no body, use the URL path as the purpose
         payload_hash = request.url.path
 
-    # Format: validator:nonce:payload_hash
     signature_string = f"{validator}:{nonce}:{payload_hash}"
 
-    # Verify signature using public-key cryptography
-    # get_keypair creates a keypair from SS58 address (contains only public key)
-    # The verify() method checks if signature was created by the matching private key
     try:
         keypair = get_keypair(validator)
         signature_bytes = bytes.fromhex(signature)
@@ -155,12 +141,6 @@ def authorize(
         nonce: str | None = Header(None, alias=NONCE_HEADER),
         signature: str | None = Header(None, alias=SIGNATURE_HEADER),
     ):
-        """
-        Verify the authenticity of a request.
-        """
-        # Lazy import to avoid loading config at module import time
-        from sek8s.config import AuthConfig
-
         settings = AuthConfig()
 
         logger.info(
@@ -215,75 +195,3 @@ def authorize(
             )
 
     return _authorize
-
-
-def _get_signing_message(
-    hotkey: str,
-    nonce: str,
-    payload_str: str | bytes | None,
-    purpose: str | None = None,
-    payload_hash: str | None = None,
-) -> str:
-    """
-    Get the signing message for a given hotkey, nonce, and payload.
-    """
-    if payload_str:
-        if isinstance(payload_str, str):
-            payload_str = payload_str.encode()
-        return f"{hotkey}:{nonce}:{hashlib.sha256(payload_str).hexdigest()}"
-    elif purpose:
-        return f"{hotkey}:{nonce}:{purpose}"
-    elif payload_hash:
-        return f"{hotkey}:{nonce}:{payload_hash}"
-    else:
-        raise ValueError("Either payload_str or purpose must be provided")
-
-
-def sign_request(
-    payload: Dict[str, Any] | str | None = None,
-    purpose: str | None = None,
-    management: bool = False,
-) -> Tuple[Dict[str, str], Optional[str]]:
-    """
-    Generate signed headers for miner requests to validators (e.g. GET /chutes/{id}/hf_info).
-    Uses purpose for GET (no body); uses payload for POST. Returns (headers, payload_str or None).
-    """
-    miner_settings = MinerConfig()
-    if miner_settings.miner_ss58 is None:
-        raise ValueError("MINER_SS58 must be configured")
-    if miner_settings.miner_keypair is None:
-        raise ValueError("miner_keypair must be configured")
-    nonce = str(int(time.time()))
-    headers: Dict[str, str] = {
-        HOTKEY_HEADER: miner_settings.miner_ss58,
-        NONCE_HEADER: nonce,
-    }
-    signature_string: str | None = None
-    payload_string: str | None = None
-    if payload is not None:
-        if isinstance(payload, (list, dict)):
-            headers["Content-Type"] = "application/json"
-            payload_string = json.dumps(payload)
-        else:
-            payload_string = payload
-        signature_string = _get_signing_message(
-            miner_settings.miner_ss58,
-            nonce,
-            payload_str=payload_string,
-            purpose=None,
-        )
-    else:
-        signature_string = _get_signing_message(
-            miner_settings.miner_ss58, nonce, payload_str=None, purpose=purpose
-        )
-    if signature_string is None:
-        raise ValueError("Failed to generate signature string")
-    if management:
-        signature_string = miner_settings.miner_ss58 + ":" + signature_string
-        headers[MINER_HEADER] = headers.pop(HOTKEY_HEADER)
-        headers[VALIDATOR_HEADER] = headers[MINER_HEADER]
-    logger.debug(f"Signing message: {signature_string}")
-    headers[SIGNATURE_HEADER] = miner_settings.miner_keypair.sign(
-        signature_string.encode()
-    ).hex()
-    return (headers, payload_string)

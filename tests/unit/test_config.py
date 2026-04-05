@@ -9,10 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from attestation_proxy.config import AttestationProxyConfig
 
 from sek8s.config import (
     AdmissionConfig,
-    AttestationProxyConfig,
     CacheConfig,
     CosignConfig,
     NamespacePolicy,

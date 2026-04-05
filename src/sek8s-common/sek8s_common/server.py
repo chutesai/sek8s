@@ -9,10 +9,9 @@ from fastapi import FastAPI
 from fastapi.applications import AppType
 from fastapi.responses import ORJSONResponse
 from loguru import logger
+from sek8s_common.config import ServerConfig
 from starlette.requests import Request
 from starlette.types import Lifespan
-
-from sek8s.config import ServerConfig
 
 
 class WebServer:
@@ -60,7 +59,6 @@ class WebServer:
 
     def run(self):
         """Run the webhook server."""
-        # Build kwargs dynamically for uvicorn.run
         uvicorn_kwargs = {}
 
         if self.config.uds_path:
@@ -78,7 +76,6 @@ class WebServer:
                 uvicorn_kwargs["ssl_keyfile"] = self.config.tls_key_path
                 logger.info("TLS enabled")
 
-                # Configure mTLS if required
                 if self.config.mtls_required:
                     if not self.config.client_ca_path or not os.path.exists(
                         self.config.client_ca_path

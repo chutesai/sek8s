@@ -39,12 +39,11 @@ jobs:
           fi
 
           # Paths that imply a user-visible / artifact release (guest image stack or sek8s packages).
-          # Extend this list if new top-level components should force a VERSION bump.
           needs_version=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              ansible/*|sek8s/*|nvevidence/*)
+              ansible/*|src/sek8s/*|src/sek8s-common/*|src/attestation-proxy/*|nvevidence/*)
                 needs_version=true
                 break
                 ;;
@@ -56,16 +55,16 @@ jobs:
           done <<< "$changed_files"
 
           if [ "$needs_version" != true ]; then
-            echo "No changes under ansible/, sek8s/, nvevidence/, pyproject.toml, or poetry.lock."
+            echo "No changes under ansible/, src/sek8s/, src/sek8s-common/, src/attestation-proxy/, nvevidence/, pyproject.toml, or poetry.lock."
             echo "VERSION bump not required for this merge."
             exit 0
           fi
 
-          if ! echo "$changed_files" | grep -qx "VERSION"; then
-            echo "::error::This PR changes the guest image stack and/or sek8s packages but VERSION was not updated. Bump VERSION before merging."
+          if ! echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
+            echo "::error::This PR changes the guest image stack and/or sek8s packages but ansible/k3s/VERSION was not updated. Bump the version before merging."
             exit 1
           fi
-          echo "VERSION was updated together with release-scoped paths."
+          echo "ansible/k3s/VERSION was updated together with release-scoped paths."
 
   tag-version:
     needs: version-check
@@ -86,21 +85,21 @@ jobs:
           base="${{ github.event.before }}"
           head="${{ github.sha }}"
           changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
-          if echo "$changed_files" | grep -qx "VERSION"; then
+          if echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "VERSION is in this push; will create tag if new."
+            echo "ansible/k3s/VERSION is in this push; will create tag if new."
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "VERSION unchanged on this push; skipping tag."
+            echo "ansible/k3s/VERSION unchanged on this push; skipping tag."
           fi
 
       - name: Read version
         id: version
         if: steps.version_changed.outputs.changed == 'true'
         run: |
-          version=$(cat VERSION | tr -d '\n' | tr -d ' ')
+          version=$(cat ansible/k3s/VERSION | tr -d '\n' | tr -d ' ')
           if [ -z "$version" ]; then
-            echo "::error::VERSION file is empty"
+            echo "::error::ansible/k3s/VERSION file is empty"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -111,7 +110,7 @@ jobs:
           version="${{ steps.version.outputs.version }}"
           tag="v$version"
           if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
-            echo "::error::Tag $tag already exists. Bump the version in VERSION before merging."
+            echo "::error::Tag $tag already exists. Bump the version in ansible/k3s/VERSION before merging."
             exit 1
           fi
 
