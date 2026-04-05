@@ -20,7 +20,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git fetch origin ${{ github.event.pull_request.base.sha }}
 
-      - name: Verify VERSION
+      - name: Verify VERSION bumps
         run: |
           set -euo pipefail
 
@@ -38,36 +38,94 @@ jobs:
             exit 0
           fi
 
-          # Paths that imply a user-visible / artifact release (guest image stack or sek8s packages).
-          needs_version=false
+          errors=0
+
+          # --- VM image domain ---
+          # ansible/*, src/sek8s/*, src/sek8s-common/*, nvevidence/*,
+          # root pyproject.toml, poetry.lock  →  ansible/k3s/VERSION
+          needs_vm_bump=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              ansible/*|src/sek8s/*|src/sek8s-common/*|src/attestation-proxy/*|nvevidence/*)
-                needs_version=true
-                break
-                ;;
-              pyproject.toml|poetry.lock)
-                needs_version=true
-                break
-                ;;
+              ansible/*|src/sek8s/*|src/sek8s-common/*|nvevidence/*) needs_vm_bump=true; break ;;
+              pyproject.toml|poetry.lock) needs_vm_bump=true; break ;;
             esac
           done <<< "$changed_files"
 
-          if [ "$needs_version" != true ]; then
-            echo "No changes under ansible/, src/sek8s/, src/sek8s-common/, src/attestation-proxy/, nvevidence/, pyproject.toml, or poetry.lock."
-            echo "VERSION bump not required for this merge."
-            exit 0
+          if [ "$needs_vm_bump" = true ]; then
+            if ! echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
+              echo "::error::Changes in the VM image domain (ansible/, src/sek8s/, src/sek8s-common/, nvevidence/, root pyproject/lock) require an ansible/k3s/VERSION bump."
+              errors=$((errors + 1))
+            else
+              echo "VM domain: ansible/k3s/VERSION bumped."
+            fi
+          else
+            echo "No VM-domain changes detected."
           fi
 
-          if ! echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
-            echo "::error::This PR changes the guest image stack and/or sek8s packages but ansible/k3s/VERSION was not updated. Bump the version before merging."
+          # --- Attestation-proxy domain ---
+          # src/attestation-proxy/*  →  src/attestation-proxy/VERSION
+          needs_proxy_bump=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              src/attestation-proxy/*) needs_proxy_bump=true; break ;;
+            esac
+          done <<< "$changed_files"
+
+          if [ "$needs_proxy_bump" = true ]; then
+            if ! echo "$changed_files" | grep -qx "src/attestation-proxy/VERSION"; then
+              echo "::error::Changes under src/attestation-proxy/ require an src/attestation-proxy/VERSION bump."
+              errors=$((errors + 1))
+            else
+              echo "Proxy domain: src/attestation-proxy/VERSION bumped."
+            fi
+          else
+            echo "No proxy-domain changes detected."
+          fi
+
+          # --- Changelog heading check ---
+          # When a VERSION file is bumped, the corresponding CHANGELOG must
+          # contain a ## [x.y.z] heading matching that version.
+          check_changelog() {
+            local version_file="$1" changelog_file="$2"
+            if echo "$changed_files" | grep -qx "$version_file"; then
+              local version
+              version=$(tr -d '[:space:]' < "$version_file")
+              if ! grep -qE "^## \[${version}\]" "$changelog_file"; then
+                echo "::error::$version_file is $version but $changelog_file has no ## [$version] entry. Add a changelog heading for this version."
+                errors=$((errors + 1))
+              else
+                echo "Changelog: $changelog_file has entry for $version."
+              fi
+            fi
+          }
+
+          check_changelog "ansible/k3s/VERSION"          "changelogs/vm/CHANGELOG.md"
+          check_changelog "src/sek8s/VERSION"             "changelogs/sek8s/CHANGELOG.md"
+          check_changelog "src/attestation-proxy/VERSION" "changelogs/attestation-proxy/CHANGELOG.md"
+
+          if [ "$errors" -gt 0 ]; then
             exit 1
           fi
-          echo "ansible/k3s/VERSION was updated together with release-scoped paths."
+
+  pyproject-sync-check:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify VERSION ↔ pyproject.toml sync
+        run: python scripts/sync_pyproject_versions.py --check
 
   tag-version:
-    needs: version-check
+    needs: [version-check, pyproject-sync-check]
     if: github.event_name == 'push' && github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
@@ -78,48 +136,62 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if VERSION changed on this push
-        id: version_changed
+      - name: Detect changed VERSION files
+        id: detect
         run: |
           set -euo pipefail
           base="${{ github.event.before }}"
           head="${{ github.sha }}"
           changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
-          if echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "ansible/k3s/VERSION is in this push; will create tag if new."
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "ansible/k3s/VERSION unchanged on this push; skipping tag."
-          fi
 
-      - name: Read version
-        id: version
-        if: steps.version_changed.outputs.changed == 'true'
-        run: |
-          version=$(cat ansible/k3s/VERSION | tr -d '\n' | tr -d ' ')
-          if [ -z "$version" ]; then
-            echo "::error::ansible/k3s/VERSION file is empty"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          check_version() {
+            local file="$1" key="$2"
+            if echo "$changed_files" | grep -qx "$file"; then
+              echo "${key}=true" >> "$GITHUB_OUTPUT"
+              echo "$file changed; will tag."
+            else
+              echo "${key}=false" >> "$GITHUB_OUTPUT"
+            fi
+          }
 
-      - name: Check tag does not exist
-        if: steps.version_changed.outputs.changed == 'true'
-        run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="v$version"
-          if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
-            echo "::error::Tag $tag already exists. Bump the version in ansible/k3s/VERSION before merging."
-            exit 1
-          fi
+          check_version "ansible/k3s/VERSION"          "vm"
+          check_version "src/sek8s/VERSION"             "sek8s"
+          check_version "src/sek8s-common/VERSION"      "common"
+          check_version "src/attestation-proxy/VERSION"  "proxy"
 
-      - name: Create and push tag
-        if: steps.version_changed.outputs.changed == 'true'
+      - name: Create tags
         run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="v$version"
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "$tag"
-          git push origin "$tag"
+
+          create_tag() {
+            local version_file="$1" prefix="$2"
+            local version
+            version=$(tr -d '[:space:]' < "$version_file")
+            if [ -z "$version" ]; then
+              echo "::error::$version_file is empty"
+              exit 1
+            fi
+            local tag="${prefix}${version}"
+            if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
+              echo "::error::Tag $tag already exists. Bump the version in $version_file."
+              exit 1
+            fi
+            git tag "$tag"
+            git push origin "$tag"
+            echo "Created tag $tag"
+          }
+
+          if [ "${{ steps.detect.outputs.vm }}" = "true" ]; then
+            create_tag "ansible/k3s/VERSION" "v"
+          fi
+          if [ "${{ steps.detect.outputs.sek8s }}" = "true" ]; then
+            create_tag "src/sek8s/VERSION" "sek8s-v"
+          fi
+          if [ "${{ steps.detect.outputs.common }}" = "true" ]; then
+            create_tag "src/sek8s-common/VERSION" "sek8s-common-v"
+          fi
+          if [ "${{ steps.detect.outputs.proxy }}" = "true" ]; then
+            create_tag "src/attestation-proxy/VERSION" "attestation-proxy-v"
+          fi
