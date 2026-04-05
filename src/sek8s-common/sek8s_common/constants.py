@@ -1,4 +1,3 @@
-# Header names
 VALIDATOR_HEADER = "X-Chutes-Validator"
 HOTKEY_HEADER = "X-Chutes-Hotkey"
 MINER_HEADER = "X-Chutes-Miner"

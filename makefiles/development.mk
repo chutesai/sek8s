@@ -25,22 +25,29 @@ venv: ##@development Set up virtual environment
 venv:
 	${POETRY} install
 
+.PHONY: list-packages
+list-packages: ##@development Show packages under src/
+	@echo $(PACKAGES)
+
 .PHONY: build
-buid: ##@development Build the docker images
-build: prod_image ?= ${PROJECT}:${BRANCH_NAME}-${BUILD_NUMBER}
-build: dev_image ?= ${PROJECT}_development:${BRANCH_NAME}-${BUILD_NUMBER}
-build: args ?= -f docker/Dockerfile --build-arg PROJECT_DIR=${PROJECT} --network=host --build-arg BUILDKIT_INLINE_CACHE=1
+build: ##@development Build the docker images
+build: args ?= --network=host --build-arg BUILDKIT_INLINE_CACHE=1
 build:
-	@echo "Building images for: $$PROJECT"; \
-	pkg_name="$$PROJECT"; \
-	pkg_version=$$(if [ -f "$$pkg_name/VERSION" ]; then head $$pkg_name/VERSION; else echo "dev"; fi); \
-	if [ -f "docker/Dockerfile" ]; then \
-		echo "Building images for $$pkg_name (version: $$pkg_version)"; \
-		dockerfile="docker/Dockerfile"; \
-		available_targets=$$(docker build --progress=plain -f $$dockerfile --target help . 2>/dev/null | grep "^FROM" | sed 's/.*AS \([^[:space:]]*\).*/\1/' || echo ""); \
-		if [ -z "$$available_targets" ]; then \
-			available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \
+	@if [ -n "$$PROJECT" ]; then \
+		pkg_list="$$PROJECT"; \
+	else \
+		pkg_list="$(PACKAGES)"; \
+	fi; \
+	for pkg_name in $$pkg_list; do \
+		image_dir="docker/$$pkg_name"; \
+		pkg_version=$$(if [ -f "src/$$pkg_name/VERSION" ]; then head "src/$$pkg_name/VERSION"; else echo "dev"; fi); \
+		if [ ! -f "$$image_dir/Dockerfile" ]; then \
+			echo "Skipping $$pkg_name: $$image_dir/Dockerfile not found"; \
+			continue; \
 		fi; \
+		echo "Building images for $$pkg_name (version: $$pkg_version)"; \
+		dockerfile="$$image_dir/Dockerfile"; \
+		available_targets=$$(grep -i "^FROM.*AS" $$dockerfile | sed 's/.*AS[[:space:]]*\([^[:space:]]*\).*/\1/' | tr '[:upper:]' '[:lower:]' || echo "production development"); \
 		for stage_target in $$available_targets; do \
 			if [[ "$$stage_target" == production* ]]; then \
 				if [[ "$$stage_target" == *-* ]]; then \
@@ -79,9 +86,7 @@ build:
 					${args} .; \
 			fi; \
 		done; \
-	else \
-		echo "Skipping $$pkg_name: docker/$$pkg_name/Dockerfile not found"; \
-	fi;
+	done
 
 .PHONY: infrastructure
 infrastructure: ##@development Set up infrastructure for tests

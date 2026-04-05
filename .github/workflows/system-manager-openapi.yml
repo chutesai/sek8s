@@ -4,7 +4,8 @@ on:
   push:
     branches: [main, "release/**"]
     paths:
-      - "sek8s/**"
+      - "src/sek8s/**"
+      - "src/sek8s-common/**"
       - "scripts/generate_openapi.py"
       - "tests/unit/test_openapi_spec.py"
       - "docs/system_manager_openapi.json"
@@ -13,7 +14,8 @@ on:
   pull_request:
     branches: [main, "release/**"]
     paths:
-      - "sek8s/**"
+      - "src/sek8s/**"
+      - "src/sek8s-common/**"
       - "scripts/generate_openapi.py"
       - "tests/unit/test_openapi_spec.py"
       - "docs/system_manager_openapi.json"
