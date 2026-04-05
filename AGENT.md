@@ -92,7 +92,7 @@ make lint-local sek8s-common     # Lint only sek8s-common
 make test-local                  # pytest with --cov for each package import
 make test-local sek8s            # pytest with --cov=sek8s only
 make reformat sek8s              # Format one package (+ tests when sek8s)
-make generate-openapi            # Requires sek8s in selection (default “all” includes it)
+make generate-openapi            # Requires sek8s in selection (default "all" includes it)
 ```
 
 Other targets:
