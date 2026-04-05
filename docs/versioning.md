@@ -2,12 +2,12 @@
 
 ## VERSION files
 
-| File | Controls | Current value |
-|------|----------|---------------|
-| `ansible/k3s/VERSION` | VM / guest image release line | `0.2.7` |
-| `src/sek8s/VERSION` | `sek8s` Python package version | `0.2.5` |
-| `src/sek8s-common/VERSION` | `sek8s-common` Python package version | `0.1.0` |
-| `src/attestation-proxy/VERSION` | `attestation-proxy` Python package version | `0.1.0` |
+| File | Controls |
+|------|----------|
+| `ansible/k3s/VERSION` | VM / guest image release line |
+| `src/sek8s/VERSION` | `sek8s` Python package version |
+| `src/sek8s-common/VERSION` | `sek8s-common` Python package version |
+| `src/attestation-proxy/VERSION` | `attestation-proxy` Python package version |
 
 Each `src/<pkg>/VERSION` is the **source of truth** for `[tool.poetry] version` in the
 corresponding `pyproject.toml`. The sync script (`scripts/sync_pyproject_versions.py`)
@@ -56,12 +56,12 @@ proxy, bump the proxy version in the same PR.
 Tags are created automatically on merge to `main` when the corresponding VERSION file
 changes:
 
-| VERSION file | Tag format | Example |
-|-------------|------------|---------|
-| `ansible/k3s/VERSION` | `v{version}` | `v0.2.7` |
-| `src/sek8s/VERSION` | `sek8s-v{version}` | `sek8s-v0.2.5` |
-| `src/sek8s-common/VERSION` | `sek8s-common-v{version}` | `sek8s-common-v0.1.0` |
-| `src/attestation-proxy/VERSION` | `attestation-proxy-v{version}` | `attestation-proxy-v0.1.0` |
+| VERSION file | Tag format |
+|-------------|------------|
+| `ansible/k3s/VERSION` | `v{version}` |
+| `src/sek8s/VERSION` | `sek8s-v{version}` |
+| `src/sek8s-common/VERSION` | `sek8s-common-v{version}` |
+| `src/attestation-proxy/VERSION` | `attestation-proxy-v{version}` |
 
 The `v{version}` tag (from `ansible/k3s/VERSION`) is the **VM image release tag**.
 Per-package tags track Python package versions independently.
