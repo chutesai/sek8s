@@ -35,7 +35,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **Never commit or alter git history** without explicit human approval for that specific action — including `git commit`, `git commit --amend`, rebase, history-changing `reset`, `cherry-pick`, branch delete, or force-push. Leave changes for the author to review and commit unless they clearly asked you to perform a named git operation.
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
-- **Version bumps** — Guest / VM image line: `ansible/k3s/VERSION`. Python packages: `src/sek8s/VERSION`, `src/sek8s-common/VERSION`, and `src/attestation-proxy/VERSION` must match `[tool.poetry] version` (see `scripts/sync_pyproject_versions.py` and CI). Update the relevant file(s) when releasing or changing those surfaces.
+- **Version bumps** — Two domains; see [docs/versioning.md](docs/versioning.md) for the full policy. **VM domain** (`ansible/*`, `src/sek8s/*`, `src/sek8s-common/*`, `nvevidence/*`, root `pyproject.toml`/`poetry.lock`): bump `ansible/k3s/VERSION`. **Proxy domain** (`src/attestation-proxy/*`): bump `src/attestation-proxy/VERSION`. Per-package `VERSION` files are the source of truth for `[tool.poetry] version` — keep them in sync via `scripts/sync_pyproject_versions.py`. When bumping a VERSION file, add a `## [x.y.z]` entry in the corresponding changelog under `changelogs/` ([Keep a Changelog](https://keepachangelog.com/) format). Use `## [Unreleased]` for work-in-progress on release branches. CI enforces domain checks, pyproject sync, and changelog headings.
 
 ## Patterns
 
@@ -92,7 +92,7 @@ make lint-local sek8s-common     # Lint only sek8s-common
 make test-local                  # pytest with --cov for each package import
 make test-local sek8s            # pytest with --cov=sek8s only
 make reformat sek8s              # Format one package (+ tests when sek8s)
-make generate-openapi            # Requires sek8s in selection (default “all” includes it)
+make generate-openapi            # Requires sek8s in selection (default "all" includes it)
 ```
 
 Other targets:
