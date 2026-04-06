@@ -1,14 +1,12 @@
 """Tests for VFIO PCI cleanup and binding helpers."""
 
-import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from chutes.guest.vfio import (
     _get_bound_driver,
     has_stale_vfio_devices,
     unbind_stale_vfio_devices,
 )
-
 
 # ---------------------------------------------------------------------------
 # _get_bound_driver
@@ -19,9 +17,7 @@ from chutes.guest.vfio import (
 @patch("os.path.islink", return_value=True)
 def test_get_bound_driver_returns_driver_name(mock_islink, mock_realpath):
     assert _get_bound_driver("0000:b8:00.0") == "vfio-pci"
-    mock_islink.assert_called_once_with(
-        "/sys/bus/pci/devices/0000:b8:00.0/driver"
-    )
+    mock_islink.assert_called_once_with("/sys/bus/pci/devices/0000:b8:00.0/driver")
 
 
 @patch("os.path.islink", return_value=False)
