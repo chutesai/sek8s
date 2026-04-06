@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `src/attestation-proxy/VERSION`
 
-## [Unreleased]
-
 ## [0.1.0] - 2026-04-02
 
 ### Added

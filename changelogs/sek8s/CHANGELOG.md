@@ -10,8 +10,6 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [Unreleased]
-
 ## [0.2.5] - 2026-04-02
 
 ### Changed
