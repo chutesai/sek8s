@@ -1,5 +1,6 @@
 """VFIO device binding, PCI cleanup, SR-IOV VF creation, and udev rules."""
 
+import concurrent.futures
 import os
 import subprocess
 
@@ -116,7 +117,7 @@ def has_stale_vfio_devices(devices: list[str]) -> bool:
 
 def unbind_stale_vfio_devices(
     devices: list[str],
-    per_device_timeout: float = 10.0,
+    per_device_timeout: float = 45.0,
 ):
     """Unbind devices from vfio-pci and clear driver_override.
 
@@ -128,28 +129,44 @@ def unbind_stale_vfio_devices(
     PCI subsystem and no config-space teardown is needed, avoiding hangs on
     devices that are slow to respond after SBR.
 
-    An SBR reset should be performed before calling this function when devices
-    may be unresponsive (e.g. after guest driver left them in a bad state).
+    Devices may need up to ~30 seconds to become responsive after an SBR
+    reset.  All unbinds are fired in parallel so every device gets the full
+    timeout window; the wall-clock cost is max(device_times) instead of
+    sum(device_times).
 
     On first boot (no previous QEMU session), devices won't be on vfio-pci
     and this function is a no-op.
     """
-    unbound = 0
-    for bdf in devices:
-        if _get_bound_driver(bdf) != 'vfio-pci':
-            continue
+    stale = [bdf for bdf in devices if _get_bound_driver(bdf) == 'vfio-pci']
+    if not stale:
+        return
+
+    def _unbind_one(bdf: str) -> tuple[str, bool]:
         unbind_path = '/sys/bus/pci/drivers/vfio-pci/unbind'
         override_path = f'/sys/bus/pci/devices/{bdf}/driver_override'
-        print(f'    Unbinding {bdf} from vfio-pci...', flush=True)
-        if _sysfs_write(unbind_path, bdf, timeout=per_device_timeout):
-            _sysfs_write(override_path, '', timeout=per_device_timeout)
-            print(f'    {bdf} unbound')
-            unbound += 1
-        else:
-            print(f'    Warning: {bdf} unbind timed out')
+        ok = _sysfs_write(unbind_path, bdf, timeout=per_device_timeout)
+        if ok:
+            _sysfs_write(override_path, '', timeout=5.0)
+        return bdf, ok
 
-    if unbound:
-        print(f'  Unbound {unbound} stale vfio-pci device(s)')
+    print(f'    Unbinding {len(stale)} device(s) in parallel...', flush=True)
+    results: dict[str, bool] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(stale)) as pool:
+        futures = {pool.submit(_unbind_one, bdf): bdf for bdf in stale}
+        for future in concurrent.futures.as_completed(futures):
+            bdf, ok = future.result()
+            results[bdf] = ok
+            if ok:
+                print(f'    {bdf} unbound')
+            else:
+                print(f'    Warning: {bdf} unbind timed out after {per_device_timeout}s')
+
+    succeeded = sum(1 for v in results.values() if v)
+    failed = sum(1 for v in results.values() if not v)
+    if succeeded:
+        print(f'  Unbound {succeeded} stale vfio-pci device(s)')
+    if failed:
+        print(f'  Warning: {failed} device(s) could not be unbound (may need host reboot)')
 
 
 def install_udev_rules(scripts_dir: str):

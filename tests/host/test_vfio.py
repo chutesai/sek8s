@@ -64,9 +64,9 @@ def test_unbind_writes_unbind_and_clears_override(mock_driver, mock_write):
     """Devices on vfio-pci should be unbound and have driver_override cleared."""
     unbind_stale_vfio_devices(["0000:b8:00.0"])
 
-    calls = [c[0] for c in mock_write.call_args_list]
-    assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b8:00.0") == calls[0][:2]
-    assert ("/sys/bus/pci/devices/0000:b8:00.0/driver_override", "") == calls[1][:2]
+    calls = [(c[0][0], c[0][1]) for c in mock_write.call_args_list]
+    assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b8:00.0") in calls
+    assert ("/sys/bus/pci/devices/0000:b8:00.0/driver_override", "") in calls
 
 
 @patch("chutes.guest.vfio._sysfs_write", return_value=True)
@@ -83,8 +83,7 @@ def test_unbind_handles_multiple_devices(mock_driver, mock_write):
     assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b9:00.0") in written
     assert ("/sys/bus/pci/devices/0000:b8:00.0/driver_override", "") in written
     assert ("/sys/bus/pci/devices/0000:b9:00.0/driver_override", "") in written
-    # ba:00.0 was not vfio-pci, so nothing written for it
-    assert all("0000:ba:00.0" not in c[1] for c in written)
+    assert all("0000:ba:00.0" not in str(c) for c in written)
 
 
 @patch("chutes.guest.vfio._sysfs_write", return_value=False)

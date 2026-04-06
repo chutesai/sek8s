@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 
 from chutes.guest.detection import (
     detect_infiniband_pfs,
@@ -94,6 +95,9 @@ def _prepare_devices(
         print('  Stale vfio-pci devices detected from previous session')
         print('  SBR reset (via parent bridge) to restore device responsiveness...')
         _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+        sbr_settle = 5
+        print(f'  Waiting {sbr_settle}s for devices to re-initialize after SBR...')
+        time.sleep(sbr_settle)
         print('  Unbinding stale vfio-pci devices...')
         unbind_stale_vfio_devices(all_devices)
 
