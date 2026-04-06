@@ -1,7 +1,8 @@
-"""VFIO device binding, libvirt nodedev helpers, SR-IOV VF creation, and udev rules."""
+"""VFIO device binding, PCI cleanup, SR-IOV VF creation, and udev rules."""
 
 import os
 import subprocess
+import time
 
 # Number of SR-IOV VFs to create per InfiniBand PF for VM passthrough
 IB_VFS_PER_PF = 1
@@ -80,18 +81,66 @@ def bind_explicit_devices_to_vfio(devices: list[str]):
         print(f'    {device} → vfio-pci')
 
 
-def virsh_bind_device(device_bdf: str):
-    """Reattach then detach a PCI device via virsh (matches historical setup-gpus.sh)."""
-    virsh_bdf = device_bdf.replace(":", "_").replace(".", "_")
-    print(f"  Libvirt nodedev for {device_bdf} (reattach → detach)")
-    subprocess.check_call(
-        ["sudo", "virsh", "nodedev-reattach", f"pci_{virsh_bdf}"],
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.check_call(
-        ["sudo", "virsh", "nodedev-detach", f"pci_{virsh_bdf}"],
-        stderr=subprocess.STDOUT,
-    )
+def _get_bound_driver(device_bdf: str) -> str | None:
+    """Return the driver name currently bound to a PCI device, or None."""
+    driver_link = f'/sys/bus/pci/devices/{device_bdf}/driver'
+    if os.path.islink(driver_link):
+        return os.path.basename(os.path.realpath(driver_link))
+    return None
+
+
+def pci_cleanup_stale_devices(devices: list[str], timeout: float = 5.0):
+    """Remove PCI devices with stale vfio-pci bindings and rescan.
+
+    After a QEMU session exits, devices remain bound to vfio-pci with stale
+    iommufd references.  Removing and rescanning clears all kernel-level state
+    (driver bindings, iommufd refs, AER errors, cached config space) so the
+    next QEMU launch starts clean.
+
+    On first boot (no previous QEMU session), devices won't be on vfio-pci
+    and this function is a no-op.
+    """
+    removed: list[str] = []
+    for bdf in devices:
+        if _get_bound_driver(bdf) != 'vfio-pci':
+            continue
+        remove_path = f'/sys/bus/pci/devices/{bdf}/remove'
+        try:
+            with open(remove_path, 'w') as f:
+                f.write('1')
+            removed.append(bdf)
+            print(f'    {bdf} removed (was vfio-pci)')
+        except OSError as e:
+            print(f'    Warning: could not remove {bdf}: {e}')
+
+    if not removed:
+        return
+
+    print('  Rescanning PCI bus...')
+    try:
+        with open('/sys/bus/pci/rescan', 'w') as f:
+            f.write('1')
+    except OSError as e:
+        print(f'  Warning: PCI rescan failed: {e}')
+        return
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        missing = [
+            bdf for bdf in removed
+            if not os.path.exists(f'/sys/bus/pci/devices/{bdf}')
+        ]
+        if not missing:
+            print(f'  All {len(removed)} device(s) reappeared after rescan')
+            return
+        time.sleep(0.5)
+
+    still_missing = [
+        bdf for bdf in removed
+        if not os.path.exists(f'/sys/bus/pci/devices/{bdf}')
+    ]
+    if still_missing:
+        print(f'  Warning: devices did not reappear after rescan: {still_missing}')
 
 
 def install_udev_rules(scripts_dir: str):

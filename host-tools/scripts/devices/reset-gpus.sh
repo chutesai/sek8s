@@ -84,3 +84,38 @@ fi
 echo "Resetting GPUs via Secondary Bus Reset..."
 sudo "$CMD" --reset-with-sbr --reset-after-ppcie-mode-switch
 echo "GPU reset complete."
+
+# PCI remove + rescan: clear stale kernel state (driver bindings, iommufd
+# refs, AER errors) so the next VM launch starts with a clean device tree.
+NVIDIA_VENDOR="10de"
+GPU_BDFS=$(lspci -Dnn | grep "$NVIDIA_VENDOR" | awk '{print $1}')
+
+if [[ -n "$GPU_BDFS" ]]; then
+    echo "Removing PCI devices to clear kernel state..."
+    for bdf in $GPU_BDFS; do
+        remove_path="/sys/bus/pci/devices/${bdf}/remove"
+        if [[ -w "$remove_path" ]]; then
+            echo "  Removing $bdf"
+            echo 1 > "$remove_path"
+        fi
+    done
+
+    echo "Rescanning PCI bus..."
+    echo 1 > /sys/bus/pci/rescan
+
+    # Wait for devices to reappear (up to 5 seconds).
+    for _attempt in $(seq 1 10); do
+        all_back=true
+        for bdf in $GPU_BDFS; do
+            if [[ ! -d "/sys/bus/pci/devices/${bdf}" ]]; then
+                all_back=false
+                break
+            fi
+        done
+        if $all_back; then
+            echo "All devices reappeared after rescan."
+            break
+        fi
+        sleep 0.5
+    done
+fi

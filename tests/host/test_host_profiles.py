@@ -171,10 +171,11 @@ def test_2510_enables_kvm_intel_tdx():
     "profile_cls",
     [Ubuntu2504Profile, Ubuntu2510Profile],
 )
-def test_host_profiles_include_libvirt_daemon_for_nodedev(profile_cls):
-    """libvirtd is required for reliable virsh nodedev-* during VFIO prep."""
+def test_host_profiles_do_not_include_libvirt(profile_cls):
+    """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
     profile = profile_cls()
-    assert "libvirt-daemon-system" in profile.packages
+    assert "libvirt-daemon-system" not in profile.packages
+    assert "libvirt-clients" not in profile.packages
 
 
 def test_2504_does_not_set_kvm_intel_tdx():
