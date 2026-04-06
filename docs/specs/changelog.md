@@ -8,7 +8,7 @@
 ## Context
 
 - **Packages affected**: `sek8s`, `attestation-proxy`, VM image line (`ansible/k3s/`)
-- **Key files**: `docs/versioning.md`, `.github/workflows/version-tag.yml`, per-package `VERSION` files
+- **Key files**: `docs/versioning.md`, `.github/workflows/version-tag.yml`, `scripts/promote_changelogs.py`
 - **Dependencies**: None new (zero-dependency implementation)
 
 The monorepo has clear version surfaces (see `docs/versioning.md`) with per-package
@@ -23,26 +23,24 @@ outside this repo. The audience is the team deploying and operating sek8s infras
 
 ## Design Decisions
 
-### Tooling: manual CHANGELOG.md + CI gate (Option C)
+### Tooling: fragment-based with automated promotion
 
-Manual `CHANGELOG.md` files with a CI check that requires the changelog to contain a
-`## [x.y.z]` heading matching the VERSION file when it's bumped. No new dependencies.
-If fragment-based generation (e.g. towncrier) becomes valuable later, it layers on top
-without rework.
-
-Options A (towncrier) and B (manual with no enforcement) were considered and rejected.
-Towncrier adds dev dependency friction; no enforcement leads to stale changelogs.
+Each feature branch drops a categorized `.md` fragment into
+`changelogs/<component>/unreleased/`. On merge to main, `scripts/promote_changelogs.py`
+aggregates fragments by category, writes a versioned `## [x.y.z] - date` entry to
+`CHANGELOG.md`, deletes the fragments, and commits. No external dependencies (towncrier
+or similar). The fragment approach eliminates merge conflicts on `CHANGELOG.md`.
 
 ### Scope: per-component changelogs in top-level directory
 
 Changelogs live under `changelogs/`, one subdirectory per component, consistent with
 the repo's top-level domain organization (`src/`, `ansible/`, `tests/`, `docs/`).
 
-| Changelog | Tracks |
-|-----------|--------|
-| `changelogs/vm/CHANGELOG.md` | VM image releases (operator-facing) |
-| `changelogs/sek8s/CHANGELOG.md` | sek8s package changes |
-| `changelogs/attestation-proxy/CHANGELOG.md` | Proxy-specific changes |
+| Component | CHANGELOG | Fragments |
+|-----------|-----------|-----------|
+| VM image | `changelogs/vm/CHANGELOG.md` | `changelogs/vm/unreleased/` |
+| sek8s | `changelogs/sek8s/CHANGELOG.md` | `changelogs/sek8s/unreleased/` |
+| Proxy | `changelogs/attestation-proxy/CHANGELOG.md` | `changelogs/attestation-proxy/unreleased/` |
 
 **No sek8s-common changelog.** Common is always consumed by sek8s or attestation-proxy;
 changes are documented in the consumer's changelog.
@@ -55,19 +53,22 @@ enforcement never fires for them.
 
 ### Branching model support
 
-The `## [Unreleased]` pattern from Keep a Changelog supports both workflows:
+Both trunk-based and release-branch workflows are supported. Feature branches add
+fragments to `unreleased/`. Whether those merge directly to main or accumulate on a
+release branch, the promotion happens on merge to main when VERSION is bumped.
 
-- **Trunk-based**: PR adds `## [x.y.z] - date` heading + entries directly.
-- **Release branch**: features add entries under `## [Unreleased]`, release PR renames
-  to `## [x.y.z] - date` and bumps VERSION.
+### Fragment format
 
-CI checks for the **version heading in the file**, not just that the file was modified,
-so both models satisfy the same invariant.
+Files use [Keep a Changelog](https://keepachangelog.com/) category headers
+(`### Added`, `### Changed`, `### Fixed`, `### Removed`) with bullet entries.
+Filename derived from branch name (strip prefix): `feature/nvidia-590-drivers`
+becomes `nvidia-590-drivers.md`.
 
-### Format
+### Versioned headings are automation-only
 
-Standard [Keep a Changelog](https://keepachangelog.com/) format with categories:
-Added, Changed, Fixed, Removed.
+Developers never manually create `## [x.y.z]` headings in `CHANGELOG.md`. CI rejects
+PRs where the versioned heading already exists. This ensures all changelog entries flow
+through the fragment system and are aggregated consistently.
 
 ---
 
@@ -82,12 +83,14 @@ Added, Changed, Fixed, Removed.
 ## Goal
 
 Success =
-1. Each version domain has a `CHANGELOG.md` under `changelogs/` following Keep a
-   Changelog format.
-2. CI requires the relevant `CHANGELOG.md` to contain a `## [x.y.z]` heading matching
-   the VERSION file when it's bumped (same PR).
-3. No new runtime or dev dependencies introduced.
-4. `docs/versioning.md` and `AGENT.md` updated to reference the changelog policy.
+1. Each version domain has a `CHANGELOG.md` and `unreleased/` directory under
+   `changelogs/`.
+2. CI validates that fragments exist when VERSION is bumped, and that versioned
+   headings do NOT already exist (automation creates them).
+3. On merge to main, automation aggregates fragments, writes the versioned entry,
+   deletes fragments, commits, and tags.
+4. No new runtime or dev dependencies introduced.
+5. `docs/versioning.md` and `AGENT.md` document the fragment workflow.
 
 ---
 
@@ -102,28 +105,28 @@ Success =
 
 ## Output Format
 
-1. `changelogs/vm/CHANGELOG.md` — seeded with `0.2.7` entry.
-2. `changelogs/sek8s/CHANGELOG.md` — seeded with `0.2.5` entry.
-3. `changelogs/attestation-proxy/CHANGELOG.md` — seeded with `0.1.0` entry.
-4. `.github/workflows/version-tag.yml` — `check_changelog` function in version-check
-   job verifies `## [x.y.z]` heading exists when VERSION is bumped.
-5. `docs/versioning.md` — new "Changelogs" section with mapping table and workflow docs.
-6. `AGENT.md` — version bumps rule updated to include changelog requirement.
+1. `changelogs/<component>/CHANGELOG.md` — seeded with version history.
+2. `changelogs/<component>/unreleased/` — fragment directories with `.gitkeep`.
+3. `scripts/promote_changelogs.py` — `--check` and `--promote` modes.
+4. `.github/workflows/version-tag.yml` — fragment check on PRs, promote + commit +
+   tag on merge to main.
+5. `docs/versioning.md` — fragment workflow documentation.
+6. `AGENT.md` — version bumps rule references fragment system.
 
 ---
 
 ## Failure Conditions
 
-- Merge conflicts in CHANGELOG.md become chronic. Mitigation: unreleased section stays
-  short; entries move to versioned sections on release.
-- Format drifts across packages. Mitigation: start with human review; add format
+- Format drifts across fragments. Mitigation: start with human review; add format
   linting later if needed.
+- Developer forgets to add a fragment. Mitigation: CI fails the PR when VERSION is
+  bumped without fragments in `unreleased/`.
 
 ---
 
 ## Rollout Notes
 
-- Each CHANGELOG.md seeded with existing version history (minimal — version numbers
-  and dates with brief descriptions).
+- Each CHANGELOG.md seeded with existing version history from discord announcements.
+- Existing `## [Unreleased]` content migrated to fragment files.
 - No Ansible changes, no feature flags.
-- Backward compatible: purely additive files + CI check.
+- Backward compatible: purely additive files + CI automation.

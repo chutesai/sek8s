@@ -68,47 +68,73 @@ Per-package tags track Python package versions independently.
 
 ## Changelogs
 
-Changelogs live under a top-level `changelogs/` directory, one subdirectory per
-component. The format follows [Keep a Changelog](https://keepachangelog.com/).
+Changelogs use a **fragment-based** system. Each feature branch drops a `.md` file
+into `changelogs/<component>/unreleased/`. On merge to main, automation aggregates
+the fragments into a versioned entry in `CHANGELOG.md` and deletes the fragment files.
 
-| Changelog | Tracks | Paired VERSION file |
-|-----------|--------|---------------------|
-| `changelogs/vm/CHANGELOG.md` | VM / guest image releases | `ansible/k3s/VERSION` |
-| `changelogs/sek8s/CHANGELOG.md` | `sek8s` package changes | `src/sek8s/VERSION` |
-| `changelogs/attestation-proxy/CHANGELOG.md` | Proxy package changes | `src/attestation-proxy/VERSION` |
+| Component | CHANGELOG | Fragments | Paired VERSION file |
+|-----------|-----------|-----------|---------------------|
+| VM image | `changelogs/vm/CHANGELOG.md` | `changelogs/vm/unreleased/` | `ansible/k3s/VERSION` |
+| sek8s | `changelogs/sek8s/CHANGELOG.md` | `changelogs/sek8s/unreleased/` | `src/sek8s/VERSION` |
+| Proxy | `changelogs/attestation-proxy/CHANGELOG.md` | `changelogs/attestation-proxy/unreleased/` | `src/attestation-proxy/VERSION` |
 
 `sek8s-common` does not have its own changelog. Common changes are documented in the
 consuming package's changelog (`sek8s` or `attestation-proxy`).
 
-### Workflow
+### Adding a changelog fragment
 
-When bumping a VERSION file, add a `## [x.y.z]` heading (with date) and entries in the
-corresponding changelog. Use the standard categories: Added, Changed, Fixed, Removed.
+On your feature branch, create a `.md` file in the appropriate `unreleased/` directory.
+The filename should match the branch name (strip the prefix):
+`feature/nvidia-590-drivers` -> `nvidia-590-drivers.md`.
 
-For **release branches** where multiple features accumulate before merging to main:
-add entries under `## [Unreleased]` on the feature branches, then rename the section
-to `## [x.y.z] - YYYY-MM-DD` in the release PR that bumps VERSION.
+Use [Keep a Changelog](https://keepachangelog.com/) category headers:
 
-CI enforces: when a VERSION file is bumped, the corresponding changelog must contain
-a `## [x.y.z]` heading matching that version.
+```markdown
+### Added
+- New image management API endpoints
+
+### Fixed
+- Attestation-proxy restart bug in attestation-system namespace
+```
+
+Categories: **Added**, **Changed**, **Fixed**, **Removed**.
+
+### What happens on merge to main
+
+The `version-tag.yml` workflow automatically:
+
+1. Collects all `.md` fragments from each component's `unreleased/` directory.
+2. Groups entries by category (Added > Changed > Fixed > Removed).
+3. Writes a `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`.
+4. Deletes the fragment files and commits the result.
+5. Creates per-package git tags.
+
+Never manually add `## [x.y.z]` headings to `CHANGELOG.md` -- automation owns those.
 
 ## CI enforcement
 
-The `version-tag.yml` workflow enforces three things on every PR to `main`:
+The `version-tag.yml` workflow enforces on every PR to `main`:
 
 1. **Domain version check** — if files in a domain changed, the domain's VERSION must
    be bumped.
 2. **Pyproject sync check** — `scripts/sync_pyproject_versions.py --check` verifies
    that every `src/<pkg>/VERSION` matches its `pyproject.toml` version.
-3. **Changelog check** — if a VERSION file was bumped, the paired CHANGELOG.md must
-   contain a `## [x.y.z]` heading for that version.
+3. **Changelog fragment check** — if a VERSION file was bumped, the paired
+   `unreleased/` directory must contain at least one `.md` fragment, and the versioned
+   heading must NOT already exist in `CHANGELOG.md`.
 
-## Sync script
+## Scripts
 
 ```bash
-# Fix mode: update pyproject.toml files to match VERSION files
+# Sync VERSION -> pyproject.toml (fix mode)
 python scripts/sync_pyproject_versions.py
 
-# Check mode: exit 1 on mismatch (used in CI)
+# Sync check (CI)
 python scripts/sync_pyproject_versions.py --check
+
+# Validate changelog fragments exist for bumped versions (CI)
+python scripts/promote_changelogs.py --check --version-files ansible/k3s/VERSION
+
+# Promote fragments into CHANGELOG.md (CI, on merge to main)
+python scripts/promote_changelogs.py --promote --version-files ansible/k3s/VERSION
 ```
