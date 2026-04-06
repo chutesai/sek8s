@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 
 from chutes.guest.detection import (
     detect_infiniband_pfs,
@@ -17,8 +18,9 @@ from chutes.guest.qemu import PciTopologyState
 from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
+    has_stale_vfio_devices,
     install_udev_rules,
-    virsh_bind_device,
+    unbind_stale_vfio_devices,
 )
 
 _gpu_tools_cmd: str | None = None
@@ -80,26 +82,30 @@ def _prepare_devices(
     ib_devices: list[str],
     profile: GpuProfile,
 ):
-    """Configure CC/PPCIe modes, bind to vfio-pci, virsh nodedev reattach/detach, udev."""
+    """Clean stale PCI state, configure CC/PPCIe modes, bind to vfio-pci, udev."""
     total_gpus = len(gpus)
+
+    all_devices = list(gpus)
+    if profile.should_passthrough_nvswitches(total_gpus) and nvswitches:
+        all_devices.extend(nvswitches)
+    if ib_devices:
+        all_devices.extend(ib_devices)
+
+    if has_stale_vfio_devices(all_devices):
+        print('  Stale vfio-pci devices detected from previous session')
+        print('  SBR reset (via parent bridge) to restore device responsiveness...')
+        _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+        sbr_settle = 5
+        print(f'  Waiting {sbr_settle}s for devices to re-initialize after SBR...')
+        time.sleep(sbr_settle)
+        print('  Unbinding stale vfio-pci devices...')
+        unbind_stale_vfio_devices(all_devices)
 
     _configure_nvswitches(nvswitches, profile, total_gpus)
     _configure_gpus(gpus, profile, total_gpus)
 
-    devices_to_bind = list(gpus)
-    if profile.should_passthrough_nvswitches(total_gpus) and nvswitches:
-        devices_to_bind.extend(nvswitches)
-    if ib_devices:
-        devices_to_bind.extend(ib_devices)
-
     print('  Binding devices to vfio-pci (explicit BDF list)...')
-    bind_explicit_devices_to_vfio(devices_to_bind)
-
-    print('  Libvirt nodedev reattach/detach (per-GPU and IB after VFIO bind)...')
-    for gpu in gpus:
-        virsh_bind_device(gpu)
-    for ib_dev in ib_devices:
-        virsh_bind_device(ib_dev)
+    bind_explicit_devices_to_vfio(all_devices)
 
     install_udev_rules(_scripts_dir())
 
