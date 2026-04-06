@@ -89,13 +89,48 @@ def _get_bound_driver(device_bdf: str) -> str | None:
     return None
 
 
-def pci_cleanup_stale_devices(devices: list[str], timeout: float = 5.0):
+def _sysfs_write(path: str, value: str, timeout: float = 10.0) -> bool:
+    """Write to a sysfs file via subprocess with a timeout.
+
+    Direct Python file writes to sysfs can block in uninterruptible kernel
+    sleep when a PCI device's config space is inaccessible.  Spawning a
+    subprocess lets us enforce a timeout and continue even if the kernel
+    operation hangs.
+    """
+    try:
+        subprocess.run(
+            ['sudo', 'bash', '-c', f'echo {value} > {path}'],
+            timeout=timeout,
+            capture_output=True,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+    except OSError:
+        return False
+
+
+def has_stale_vfio_devices(devices: list[str]) -> bool:
+    """Return True if any device in the list is currently bound to vfio-pci."""
+    return any(_get_bound_driver(bdf) == 'vfio-pci' for bdf in devices)
+
+
+def pci_cleanup_stale_devices(
+    devices: list[str],
+    timeout: float = 5.0,
+    per_device_timeout: float = 10.0,
+):
     """Remove PCI devices with stale vfio-pci bindings and rescan.
 
     After a QEMU session exits, devices remain bound to vfio-pci with stale
     iommufd references.  Removing and rescanning clears all kernel-level state
     (driver bindings, iommufd refs, AER errors, cached config space) so the
     next QEMU launch starts clean.
+
+    An SBR reset should be performed before calling this function — the PCI
+    remove path accesses device config space, which hangs if the device is
+    unresponsive.  SBR goes through the parent bridge and makes devices
+    accessible again.
 
     On first boot (no previous QEMU session), devices won't be on vfio-pci
     and this function is a no-op.
@@ -105,23 +140,19 @@ def pci_cleanup_stale_devices(devices: list[str], timeout: float = 5.0):
         if _get_bound_driver(bdf) != 'vfio-pci':
             continue
         remove_path = f'/sys/bus/pci/devices/{bdf}/remove'
-        try:
-            with open(remove_path, 'w') as f:
-                f.write('1')
+        print(f'    Removing {bdf} (was vfio-pci)...', flush=True)
+        if _sysfs_write(remove_path, '1', timeout=per_device_timeout):
             removed.append(bdf)
-            print(f'    {bdf} removed (was vfio-pci)')
-        except OSError as e:
-            print(f'    Warning: could not remove {bdf}: {e}')
+            print(f'    {bdf} removed')
+        else:
+            print(f'    Warning: {bdf} remove timed out (device may be unresponsive)')
 
     if not removed:
         return
 
-    print('  Rescanning PCI bus...')
-    try:
-        with open('/sys/bus/pci/rescan', 'w') as f:
-            f.write('1')
-    except OSError as e:
-        print(f'  Warning: PCI rescan failed: {e}')
+    print('  Rescanning PCI bus...', flush=True)
+    if not _sysfs_write('/sys/bus/pci/rescan', '1', timeout=per_device_timeout):
+        print('  Warning: PCI rescan timed out')
         return
 
     deadline = time.monotonic() + timeout

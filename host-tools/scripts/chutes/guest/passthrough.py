@@ -17,6 +17,7 @@ from chutes.guest.qemu import PciTopologyState
 from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
+    has_stale_vfio_devices,
     install_udev_rules,
     pci_cleanup_stale_devices,
 )
@@ -89,8 +90,12 @@ def _prepare_devices(
     if ib_devices:
         all_devices.extend(ib_devices)
 
-    print('  Cleaning stale PCI device state (if any)...')
-    pci_cleanup_stale_devices(all_devices)
+    if has_stale_vfio_devices(all_devices):
+        print('  Stale vfio-pci devices detected from previous session')
+        print('  SBR reset (via parent bridge) to restore device responsiveness...')
+        _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+        print('  Cleaning stale PCI device state...')
+        pci_cleanup_stale_devices(all_devices)
 
     _configure_nvswitches(nvswitches, profile, total_gpus)
     _configure_gpus(gpus, profile, total_gpus)
