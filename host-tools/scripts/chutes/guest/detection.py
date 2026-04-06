@@ -28,7 +28,7 @@ def _lspci_lines(vendor: str) -> list[str]:
     """Return lspci -Dnn lines matching the given PCI vendor ID.
 
     -D ensures BDFs are always in full domain form (0000:bb:dd.f),
-    matching nvidia-gpu-tools output and sysfs/virsh expectations.
+    matching nvidia-gpu-tools output and sysfs expectations.
     """
     output = subprocess.check_output(["lspci", "-Dnn"], stderr=subprocess.STDOUT)
     return [line for line in output.decode().splitlines() if vendor in line]

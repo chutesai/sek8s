@@ -27,10 +27,10 @@
       register: nvidia_packages
       changed_when: false
 
-    - name: Check whether target NVIDIA driver metapackage is already installed
+    - name: Check whether target NVIDIA driver is already installed at pinned version
       ansible.builtin.shell:
         cmd: |
-          if dpkg -s nvidia-headless-no-dkms-{{ nvidia_version }}-open >/dev/null 2>&1; then
+          if dpkg -s nvidia-dkms-open 2>/dev/null | grep -q "^Version: {{ nvidia_pkg_version }}"; then
             echo installed
           else
             echo missing
@@ -129,54 +129,43 @@
             name: cuda-toolkit-{{ cuda_version }}
             state: present
 
-        # Prebuilt linux-modules-nvidia-* uses the kernel/ABI deb version (e.g. 6.8.0-106.106), not
-        # nvidia_pkg_release_ubuntu (590.48.01-0ubuntu0...). The ABI suffix changes on archive
-        # rebuilds; the package name also depends on ansible_kernel. We query apt (madison) so the
-        # pin stays correct per host without hand-maintaining a kernel→version map. To skip this,
-        # omit the version on the linux-modules line and let apt pick the candidate (less reproducible).
-        - name: Resolve prebuilt linux-modules-nvidia version for running kernel
-          ansible.builtin.shell:
-            cmd: |
-              set +o pipefail
-              apt-cache madison "linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }}" 2>/dev/null | head -1 | awk '{print $3}'
-            executable: /bin/bash
-          register: nvidia_linux_modules_ver
-          changed_when: false
-
-        - name: Require matching linux-modules-nvidia package in apt cache
-          ansible.builtin.assert:
-            that:
-              - nvidia_linux_modules_ver.stdout | trim | length > 0
-            fail_msg: >-
-              No linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }} in apt;
-              install a kernel that has a matching prebuilt package (or switch to DKMS-only layout).
-
-        # No allow_downgrade: with apt's default, installing an older pin than what is already on disk
-        # fails loudly instead of silently replacing a newer security build. The purge above should
-        # clear prior NVIDIA/CUDA debs before this block; if install still errors on version conflicts,
-        # refresh pins in group_vars or fix host state—do not paper over with downgrade-to-pin.
-        # install_recommends: false avoids e.g. Ubuntu nvidia-settings / nvidia-prime / i386 stacks; we
-        # install nvidia-settings from CUDA in the next task. Omit on server images unless a workload
-        # proves a Recommend is required—then add that package by name.
-        - name: Install NVIDIA {{ nvidia_version }} Ubuntu stack (headless-no-dkms + prebuilt modules)
+        - name: Install DKMS prerequisites (kernel headers for module compilation)
           ansible.builtin.apt:
             name:
-              - libnvidia-cfg1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-compute-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-decode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-encode-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-extra-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-fbc1-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - libnvidia-gl-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - nvidia-headless-no-dkms-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - "{{ nvidia_firmware_pkg }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}"
-              - nvidia-kernel-common-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - nvidia-kernel-source-{{ nvidia_version }}-open={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - xserver-xorg-video-nvidia-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - nvidia-utils-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - nvidia-compute-utils-{{ nvidia_version }}={{ nvidia_version }}.{{ nvidia_pkg_release_ubuntu }}
-              - linux-modules-nvidia-{{ nvidia_version }}-open-{{ ansible_kernel }}={{ nvidia_linux_modules_ver.stdout | trim }}
+              - "linux-headers-{{ ansible_kernel }}"
+              - dkms
+            state: present
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
+
+        # 595 uses unversioned package names from the CUDA repo. All libs and driver
+        # packages are pinned to nvidia_pkg_version. No prebuilt kernel modules exist
+        # for 595; DKMS compiles them at install time.
+        - name: Install NVIDIA {{ nvidia_version }} libraries (unversioned, CUDA repo)
+          ansible.builtin.apt:
+            name:
+              - libnvidia-cfg1={{ nvidia_pkg_version }}
+              - libnvidia-common={{ nvidia_pkg_version }}
+              - libnvidia-compute={{ nvidia_pkg_version }}
+              - libnvidia-decode={{ nvidia_pkg_version }}
+              - libnvidia-encode={{ nvidia_pkg_version }}
+              - libnvidia-extra={{ nvidia_pkg_version }}
+              - libnvidia-fbc1={{ nvidia_pkg_version }}
+              - libnvidia-gl={{ nvidia_pkg_version }}
+            install_recommends: false
+            state: present
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
+
+        - name: Install NVIDIA {{ nvidia_version }} DKMS driver stack
+          ansible.builtin.apt:
+            name:
+              - nvidia-dkms-open={{ nvidia_pkg_version }}
+              - nvidia-kernel-source-open={{ nvidia_pkg_version }}
+              - nvidia-kernel-common={{ nvidia_pkg_version }}
+              - nvidia-firmware={{ nvidia_pkg_version }}
             install_recommends: false
             state: present
           environment:
@@ -185,18 +174,30 @@
           register: driver_install
           changed_when: driver_install.changed
 
-        # Ubuntu multiverse nvidia-fabricmanager-590 pulls nvidia-kernel-common-590-server (conflicts with open stack).
-        - name: Install Fabric Manager, modprobe, and settings from CUDA repo
+        - name: Install Fabric Manager, persistenced, modprobe, settings, and IMEX from CUDA repo
           ansible.builtin.apt:
             name:
-              - nvidia-fabricmanager={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
-              - nvidia-modprobe={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
-              - nvidia-settings={{ nvidia_version }}.{{ nvidia_pkg_release_cuda }}
+              - nvidia-fabricmanager={{ nvidia_pkg_version }}
+              - nvidia-persistenced={{ nvidia_pkg_version }}
+              - nvidia-modprobe={{ nvidia_pkg_version }}
+              - nvidia-settings={{ nvidia_pkg_version }}
+              - nvidia-imex={{ nvidia_pkg_version }}
             install_recommends: false
             state: present
           environment:
             DEBIAN_FRONTEND: noninteractive
             NEEDRESTART_SUSPEND: "y"
+
+        - name: Install NVSwitch library (libnvidia-nscq)
+          ansible.builtin.apt:
+            name:
+              - libnvidia-nscq={{ nvidia_pkg_version }}
+            install_recommends: false
+            state: present
+          environment:
+            DEBIAN_FRONTEND: noninteractive
+            NEEDRESTART_SUSPEND: "y"
+          failed_when: false
 
         - name: Install NVIDIA Container Toolkit
           ansible.builtin.apt:
@@ -207,6 +208,22 @@
           environment:
             DEBIAN_FRONTEND: noninteractive
             NEEDRESTART_SUSPEND: "y"
+
+        - name: Verify DKMS module is built for running kernel
+          ansible.builtin.shell:
+            cmd: dkms status | grep -q "nvidia.*{{ ansible_kernel }}"
+            executable: /bin/bash
+          register: dkms_verify
+          changed_when: false
+
+        - name: Fail if DKMS module was not built for running kernel
+          ansible.builtin.assert:
+            that:
+              - dkms_verify.rc == 0
+            fail_msg: >-
+              DKMS nvidia module not found for {{ ansible_kernel }}.
+              The VM image will not have functional GPU drivers.
+              Check: dkms status && dkms autoinstall
 
         - name: Configure NVIDIA Fabric Manager
           ansible.builtin.systemd:

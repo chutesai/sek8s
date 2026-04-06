@@ -64,7 +64,7 @@ class HostProfile(ABC):
     @property
     @abstractmethod
     def packages(self) -> list[str]:
-        """All apt packages to install (QEMU, libvirt, attestation, etc.)."""
+        """All apt packages to install (QEMU, attestation, etc.)."""
         ...
 
     @property
@@ -103,8 +103,6 @@ class Ubuntu2504Profile(HostProfile):
     def packages(self) -> list[str]:
         return [
             "qemu-system-x86",
-            "libvirt-clients",
-            "libvirt-daemon-system",
             "sgx-dcap-pccs",
             "tdx-qgs",
             "libsgx-dcap-default-qpl",
@@ -145,8 +143,6 @@ class Ubuntu2510Profile(HostProfile):
     def packages(self) -> list[str]:
         return [
             "qemu-system-x86",
-            "libvirt-clients",
-            "libvirt-daemon-system",
             "sgx-dcap-pccs",
             "tdx-qgs",
             "libsgx-dcap-default-qpl",
