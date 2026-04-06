@@ -4,7 +4,7 @@ monitoring_namespace: monitoring
 # Pinned for reproducible builds. The marker file at /etc/chutes/chart-versions/chutes-miner-gpu
 # is derived from this; both define the expected chart version from one release to the next.
 # Override in group_vars or host_vars for debug images (e.g. 0.1.0-dev.1).
-chutes_chart_version: "0.2.3"
+chutes_chart_version: "0.2.4"
 
 # Path to Helm chart signing PGP public key (build-time, like cosign_public_key_path).
 # Required. Override in inventory or group_vars.
