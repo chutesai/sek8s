@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from chutes.guest.vfio import (
     _get_bound_driver,
     has_stale_vfio_devices,
-    pci_cleanup_stale_devices,
+    unbind_stale_vfio_devices,
 )
 
 
@@ -46,63 +46,52 @@ def test_has_stale_vfio_devices_false(mock_driver):
 
 
 # ---------------------------------------------------------------------------
-# pci_cleanup_stale_devices
+# unbind_stale_vfio_devices
 # ---------------------------------------------------------------------------
 
 
 @patch("chutes.guest.vfio._sysfs_write")
 @patch("chutes.guest.vfio._get_bound_driver", return_value="nvidia")
-def test_cleanup_noop_when_not_vfio(mock_driver, mock_write):
-    """Devices not on vfio-pci should not be removed."""
-    pci_cleanup_stale_devices(["0000:b8:00.0"])
+def test_unbind_noop_when_not_vfio(mock_driver, mock_write):
+    """Devices not on vfio-pci should not be unbound."""
+    unbind_stale_vfio_devices(["0000:b8:00.0"])
     mock_write.assert_not_called()
 
 
-@patch("time.sleep")
-@patch("time.monotonic")
-@patch("os.path.exists", return_value=True)
 @patch("chutes.guest.vfio._sysfs_write", return_value=True)
 @patch("chutes.guest.vfio._get_bound_driver", return_value="vfio-pci")
-def test_cleanup_removes_and_rescans(
-    mock_driver, mock_write, mock_exists, mock_monotonic, mock_sleep
-):
-    """Devices on vfio-pci should be removed via sysfs, then rescan triggers."""
-    mock_monotonic.side_effect = [0.0, 0.1]
-
-    pci_cleanup_stale_devices(["0000:b8:00.0"], timeout=5.0)
+def test_unbind_writes_unbind_and_clears_override(mock_driver, mock_write):
+    """Devices on vfio-pci should be unbound and have driver_override cleared."""
+    unbind_stale_vfio_devices(["0000:b8:00.0"])
 
     calls = [c[0] for c in mock_write.call_args_list]
-    assert ("/sys/bus/pci/devices/0000:b8:00.0/remove", "1") == calls[0][:2]
-    assert ("/sys/bus/pci/rescan", "1") == calls[1][:2]
+    assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b8:00.0") == calls[0][:2]
+    assert ("/sys/bus/pci/devices/0000:b8:00.0/driver_override", "") == calls[1][:2]
 
 
-@patch("time.sleep")
-@patch("time.monotonic")
-@patch("os.path.exists", return_value=True)
 @patch("chutes.guest.vfio._sysfs_write", return_value=True)
 @patch("chutes.guest.vfio._get_bound_driver")
-def test_cleanup_handles_multiple_devices(
-    mock_driver, mock_write, mock_exists, mock_monotonic, mock_sleep
-):
-    """Multiple vfio-pci devices should all be removed; non-vfio skipped."""
+def test_unbind_handles_multiple_devices(mock_driver, mock_write):
+    """Multiple vfio-pci devices should all be unbound; non-vfio skipped."""
     mock_driver.side_effect = ["vfio-pci", "vfio-pci", None]
-    mock_monotonic.side_effect = [0.0, 0.1]
 
     devices = ["0000:b8:00.0", "0000:b9:00.0", "0000:ba:00.0"]
-    pci_cleanup_stale_devices(devices, timeout=5.0)
+    unbind_stale_vfio_devices(devices)
 
-    written_paths = [c[0][0] for c in mock_write.call_args_list]
-    assert "/sys/bus/pci/devices/0000:b8:00.0/remove" in written_paths
-    assert "/sys/bus/pci/devices/0000:b9:00.0/remove" in written_paths
-    assert "/sys/bus/pci/devices/0000:ba:00.0/remove" not in written_paths
-    assert "/sys/bus/pci/rescan" in written_paths
+    written = [(c[0][0], c[0][1]) for c in mock_write.call_args_list]
+    assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b8:00.0") in written
+    assert ("/sys/bus/pci/drivers/vfio-pci/unbind", "0000:b9:00.0") in written
+    assert ("/sys/bus/pci/devices/0000:b8:00.0/driver_override", "") in written
+    assert ("/sys/bus/pci/devices/0000:b9:00.0/driver_override", "") in written
+    # ba:00.0 was not vfio-pci, so nothing written for it
+    assert all("0000:ba:00.0" not in c[1] for c in written)
 
 
 @patch("chutes.guest.vfio._sysfs_write", return_value=False)
 @patch("chutes.guest.vfio._get_bound_driver", return_value="vfio-pci")
-def test_cleanup_warns_on_remove_timeout(mock_driver, mock_write, capsys):
-    """Timed-out remove should warn, not raise, and not attempt rescan."""
-    pci_cleanup_stale_devices(["0000:b8:00.0"])
+def test_unbind_warns_on_timeout(mock_driver, mock_write, capsys):
+    """Timed-out unbind should warn, not raise, and not clear override."""
+    unbind_stale_vfio_devices(["0000:b8:00.0"])
 
     captured = capsys.readouterr()
     assert "timed out" in captured.out

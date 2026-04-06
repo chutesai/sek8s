@@ -2,7 +2,6 @@
 
 import os
 import subprocess
-import time
 
 # Number of SR-IOV VFs to create per InfiniBand PF for VM passthrough
 IB_VFS_PER_PF = 1
@@ -115,63 +114,42 @@ def has_stale_vfio_devices(devices: list[str]) -> bool:
     return any(_get_bound_driver(bdf) == 'vfio-pci' for bdf in devices)
 
 
-def pci_cleanup_stale_devices(
+def unbind_stale_vfio_devices(
     devices: list[str],
-    timeout: float = 5.0,
     per_device_timeout: float = 10.0,
 ):
-    """Remove PCI devices with stale vfio-pci bindings and rescan.
+    """Unbind devices from vfio-pci and clear driver_override.
 
     After a QEMU session exits, devices remain bound to vfio-pci with stale
-    iommufd references.  Removing and rescanning clears all kernel-level state
-    (driver bindings, iommufd refs, AER errors, cached config space) so the
-    next QEMU launch starts clean.
+    iommufd references.  Unbinding releases those references so the next
+    bind_explicit_devices_to_vfio() creates fresh state.
 
-    An SBR reset should be performed before calling this function — the PCI
-    remove path accesses device config space, which hangs if the device is
-    unresponsive.  SBR goes through the parent bridge and makes devices
-    accessible again.
+    This is lighter than PCI remove+rescan: the device stays in the kernel's
+    PCI subsystem and no config-space teardown is needed, avoiding hangs on
+    devices that are slow to respond after SBR.
+
+    An SBR reset should be performed before calling this function when devices
+    may be unresponsive (e.g. after guest driver left them in a bad state).
 
     On first boot (no previous QEMU session), devices won't be on vfio-pci
     and this function is a no-op.
     """
-    removed: list[str] = []
+    unbound = 0
     for bdf in devices:
         if _get_bound_driver(bdf) != 'vfio-pci':
             continue
-        remove_path = f'/sys/bus/pci/devices/{bdf}/remove'
-        print(f'    Removing {bdf} (was vfio-pci)...', flush=True)
-        if _sysfs_write(remove_path, '1', timeout=per_device_timeout):
-            removed.append(bdf)
-            print(f'    {bdf} removed')
+        unbind_path = '/sys/bus/pci/drivers/vfio-pci/unbind'
+        override_path = f'/sys/bus/pci/devices/{bdf}/driver_override'
+        print(f'    Unbinding {bdf} from vfio-pci...', flush=True)
+        if _sysfs_write(unbind_path, bdf, timeout=per_device_timeout):
+            _sysfs_write(override_path, '', timeout=per_device_timeout)
+            print(f'    {bdf} unbound')
+            unbound += 1
         else:
-            print(f'    Warning: {bdf} remove timed out (device may be unresponsive)')
+            print(f'    Warning: {bdf} unbind timed out')
 
-    if not removed:
-        return
-
-    print('  Rescanning PCI bus...', flush=True)
-    if not _sysfs_write('/sys/bus/pci/rescan', '1', timeout=per_device_timeout):
-        print('  Warning: PCI rescan timed out')
-        return
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        missing = [
-            bdf for bdf in removed
-            if not os.path.exists(f'/sys/bus/pci/devices/{bdf}')
-        ]
-        if not missing:
-            print(f'  All {len(removed)} device(s) reappeared after rescan')
-            return
-        time.sleep(0.5)
-
-    still_missing = [
-        bdf for bdf in removed
-        if not os.path.exists(f'/sys/bus/pci/devices/{bdf}')
-    ]
-    if still_missing:
-        print(f'  Warning: devices did not reappear after rescan: {still_missing}')
+    if unbound:
+        print(f'  Unbound {unbound} stale vfio-pci device(s)')
 
 
 def install_udev_rules(scripts_dir: str):

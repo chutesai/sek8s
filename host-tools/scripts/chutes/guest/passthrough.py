@@ -19,7 +19,7 @@ from chutes.guest.vfio import (
     ensure_sriov_vfs,
     has_stale_vfio_devices,
     install_udev_rules,
-    pci_cleanup_stale_devices,
+    unbind_stale_vfio_devices,
 )
 
 _gpu_tools_cmd: str | None = None
@@ -94,8 +94,8 @@ def _prepare_devices(
         print('  Stale vfio-pci devices detected from previous session')
         print('  SBR reset (via parent bridge) to restore device responsiveness...')
         _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
-        print('  Cleaning stale PCI device state...')
-        pci_cleanup_stale_devices(all_devices)
+        print('  Unbinding stale vfio-pci devices...')
+        unbind_stale_vfio_devices(all_devices)
 
     _configure_nvswitches(nvswitches, profile, total_gpus)
     _configure_gpus(gpus, profile, total_gpus)
