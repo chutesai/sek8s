@@ -100,8 +100,11 @@ jobs:
             echo "PR to main: strict check — no fragments allowed."
             python scripts/promote_changelogs.py --check --strict
           elif [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "PR to release branch: normal check — fragments expected for bumped versions."
-            python scripts/promote_changelogs.py --check
+            echo "PR to release branch: verifying branch-named fragments for changed components."
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            git diff --name-only "$base" "$head" | \
+              python scripts/promote_changelogs.py --check-branch "${{ github.head_ref }}"
           else
             echo "Push to main: strict check — no fragments allowed."
             python scripts/promote_changelogs.py --check --strict

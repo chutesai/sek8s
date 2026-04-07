@@ -14,6 +14,10 @@ Usage:
 
     # Strict mode: fail if ANY fragments remain in any unreleased/ dir
     python promote_changelogs.py --check --strict
+
+    # Verify a branch-named fragment exists for each changed component
+    # (pipe changed files from git diff --name-only)
+    git diff --name-only base..head | python promote_changelogs.py --check-branch feature/nvidia-590-drivers
 """
 import argparse
 from collections import OrderedDict
@@ -31,6 +35,18 @@ VERSION_CHANGELOG_MAP: dict[str, str] = {
 }
 
 CATEGORY_ORDER = ["Added", "Changed", "Fixed", "Removed"]
+
+BRANCH_PREFIXES = ("feature/", "bugfix/", "fix/", "chore/", "hotfix/")
+
+# Maps file path prefixes to the changelog component they affect.
+# Order matters: first match wins, so more specific prefixes go first.
+PATH_CHANGELOG_MAP: list[tuple[str, str]] = [
+    ("src/sek8s/", "changelogs/sek8s"),
+    ("src/sek8s-common/", "changelogs/sek8s"),
+    ("src/attestation-proxy/", "changelogs/attestation-proxy"),
+    ("ansible/", "changelogs/vm"),
+    ("nvevidence/", "changelogs/vm"),
+]
 
 HEADING_RE = re.compile(r"^## \[(.+?)\]")
 CATEGORY_RE = re.compile(r"^### (.+)")
@@ -276,6 +292,56 @@ def _check_normal() -> int:
     return 1 if errors else 0
 
 
+def branch_to_fragment_name(branch: str) -> str:
+    """Strip common branch prefixes to get the expected fragment filename."""
+    name = branch
+    for prefix in BRANCH_PREFIXES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return f"{name}.md"
+
+
+def affected_components(changed_files: list[str]) -> set[str]:
+    """Map changed file paths to the changelog component directories they affect."""
+    components: set[str] = set()
+    for filepath in changed_files:
+        for prefix, comp_dir in PATH_CHANGELOG_MAP:
+            if filepath.startswith(prefix):
+                components.add(comp_dir)
+                break
+    return components
+
+
+def check_branch_mode(branch: str) -> int:
+    """Verify that a branch-named fragment exists in every component affected
+    by the changed files.  Changed files are read from stdin (one per line),
+    as produced by ``git diff --name-only``."""
+    fragment_name = branch_to_fragment_name(branch)
+
+    changed = [line.strip() for line in sys.stdin if line.strip()]
+    if not changed:
+        print("OK: No changed files provided; nothing to check.")
+        return 0
+
+    required = affected_components(changed)
+    if not required:
+        print("OK: No changelog-tracked paths changed.")
+        return 0
+
+    errors = 0
+    for comp_dir_rel in sorted(required):
+        frag = REPO_ROOT / comp_dir_rel / "unreleased" / fragment_name
+        if frag.is_file():
+            print(f"OK: Found {frag.relative_to(REPO_ROOT)}")
+        else:
+            print(f"ERROR: Missing {comp_dir_rel}/unreleased/{fragment_name} — "
+                  f"add a changelog fragment for your changes.")
+            errors += 1
+
+    return 1 if errors else 0
+
+
 def promote_mode() -> int:
     """Idempotent promotion: aggregate fragments into CHANGELOG.md.
 
@@ -341,6 +407,11 @@ def main() -> int:
         help="Validate changelog state. Add --strict to block any remaining fragments.",
     )
     group.add_argument(
+        "--check-branch", metavar="BRANCH",
+        help="Verify a branch-named fragment exists for each affected component. "
+             "Reads changed file paths from stdin.",
+    )
+    group.add_argument(
         "--promote", action="store_true",
         help="Idempotent: aggregate fragments into CHANGELOG.md and delete them.",
     )
@@ -352,6 +423,8 @@ def main() -> int:
 
     if args.check:
         return check_mode(strict=args.strict)
+    elif args.check_branch:
+        return check_branch_mode(args.check_branch)
     else:
         return promote_mode()
 

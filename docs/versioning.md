@@ -83,9 +83,22 @@ consuming package's changelog (`sek8s` or `attestation-proxy`).
 
 ### Adding a changelog fragment
 
-On your feature branch, create a `.md` file in the appropriate `unreleased/` directory.
-The filename should match the branch name (strip the prefix):
-`feature/nvidia-590-drivers` -> `nvidia-590-drivers.md`.
+On your feature branch, create a `.md` file in **every component's** `unreleased/`
+directory that your branch touches. The filename must match the branch name (strip
+the prefix): `feature/nvidia-590-drivers` → `nvidia-590-drivers.md`.
+
+If your branch changes files in both `src/sek8s/` and `ansible/`, you need fragments
+in both `changelogs/sek8s/unreleased/` and `changelogs/vm/unreleased/`.
+
+Path-to-component mapping:
+
+| Changed path | Requires fragment in |
+|-------------|---------------------|
+| `src/sek8s/*` | `changelogs/sek8s/unreleased/` |
+| `src/sek8s-common/*` | `changelogs/sek8s/unreleased/` |
+| `src/attestation-proxy/*` | `changelogs/attestation-proxy/unreleased/` |
+| `ansible/*` | `changelogs/vm/unreleased/` |
+| `nvevidence/*` | `changelogs/vm/unreleased/` |
 
 Use [Keep a Changelog](https://keepachangelog.com/) category headers:
 
@@ -98,6 +111,9 @@ Use [Keep a Changelog](https://keepachangelog.com/) category headers:
 ```
 
 Categories: **Added**, **Changed**, **Fixed**, **Removed**.
+
+CI enforces this on PRs to `release/**` branches — the check maps changed files to
+components and verifies the branch-named fragment exists in each one.
 
 ### Promotion: how fragments become changelog entries
 
@@ -133,13 +149,16 @@ file changes.
 The `version-tag.yml` workflow runs on PRs to `main` and `release/**` branches, and
 on push to `main`:
 
-1. **Domain version check** — if files in a domain changed, the domain's VERSION must
-   be bumped.
+1. **Domain version check** (PRs to `main` and push to `main` only) — if files in a
+   domain changed, the domain's VERSION must be bumped. Skipped on PRs to release
+   branches since VERSION is bumped once per release, not per feature.
 2. **Pyproject sync check** — `scripts/sync_pyproject_versions.py --check` verifies
    that every `src/<pkg>/VERSION` matches its `pyproject.toml` version.
-3. **Changelog check** — on PRs to `main` and push to `main`: strict mode, fails if
-   any fragments remain in any `unreleased/` directory. On PRs to `release/**`:
-   normal mode, validates fragments exist for bumped versions.
+3. **Changelog check**:
+   - PRs to `release/**`: branch-named fragment required in every affected component
+     (maps changed files to components automatically).
+   - PRs to `main` / push to `main`: strict mode, fails if any fragments remain in
+     any `unreleased/` directory.
 
 ## Scripts
 
@@ -158,6 +177,6 @@ make promote-changelogs
 make check-changelogs
 # or: python scripts/promote_changelogs.py --check --strict
 
-# Validate fragments exist for bumped versions (normal mode, release branches)
-python scripts/promote_changelogs.py --check
+# Validate branch-named fragments exist for changed components (release branch PRs)
+git diff --name-only base..head | python scripts/promote_changelogs.py --check-branch feature/my-branch
 ```
