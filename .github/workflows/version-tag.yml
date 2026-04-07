@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
 
 jobs:
   version-check:
@@ -21,6 +21,7 @@ jobs:
         run: git fetch origin ${{ github.event.pull_request.base.sha }}
 
       - name: Verify VERSION bumps
+        if: github.base_ref == 'main' || github.event_name == 'push'
         run: |
           set -euo pipefail
 
@@ -95,8 +96,16 @@ jobs:
 
       - name: Verify changelogs
         run: |
-          echo "Strict check — no fragments allowed."
-          python scripts/promote_changelogs.py --check --strict
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.base_ref }}" = "main" ]; then
+            echo "PR to main: strict check — no fragments allowed."
+            python scripts/promote_changelogs.py --check --strict
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "PR to release branch: normal check — fragments expected for bumped versions."
+            python scripts/promote_changelogs.py --check
+          else
+            echo "Push to main: strict check — no fragments allowed."
+            python scripts/promote_changelogs.py --check --strict
+          fi
 
   pyproject-sync-check:
     if: github.event.repository.private == false

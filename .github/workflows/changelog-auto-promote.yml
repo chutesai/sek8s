@@ -1,0 +1,39 @@
+name: Changelog auto-promote
+
+on:
+  push:
+    branches: ['release/**']
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Promote changelog fragments
+        run: python scripts/promote_changelogs.py --promote
+
+      - name: Commit and push if changed
+        run: |
+          if git diff --quiet changelogs/; then
+            echo "No changelog changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add changelogs/
+          git commit -m "chore: auto-promote changelog fragments"
+          git push

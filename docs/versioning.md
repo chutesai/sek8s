@@ -69,8 +69,8 @@ Per-package tags track Python package versions independently.
 ## Changelogs
 
 Changelogs use a **fragment-based** system. Each feature branch drops a `.md` file
-into `changelogs/<component>/unreleased/`. On merge to main, automation aggregates
-the fragments into a versioned entry in `CHANGELOG.md` and deletes the fragment files.
+into `changelogs/<component>/unreleased/`. Promotion aggregates fragments into a
+versioned `## [x.y.z]` entry in `CHANGELOG.md` and deletes the fragment files.
 
 | Component | CHANGELOG | Fragments | Paired VERSION file |
 |-----------|-----------|-----------|---------------------|
@@ -99,31 +99,47 @@ Use [Keep a Changelog](https://keepachangelog.com/) category headers:
 
 Categories: **Added**, **Changed**, **Fixed**, **Removed**.
 
-### What happens on merge to main
+### Promotion: how fragments become changelog entries
 
-After a PR merges to main, the `version-tag.yml` workflow automatically:
+Promotion is **idempotent** — running it multiple times is safe. If the version heading
+already exists, new fragments are merged into the existing section by category.
 
-1. Creates per-package git tags for any bumped VERSION files.
-2. Runs `promote_changelogs.py --promote` to aggregate fragments by category
-   (Added > Changed > Fixed > Removed) and write a `## [x.y.z] - YYYY-MM-DD`
-   section to each affected `CHANGELOG.md`.
-3. Opens a follow-up PR with the promoted changelogs and enables auto-merge.
-   Since the follow-up PR only touches `changelogs/`, the security gate auto-skips
-   and CI passes trivially.
+#### Release branch workflow (`release/**`)
 
-Never manually add `## [x.y.z]` headings to `CHANGELOG.md` -- automation owns those.
+1. Feature branches merge into `release/next` (or similar).
+2. On each push to a `release/**` branch, the `changelog-auto-promote.yml` workflow
+   runs `promote_changelogs.py --promote`, commits promoted changelogs, and pushes
+   directly to the release branch.
+3. When the release branch is PR'd to `main`, the strict check enforces that **no
+   fragments remain** — everything must already be promoted.
+4. On merge to `main`, tags are created for bumped versions.
+
+#### Trunk-based workflow (direct to main)
+
+1. Before creating a PR to `main`, run `make promote-changelogs` locally.
+2. The same strict check applies: no fragments allowed on PRs to `main`.
+
+Never manually add `## [x.y.z]` headings to `CHANGELOG.md` — automation owns those.
+
+### Git tags
+
+Tags are created on merge to `main` by the `version-tag.yml` workflow. For components
+with changelogs, tags are only created when the version heading exists in `CHANGELOG.md`.
+For `sek8s-common` (no changelog), tags are created unconditionally when the VERSION
+file changes.
 
 ## CI enforcement
 
-The `version-tag.yml` workflow enforces on every PR to `main`:
+The `version-tag.yml` workflow runs on PRs to `main` and `release/**` branches, and
+on push to `main`:
 
 1. **Domain version check** — if files in a domain changed, the domain's VERSION must
    be bumped.
 2. **Pyproject sync check** — `scripts/sync_pyproject_versions.py --check` verifies
    that every `src/<pkg>/VERSION` matches its `pyproject.toml` version.
-3. **Changelog fragment check** — if a VERSION file was bumped, the paired
-   `unreleased/` directory must contain at least one `.md` fragment, and the versioned
-   heading must NOT already exist in `CHANGELOG.md` (automation creates it after merge).
+3. **Changelog check** — on PRs to `main` and push to `main`: strict mode, fails if
+   any fragments remain in any `unreleased/` directory. On PRs to `release/**`:
+   normal mode, validates fragments exist for bumped versions.
 
 ## Scripts
 
@@ -134,9 +150,14 @@ python scripts/sync_pyproject_versions.py
 # Sync check (CI)
 python scripts/sync_pyproject_versions.py --check
 
-# Validate changelog fragments exist for bumped versions (CI, on PRs)
-python scripts/promote_changelogs.py --check --version-files ansible/k3s/VERSION
+# Promote fragments into CHANGELOG.md (idempotent)
+make promote-changelogs
+# or: python scripts/promote_changelogs.py --promote
 
-# Promote fragments into CHANGELOG.md (CI, after merge to main)
-python scripts/promote_changelogs.py --promote --version-files ansible/k3s/VERSION
+# Verify no orphaned fragments (strict, used before merging to main)
+make check-changelogs
+# or: python scripts/promote_changelogs.py --check --strict
+
+# Validate fragments exist for bumped versions (normal mode, release branches)
+python scripts/promote_changelogs.py --check
 ```

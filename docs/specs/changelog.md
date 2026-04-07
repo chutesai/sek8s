@@ -23,15 +23,18 @@ outside this repo. The audience is the team deploying and operating sek8s infras
 
 ## Design Decisions
 
-### Tooling: fragment-based with automated promotion
+### Tooling: fragment-based with idempotent automated promotion
 
 Each feature branch drops a categorized `.md` fragment into
-`changelogs/<component>/unreleased/`. After merge to main, the `version-tag.yml`
-workflow runs `scripts/promote_changelogs.py --promote` to aggregate fragments by
-category, write a versioned `## [x.y.z] - date` entry to `CHANGELOG.md`, and delete
-the fragments. The result is pushed as a follow-up PR (changelogs-only) that
-auto-merges via the existing security path gate. No external dependencies (towncrier
+`changelogs/<component>/unreleased/`. Promotion aggregates fragments by category,
+writes a versioned `## [x.y.z] - date` entry to `CHANGELOG.md`, and deletes the
+fragments. Promotion is **idempotent**: if the version heading already exists, new
+fragments are merged into the existing section. No external dependencies (towncrier
 or similar). The fragment approach eliminates merge conflicts on `CHANGELOG.md`.
+
+On `release/**` branches, the `changelog-auto-promote.yml` workflow auto-promotes
+on each push. On PRs to `main`, a strict check enforces that no fragments remain.
+Tags are created on merge to `main`.
 
 ### Scope: per-component changelogs in top-level directory
 
@@ -56,8 +59,9 @@ enforcement never fires for them.
 ### Branching model support
 
 Both trunk-based and release-branch workflows are supported. Feature branches add
-fragments to `unreleased/`. Whether those merge directly to main or accumulate on a
-release branch, the promotion happens on merge to main when VERSION is bumped.
+fragments to `unreleased/`. On release branches, CI auto-promotes fragments on each
+merge. For trunk-based, developers run `make promote-changelogs` before PR to main.
+PRs to `main` enforce a strict "no fragments" policy.
 
 ### Fragment format
 
@@ -87,12 +91,11 @@ through the fragment system and are aggregated consistently.
 Success =
 1. Each version domain has a `CHANGELOG.md` and `unreleased/` directory under
    `changelogs/`.
-2. CI validates that fragments exist when VERSION is bumped, and that versioned
-   headings do NOT already exist (automation creates them).
-3. On merge to main, automation creates tags, aggregates fragments, writes the
-   versioned entry, deletes fragments, and opens a follow-up PR that auto-merges.
-4. No new runtime or dev dependencies introduced.
-5. `docs/versioning.md` and `AGENT.md` document the fragment workflow.
+2. CI auto-promotes fragments on `release/**` branches (idempotent).
+3. CI enforces strict "no fragments" on PRs to `main`.
+4. Tags are created on merge to `main` when changelogs are clean.
+5. No new runtime or dev dependencies introduced.
+6. `docs/versioning.md` and `AGENT.md` document the fragment workflow.
 
 ---
 
@@ -100,7 +103,7 @@ Success =
 
 - No new dependencies without team discussion.
 - Do not generate GitHub Releases.
-- CHANGELOG enforcement applies only on PRs to `main` (same as version-tag checks).
+- Strict "no fragments" enforcement on PRs to `main`; normal validation on PRs to `release/**`.
 - Keep the format human-readable and diff-friendly.
 
 ---
@@ -109,11 +112,11 @@ Success =
 
 1. `changelogs/<component>/CHANGELOG.md` — seeded with version history.
 2. `changelogs/<component>/unreleased/` — fragment directories with `.gitkeep`.
-3. `scripts/promote_changelogs.py` — `--check` and `--promote` modes.
-4. `.github/workflows/version-tag.yml` — fragment check on PRs, tag + promote +
-   follow-up PR on merge to main.
-5. `docs/versioning.md` — fragment workflow documentation.
-6. `AGENT.md` — version bumps rule references fragment system.
+3. `scripts/promote_changelogs.py` — `--check`, `--check --strict`, and `--promote` modes.
+4. `.github/workflows/version-tag.yml` — strict check on PRs to main, tagging on push.
+5. `.github/workflows/changelog-auto-promote.yml` — auto-promote on release branches.
+6. `docs/versioning.md` — fragment workflow documentation.
+7. `AGENT.md` — version bumps rule references fragment system.
 
 ---
 
