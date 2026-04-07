@@ -3,11 +3,15 @@
 Fragment-based changelog promotion.
 
 Developers drop categorized .md fragments into changelogs/<component>/unreleased/.
-This script validates or promotes those fragments into CHANGELOG.md.
+CI uses --check on PRs to verify fragments exist. After merge, CI uses --promote to
+aggregate fragments into CHANGELOG.md and opens a follow-up PR.
 
 Usage:
-    python promote_changelogs.py --check   --version-files ansible/k3s/VERSION
-    python promote_changelogs.py --promote --version-files ansible/k3s/VERSION src/sek8s/VERSION
+    # CI (PR): verify fragments exist and heading does not
+    python promote_changelogs.py --check --version-files ansible/k3s/VERSION
+
+    # CI (post-merge) or local: aggregate fragments into CHANGELOG.md
+    python promote_changelogs.py --promote --version-files ansible/k3s/VERSION
 """
 import argparse
 from collections import OrderedDict
@@ -114,6 +118,13 @@ def promote(changelog: Path, version_section: str) -> None:
 
 
 def check_mode(version_files: list[str]) -> int:
+    """Validate pre-promotion state for each bumped VERSION file.
+
+    On a PR, the expected state is:
+      - At least one .md fragment exists in unreleased/
+      - The versioned heading does NOT yet exist in CHANGELOG.md
+        (automation creates it after merge)
+    """
     errors = 0
     for vf_str in version_files:
         vf = REPO_ROOT / vf_str
@@ -131,7 +142,7 @@ def check_mode(version_files: list[str]) -> int:
         changelog = comp_dir / "CHANGELOG.md"
         if changelog_has_version(changelog, version):
             print(f"ERROR: {changelog.relative_to(REPO_ROOT)} already has ## [{version}]. "
-                  "Versioned headings are created by automation only.")
+                  "Versioned headings are created by automation after merge.")
             errors += 1
             continue
 
@@ -194,7 +205,7 @@ def main() -> int:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--check", action="store_true",
-                       help="Validate fragments exist and versioned heading does not.")
+                       help="Validate fragments exist and versioned heading does not (PR check).")
     group.add_argument("--promote", action="store_true",
                        help="Aggregate fragments into CHANGELOG.md and delete them.")
     parser.add_argument("--version-files", nargs="+", required=True,

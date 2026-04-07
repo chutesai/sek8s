@@ -26,9 +26,11 @@ outside this repo. The audience is the team deploying and operating sek8s infras
 ### Tooling: fragment-based with automated promotion
 
 Each feature branch drops a categorized `.md` fragment into
-`changelogs/<component>/unreleased/`. On merge to main, `scripts/promote_changelogs.py`
-aggregates fragments by category, writes a versioned `## [x.y.z] - date` entry to
-`CHANGELOG.md`, deletes the fragments, and commits. No external dependencies (towncrier
+`changelogs/<component>/unreleased/`. After merge to main, the `version-tag.yml`
+workflow runs `scripts/promote_changelogs.py --promote` to aggregate fragments by
+category, write a versioned `## [x.y.z] - date` entry to `CHANGELOG.md`, and delete
+the fragments. The result is pushed as a follow-up PR (changelogs-only) that
+auto-merges via the existing security path gate. No external dependencies (towncrier
 or similar). The fragment approach eliminates merge conflicts on `CHANGELOG.md`.
 
 ### Scope: per-component changelogs in top-level directory
@@ -87,8 +89,8 @@ Success =
    `changelogs/`.
 2. CI validates that fragments exist when VERSION is bumped, and that versioned
    headings do NOT already exist (automation creates them).
-3. On merge to main, automation aggregates fragments, writes the versioned entry,
-   deletes fragments, commits, and tags.
+3. On merge to main, automation creates tags, aggregates fragments, writes the
+   versioned entry, deletes fragments, and opens a follow-up PR that auto-merges.
 4. No new runtime or dev dependencies introduced.
 5. `docs/versioning.md` and `AGENT.md` document the fragment workflow.
 
@@ -108,8 +110,8 @@ Success =
 1. `changelogs/<component>/CHANGELOG.md` — seeded with version history.
 2. `changelogs/<component>/unreleased/` — fragment directories with `.gitkeep`.
 3. `scripts/promote_changelogs.py` — `--check` and `--promote` modes.
-4. `.github/workflows/version-tag.yml` — fragment check on PRs, promote + commit +
-   tag on merge to main.
+4. `.github/workflows/version-tag.yml` — fragment check on PRs, tag + promote +
+   follow-up PR on merge to main.
 5. `docs/versioning.md` — fragment workflow documentation.
 6. `AGENT.md` — version bumps rule references fragment system.
 

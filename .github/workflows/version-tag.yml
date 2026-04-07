@@ -21,7 +21,6 @@ jobs:
         run: git fetch origin ${{ github.event.pull_request.base.sha }}
 
       - name: Verify VERSION bumps
-        id: version_bumps
         run: |
           set -euo pipefail
 
@@ -40,7 +39,6 @@ jobs:
           fi
 
           errors=0
-          bumped_versions=""
 
           # --- VM image domain ---
           # ansible/*, src/sek8s/*, src/sek8s-common/*, nvevidence/*,
@@ -60,7 +58,6 @@ jobs:
               errors=$((errors + 1))
             else
               echo "VM domain: ansible/k3s/VERSION bumped."
-              bumped_versions="$bumped_versions ansible/k3s/VERSION"
             fi
           else
             echo "No VM-domain changes detected."
@@ -82,36 +79,24 @@ jobs:
               errors=$((errors + 1))
             else
               echo "Proxy domain: src/attestation-proxy/VERSION bumped."
-              bumped_versions="$bumped_versions src/attestation-proxy/VERSION"
             fi
           else
             echo "No proxy-domain changes detected."
           fi
 
-          # Collect any per-package VERSION bumps (sek8s, sek8s-common)
-          for vf in src/sek8s/VERSION src/sek8s-common/VERSION; do
-            if echo "$changed_files" | grep -qx "$vf"; then
-              bumped_versions="$bumped_versions $vf"
-            fi
-          done
-
           if [ "$errors" -gt 0 ]; then
             exit 1
           fi
 
-          echo "bumped_versions=$bumped_versions" >> "$GITHUB_OUTPUT"
-
       - name: Set up Python
-        if: github.event_name == 'pull_request' && steps.version_bumps.outputs.bumped_versions != ''
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Verify changelog fragments
-        if: github.event_name == 'pull_request' && steps.version_bumps.outputs.bumped_versions != ''
+      - name: Verify changelogs
         run: |
-          python scripts/promote_changelogs.py --check \
-            --version-files ${{ steps.version_bumps.outputs.bumped_versions }}
+          echo "Strict check — no fragments allowed."
+          python scripts/promote_changelogs.py --check --strict
 
   pyproject-sync-check:
     if: github.event.repository.private == false
@@ -140,62 +125,43 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect changed VERSION files
-        id: detect
-        run: |
-          set -euo pipefail
-          base="${{ github.event.before }}"
-          head="${{ github.sha }}"
-          changed_files=$(git diff --name-only "$base" "$head" 2>/dev/null || true)
-
-          check_version() {
-            local file="$1" key="$2"
-            if echo "$changed_files" | grep -qx "$file"; then
-              echo "${key}=true" >> "$GITHUB_OUTPUT"
-              echo "$file changed; will tag."
-            else
-              echo "${key}=false" >> "$GITHUB_OUTPUT"
-            fi
-          }
-
-          check_version "ansible/k3s/VERSION"          "vm"
-          check_version "src/sek8s/VERSION"             "sek8s"
-          check_version "src/sek8s-common/VERSION"      "common"
-          check_version "src/attestation-proxy/VERSION"  "proxy"
-
-      - name: Create tags
+      - name: Create tags for bumped versions
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          create_tag() {
-            local version_file="$1" prefix="$2"
+          tag_if_ready() {
+            local version_file="$1" prefix="$2" changelog_dir="$3"
             local version
             version=$(tr -d '[:space:]' < "$version_file")
-            if [ -z "$version" ]; then
-              echo "::error::$version_file is empty"
-              exit 1
-            fi
+            [ -z "$version" ] && return
+
             local tag="${prefix}${version}"
+
             if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
-              echo "::error::Tag $tag already exists. Bump the version in $version_file."
-              exit 1
+              echo "Tag $tag already exists; skipping."
+              return
             fi
-            git tag "$tag"
-            git push origin "$tag"
-            echo "Created tag $tag"
+
+            if [ -z "$changelog_dir" ]; then
+              git tag "$tag"
+              git push origin "$tag"
+              echo "Created tag $tag (no changelog tracked)."
+              return
+            fi
+
+            local changelog="${changelog_dir}/CHANGELOG.md"
+            if grep -qE "^## \\[${version}\\]" "$changelog" 2>/dev/null; then
+              git tag "$tag"
+              git push origin "$tag"
+              echo "Created tag $tag"
+            else
+              echo "::warning::Tag $tag deferred: no ## [$version] heading in $changelog"
+            fi
           }
 
-          if [ "${{ steps.detect.outputs.vm }}" = "true" ]; then
-            create_tag "ansible/k3s/VERSION" "v"
-          fi
-          if [ "${{ steps.detect.outputs.sek8s }}" = "true" ]; then
-            create_tag "src/sek8s/VERSION" "sek8s-v"
-          fi
-          if [ "${{ steps.detect.outputs.common }}" = "true" ]; then
-            create_tag "src/sek8s-common/VERSION" "sek8s-common-v"
-          fi
-          if [ "${{ steps.detect.outputs.proxy }}" = "true" ]; then
-            create_tag "src/attestation-proxy/VERSION" "attestation-proxy-v"
-          fi
+          tag_if_ready "ansible/k3s/VERSION"          "v"                    "changelogs/vm"
+          tag_if_ready "src/sek8s/VERSION"             "sek8s-v"             "changelogs/sek8s"
+          tag_if_ready "src/sek8s-common/VERSION"      "sek8s-common-v"      ""
+          tag_if_ready "src/attestation-proxy/VERSION"  "attestation-proxy-v" "changelogs/attestation-proxy"

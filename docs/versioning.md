@@ -101,13 +101,15 @@ Categories: **Added**, **Changed**, **Fixed**, **Removed**.
 
 ### What happens on merge to main
 
-The `version-tag.yml` workflow automatically:
+After a PR merges to main, the `version-tag.yml` workflow automatically:
 
-1. Collects all `.md` fragments from each component's `unreleased/` directory.
-2. Groups entries by category (Added > Changed > Fixed > Removed).
-3. Writes a `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`.
-4. Deletes the fragment files and commits the result.
-5. Creates per-package git tags.
+1. Creates per-package git tags for any bumped VERSION files.
+2. Runs `promote_changelogs.py --promote` to aggregate fragments by category
+   (Added > Changed > Fixed > Removed) and write a `## [x.y.z] - YYYY-MM-DD`
+   section to each affected `CHANGELOG.md`.
+3. Opens a follow-up PR with the promoted changelogs and enables auto-merge.
+   Since the follow-up PR only touches `changelogs/`, the security gate auto-skips
+   and CI passes trivially.
 
 Never manually add `## [x.y.z]` headings to `CHANGELOG.md` -- automation owns those.
 
@@ -121,7 +123,7 @@ The `version-tag.yml` workflow enforces on every PR to `main`:
    that every `src/<pkg>/VERSION` matches its `pyproject.toml` version.
 3. **Changelog fragment check** — if a VERSION file was bumped, the paired
    `unreleased/` directory must contain at least one `.md` fragment, and the versioned
-   heading must NOT already exist in `CHANGELOG.md`.
+   heading must NOT already exist in `CHANGELOG.md` (automation creates it after merge).
 
 ## Scripts
 
@@ -132,9 +134,9 @@ python scripts/sync_pyproject_versions.py
 # Sync check (CI)
 python scripts/sync_pyproject_versions.py --check
 
-# Validate changelog fragments exist for bumped versions (CI)
+# Validate changelog fragments exist for bumped versions (CI, on PRs)
 python scripts/promote_changelogs.py --check --version-files ansible/k3s/VERSION
 
-# Promote fragments into CHANGELOG.md (CI, on merge to main)
+# Promote fragments into CHANGELOG.md (CI, after merge to main)
 python scripts/promote_changelogs.py --promote --version-files ansible/k3s/VERSION
 ```
