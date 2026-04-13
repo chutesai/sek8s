@@ -11,7 +11,7 @@ POETRY ?= "poetry"
 
 SRC_DIR := src
 PACKAGES := $(shell ls $(SRC_DIR))
-VERSION := $(shell head ansible/k3s/VERSION | grep -Eo "\d+.\d+.\d+")
+VERSION := $(shell head ansible/guest/VERSION | grep -Eo "\d+.\d+.\d+")
 
 # Package filter: "make <target> sek8s" selects one package
 PKG_FILTER := $(filter $(PACKAGES),$(MAKECMDGOALS))

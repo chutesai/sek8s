@@ -7,7 +7,7 @@
 
 ## Context
 
-- **Packages affected**: `sek8s`, `attestation-proxy`, VM image line (`ansible/k3s/`)
+- **Packages affected**: `sek8s`, `attestation-proxy`, VM image line (`ansible/guest/`)
 - **Key files**: `docs/versioning.md`, `.github/workflows/version-tag.yml`, `scripts/promote_changelogs.py`
 - **Dependencies**: None new (zero-dependency implementation)
 

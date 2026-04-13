@@ -1,4 +1,4 @@
-# ansible/k3s/roles/admission-controller/defaults/main.yml
+# ansible/guest/roles/admission-controller/defaults/main.yml
 
 # Git repository settings
 admission_controller_repo: "https://github.com/rayonlabs/sek8s.git"

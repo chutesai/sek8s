@@ -1,5 +1,5 @@
 # OPA tests for rbac.rego RBAC and admission webhook lockdown.
-# Run: ./bin/opa test ansible/k3s/roles/admission-controller/files/policies tests/opa -v
+# Run: ./bin/opa test ansible/guest/roles/admission-controller/files/policies tests/opa -v
 package kubernetes.admission
 
 import future.keywords.if

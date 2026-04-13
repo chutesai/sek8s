@@ -64,9 +64,9 @@ Success = Docker Hub API calls for whitelisted high-frequency tag-only images ar
 4. `sek8s/validators/cosign.py` -- `_TagVerification` dataclass, `_tag_cache` dict, `get_pinned_digest()` method, tag cache population in `_verify_image_signature` for whitelisted images only
 5. `sek8s/services/admission_models.py` -- `AdmissionStatus`, `AdmissionResponseBody`, `AdmissionReviewResponse` Pydantic models
 6. `sek8s/services/admission_controller.py` -- `build_image_pin_patches()` on `AdmissionController`, real `handle_mutate()` on `AdmissionWebhookServer` with JSON Patch generation, typed response models throughout
-7. `ansible/k3s/roles/admission-controller/templates/mutation-webhook.yaml.j2` -- `MutatingWebhookConfiguration` manifest
-8. `ansible/k3s/roles/admission-controller/templates/cosign-registries.json.j2` -- `pin_digest_whitelist` section
-9. `ansible/k3s/roles/admission-controller/tasks/configure-k3s-webhook.yml` -- deploy mutating webhook alongside validating webhook
+7. `ansible/guest/roles/admission-controller/templates/mutation-webhook.yaml.j2` -- `MutatingWebhookConfiguration` manifest
+8. `ansible/guest/roles/admission-controller/templates/cosign-registries.json.j2` -- `pin_digest_whitelist` section
+9. `ansible/guest/roles/admission-controller/tasks/configure-k3s-webhook.yml` -- deploy mutating webhook alongside validating webhook
 10. `tests/unit/test_mutating_webhook.py` -- unit tests for digest extraction, whitelist lookup, tag cache, JSON Patch generation, end-to-end flow
 
 ---

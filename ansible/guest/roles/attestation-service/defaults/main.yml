@@ -1,4 +1,4 @@
-# ansible/k3s/roles/admission-controller/defaults/main.yml
+# ansible/guest/roles/admission-controller/defaults/main.yml
 
 # Attestation Service settings
 admission_bind_address: "0.0.0.0"

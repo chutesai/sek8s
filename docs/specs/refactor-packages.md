@@ -63,7 +63,7 @@ Work is **intentionally sequenced** across PRs (or clearly scoped commits) with 
 - [pyproject.toml](../../pyproject.toml), [poetry.lock](../../poetry.lock), [Makefile](../../Makefile), [makefiles/](../../makefiles/)
 - [sek8s/](../../sek8s/) (services include [sek8s/services/attestation_proxy.py](../../sek8s/services/attestation_proxy.py))
 - [docker/Dockerfile](../../docker/Dockerfile), [docker/docker-compose.yaml](../../docker/docker-compose.yaml)
-- [ansible/k3s/roles/sek8s/tasks/install-sek8s.yml](../../ansible/k3s/roles/sek8s/tasks/install-sek8s.yml)
+- [ansible/guest/roles/sek8s/tasks/install-sek8s.yml](../../ansible/guest/roles/sek8s/tasks/install-sek8s.yml)
 - [.github/workflows/](../../.github/workflows/) (notably [ci.yml](../../.github/workflows/ci.yml), [version-tag.yml](../../.github/workflows/version-tag.yml), [system-manager-openapi.yml](../../.github/workflows/system-manager-openapi.yml), [security-verified-path-gate.yml](../../.github/workflows/security-verified-path-gate.yml))
 - Root [VERSION](../../VERSION), [sek8s/VERSION](../../sek8s/VERSION)
 
@@ -121,7 +121,7 @@ Implementation work should touch at least the following (exact diffs belong in i
 2. **Root** `pyproject.toml` (meta + path deps to **sek8s** + **sek8s-common**), **`poetry.lock`**; remove obsolete top-level **`sek8s/`** when done.
 3. **`scripts/sync_pyproject_versions.py`** (or equivalent) for **`src/*`** modules present in Phase 1; extend in later phases.
 4. **`docker/sek8s/`** (or VM bundle) including **sek8s-common**; Makefiles as needed.
-5. **Ansible:** VM **`VERSION`** location(s); [install-sek8s.yml](../../ansible/k3s/roles/sek8s/tasks/install-sek8s.yml) for **sek8s** + **sek8s-common**.
+5. **Ansible:** VM **`VERSION`** location(s); [install-sek8s.yml](../../ansible/guest/roles/sek8s/tasks/install-sek8s.yml) for **sek8s** + **sek8s-common**.
 6. **CI / AGENT / 3.12** per spec; path filters for **`src/sek8s/**`**, **`src/sek8s-common/**`**, **`ansible/**`**.
 
 **Phase 2**
@@ -189,7 +189,7 @@ Implementation work should touch at least the following (exact diffs belong in i
 
 ## Open decisions (resolve during implementation)
 
-1. **Exact path** for VM image `VERSION` under `ansible/k3s/` (and naming when **N > 1** guest profiles exist).
+1. **Exact path** for VM image `VERSION` under `ansible/guest/` (and naming when **N > 1** guest profiles exist).
 2. **CI strictness** when only `src/sek8s-common/**` changes: bump **sek8s-common only**, or **require** **sek8s** and/or **attestation-proxy** version bumps (policy explicit **before or when Phase 2 completes**).
 3. Default assumption: **attestation-proxy** is **container-only** on the guest; document if **pip install** on VM is ever required.
 4. **Single** combined workflow vs **split** jobs for **version bump check** vs **pyproject sync commit** (e.g. separate `package-version-check` vs `pyproject-version-check` jobs).

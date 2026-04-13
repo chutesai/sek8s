@@ -13,7 +13,7 @@ install-opa: ##@development Install OPA binary
 install: ##@development Instal development dependencies
 install: venv install-opa
 
-OPA_POLICIES_DIR ?= ansible/k3s/roles/admission-controller/files/policies
+OPA_POLICIES_DIR ?= ansible/guest/roles/admission-controller/files/policies
 OPA_TESTS_DIR ?= tests/opa
 
 .PHONY: test-opa-policies

@@ -29,7 +29,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 VERSION_CHANGELOG_MAP: dict[str, str] = {
-    "ansible/k3s/VERSION": "changelogs/vm",
+    "ansible/guest/VERSION": "changelogs/vm",
     "src/sek8s/VERSION": "changelogs/sek8s",
     "src/attestation-proxy/VERSION": "changelogs/attestation-proxy",
 }
@@ -44,7 +44,7 @@ PATH_CHANGELOG_MAP: list[tuple[str, str]] = [
     ("src/sek8s/", "changelogs/sek8s"),
     ("src/sek8s-common/", "changelogs/sek8s"),
     ("src/attestation-proxy/", "changelogs/attestation-proxy"),
-    ("ansible/", "changelogs/vm"),
+    ("ansible/guest/", "changelogs/vm"),
     ("nvevidence/", "changelogs/vm"),
 ]
 

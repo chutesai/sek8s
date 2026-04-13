@@ -56,7 +56,7 @@ export TDX_NONCE_ENDPOINT="https://api.example.com/nonce"
 ### Build Image
 
 ```bash
-cd ansible/k3s
+cd ansible/guest
 ansible-playbook playbooks/site.yml
 ```
 
@@ -66,7 +66,7 @@ The build process:
 3. Applies security hardening and admission policies
 4. Encrypts root filesystem with LUKS
 5. Configures initramfs for TDX-based boot unlock
-6. Outputs final encrypted image under `guest-tools/image/<build_env>/<vm_version>.qcow2` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/k3s/VERSION`; append `-debug` when `debug_build` is true)
+6. Outputs final encrypted image under `guest-tools/image/<build_env>/<vm_version>.qcow2` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; append `-debug` when `debug_build` is true)
 
 At the **start** of `site.yml` (before the build VM is launched), the playbook prints the build configuration and **pauses for confirmation** (press Enter to continue, Ctrl+C to abort).
 
@@ -157,7 +157,7 @@ See role-specific defaults for component configuration.
 ## Repository Structure
 
 ```
-├── ansible/k3s/          # VM image build automation (this README)
+├── ansible/guest/          # VM image build automation (this README)
 ├── host-tools/           # TDX host setup and VM deployment
 │   ├── scripts/          # GPU binding, network setup, VM launch
 │   └── docs/             # Cache volume and deployment guides

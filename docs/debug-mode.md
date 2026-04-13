@@ -17,7 +17,7 @@ When `debug_build: true` is set:
 
 ### Enable Debug Mode
 
-Edit `ansible/k3s/inventory.yml` to override the default:
+Edit `ansible/guest/inventory.yml` to override the default:
 
 ```yaml
 all:

@@ -13,19 +13,19 @@ Authenticated Docker Hub users get at least 200 pulls/6hrs (free tier) and signi
 
 The config volume (`/var/config`) is an **untrusted input boundary** — the miner provides the credentials on the host, and the guest must treat them as potentially adversarial. On the **guest**, credentials must never be interpolated into shell commands or subprocess arguments. On the **host**, passing username/token as optional positional arguments into `create-config.sh` is acceptable: the same values are stored as **cleartext files on the config volume**, so anyone who can mount that volume can read them anyway; the primary threat model is **guest-side injection** into generated files (see **Threat model**).
 
-- **Packages affected**: `host-tools/scripts`, `ansible/k3s/roles/config`, `ansible/k3s/roles/common`, `ansible/k3s/roles/admission-controller`, `ansible/k3s/roles/system-manager`, `sek8s/cosign`
+- **Packages affected**: `host-tools/scripts`, `ansible/guest/roles/config`, `ansible/guest/roles/common`, `ansible/guest/roles/admission-controller`, `ansible/guest/roles/system-manager`, `sek8s/cosign`
 - **Key files**:
   - `host-tools/scripts/config/config.tmpl.yaml` — user-facing config template
   - `host-tools/scripts/config/config-schema.json` — JSON Schema for config validation
   - `host-tools/scripts/chutes/guest/config.py` — YAML parser, emits shell vars
   - `host-tools/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
   - `host-tools/scripts/volumes/create-config.sh` — creates and populates config volume
-  - `ansible/k3s/roles/config/files/process-config.py` — guest-side config validator and applier (already uses PyYAML)
-  - `ansible/k3s/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s); Ansible content preserved at runtime
+  - `ansible/guest/roles/config/files/process-config.py` — guest-side config validator and applier (already uses PyYAML)
+  - `ansible/guest/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s); Ansible content preserved at runtime
   - `sek8s/cosign/client.py` — cosign subprocess runner (`_COSIGN_ENV`); should follow systemd `DOCKER_CONFIG`, not duplicate path logic
-  - `ansible/k3s/roles/admission-controller/files/admission-controller.service` — systemd unit; ordering vs `config-manager`
+  - `ansible/guest/roles/admission-controller/files/admission-controller.service` — systemd unit; ordering vs `config-manager`
   - Shared **systemd drop-in** (implementation choice: e.g. under `admission-controller.service.d/` and `system-manager.service.d/`, or a shared snippet included by both) setting `DOCKER_CONFIG`
-  - `ansible/k3s/roles/system-manager/files/system-manager.service` — must receive the same `DOCKER_CONFIG` as admission
+  - `ansible/guest/roles/system-manager/files/system-manager.service` — must receive the same `DOCKER_CONFIG` as admission
 - **Dependencies**: Depends on (but does not block) the single-flight cosign dedup fix. Both reduce Docker Hub rate limit pressure independently.
 
 ---
@@ -137,12 +137,12 @@ Success = A miner who provides Docker Hub credentials has both containerd (k3s) 
 5. **Modified: `host-tools/scripts/volumes/create-config.sh`**
    - Accept optional Docker Hub username/token args.
    - Write `docker-hub-username` and `docker-hub-token` on the config volume (mode **0600**).
-6. **Modified: `ansible/k3s/roles/config/files/process-config.py`**
+6. **Modified: `ansible/guest/roles/config/files/process-config.py`**
    - Read `/var/config/docker-hub-username` and `/var/config/docker-hub-token` (treat missing as no creds).
    - Validate with **safe string** rules (see **Threat model** / **Constraints**).
    - **Always** write `/etc/admission-controller/docker-config/config.json`: either full Hub auth or `{"auths": {}}`; mode **0640**, **root:admission**. Never leave stale Hub entries when creds are invalid or removed.
    - **`registries.yaml`**: **`yaml.safe_load`** → merge/strip **only** fixed Hub `configs` keys → **`yaml.safe_dump`**; preserve mirrors and other registry configs from Ansible.
-7. **Modified: `ansible/k3s/roles/common/templates/registries.yaml.j2`** (optional)
+7. **Modified: `ansible/guest/roles/common/templates/registries.yaml.j2`** (optional)
    - Prefer a **comment** documenting that Docker Hub auth is applied at runtime by `process-config.py` (no secrets baked into the image).
 8. **Modified: `sek8s/cosign/client.py`**
    - **`_COSIGN_ENV`**: Rely on **`DOCKER_CONFIG`** from the process environment (systemd). Remove or narrow redundant “set `DOCKER_CONFIG` if directory exists” logic if it duplicates systemd.

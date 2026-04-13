@@ -11,8 +11,8 @@ sek8s is confidential GPU infrastructure for Chutes miners and zero-trust worklo
 - **Language**: Python 3.12+ (sek8s packages under `src/`), Bash (host-tools, guest-tools scripts)
 - **Package manager**: Poetry 2.x
 - **HTTP services**: FastAPI + Uvicorn (admission controller, attestation, system manager/status)
-- **Policy engine**: OPA (admission controller policies in `ansible/k3s/roles/admission-controller/files/policies/`)
-- **Provisioning**: Ansible (guest image build in `ansible/k3s/`)
+- **Policy engine**: OPA (admission controller policies in `ansible/guest/roles/admission-controller/files/policies/`)
+- **Provisioning**: Ansible (guest image build in `ansible/guest/`)
 - **Orchestration**: k3s (inside guest VM)
 - **Container signing**: cosign
 - **Linting**: bandit, black, flake8, isort, mypy
@@ -26,8 +26,8 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **Never modify database schemas** without showing the migration plan (sek8s has no DB; this applies if one is added)
 - **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`), `src/sek8s-common/` (`sek8s_common`), and `src/attestation-proxy/` (`attestation_proxy`); tests under `tests/`
 - **Shell scripts** in `host-tools/scripts/` and `guest-tools/`
-- **Ansible roles** in `ansible/k3s/roles/`
-- **OPA policies** in `ansible/k3s/roles/admission-controller/files/policies/`
+- **Ansible roles** in `ansible/guest/roles/`
+- **OPA policies** in `ansible/guest/roles/admission-controller/files/policies/`
 - **Environment variables** go in config files (pydantic-settings, Ansible vars) — never hardcoded
 - **90% test coverage target** — if you change code, add tests for it
 - **No class-based tests** — use plain functions (`def test_*`) with fixtures, not `class Test*` groupings
@@ -35,7 +35,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **Never commit or alter git history** without explicit human approval for that specific action — including `git commit`, `git commit --amend`, rebase, history-changing `reset`, `cherry-pick`, branch delete, or force-push. Leave changes for the author to review and commit unless they clearly asked you to perform a named git operation.
 - **Never modify Ansible roles** without understanding the guest image build pipeline
 - **Never hardcode attestation keys or measurements**
-- **Version bumps** — Two domains; see [docs/versioning.md](docs/versioning.md) for the full policy. **VM domain** (`ansible/*`, `src/sek8s/*`, `src/sek8s-common/*`, `nvevidence/*`, root `pyproject.toml`/`poetry.lock`): bump `ansible/k3s/VERSION`. **Proxy domain** (`src/attestation-proxy/*`): bump `src/attestation-proxy/VERSION`. Per-package `VERSION` files are the source of truth for `[tool.poetry] version` — keep them in sync via `scripts/sync_pyproject_versions.py`. Add a changelog fragment in `changelogs/<component>/unreleased/<branch-name>.md` with [Keep a Changelog](https://keepachangelog.com/) category headers (`### Added`, `### Changed`, `### Fixed`, `### Removed`). On release branches, `make promote-changelogs` (or CI auto-promotion) aggregates fragments into `CHANGELOG.md` — never manually create `## [x.y.z]` headings. PRs to `main` must have no fragments remaining. CI enforces domain checks, pyproject sync, and changelog state.
+- **Version bumps** — Two domains; see [docs/versioning.md](docs/versioning.md) for the full policy. **VM domain** (`ansible/guest/*`, `src/sek8s/*`, `src/sek8s-common/*`, `nvevidence/*`, root `pyproject.toml`/`poetry.lock`): bump `ansible/guest/VERSION`. Changes under **`ansible/host/`** do not bump the guest image version. **Proxy domain** (`src/attestation-proxy/*`): bump `src/attestation-proxy/VERSION`. Per-package `VERSION` files are the source of truth for `[tool.poetry] version` — keep them in sync via `scripts/sync_pyproject_versions.py`. Add a changelog fragment in `changelogs/<component>/unreleased/<branch-name>.md` with [Keep a Changelog](https://keepachangelog.com/) category headers (`### Added`, `### Changed`, `### Fixed`, `### Removed`). On release branches, `make promote-changelogs` (or CI auto-promotion) aggregates fragments into `CHANGELOG.md` — never manually create `## [x.y.z]` headings. PRs to `main` must have no fragments remaining. CI enforces domain checks, pyproject sync, and changelog state.
 
 ## Patterns
 
@@ -62,7 +62,8 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
 | **host-tools/** | Host setup (`chutes.host`), GPU binding/VM launch (`chutes.guest`), networking, orchestration (`quick-launch.sh`) |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
-| **ansible/k3s/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
+| **ansible/guest/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
+| **ansible/host/** | Operational Ansible (setup / launch / upgrade) for bare-metal TDX hosts over SSH |
 | **opa/** | OPA policy files for admission controller |
 | **tdx/** | Git submodule: Intel TDX guest image creation (Canonical). Host setup is handled by `host-tools/scripts/setup-tdx-host` |
 

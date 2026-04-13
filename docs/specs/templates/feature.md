@@ -8,7 +8,7 @@
 ## Context
 
 <!-- Related files, dependent packages, relevant API endpoints. -->
-<!-- Example: sek8s/services/attestation.py, sek8s/models.py, ansible/k3s/roles/attestation-service/ -->
+<!-- Example: sek8s/services/attestation.py, sek8s/models.py, ansible/guest/roles/attestation-service/ -->
 
 - **Packages affected**: 
 - **Key files**: 

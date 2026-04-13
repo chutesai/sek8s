@@ -4,7 +4,7 @@
 
 | File | Controls |
 |------|----------|
-| `ansible/k3s/VERSION` | VM / guest image release line |
+| `ansible/guest/VERSION` | VM / guest image release line |
 | `src/sek8s/VERSION` | `sek8s` Python package version |
 | `src/sek8s-common/VERSION` | `sek8s-common` Python package version |
 | `src/attestation-proxy/VERSION` | `attestation-proxy` Python package version |
@@ -19,9 +19,9 @@ There are two independent release domains. A single PR may touch both.
 
 ### VM image domain
 
-Changes under any of these paths require an **`ansible/k3s/VERSION`** bump:
+Changes under any of these paths require an **`ansible/guest/VERSION`** bump:
 
-- `ansible/*`
+- `ansible/guest/*` (guest image build; **`ansible/host/`** bare-metal playbooks do **not** require this bump)
 - `src/sek8s/*`
 - `src/sek8s-common/*`
 - `nvevidence/*`
@@ -34,7 +34,7 @@ because it is installed on the VM alongside `sek8s`.
 ### Attestation-proxy domain
 
 Changes under `src/attestation-proxy/*` require an **`src/attestation-proxy/VERSION`**
-bump (not `ansible/k3s/VERSION`).
+bump (not `ansible/guest/VERSION`).
 
 Rationale: the proxy runs as a standalone k3s container image, independently releasable
 from the VM image.
@@ -46,7 +46,7 @@ both VERSION files must be bumped.
 
 ### `sek8s-common` and proxy consumers
 
-When `sek8s-common` changes, a `ansible/k3s/VERSION` bump is required (VM domain),
+When `sek8s-common` changes, a `ansible/guest/VERSION` bump is required (VM domain),
 but an `attestation-proxy/VERSION` bump is **not** automatically required. The proxy
 picks up common changes on its next release. If a common change is breaking for the
 proxy, bump the proxy version in the same PR.
@@ -58,12 +58,12 @@ changes:
 
 | VERSION file | Tag format |
 |-------------|------------|
-| `ansible/k3s/VERSION` | `v{version}` |
+| `ansible/guest/VERSION` | `v{version}` |
 | `src/sek8s/VERSION` | `sek8s-v{version}` |
 | `src/sek8s-common/VERSION` | `sek8s-common-v{version}` |
 | `src/attestation-proxy/VERSION` | `attestation-proxy-v{version}` |
 
-The `v{version}` tag (from `ansible/k3s/VERSION`) is the **VM image release tag**.
+The `v{version}` tag (from `ansible/guest/VERSION`) is the **VM image release tag**.
 Per-package tags track Python package versions independently.
 
 ## Changelogs
@@ -74,7 +74,7 @@ versioned `## [x.y.z]` entry in `CHANGELOG.md` and deletes the fragment files.
 
 | Component | CHANGELOG | Fragments | Paired VERSION file |
 |-----------|-----------|-----------|---------------------|
-| VM image | `changelogs/vm/CHANGELOG.md` | `changelogs/vm/unreleased/` | `ansible/k3s/VERSION` |
+| VM image | `changelogs/vm/CHANGELOG.md` | `changelogs/vm/unreleased/` | `ansible/guest/VERSION` |
 | sek8s | `changelogs/sek8s/CHANGELOG.md` | `changelogs/sek8s/unreleased/` | `src/sek8s/VERSION` |
 | Proxy | `changelogs/attestation-proxy/CHANGELOG.md` | `changelogs/attestation-proxy/unreleased/` | `src/attestation-proxy/VERSION` |
 
@@ -87,7 +87,7 @@ On your feature branch, create a `.md` file in **every component's** `unreleased
 directory that your branch touches. The filename must match the branch name (strip
 the prefix): `feature/nvidia-590-drivers` → `nvidia-590-drivers.md`.
 
-If your branch changes files in both `src/sek8s/` and `ansible/`, you need fragments
+If your branch changes files in both `src/sek8s/` and `ansible/guest/`, you need fragments
 in both `changelogs/sek8s/unreleased/` and `changelogs/vm/unreleased/`.
 
 Path-to-component mapping:
@@ -97,7 +97,7 @@ Path-to-component mapping:
 | `src/sek8s/*` | `changelogs/sek8s/unreleased/` |
 | `src/sek8s-common/*` | `changelogs/sek8s/unreleased/` |
 | `src/attestation-proxy/*` | `changelogs/attestation-proxy/unreleased/` |
-| `ansible/*` | `changelogs/vm/unreleased/` |
+| `ansible/guest/*` | `changelogs/vm/unreleased/` |
 | `nvevidence/*` | `changelogs/vm/unreleased/` |
 
 Use [Keep a Changelog](https://keepachangelog.com/) category headers:

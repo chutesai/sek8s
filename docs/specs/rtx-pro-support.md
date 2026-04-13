@@ -18,8 +18,8 @@ NVSwitch and no NVLink** -- inter-GPU communication is PCIe-only.
   - `host-tools/scripts/chutes/guest/gpu/tools.py` (nvidia-gpu-tools compat)
   - `host-tools/scripts/chutes/guest/detection.py` (detection driven by profile)
   - `host-tools/scripts/chutes/guest/passthrough.py` (orchestration driven by profile)
-  - `ansible/k3s/roles/gpu/files/nvidia-fabricmanager-mask.sh` (no changes, already handles no-NVSwitch)
-  - `ansible/k3s/roles/gpu/files/nvidia-persistenced-config.sh` (no changes, already handles no-NVSwitch)
+  - `ansible/guest/roles/gpu/files/nvidia-fabricmanager-mask.sh` (no changes, already handles no-NVSwitch)
+  - `ansible/guest/roles/gpu/files/nvidia-persistenced-config.sh` (no changes, already handles no-NVSwitch)
 - **Dependencies**: `nvidia-gpu-tools` (bundled wheel from NVIDIA/gpu-admin-tools) must support GB202 CC mode
 
 ---

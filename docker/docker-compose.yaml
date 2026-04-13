@@ -28,7 +28,7 @@ services:
       - "--log-level=debug"
       - "/policies"
     volumes:
-      - ./ansible/k3s/roles/admission-controller/files/policies:/policies:ro
+      - ./ansible/guest/roles/admission-controller/files/policies:/policies:ro
     networks:
       - test-network
     profiles:

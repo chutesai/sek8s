@@ -11,17 +11,17 @@ Currently, helm charts (chutes-miner-gpu, gpu-operator, monitoring) are installe
 
 The boot-time cluster init system (`k3s-cluster-init.service`) runs numbered scripts from `/usr/local/bin/k3s-init-scripts/`. Scripts handle their own idempotency (run-once scripts use markers in `/var/lib/rancher/k3s/init-markers/`; run-every-boot scripts skip markers). This feature adds a new init script that compares a baked-in chart version marker against the version deployed in the cluster and runs `helm repo update` + `helm upgrade` when they differ.
 
-- **Packages affected**: `ansible/k3s/roles/chutes-gpu`, `ansible/k3s/roles/k3s`, `ansible/k3s/roles/cleanup`
+- **Packages affected**: `ansible/guest/roles/chutes-gpu`, `ansible/guest/roles/k3s`, `ansible/guest/roles/cleanup`
 - **Key files**:
-  - `ansible/k3s/roles/chutes-gpu/tasks/setup_chutes.yml` — build-time chart install, Helm env, repo add
-  - `ansible/k3s/roles/chutes-gpu/defaults/main.yml` — `chutes_chart_version`, `helm_chart_public_key_path`, `chutes_helm_repo_url`
+  - `ansible/guest/roles/chutes-gpu/tasks/setup_chutes.yml` — build-time chart install, Helm env, repo add
+  - `ansible/guest/roles/chutes-gpu/defaults/main.yml` — `chutes_chart_version`, `helm_chart_public_key_path`, `chutes_helm_repo_url`
   - `helm_chart_public_key_path` — build-time var pointing to PGP public key file (required)
-  - `ansible/k3s/roles/k3s/defaults/main.yml` — `helm_config_home`, `helm_cache_home`, `helm_data_home`
-  - `ansible/k3s/roles/chutes-gpu/defaults/main.yml` — same (for standalone runs)
-  - `ansible/k3s/roles/k3s/templates/k3s-cluster-init.service.j2` — Helm env vars for child scripts
-  - `ansible/k3s/roles/k3s/files/k3s-cluster-init.sh` — cluster init runner
-  - `ansible/k3s/roles/k3s/files/cluster-init/*.sh` — numbered init scripts
-  - `ansible/k3s/roles/cleanup/tasks/cleanup-k3s.yml` — marker cleanup at image build
+  - `ansible/guest/roles/k3s/defaults/main.yml` — `helm_config_home`, `helm_cache_home`, `helm_data_home`
+  - `ansible/guest/roles/chutes-gpu/defaults/main.yml` — same (for standalone runs)
+  - `ansible/guest/roles/k3s/templates/k3s-cluster-init.service.j2` — Helm env vars for child scripts
+  - `ansible/guest/roles/k3s/files/k3s-cluster-init.sh` — cluster init runner
+  - `ansible/guest/roles/k3s/files/cluster-init/*.sh` — numbered init scripts
+  - `ansible/guest/roles/cleanup/tasks/cleanup-k3s.yml` — marker cleanup at image build
 - **Dependencies**: helm (already installed by `common` role), kubectl, k3s API readiness (handled by `k3s-cluster-init.sh`)
 
 ---
@@ -75,10 +75,10 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 
 ## Output Format
 
-1. **Modified: `ansible/k3s/roles/k3s/files/k3s-cluster-init.service`**
+1. **Modified: `ansible/guest/roles/k3s/files/k3s-cluster-init.service`**
    - Add `Environment=HELM_CONFIG_HOME=/var/lib/chutes/helm-config`, `HELM_CACHE_HOME=.../helm-cache`, `HELM_DATA_HOME=.../helm-data` to the `[Service]` section so child scripts inherit them.
 
-2. **Modified: `ansible/k3s/roles/chutes-gpu/tasks/setup_chutes.yml`**
+2. **Modified: `ansible/guest/roles/chutes-gpu/tasks/setup_chutes.yml`**
    - Before helm install: create `/etc/chutes/`; copy PGP keyring from `helm_chart_public_key_path` to `/etc/chutes/helm-pubkey.gpg`; create `helm-config`, `helm-cache`, `helm-data` under `/var/lib/chutes/` (root volume, VM-version-specific).
    - Replace `kubernetes.core.helm_repository` with shell tasks that run `helm repo add chutes <url>` and `helm repo update` with `HELM_*_HOME` env vars set.
    - Add `--verify --keyring /etc/chutes/helm-pubkey.gpg` to `helm upgrade --install` (always).
@@ -87,15 +87,15 @@ Success = On VM boot with a persistent storage volume from an older image, the `
 3. **Build-time config: `helm_chart_public_key_path`**
    - Path to PGP public key file (like `cosign_public_key_path`). Required. Ansible copies this file to `/etc/chutes/helm-pubkey.gpg` in the image.
 
-4. **Modified: `ansible/k3s/roles/k3s/files/cluster-init/04-helm-chart-upgrade.sh`**
+4. **Modified: `ansible/guest/roles/k3s/files/cluster-init/04-helm-chart-upgrade.sh`**
    - Uses `HELM_*_HOME` from service unit only (no fallbacks); does not run `helm repo add`.
    - Requires keyring at `/etc/chutes/helm-pubkey.gpg`; exits 1 if missing. Runs `helm repo update`, then `helm upgrade --install` with `--verify --keyring` (always).
    - Reads expected version from marker; queries installed version; exits 0 when versions match and release is healthy; otherwise runs upgrade. Logs to `/var/log/helm-chart-upgrade.log`.
 
-5. **Modified: `ansible/k3s/roles/k3s/files/k3s-cluster-init.sh`** (no change needed)
+5. **Modified: `ansible/guest/roles/k3s/files/k3s-cluster-init.sh`** (no change needed)
    - Auto-discovers `*.sh` in the script dir; `04-helm-chart-upgrade.sh` is picked up automatically.
 
-6. **Modified: `ansible/k3s/roles/cleanup/tasks/cleanup-k3s.yml`**
+6. **Modified: `ansible/guest/roles/cleanup/tasks/cleanup-k3s.yml`**
    - Do NOT clear `/etc/chutes/` during cleanup (version marker and keyring live on root FS). (No changes needed — existing cleanup does not touch `/etc/chutes/`.)
 
 ---

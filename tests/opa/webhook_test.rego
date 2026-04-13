@@ -1,7 +1,7 @@
 # OPA tests for webhook.rego k3s-config ConfigMap protection.
 # With kube-system included in webhook scope, the miner must be blocked from
 # modifying k3s-config while system controllers remain unblocked.
-# Run: ./bin/opa test ansible/k3s/roles/admission-controller/files/policies tests/opa -v
+# Run: ./bin/opa test ansible/guest/roles/admission-controller/files/policies tests/opa -v
 package kubernetes.admission
 
 import future.keywords.if

@@ -5,7 +5,7 @@ All notable changes to the VM / guest image will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-Version source of truth: `ansible/k3s/VERSION`
+Version source of truth: `ansible/guest/VERSION`
 
 ## [1.1.0] - 2026-04-07
 
@@ -40,7 +40,7 @@ Version source of truth: `ansible/k3s/VERSION`
   without a full host setup; enables `chutes-reset-gpus`.
 - Monorepo package refactor: `src/` layout with `sek8s`, `sek8s-common`, and
   `attestation-proxy` as separate packages. VM image version moved to
-  `ansible/k3s/VERSION`. Python target aligned to 3.12.
+  `ansible/guest/VERSION`. Python target aligned to 3.12.
 
 ### Changed
 - NVIDIA 590 drivers — guest stack moves to the 590 driver / Fabric Manager line.

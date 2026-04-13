@@ -42,23 +42,24 @@ jobs:
           errors=0
 
           # --- VM image domain ---
-          # ansible/*, src/sek8s/*, src/sek8s-common/*, nvevidence/*,
-          # root pyproject.toml, poetry.lock  →  ansible/k3s/VERSION
+          # ansible/guest/* (guest image build), src/sek8s/*, src/sek8s-common/*, nvevidence/*,
+          # root pyproject.toml, poetry.lock  →  ansible/guest/VERSION
+          # ansible/host/* is bare-metal ops only — not baked into the guest image.
           needs_vm_bump=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              ansible/*|src/sek8s/*|src/sek8s-common/*|nvevidence/*) needs_vm_bump=true; break ;;
+              ansible/guest/*|src/sek8s/*|src/sek8s-common/*|nvevidence/*) needs_vm_bump=true; break ;;
               pyproject.toml|poetry.lock) needs_vm_bump=true; break ;;
             esac
           done <<< "$changed_files"
 
           if [ "$needs_vm_bump" = true ]; then
-            if ! echo "$changed_files" | grep -qx "ansible/k3s/VERSION"; then
-              echo "::error::Changes in the VM image domain (ansible/, src/sek8s/, src/sek8s-common/, nvevidence/, root pyproject/lock) require an ansible/k3s/VERSION bump."
+            if ! echo "$changed_files" | grep -qx "ansible/guest/VERSION"; then
+              echo "::error::Changes in the VM image domain (ansible/guest/, src/sek8s/, src/sek8s-common/, nvevidence/, root pyproject/lock) require an ansible/guest/VERSION bump."
               errors=$((errors + 1))
             else
-              echo "VM domain: ansible/k3s/VERSION bumped."
+              echo "VM domain: ansible/guest/VERSION bumped."
             fi
           else
             echo "No VM-domain changes detected."
@@ -173,7 +174,7 @@ jobs:
             fi
           }
 
-          tag_if_ready "ansible/k3s/VERSION"          "v"                    "changelogs/vm"
+          tag_if_ready "ansible/guest/VERSION"          "v"                    "changelogs/vm"
           tag_if_ready "src/sek8s/VERSION"             "sek8s-v"             "changelogs/sek8s"
           tag_if_ready "src/sek8s-common/VERSION"      "sek8s-common-v"      ""
           tag_if_ready "src/attestation-proxy/VERSION"  "attestation-proxy-v" "changelogs/attestation-proxy"

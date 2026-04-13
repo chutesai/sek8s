@@ -12,7 +12,7 @@ Confidential GPU infrastructure for Chutes miners and zero-trust workloads. This
 | `**guest-tools/**`      | Build the encrypted TDX VM image with k3s, attestation services, and GPU drivers                                        |
 | `**host-tools/**`       | Set up the host machine and launch the TDX VM (GPU binding, networking, volume management)                              |
 | `**docs/**`             | Integration guide with [chutes-miner](https://github.com/chutesai/chutes-miner) and system-status service documentation |
-| `ansible/k3s/`          | Ansible roles for guest image build automation                                                                          |
+| `ansible/guest/`          | Ansible roles for guest image build automation                                                                          |
 | `sek8s/`, `nvevidence/` | Python services running inside the guest (attestation, evidence verification, system status)                            |
 | `tdx/`                  | Submodule with Intel's TDX host enablement scripts                                                                      |
 
@@ -25,7 +25,7 @@ Confidential GPU infrastructure for Chutes miners and zero-trust workloads. This
 2. **Download the VM image** — Run `./quick-launch.sh --download` from `host-tools/scripts/` to fetch the prebuilt guest image (requires `aria2`).
 3. **Configure and launch** — Run `./quick-launch.sh --template` to generate a `config.yaml`, fill in your miner credentials and network settings, then `./quick-launch.sh config.yaml` to create volumes, configure GPUs, and boot the VM in one command.
 4. **Understand the integration** — Read `[docs/end-to-end-miner.md](docs/end-to-end-miner.md)` to see how this repo integrates with the [chutes-miner](https://github.com/chutesai/chutes-miner) control plane.
-5. **Build the guest image** (optional) — Use `[guest-tools/](guest-tools/)` and `[ansible/k3s/](ansible/k3s/)` to customize or rebuild the encrypted VM image.
+5. **Build the guest image** (optional) — Use `[guest-tools/](guest-tools/)` and `[ansible/guest/](ansible/guest/)` to customize or rebuild the encrypted VM image.
 6. **Monitor VM status** — See `[docs/system-status.md](docs/system-status.md)` for using the system-status API to inspect service health and GPU telemetry inside the VM.
 
 > **Important:** The guest root disk is LUKS-encrypted. Only the Chutes attestation/key service (or your own compatible service) can decrypt it after verifying Intel TDX measurements, so simply possessing the qcow2 image is not enough to run the VM.
@@ -34,7 +34,7 @@ The `config.yaml` defines your deployment: VM identity, miner credentials, netwo
 
 ### How this repo pairs with `chutes-miner`
 
-- **Guest image:** Built with `guest-tools/` and `ansible/k3s/`, contains the full Chutes stack pre-installed.
+- **Guest image:** Built with `guest-tools/` and `ansible/guest/`, contains the full Chutes stack pre-installed.
 - **Host operations:** Use `host-tools/` to launch and manage the TDX VM on bare metal.
 - **Control plane:** The [chutes-miner](https://github.com/chutesai/chutes-miner) repo manages your fleet of miners (both TEE and non-TEE) via `chutes-miner-cli`.
 - **Integration:** See `[docs/end-to-end-miner.md](docs/end-to-end-miner.md)` for how the pieces fit together.
