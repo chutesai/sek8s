@@ -1,0 +1,18 @@
+---
+- name: Detect live chutes-td QEMU on metal
+  ansible.builtin.script: is_live_chutes_td.sh
+  register: chutes_td_live_check
+  changed_when: false
+  failed_when: false
+
+- name: Fail when a TEE guest is already running
+  ansible.builtin.fail:
+    msg: >-
+      A chutes-td QEMU guest is already running on {{ inventory_hostname }}.
+      You cannot launch until it is shut down. From your operator machine (with chutes-miner):
+        chutes-miner tee shutdown --name {{ tee_server_name | default(inventory_hostname) }} --confirm --hotkey <path> --miner-api <url>
+      Or run Ansible from ansible/host:
+        ansible-playbook -i <inventory> {{ playbook_dir }}/shutdown.yml
+      (same inventory as upgrade: chutes_hotkey_path, chutes_miner_api from host_tools defaults or inventory; optional tee_server_name).
+      See host-tools/scripts/quick-launch.sh; --force bypasses the duplicate guard and is unsafe.
+  when: chutes_td_live_check.rc == 0

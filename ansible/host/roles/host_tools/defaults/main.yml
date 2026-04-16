@@ -1,0 +1,7 @@
+---
+# Lowest-precedence defaults — inventory group_vars / host_vars / -e override these.
+# Do not duplicate in group_vars/all.yml or inventory cannot win.
+
+chutes_miner_api: "http://127.0.0.1:32000"
+chutes_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/chutes.config"
+upgrade_force_delete_stuck_pods: false

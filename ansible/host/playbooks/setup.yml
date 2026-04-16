@@ -1,0 +1,21 @@
+---
+# Host prep through TDX setup, optional PCCS, prerequisites. Does not launch the VM.
+# Run from repo root or ansible/host:
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/setup.yml
+#
+# Optional Vault / extra-vars for automated PCCS:
+#   pccs_api_key, pccs_password — set **both** to run roles/pccs_configure; omit both to skip (playbook prints why).
+#   Partial configuration fails with an explicit inventory message.
+
+- name: TDX host setup
+  hosts: td_hosts
+  gather_facts: true
+  become: true
+  vars:
+    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
+  roles:
+    - role: host_tools
+    - role: host_prerequisites
+    - role: tdx_bootstrap
+    - role: chutes_dirs
+    - role: pccs_configure

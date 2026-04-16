@@ -1,0 +1,293 @@
+---
+# Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
+# Controller: chutes-miner, kubectl. chutes-miner --name defaults to inventory_hostname; set tee_server_name to override.
+#
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade.yml
+
+- name: Upgrade TDX guest base image
+  hosts: td_hosts
+  serial: 1
+  gather_facts: true
+  become: true
+  vars:
+    chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
+    staged_image_path: "/var/lib/chutes/base-images/{{ upgrade_staged_basename }}"
+    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
+    # chutes-miner tee * --name: use inventory host key by default; set tee_server_name if it differs (e.g. SSH alias).
+    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
+  pre_tasks:
+    - name: Require chutes_hotkey_path
+      ansible.builtin.assert:
+        that:
+          - chutes_hotkey_path is defined
+          - chutes_hotkey_path | length > 0
+        fail_msg: "Set chutes_hotkey_path (e.g. group_vars or host_vars)."
+
+  roles:
+    - role: host_tools
+
+  tasks:
+    - name: Read EXPECTED_BASE_SHA256 from synced quick-launch.sh
+      ansible.builtin.shell: |
+        set -euo pipefail
+        grep -E '^EXPECTED_BASE_SHA256=' "{{ sek8s_remote_host_tools }}/scripts/quick-launch.sh" | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'"
+      args:
+        executable: /bin/bash
+      register: expected_sha_raw
+      changed_when: false
+
+    - name: Set expected SHA fact
+      ansible.builtin.set_fact:
+        upgrade_expected_sha: "{{ expected_sha_raw.stdout | trim }}"
+
+    - name: Stat current default base image
+      ansible.builtin.stat:
+        path: "{{ upgrade_default_base_image }}"
+      register: cur_base_stat
+
+    - name: SHA256 of current default base image
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ upgrade_default_base_image }}"
+      register: cur_sha_out
+      changed_when: false
+      when: cur_base_stat.stat.exists
+
+    - name: Set current image SHA fact
+      ansible.builtin.set_fact:
+        upgrade_current_sha: "{{ (cur_sha_out.stdout.split()[0]) if cur_base_stat.stat.exists else '' }}"
+
+    - name: Stat staged image
+      ansible.builtin.stat:
+        path: "{{ staged_image_path }}"
+      register: staged_stat
+
+    - name: SHA256 of staged image when present
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ staged_image_path }}"
+      register: staged_sha_cmd
+      changed_when: false
+      when: staged_stat.stat.exists
+
+    - name: Set staged SHA fact
+      ansible.builtin.set_fact:
+        upgrade_staged_sha: "{{ (staged_sha_cmd.stdout.split()[0]) if staged_stat.stat.exists else '' }}"
+
+    - name: No-op when default image already matches expected and no staged file
+      ansible.builtin.debug:
+        msg: "Base image already at expected SHA256; nothing to upgrade."
+      when:
+        - upgrade_current_sha == upgrade_expected_sha
+        - not staged_stat.stat.exists
+
+    - name: End when already upgraded
+      ansible.builtin.meta: end_host
+      when:
+        - upgrade_current_sha == upgrade_expected_sha
+        - not staged_stat.stat.exists
+
+    - name: Remove stray staged file when default image already matches expected
+      ansible.builtin.file:
+        path: "{{ staged_image_path }}"
+        state: absent
+      when:
+        - upgrade_current_sha == upgrade_expected_sha
+        - staged_stat.stat.exists
+
+    - name: End after cleaning stray staged artifact
+      ansible.builtin.meta: end_host
+      when:
+        - upgrade_current_sha == upgrade_expected_sha
+        - staged_stat.stat.exists
+
+    - name: Download staged base image when missing or checksum wrong
+      ansible.builtin.command:
+        argv:
+          - aria2c
+          - -x
+          - "16"
+          - -s
+          - "16"
+          - -k
+          - 1M
+          - -d
+          - /var/lib/chutes/base-images
+          - -o
+          - "{{ upgrade_staged_basename }}"
+          - "{{ upgrade_base_image_url }}"
+      when: upgrade_staged_sha != upgrade_expected_sha
+      register: aria_dl
+      changed_when: true
+
+    - name: Re-stat staged image
+      ansible.builtin.stat:
+        path: "{{ staged_image_path }}"
+      register: staged_stat
+
+    - name: SHA256 staged image after download
+      ansible.builtin.command:
+        argv:
+          - sha256sum
+          - "{{ staged_image_path }}"
+      register: staged_sha_cmd
+      changed_when: false
+      failed_when: staged_sha_cmd.rc != 0
+
+    - name: Refresh staged SHA fact
+      ansible.builtin.set_fact:
+        upgrade_staged_sha: "{{ staged_sha_cmd.stdout.split()[0] }}"
+
+    - name: Verify staged image matches quick-launch expectation
+      ansible.builtin.assert:
+        that:
+          - upgrade_staged_sha == upgrade_expected_sha
+        fail_msg: >-
+          Staged image checksum {{ upgrade_staged_sha }} != expected {{ upgrade_expected_sha }}.
+          Delete {{ staged_image_path }} and re-run.
+
+    - name: Enter maintenance (validator API)
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - tee
+          - start-maintenance
+          - --name
+          - "{{ chutes_tee_server_name }}"
+          - --yes
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --validator-api
+          - "{{ chutes_validator_api }}"
+          - --raw-json
+      delegate_to: localhost
+      become: false
+
+    - name: Sync kubeconfig from miner API
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - sync-kubeconfig
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --path
+          - "{{ chutes_kubeconfig_path }}"
+          - --miner-api
+          - "{{ chutes_miner_api }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Delete chute pods and wait for termination
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ chutes_kubeconfig_path }}"
+          - delete
+          - pods
+          - -n
+          - chutes
+          - -l
+          - "{{ upgrade_chute_label }}"
+          - --wait=true
+          - --timeout={{ upgrade_drain_timeout }}
+      delegate_to: localhost
+      become: false
+      register: kubectl_del
+
+    - name: Force-delete stuck chute pods when enabled and first delete failed
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ chutes_kubeconfig_path }}"
+          - delete
+          - pods
+          - -n
+          - chutes
+          - -l
+          - "{{ upgrade_chute_label }}"
+          - --grace-period=0
+          - --force
+      delegate_to: localhost
+      become: false
+      register: kubectl_force
+      when:
+        - kubectl_del.rc != 0
+        - upgrade_force_delete_stuck_pods | bool
+
+    - name: Fail when chute pod drain did not succeed
+      ansible.builtin.fail:
+        msg: >-
+          kubectl delete failed (rc={{ kubectl_del.rc }}). stderr={{ kubectl_del.stderr | default('') }}.
+          Set upgrade_force_delete_stuck_pods=true or clear pods manually.
+      when:
+        - kubectl_del.rc != 0
+        - not (upgrade_force_delete_stuck_pods | bool)
+
+    - name: Fail when force-delete was requested but still failing
+      ansible.builtin.fail:
+        msg: >-
+          Forced pod delete failed (rc={{ kubectl_force.rc }}). stderr={{ kubectl_force.stderr | default('') }}.
+      when:
+        - kubectl_del.rc != 0
+        - upgrade_force_delete_stuck_pods | bool
+        - kubectl_force is defined
+        - kubectl_force.rc != 0
+
+    - name: Shutdown guest via chutes-miner and wait for power off
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: shutdown_via_miner.yml
+
+    - name: Backup current base qcow2 by date
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ upgrade_default_base_image }}"
+          - "/var/lib/chutes/base-images/tdx-guest-{{ ansible_date_time.date }}.qcow2"
+
+    - name: Promote staged image to default path
+      ansible.builtin.command:
+        argv:
+          - mv
+          - "{{ staged_image_path }}"
+          - "{{ upgrade_default_base_image }}"
+
+    - name: Refresh config.yaml on host before relaunch
+      ansible.builtin.include_role:
+        name: chutes_vm_config
+
+    - name: Relaunch VM with new base image
+      ansible.builtin.command:
+        chdir: "{{ sek8s_remote_host_tools }}/scripts"
+        argv:
+          - ./quick-launch.sh
+          - "{{ chutes_config_remote_path }}"
+      register: qlaunch_up
+
+    - name: Fail relaunch diagnostics
+      ansible.builtin.fail:
+        msg: "quick-launch.sh failed after upgrade (rc={{ qlaunch_up.rc }}). stderr={{ qlaunch_up.stderr | default('') }}"
+      when: qlaunch_up.rc != 0
+
+    - name: Poll node health after upgrade
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - tee
+          - node-health
+          - --name
+          - "{{ chutes_tee_server_name }}"
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --miner-api
+          - "{{ chutes_miner_api }}"
+      delegate_to: localhost
+      become: false
+      register: health_poll
+      until: health_poll.rc == 0
+      retries: "{{ [((upgrade_health_poll_seconds | int) // 5), 1] | max }}"
+      delay: 5

@@ -1,0 +1,14 @@
+---
+# Rendered into host config.yaml (override in group_vars / host_vars / Vault).
+
+chutes_network_dns: "8.8.8.8"
+chutes_volume_cache_size: "5000G"
+chutes_volume_storage_size: "500G"
+chutes_devices_bind: true
+chutes_runtime_foreground: false
+
+# If set (e.g. "192.168.50.0/24"), skip pick_guest_network.py and use .2 / .1/24 on this prefix.
+# chutes_guest_bridge_network: ""
+
+# Override detected default-route interface if needed.
+# chutes_public_interface: "ens192"

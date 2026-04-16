@@ -1,0 +1,8 @@
+---
+- name: Install host script dependencies (aria2, PyYAML)
+  ansible.builtin.apt:
+    name:
+      - aria2
+      - python3-yaml
+    state: present
+    update_cache: true

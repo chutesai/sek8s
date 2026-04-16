@@ -1,0 +1,5 @@
+---
+- name: Restart pccs
+  ansible.builtin.systemd:
+    name: pccs
+    state: restarted

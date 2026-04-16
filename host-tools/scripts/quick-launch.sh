@@ -74,6 +74,34 @@ CLI_EPHEMERAL=""
 CLI_DOWNLOAD=""
 CLI_DOCKER_HUB_USERNAME=""
 CLI_DOCKER_HUB_TOKEN=""
+CLI_FORCE=""
+
+# --------------------------------------------------------------------
+# Duplicate-instance guard (chutes-td QEMU must not stack without --force)
+# Keep detection aligned with ansible/host/roles/chutes_tee_vm/files/is_live_chutes_td.sh.
+# --------------------------------------------------------------------
+_PROCESS_NAME_CHUTES_TD="chutes-td"
+
+_live_chutes_td_qemu_running() {
+  local pid state cmdline
+  while read -r pid; do
+    [[ -z "$pid" ]] && continue
+    [[ -r "/proc/$pid/stat" ]] || continue
+    state=$(ps -p "$pid" -o stat= 2>/dev/null || echo "")
+    [[ "$state" == Z* ]] && continue
+    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
+    if [[ "$cmdline" != *qemu-system* && "$cmdline" != *qemu-kvm* ]]; then
+      continue
+    fi
+    [[ "$cmdline" == *"$_PROCESS_NAME_CHUTES_TD"* ]] || continue
+    return 0
+  done < <(
+    { pgrep -f 'qemu-system' 2>/dev/null || true
+      pgrep -f 'qemu-kvm' 2>/dev/null || true
+    } | sort -un
+  )
+  return 1
+}
 
 # --------------------------------------------------------------------
 # Parse CLI options
@@ -107,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
     --docker-hub-username) CLI_DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
+    --force) CLI_FORCE="true"; shift ;;
     --download)
       echo "=== Downloading VM Base Image (production) ==="
       BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
@@ -219,6 +248,7 @@ Management:
   --clean                   Clean up VM and bridge
   --download                Download VM base image (production) to /var/lib/chutes/base-images/
   --download-debug          Download VM debug image to /var/lib/chutes/base-images/
+  --force                   Allow launch even if a chutes-td QEMU instance appears running (unsafe)
 
 Examples:
   # Create template config
@@ -373,6 +403,18 @@ echo "Storage volume: $STORAGE_VOLUME ($STORAGE_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Network: $NETWORK_TYPE"
 echo ""
+
+# --------------------------------------------------------------------
+# Refuse duplicate chutes-td QEMU unless --force
+# --------------------------------------------------------------------
+if [[ "$CLI_FORCE" != "true" ]]; then
+  if _live_chutes_td_qemu_running; then
+    echo "Error: TDX VM (QEMU, $_PROCESS_NAME_CHUTES_TD) is already running."
+    echo "Stop it first: ./quick-launch.sh --clean"
+    echo "Or pass --force only if you intend to override this check (not recommended)."
+    exit 1
+  fi
+fi
 
 # --------------------------------------------------------------------
 # Step 0: Verify host configuration

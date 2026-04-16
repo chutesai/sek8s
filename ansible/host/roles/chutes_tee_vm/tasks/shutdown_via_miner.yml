@@ -1,0 +1,30 @@
+---
+# Graceful shutdown: chutes-miner on controller, then wait for guest serial log on metal.
+# Expects: chutes_tee_server_name, chutes_hotkey_path, chutes_miner_api, upgrade_powerdown_timeout_seconds
+
+- name: Request graceful VM shutdown via chutes-miner
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - shutdown
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --confirm
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
+
+- name: Wait for Power down in guest serial log
+  ansible.builtin.shell: |
+    set -euo pipefail
+    test -s /tmp/tdx-guest-td.log && grep -q 'Power down' /tmp/tdx-guest-td.log
+  args:
+    executable: /bin/bash
+  register: power_wait
+  until: power_wait.rc == 0
+  retries: "{{ (upgrade_powerdown_timeout_seconds | int) // 5 }}"
+  delay: 5

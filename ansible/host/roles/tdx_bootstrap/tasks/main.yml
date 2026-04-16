@@ -1,0 +1,63 @@
+---
+- name: Check whether TDX module is initialized
+  ansible.builtin.shell: dmesg | grep -i tdx || true
+  args:
+    executable: /bin/bash
+  register: tdx_dmesg
+  changed_when: false
+
+- name: Set fact for TDX readiness
+  ansible.builtin.set_fact:
+    tdx_ready: "{{ 'tdx: TDX module initialized' in tdx_dmesg.stdout }}"
+
+- name: Run full setup-tdx-host when TDX not initialized
+  ansible.builtin.command:
+    argv:
+      - "{{ sek8s_remote_host_tools }}/scripts/setup-tdx-host"
+  register: setup_tdx_full
+  when: not tdx_ready
+  changed_when: setup_tdx_full.rc == 0
+
+- name: Run setup-tdx-host --install-tools-only when TDX already initialized
+  ansible.builtin.command:
+    argv:
+      - "{{ sek8s_remote_host_tools }}/scripts/setup-tdx-host"
+      - --install-tools-only
+  register: setup_tdx_tools
+  when: tdx_ready
+  changed_when: setup_tdx_tools.rc == 0
+
+- name: Check if reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+
+- name: Reboot host and wait
+  ansible.builtin.reboot:
+    reboot_timeout: 900
+  when: reboot_required.stat.exists
+
+- name: Re-check dmesg for TDX after reboot
+  ansible.builtin.shell: dmesg | grep -i tdx || true
+  args:
+    executable: /bin/bash
+  register: tdx_after_reboot
+  changed_when: false
+  when: reboot_required.stat.exists
+
+- name: Merge TDX dmesg fact after reboot
+  ansible.builtin.set_fact:
+    tdx_final_dmesg: "{{ tdx_after_reboot.stdout | default(tdx_dmesg.stdout) }}"
+  when: reboot_required.stat.exists
+
+- name: Use previous dmesg when no reboot
+  ansible.builtin.set_fact:
+    tdx_final_dmesg: "{{ tdx_dmesg.stdout }}"
+  when: not reboot_required.stat.exists
+
+- name: Fail if TDX not initialized
+  ansible.builtin.fail:
+    msg: >-
+      TDX does not appear initialized (expected 'tdx: TDX module initialized' in dmesg).
+      See host-tools/README.md.
+  when: "'tdx: TDX module initialized' not in tdx_final_dmesg"

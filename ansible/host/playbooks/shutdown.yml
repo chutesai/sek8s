@@ -1,0 +1,32 @@
+---
+# Graceful TEE guest shutdown on metal: chutes-miner tee shutdown (localhost), then wait for
+# "Power down" in /tmp/tdx-guest-td.log on the host. Does not change base images or relaunch.
+#
+#   cd ansible/host && ansible-playbook -i inventory/hosts.yml playbooks/shutdown.yml
+#
+# Requires (inventory / Vault): chutes_hotkey_path on the controller
+# Optional: tee_server_name (defaults to inventory_hostname), chutes_miner_api (host_tools role default)
+
+- name: Shutdown TDX guest VM
+  hosts: td_hosts
+  gather_facts: true
+  become: true
+  vars:
+    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
+    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
+  pre_tasks:
+    - name: Require chutes_hotkey_path
+      ansible.builtin.assert:
+        that:
+          - chutes_hotkey_path is defined
+          - chutes_hotkey_path | length > 0
+        fail_msg: "Set chutes_hotkey_path (e.g. group_vars or host_vars)."
+
+  roles:
+    - role: host_tools
+
+  tasks:
+    - name: Shutdown guest via chutes-miner and wait for power off
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: shutdown_via_miner.yml

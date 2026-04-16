@@ -1,0 +1,7 @@
+---
+# This role is always included with tasks_from=… (see assert_not_running.yml, shutdown_via_miner.yml).
+- name: Mis-invoked chutes_tee_vm role
+  ansible.builtin.fail:
+    msg: >-
+      Include this role with ansible.builtin.include_role and tasks_from:
+      assert_not_running.yml (launch pre-check) or shutdown_via_miner.yml (graceful shutdown).

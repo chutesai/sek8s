@@ -1,0 +1,15 @@
+---
+- name: Ensure remote sek8s root exists
+  ansible.builtin.file:
+    path: "{{ sek8s_remote_root }}"
+    state: directory
+    mode: "0755"
+
+- name: Rsync host-tools from controller to metal
+  ansible.posix.synchronize:
+    src: "{{ host_tools_local }}/"
+    dest: "{{ sek8s_remote_host_tools }}/"
+    delete: false
+    rsync_opts:
+      - "--chmod=F755,D755"
+  delegate_to: localhost
