@@ -1,0 +1,27 @@
+---
+# Defaults for ansible/host operational playbooks.
+# Adjacent to playbooks/ so Ansible loads this regardless of which inventory is used.
+# Override any value in your inventory group_vars, host_vars, or with -e.
+
+sek8s_remote_root: /opt/sek8s
+sek8s_remote_host_tools: "{{ sek8s_remote_root }}/host-tools"
+
+sek8s_repo_url: https://github.com/chutesai/sek8s
+sek8s_repo_branch: main
+
+# PCCS (setup only) — set BOTH or omit BOTH via inventory / Vault / -e.
+# pccs_api_key: ""
+# pccs_password: ""
+
+pccs_config_path: /opt/intel/sgx-dcap-pccs/config/default.json
+pccs_ssl_dir: /opt/intel/sgx-dcap-pccs/ssl_key
+
+chutes_validator_api: "https://api.chutes.ai"
+
+upgrade_base_image_url: "https://vm.chutes.ai/tdx-guest.qcow2"
+upgrade_staged_basename: tdx-guest-staged.qcow2
+upgrade_default_base_image: /var/lib/chutes/base-images/tdx-guest.qcow2
+upgrade_chute_label: "chutes/chute=true"
+upgrade_drain_timeout: 600s
+upgrade_powerdown_timeout_seconds: 300
+upgrade_health_poll_seconds: 60

@@ -4,16 +4,13 @@ Operational playbooks run from your workstation against inventory over SSH. Gues
 
 ## Prerequisites (controller)
 
-- Ansible 2.14+ recommended
-- `ansible-galaxy collection install -r requirements.yml` (install from this directory)
-- `rsync` on the controller (`ansible.posix.synchronize`)
+- Ansible 2.17+ recommended
 - `chutes-miner` and `kubectl` on the controller for `upgrade.yml`
 
 ## Quick start
 
 ```bash
 cd ansible/host
-ansible-galaxy collection install -r requirements.yml
 ansible-playbook -i ~/chutes/my-inventory.yml playbooks/setup.yml
 ```
 

@@ -12,7 +12,6 @@
   gather_facts: true
   become: true
   vars:
-    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
     chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
   pre_tasks:
     - name: Require chutes_hotkey_path

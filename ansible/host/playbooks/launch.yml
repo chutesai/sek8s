@@ -20,7 +20,6 @@
   become: true
   vars:
     chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
-    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
 
   pre_tasks:
     - name: Refuse launch while a chutes-td guest is already running

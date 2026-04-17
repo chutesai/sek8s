@@ -12,7 +12,6 @@
   gather_facts: true
   become: true
   vars:
-    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
   roles:
     - role: host_tools
     - role: host_prerequisites

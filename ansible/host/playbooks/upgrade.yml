@@ -12,7 +12,6 @@
   vars:
     chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
     staged_image_path: "/var/lib/chutes/base-images/{{ upgrade_staged_basename }}"
-    host_tools_local: "{{ playbook_dir | dirname | dirname | dirname }}/host-tools"
     # chutes-miner tee * --name: use inventory host key by default; set tee_server_name if it differs (e.g. SSH alias).
     chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
   pre_tasks:
