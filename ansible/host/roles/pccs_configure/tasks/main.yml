@@ -106,7 +106,6 @@
 
 - name: Register platform with PCKIDRetrievalTool
   ansible.builtin.shell: |
-    set -euo pipefail
     printf '%s\n' '{{ pccs_password }}' | sudo -E PCKIDRetrievalTool \
       -url https://localhost:8081 \
       -use_secure_cert false
@@ -114,10 +113,12 @@
     executable: /bin/bash
   register: pck_tool
   no_log: true
+  failed_when: false
 
-- name: Fail with manual remediation when PCK tool fails
+- name: Fail with manual remediation when PCK tool reports an error
   ansible.builtin.fail:
     msg: >-
-      PCKIDRetrievalTool failed (rc={{ pck_tool.rc }}). stderr: {{ pck_tool.stderr | default('') }}.
-      Complete host-tools/README.md Step 2 manually (pccs-configure, systemctl restart pccs, PCKIDRetrievalTool).
-  when: pck_tool.rc != 0
+      PCKIDRetrievalTool did not succeed. stdout: {{ pck_tool.stdout | default('') }}.
+      Common causes: wrong pccs_password, PCCS not reachable, or service not yet started.
+      Complete host-tools/README.md Step 2 manually if needed.
+  when: "'the data has been sent to cache server successfully' not in (pck_tool.stdout | default(''))"
