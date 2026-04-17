@@ -8,7 +8,9 @@
 
 - name: Set fact for TDX readiness
   ansible.builtin.set_fact:
-    tdx_ready: "{{ 'tdx: TDX module initialized' in tdx_dmesg.stdout }}"
+    tdx_ready: >-
+      {{ 'tdx: TDX module initialized' in tdx_dmesg.stdout
+         or 'virt/tdx: module initialized' in tdx_dmesg.stdout }}
 
 - name: Run full setup-tdx-host when TDX not initialized
   ansible.builtin.command:
@@ -58,6 +60,8 @@
 - name: Fail if TDX not initialized
   ansible.builtin.fail:
     msg: >-
-      TDX does not appear initialized (expected 'tdx: TDX module initialized' in dmesg).
-      See host-tools/README.md.
-  when: "'tdx: TDX module initialized' not in tdx_final_dmesg"
+      TDX does not appear initialized (neither 'tdx: TDX module initialized' nor
+      'virt/tdx: module initialized' found in dmesg). See host-tools/README.md.
+  when:
+    - "'tdx: TDX module initialized' not in tdx_final_dmesg"
+    - "'virt/tdx: module initialized' not in tdx_final_dmesg"

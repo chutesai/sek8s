@@ -100,7 +100,9 @@ sudo reboot
 **After reboot, verify TDX is available:**
 ```bash
 dmesg | grep -i tdx
-# Expected output should include: [    x.xxxxx] tdx: TDX module initialized
+# Expected output includes one of:
+#   [    x.xxxxx] tdx: TDX module initialized        (older kobuk kernel)
+#   [    x.xxxxx] virt/tdx: module initialized        (newer kobuk / upstream kernel)
 ```
 
 ---
