@@ -1,7 +1,7 @@
 ---
-- name: Ensure remote sek8s root exists
+- name: Ensure sek8s remote root exists
   ansible.builtin.file:
-    path: "{{ sek8s_remote_root }}/sek8s"
+    path: "{{ sek8s_remote_root }}"
     state: directory
     mode: "0755"
 
@@ -18,19 +18,13 @@
     git checkout {{ sek8s_repo_branch | default('main') }} 2>/dev/null \
       || git checkout -b {{ sek8s_repo_branch | default('main') }} FETCH_HEAD
   args:
-    chdir: "{{ sek8s_remote_root }}/sek8s"
+    chdir: "{{ sek8s_remote_root }}"
     executable: /bin/bash
-    creates: "{{ sek8s_remote_root }}/sek8s/host-tools"
+    creates: "{{ sek8s_remote_host_tools }}"
 
 - name: Pull latest host-tools
   ansible.builtin.command:
     cmd: git pull --depth 1
-    chdir: "{{ sek8s_remote_root }}/sek8s"
+    chdir: "{{ sek8s_remote_root }}"
   register: git_pull
   changed_when: "'Already up to date' not in git_pull.stdout"
-
-- name: Symlink host-tools to expected path
-  ansible.builtin.file:
-    src: "{{ sek8s_remote_root }}/sek8s/host-tools"
-    dest: "{{ sek8s_remote_host_tools }}"
-    state: link
