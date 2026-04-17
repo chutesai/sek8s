@@ -336,7 +336,7 @@ def _symlink_host_bin_tools() -> None:
         dst = f"/usr/local/bin/{tool}"
         if not os.access(src, os.X_OK):
             continue
-        if os.path.exists(dst):
+        if os.path.lexists(dst):
             if os.path.islink(dst):
                 os.remove(dst)
             else:
