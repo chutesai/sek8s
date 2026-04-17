@@ -1,4 +1,24 @@
 ---
+- name: Parse miner credentials from hotkey file
+  when:
+    - chutes_hotkey_path is defined
+    - chutes_hotkey_path | length > 0
+    - chutes_miner_ss58 is not defined or chutes_miner_seed is not defined
+  block:
+    - name: Read hotkey JSON from controller
+      ansible.builtin.slurp:
+        src: "{{ chutes_hotkey_path }}"
+      delegate_to: localhost
+      become: false
+      register: _hotkey_raw
+      no_log: true
+
+    - name: Extract ss58 and seed from hotkey
+      ansible.builtin.set_fact:
+        chutes_miner_ss58: "{{ (_hotkey_raw.content | b64decode | from_json).ss58Address }}"
+        chutes_miner_seed: "{{ (_hotkey_raw.content | b64decode | from_json).secretSeed | regex_replace('^0x', '') }}"
+      no_log: true
+
 - name: Validate miner credentials are present
   ansible.builtin.assert:
     that:
@@ -7,7 +27,9 @@
       - chutes_miner_seed is defined
       - chutes_miner_seed | string | length > 0
     fail_msg: >-
-      Set chutes_miner_ss58 and chutes_miner_seed (host_vars / Vault) for this host.
+      Miner credentials are missing. Either set chutes_hotkey_path (path on the controller
+      to the Bittensor hotkey JSON) or set chutes_miner_ss58 and chutes_miner_seed explicitly
+      (host_vars / Vault).
 
 - name: Compute effective VM hostname
   ansible.builtin.set_fact:

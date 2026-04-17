@@ -16,7 +16,9 @@ pccs_config_path: /opt/intel/sgx-dcap-pccs/config/default.json
 pccs_ssl_dir: /opt/intel/sgx-dcap-pccs/ssl_key
 
 # Launch / upgrade: chutes_vm_config renders config.yaml on the host.
-#   chutes_miner_ss58, chutes_miner_seed — required (Vault / host_vars)
+#   chutes_hotkey_path — path on controller to Bittensor hotkey JSON; ss58Address and secretSeed
+#                        are extracted automatically. Set chutes_miner_ss58 / chutes_miner_seed
+#                        explicitly only to override the hotkey-parsed values.
 #   vm.hostname defaults to inventory_hostname; set chutes_vm_hostname to override
 #   Guest bridge /24 is picked to avoid overlapping host IPv4 unless chutes_guest_bridge_network is set
 # Upgrade / localhost CLI: tee * --name defaults to inventory_hostname; set tee_server_name to override.
