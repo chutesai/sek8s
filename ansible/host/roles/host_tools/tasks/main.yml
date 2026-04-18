@@ -22,6 +22,14 @@
     executable: /bin/bash
     creates: "{{ sek8s_remote_host_tools }}"
 
+- name: Ensure sparse-checkout includes host-tools and firmware
+  ansible.builtin.copy:
+    dest: "{{ sek8s_remote_root }}/.git/info/sparse-checkout"
+    content: |
+      host-tools/
+      firmware/
+    mode: "0644"
+
 - name: Pull latest host-tools
   ansible.builtin.command:
     cmd: git pull --depth 1
