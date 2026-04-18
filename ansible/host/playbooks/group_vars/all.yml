@@ -23,5 +23,6 @@ upgrade_staged_basename: tdx-guest-staged.qcow2
 upgrade_default_base_image: /var/lib/chutes/base-images/tdx-guest.qcow2
 upgrade_chute_label: "chutes/chute=true"
 upgrade_drain_timeout: 600s
+upgrade_drain_timeout_seconds: 600
 upgrade_powerdown_timeout_seconds: 300
 upgrade_health_poll_seconds: 60

@@ -1,11 +1,11 @@
 ---
-# Graceful TEE guest shutdown on metal: chutes-miner tee shutdown (localhost), then wait for
-# "Power down" in /tmp/tdx-guest-td.log on the host. Does not change base images or relaunch.
+# Graceful TEE guest shutdown: lock → purge deployments → wait for drain → shutdown → wait for power-down.
+# Does not change base images or relaunch. For upgrades use upgrade.yml (validator handles drain via maintenance).
 #
 #   cd ansible/host && ansible-playbook -i inventory/hosts.yml playbooks/shutdown.yml
 #
-# Requires (inventory / Vault): chutes_hotkey_path on the controller
-# Optional: tee_server_name (defaults to inventory_hostname), chutes_miner_api (host_tools role default)
+# Requires (inventory / Vault): chutes_hotkey_path, chutes_kubeconfig_path
+# Optional: tee_server_name (defaults to inventory_hostname), chutes_miner_api
 
 - name: Shutdown TDX guest VM
   hosts: td_hosts
@@ -25,6 +25,72 @@
     - role: host_tools
 
   tasks:
+    # ── Step 1: Lock ────────────────────────────────────────────────────────
+    - name: Lock server (prevent new deployments)
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - lock
+          - --name
+          - "{{ chutes_tee_server_name }}"
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --miner-api
+          - "{{ chutes_miner_api }}"
+      delegate_to: localhost
+      become: false
+
+    # ── Step 2: Purge ───────────────────────────────────────────────────────
+    - name: Purge all deployments from server
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - purge-server
+          - --name
+          - "{{ chutes_tee_server_name }}"
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+      delegate_to: localhost
+      become: false
+
+    # ── Step 3: Wait for drain ───────────────────────────────────────────────
+    - name: Sync kubeconfig from miner API
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - sync-kubeconfig
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --path
+          - "{{ chutes_kubeconfig_path }}"
+          - --miner-api
+          - "{{ chutes_miner_api }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Wait for all chute pods to terminate
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --kubeconfig
+          - "{{ chutes_kubeconfig_path }}"
+          - --context
+          - "{{ chutes_tee_server_name }}"
+          - get
+          - pods
+          - -n
+          - chutes
+          - -l
+          - "chutes/chute=true"
+          - --no-headers
+      delegate_to: localhost
+      become: false
+      register: _pods_remaining
+      until: _pods_remaining.stdout | trim == ''
+      retries: "{{ (upgrade_drain_timeout_seconds | int) // 10 }}"
+      delay: 10
+
+    # ── Step 4: Shutdown + wait ──────────────────────────────────────────────
     - name: Shutdown guest via chutes-miner and wait for power off
       ansible.builtin.include_role:
         name: chutes_tee_vm

@@ -178,63 +178,27 @@
       delegate_to: localhost
       become: false
 
-    - name: Delete chute pods and wait for termination
+    - name: Wait for validator to drain all chute pods (maintenance mode auto-purge)
       ansible.builtin.command:
         argv:
           - kubectl
           - --kubeconfig
           - "{{ chutes_kubeconfig_path }}"
-          - delete
+          - --context
+          - "{{ chutes_tee_server_name }}"
+          - get
           - pods
           - -n
           - chutes
           - -l
-          - "{{ upgrade_chute_label }}"
-          - --wait=true
-          - --timeout={{ upgrade_drain_timeout }}
+          - "chutes/chute=true"
+          - --no-headers
       delegate_to: localhost
       become: false
-      register: kubectl_del
-
-    - name: Force-delete stuck chute pods when enabled and first delete failed
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - --kubeconfig
-          - "{{ chutes_kubeconfig_path }}"
-          - delete
-          - pods
-          - -n
-          - chutes
-          - -l
-          - "{{ upgrade_chute_label }}"
-          - --grace-period=0
-          - --force
-      delegate_to: localhost
-      become: false
-      register: kubectl_force
-      when:
-        - kubectl_del.rc != 0
-        - upgrade_force_delete_stuck_pods | bool
-
-    - name: Fail when chute pod drain did not succeed
-      ansible.builtin.fail:
-        msg: >-
-          kubectl delete failed (rc={{ kubectl_del.rc }}). stderr={{ kubectl_del.stderr | default('') }}.
-          Set upgrade_force_delete_stuck_pods=true or clear pods manually.
-      when:
-        - kubectl_del.rc != 0
-        - not (upgrade_force_delete_stuck_pods | bool)
-
-    - name: Fail when force-delete was requested but still failing
-      ansible.builtin.fail:
-        msg: >-
-          Forced pod delete failed (rc={{ kubectl_force.rc }}). stderr={{ kubectl_force.stderr | default('') }}.
-      when:
-        - kubectl_del.rc != 0
-        - upgrade_force_delete_stuck_pods | bool
-        - kubectl_force is defined
-        - kubectl_force.rc != 0
+      register: _pods_remaining
+      until: _pods_remaining.stdout | trim == ''
+      retries: "{{ (upgrade_drain_timeout_seconds | int) // 10 }}"
+      delay: 10
 
     - name: Shutdown guest via chutes-miner and wait for power off
       ansible.builtin.include_role:
