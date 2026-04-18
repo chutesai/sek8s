@@ -42,40 +42,36 @@
       register: base_img_stat
 
     - name: Download base image when missing
-      ansible.builtin.command:
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ./quick-launch.sh --download 2>&1 | tee /tmp/chutes-download.log
+        exit ${PIPESTATUS[0]}
+      args:
         chdir: "{{ sek8s_remote_host_tools }}/scripts"
-        argv:
-          - ./quick-launch.sh
-          - --download
+        executable: /bin/bash
       when: not base_img_stat.stat.exists
       register: qdl
       changed_when: true
-
-    - name: Re-check base image after download
-      ansible.builtin.stat:
-        path: "{{ launch_base_image }}"
-      register: base_img_stat
-
-    - name: Fail when base image is still missing
-      ansible.builtin.fail:
-        msg: >-
-          Base image missing at {{ launch_base_image }}.
-          Ensure aria2 is installed, disk space is available, and vm.chutes.ai is reachable.
-      when: not base_img_stat.stat.exists
 
     - name: Render config.yaml on host (hostname, miner, network)
       ansible.builtin.include_role:
         name: chutes_vm_config
 
     - name: Run quick-launch (checksum verify + start VM)
-      ansible.builtin.command:
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ./quick-launch.sh "{{ chutes_config_remote_path }}" 2>&1 | tee /tmp/chutes-launch.log
+        exit ${PIPESTATUS[0]}
+      args:
         chdir: "{{ sek8s_remote_host_tools }}/scripts"
-        argv:
-          - ./quick-launch.sh
-          - "{{ chutes_config_remote_path }}"
+        executable: /bin/bash
       register: qlaunch
       changed_when: qlaunch.rc == 0
       failed_when: false
+
+    - name: Show quick-launch output
+      ansible.builtin.debug:
+        var: qlaunch.stdout_lines
 
     - name: Hand off to upgrade playbook on launch failure (often checksum mismatch)
       ansible.builtin.fail:
