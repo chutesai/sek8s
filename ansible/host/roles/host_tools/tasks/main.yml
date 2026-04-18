@@ -13,7 +13,7 @@
       || git remote set-url origin {{ sek8s_repo_url }}
     git config core.sparseCheckout true
     mkdir -p .git/info
-    echo 'host-tools/' > .git/info/sparse-checkout
+    printf 'host-tools/\nfirmware/\n' > .git/info/sparse-checkout
     git fetch --depth 1 origin {{ sek8s_repo_branch | default('main') }}
     git checkout {{ sek8s_repo_branch | default('main') }} 2>/dev/null \
       || git checkout -b {{ sek8s_repo_branch | default('main') }} FETCH_HEAD
