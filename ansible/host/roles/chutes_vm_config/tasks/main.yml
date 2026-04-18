@@ -35,23 +35,43 @@
   ansible.builtin.set_fact:
     chutes_effective_vm_hostname: "{{ chutes_vm_hostname | default(inventory_hostname) }}"
 
+- name: Check if config.yaml already exists on host
+  ansible.builtin.stat:
+    path: "{{ chutes_config_remote_path }}"
+  register: _config_stat
+
+- name: Read network config from existing config.yaml
+  ansible.builtin.slurp:
+    src: "{{ chutes_config_remote_path }}"
+  register: _existing_config
+  when:
+    - _config_stat.stat.exists
+    - chutes_guest_bridge_network is not defined or (chutes_guest_bridge_network | length == 0)
+
+- name: Apply network facts from existing config.yaml
+  ansible.builtin.set_fact:
+    chutes_guest_bridge_ip: "{{ (_existing_config.content | b64decode | from_yaml).network.bridge_ip }}"
+    chutes_guest_vm_ip: "{{ (_existing_config.content | b64decode | from_yaml).network.vm_ip }}"
+    chutes_guest_public_interface: "{{ (_existing_config.content | b64decode | from_yaml).network.public_interface }}"
+  when:
+    - _config_stat.stat.exists
+    - chutes_guest_bridge_network is not defined or (chutes_guest_bridge_network | length == 0)
+
 - name: Pick guest network automatically (no overlap with host IPv4 networks)
-  when: chutes_guest_bridge_network is not defined or (chutes_guest_bridge_network | length == 0)
+  when:
+    - not _config_stat.stat.exists
+    - chutes_guest_bridge_network is not defined or (chutes_guest_bridge_network | length == 0)
   block:
     - name: Run pick_guest_network.py on metal
       ansible.builtin.script: pick_guest_network.py
       register: chutes_pick_net
       changed_when: false
 
-    - name: Parse guest network JSON
-      ansible.builtin.set_fact:
-        chutes_guest_net: "{{ chutes_pick_net.stdout | trim | from_json }}"
-
     - name: Apply picked network facts
       ansible.builtin.set_fact:
-        chutes_guest_public_interface: "{{ chutes_guest_net.public_interface }}"
-        chutes_guest_vm_ip: "{{ chutes_guest_net.vm_ip }}"
-        chutes_guest_bridge_ip: "{{ chutes_guest_net.bridge_ip }}"
+        chutes_guest_public_interface: "{{ (chutes_pick_net.stdout | trim | from_json).public_interface }}"
+        chutes_guest_vm_ip: "{{ (chutes_pick_net.stdout | trim | from_json).vm_ip }}"
+        chutes_guest_bridge_ip: "{{ (chutes_pick_net.stdout | trim | from_json).bridge_ip }}"
 
 - name: Use manual guest bridge CIDR
   when: chutes_guest_bridge_network is defined and chutes_guest_bridge_network | length > 0
