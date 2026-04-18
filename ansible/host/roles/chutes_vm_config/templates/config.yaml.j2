@@ -25,12 +25,12 @@ network:
 volumes:
   cache:
     size: {{ chutes_volume_cache_size | to_json }}
-    path: ""
+    path: {{ chutes_volume_cache_path | to_json }}
   storage:
     size: {{ chutes_volume_storage_size | to_json }}
-    path: ""
+    path: {{ chutes_volume_storage_path | to_json }}
   config:
-    path: ""
+    path: {{ chutes_volume_config_path | to_json }}
 
 devices:
   bind_devices: {{ 'true' if chutes_devices_bind | bool else 'false' }}

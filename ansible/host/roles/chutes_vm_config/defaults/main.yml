@@ -2,8 +2,11 @@
 # Rendered into host config.yaml (override in group_vars / host_vars / Vault).
 
 chutes_network_dns: "8.8.8.8"
-chutes_volume_cache_size: "5000G"
+chutes_volume_cache_size: "10000G"
+chutes_volume_cache_path: "/data/prod/cache.raw"
 chutes_volume_storage_size: "500G"
+chutes_volume_storage_path: "/data/prod/storage.raw"
+chutes_volume_config_path: "/data/prod/config.qcow2"
 chutes_devices_bind: true
 chutes_runtime_foreground: false
 
