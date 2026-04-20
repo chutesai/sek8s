@@ -77,6 +77,7 @@ versioned `## [x.y.z]` entry in `CHANGELOG.md` and deletes the fragment files.
 | VM image | `changelogs/vm/CHANGELOG.md` | `changelogs/vm/unreleased/` | `ansible/guest/VERSION` |
 | sek8s | `changelogs/sek8s/CHANGELOG.md` | `changelogs/sek8s/unreleased/` | `src/sek8s/VERSION` |
 | Proxy | `changelogs/attestation-proxy/CHANGELOG.md` | `changelogs/attestation-proxy/unreleased/` | `src/attestation-proxy/VERSION` |
+| Ops | `changelogs/ops/CHANGELOG.md` | `changelogs/ops/unreleased/` | _(none — date-stamped)_ |
 
 `sek8s-common` does not have its own changelog. Common changes are documented in the
 consuming package's changelog (`sek8s` or `attestation-proxy`).
@@ -99,6 +100,7 @@ Path-to-component mapping:
 | `src/attestation-proxy/*` | `changelogs/attestation-proxy/unreleased/` |
 | `ansible/guest/*` | `changelogs/vm/unreleased/` |
 | `nvevidence/*` | `changelogs/vm/unreleased/` |
+| `ansible/host/*`, `host-tools/*`, `.github/workflows/*` | `changelogs/ops/unreleased/` |
 
 Use [Keep a Changelog](https://keepachangelog.com/) category headers:
 

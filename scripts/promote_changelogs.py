@@ -38,6 +38,9 @@ CATEGORY_ORDER = ["Added", "Changed", "Fixed", "Removed"]
 
 BRANCH_PREFIXES = ("feature/", "bugfix/", "fix/", "chore/", "hotfix/")
 
+# Ops changelog — date-headed, no paired VERSION file.
+OPS_CHANGELOG_DIR: str = "changelogs/ops"
+
 # Maps file path prefixes to the changelog component they affect.
 # Order matters: first match wins, so more specific prefixes go first.
 PATH_CHANGELOG_MAP: list[tuple[str, str]] = [
@@ -46,6 +49,10 @@ PATH_CHANGELOG_MAP: list[tuple[str, str]] = [
     ("src/attestation-proxy/", "changelogs/attestation-proxy"),
     ("ansible/guest/", "changelogs/vm"),
     ("nvevidence/", "changelogs/vm"),
+    # Ops paths — no version bump required, promoted with date headings.
+    ("ansible/host/", OPS_CHANGELOG_DIR),
+    ("host-tools/", OPS_CHANGELOG_DIR),
+    (".github/workflows/", OPS_CHANGELOG_DIR),
 ]
 
 HEADING_RE = re.compile(r"^## \[(.+?)\]")
@@ -342,6 +349,16 @@ def check_branch_mode(branch: str) -> int:
     return 1 if errors else 0
 
 
+def _build_ops_section(today: str, categories: OrderedDict[str, list[str]]) -> str:
+    """Build a date-headed ops section (no redundant date suffix)."""
+    lines = [f"## [{today}]", ""]
+    for cat, bullets in categories.items():
+        lines.append(f"### {cat}")
+        lines.extend(bullets)
+        lines.append("")
+    return "\n".join(lines)
+
+
 def promote_mode() -> int:
     """Idempotent promotion: aggregate fragments into CHANGELOG.md.
 
@@ -386,6 +403,33 @@ def promote_mode() -> int:
         promoted.append(
             f"{comp_dir.relative_to(REPO_ROOT)}: [{version}] "
             f"{action} from {len(fragments)} fragment(s)"
+        )
+
+    # Ops changelog — date-headed, no paired VERSION file.
+    ops_dir = REPO_ROOT / OPS_CHANGELOG_DIR
+    ops_fragments = collect_fragments(ops_dir / "unreleased")
+    if ops_fragments:
+        today = date.today().isoformat()
+        ops_changelog = ops_dir / "CHANGELOG.md"
+        new_categories = aggregate_fragments(ops_fragments)
+
+        if changelog_has_version(ops_changelog, today):
+            existing_cats, _, _ = parse_changelog_section(ops_changelog, today)
+            merged = merge_categories(existing_cats, new_categories)
+            section = _build_ops_section(today, merged)
+            replace_section(ops_changelog, today, section)
+            action = "merged into"
+        else:
+            section = _build_ops_section(today, new_categories)
+            insert_new_section(ops_changelog, section)
+            action = "created"
+
+        for frag in ops_fragments:
+            frag.unlink()
+
+        promoted.append(
+            f"{OPS_CHANGELOG_DIR}: [{today}] "
+            f"{action} from {len(ops_fragments)} fragment(s)"
         )
 
     if promoted:
