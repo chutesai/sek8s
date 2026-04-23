@@ -6,3 +6,4 @@
 - name: K3s GPU Setup
   ansible.builtin.include_tasks: k3s-setup.yml
   tags: k3s-gpu-setup
+  when: not (benchmark_build | default(false))

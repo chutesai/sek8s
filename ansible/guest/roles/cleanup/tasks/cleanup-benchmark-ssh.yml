@@ -1,0 +1,56 @@
+---
+- name: Remove builder authorized_keys (cloud-init residual)
+  ansible.builtin.file:
+    path: /root/.ssh/authorized_keys
+    state: absent
+
+- name: Ensure /root/.ssh directory exists
+  ansible.builtin.file:
+    path: /root/.ssh
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Write partner SSH keys to authorized_keys
+  ansible.builtin.copy:
+    dest: /root/.ssh/authorized_keys
+    content: "{{ benchmark_ssh_keys | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Harden sshd_config for benchmark image
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
+
+- name: Read back authorized_keys for verification
+  ansible.builtin.slurp:
+    src: /root/.ssh/authorized_keys
+  register: authorized_keys_content
+
+- name: Verify authorized_keys contains exactly the expected keys
+  ansible.builtin.assert:
+    that:
+      - item in (authorized_keys_content.content | b64decode)
+    fail_msg: >-
+      SSH key verification failed: expected key not found in /root/.ssh/authorized_keys.
+      Build halted to prevent shipping image with incorrect keys.
+    success_msg: "SSH key verified: {{ item[:40] }}..."
+  loop: "{{ benchmark_ssh_keys }}"
+
+- name: Verify no unexpected keys in authorized_keys
+  ansible.builtin.assert:
+    that:
+      - (authorized_keys_content.content | b64decode).split('\n') | select('match', '^ssh-') | list | length == benchmark_ssh_keys | length
+    fail_msg: >-
+      SSH key count mismatch: authorized_keys contains a different number of keys than
+      benchmark_ssh_keys. Build halted — image may contain unexpected keys.
+    success_msg: "authorized_keys key count matches benchmark_ssh_keys ({{ benchmark_ssh_keys | length }} key(s))"

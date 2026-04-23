@@ -1,0 +1,134 @@
+---
+# Install benchmark attestation tools into the guest image:
+#   - tdx-attest group/user + directories (reused from attestation-service)
+#   - TDX quote generator binary (reused from attestation-service)
+#   - trustauthority-cli (Intel SGX repo, added by quote generator tasks)
+#   - chutes-nvevidence CLI (nvevidence venv, root:tdx-attest ownership)
+#   - benchmark-attest verification script (Phase 3)
+
+- name: Attestation common setup (tdx-attest group/user/directories)
+  ansible.builtin.include_role:
+    name: attestation-service
+    tasks_from: common-setup
+
+- name: Install TDX quote generator
+  ansible.builtin.include_role:
+    name: attestation-service
+    tasks_from: install-tdx-quote-generator
+
+- name: Install trustauthority-cli
+  ansible.builtin.apt:
+    name: trustauthority-cli
+    state: present
+  ignore_errors: true
+  register: trustauthority_cli_install
+
+- name: Warn if trustauthority-cli is unavailable
+  ansible.builtin.debug:
+    msg: >-
+      trustauthority-cli could not be installed from Intel SGX repo (may not be available
+      for this Ubuntu version). TDX remote verification will not be available, but
+      measurement dump and GPU verification still work.
+  when: trustauthority_cli_install is failed
+
+- name: Create temporary build directory for nvevidence
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: nvevidence-benchmark
+  register: build_dir
+
+- name: Copy nvevidence build artifacts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../nvevidence/{{ item }}"
+    dest: "{{ build_dir.path }}"
+  loop:
+    - pyproject.toml
+    - poetry.lock
+    - README.md
+
+- name: Copy nvevidence source to temp directory
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../nvevidence/chutes_nvevidence"
+    dest: "{{ build_dir.path }}"
+
+- name: Create nvevidence application directory
+  ansible.builtin.file:
+    path: /opt/chutes-nvevidence
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy nvevidence Python package files
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/{{ item }}"
+    dest: /opt/chutes-nvevidence/{{ item }}
+    remote_src: yes
+    owner: root
+    group: root
+    mode: preserve
+  loop:
+    - chutes_nvevidence/
+    - pyproject.toml
+  ignore_errors: yes
+
+- name: Fix nvevidence directory permissions
+  ansible.builtin.shell: |
+    find /opt/chutes-nvevidence -type d -exec chmod 755 {} \;
+    find /opt/chutes-nvevidence -type f -name "*.py" -exec chmod 644 {} \;
+  changed_when: false
+
+- name: Copy nvevidence README
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/README.md"
+    dest: /opt/chutes-nvevidence/README.md
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  ignore_errors: yes
+
+- name: Create nvevidence Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/chutes-nvevidence/venv
+    creates: /opt/chutes-nvevidence/venv
+
+- name: Upgrade pip in nvevidence virtual environment
+  ansible.builtin.pip:
+    name:
+      - pip
+      - setuptools
+      - wheel
+    state: latest
+    virtualenv: /opt/chutes-nvevidence/venv
+
+- name: Install chutes-nvevidence package
+  ansible.builtin.pip:
+    name: /opt/chutes-nvevidence/
+    virtualenv: /opt/chutes-nvevidence/venv
+    state: present
+    extra_args: "-e"
+
+- name: Clean up nvevidence temporary build directory
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}"
+    state: absent
+
+- name: Set nvevidence ownership to root:tdx-attest
+  ansible.builtin.file:
+    path: /opt/chutes-nvevidence
+    state: directory
+    owner: root
+    group: tdx-attest
+    mode: '0750'
+    recurse: yes
+
+- name: Create chutes-nvevidence system-wide symlink
+  ansible.builtin.file:
+    src: /opt/chutes-nvevidence/venv/bin/chutes-nvevidence
+    dest: /usr/local/bin/chutes-nvevidence
+    state: link
+    owner: root
+    group: tdx-attest
+
+# Phase 3 (benchmark-attest.py) — to be added in the next implementation phase

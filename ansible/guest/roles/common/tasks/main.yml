@@ -27,13 +27,16 @@
   ansible.builtin.include_tasks: k3s.yml
   tags:
     - k3s-prereqs
+  when: not (benchmark_build | default(false))
 
 - name: Setup k8s tooling
   ansible.builtin.include_tasks: k8s.yml
   tags:
     - k8s-tools
+  when: not (benchmark_build | default(false))
 
 - name: Install helm
   ansible.builtin.include_tasks: helm.yml
   tags:
     - helm
+  when: not (benchmark_build | default(false))

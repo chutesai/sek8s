@@ -455,3 +455,15 @@
         name: nvidia-tdx
         enabled: true
         state: stopped
+
+- name: Configure Docker NVIDIA Container Runtime
+  tags:
+    - gpu-device-setup
+  block:
+    - name: Configure NVIDIA Container Toolkit for Docker
+      ansible.builtin.shell: |
+        nvidia-ctk runtime configure --runtime=docker --set-as-default
+      register: docker_runtime_configure
+      changed_when: >
+        docker_runtime_configure.stdout is search('changed|updated|modified') or
+        docker_runtime_configure.stderr is search('changed|updated|modified')

@@ -22,6 +22,9 @@ all:
     prime_wait_timeout: 300
     gpu_verify_debug_mode: false
     debug_build: false
+    benchmark_build: false
+    # List of SSH public key strings for partner access (required when benchmark_build: true)
+    benchmark_ssh_keys: []
     validator: "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ"
     # Optional: Override sek8s image tag for testing (default: "latest")
     # sek8s_image_tag: "dev-latest"

@@ -45,10 +45,12 @@ connection-level metadata records for NDA compliance (no TLS payloads).
 
 ## Design Decisions
 
-- **`benchmark_build: true` flag** — new Ansible variable, layered on `debug_build: true`.
-  Benchmark implies debug (no LUKS on root, no harden-access) but additionally skips all
-  Chutes-specific orchestration (k3s, sek8s, gpu-verify, admission, system-manager,
-  chutes-gpu, cache-volume, config).
+- **`benchmark_build: true` flag** — new Ansible variable. Setting it alone is sufficient;
+  `debug_build` does not need to be set separately. Benchmark mode implicitly applies
+  debug-like behavior (no LUKS on root, no harden-access, no prime-vm) by extending the
+  existing `when: not debug_build` conditions on those plays to also check
+  `benchmark_build`. Additionally skips all Chutes-specific orchestration (k3s, sek8s,
+  gpu-verify, admission, system-manager, chutes-gpu, cache-volume, config).
 - **SSH key replacement at cleanup** — the Ansible build VM is provisioned with the builder's
   SSH key via cloud-init (needed for Ansible to SSH into the build VM and run roles). Cloud-init
   is purged by the existing security/cleanup roles. A new cleanup task strips the builder's
@@ -126,7 +128,8 @@ Success =
 
 - No new Python dependencies beyond what is already in `nvevidence/` (`nv-attestation-sdk`).
 - No behavioral changes when `benchmark_build` is false/unset (default).
-- `benchmark_build: true` requires `debug_build: true` — build fails early otherwise.
+- `benchmark_build: true` does not require `debug_build: true` — benchmark mode implicitly
+  applies the same LUKS/harden-access/prime-vm skips by extending those conditions.
 - `benchmark_ssh_keys` must be non-empty when `benchmark_build: true` — build fails early
   otherwise.
 - Network logging is a host-side component (`host-tools/`), not baked into the guest image.
@@ -190,16 +193,19 @@ Success =
 - Extend `final_img_path`: `-benchmark` if `benchmark_build`, else `-debug` if `debug_build`,
   else empty.
 
-**1.8** New Ansible task file: `ansible/guest/roles/attestation-service/tasks/install-benchmark-attestation.yml`:
-- Include `common-setup.yml` (creates `tdx-attest` group/user, required directories).
-- Include `install-tdx-quote-generator.yml` (Intel SGX repo, libtdx-attest, compile quote
-  generator, udev rules).
+**1.8** New role `ansible/guest/roles/benchmark-attestation/tasks/main.yml`:
+- Uses `include_role: name: attestation-service, tasks_from: common-setup` (creates
+  `tdx-attest` group/user, required directories). Cross-role reuse keeps file lookups
+  (e.g. `tdx-quote-generator.c`) correctly scoped to the attestation-service role.
+- Uses `include_role: name: attestation-service, tasks_from: install-tdx-quote-generator`
+  (Intel SGX repo, libtdx-attest, compile quote generator, udev rules).
 - Reuse `sek8s/tasks/install-nvevidence-cli.yml` pattern (nvevidence venv + CLI) but with
   `root:tdx-attest` ownership instead of `root:sek8s` (sek8s group doesn't exist in
   benchmark images; `tdx-attest` group owns `/dev/tdx_guest` device).
 - Install `trustauthority-cli` from Intel SGX repo (already added by quote generator tasks).
-- Install verification Python script into nvevidence venv as
-  `/usr/local/bin/benchmark-attest`.
+- Install verification Python script as `/usr/local/bin/benchmark-attest` (Phase 3).
+- Dedicated role keeps benchmark concerns entirely out of the attestation-service role,
+  which is scoped to the production attestation FastAPI service.
 
 ### Phase 2: Host-Side Network Logging Service
 
@@ -226,7 +232,7 @@ Success =
 
 ### Phase 3: Attestation Verification Script
 
-**3.1** New file: `ansible/guest/roles/attestation-service/files/benchmark-attest.py`
+**3.1** New file: `ansible/guest/roles/benchmark-attestation/files/benchmark-attest.py`
 
 Two modes — measurement dump and full verification:
 
@@ -267,10 +273,7 @@ nvevidence).
   - Start `benchmark-netlog.service` after bridge setup.
   - Pass `run-td` without `--config-volume` or `--cache-volume`, only `--storage-volume`.
 
-**4.2** Add `--download-benchmark` flag (parallels `--download` and `--download-debug`):
-- Downloads benchmark image to `/var/lib/chutes/base-images/tdx-guest-benchmark.qcow2`.
-
-**4.3** New `host-tools/scripts/config/config.benchmark.example.yaml`:
+**4.2** New `host-tools/scripts/config/config.benchmark.example.yaml`:
 - Minimal config: hostname, network (tap mode), storage volume (multi-TB), no miner
   credentials, no cache volume, no config volume.
 
@@ -310,8 +313,8 @@ nvevidence).
 | `ansible/guest/roles/gpu/tasks/k3s-setup.yml` | Remove Docker runtime configure (now in device-setup) |
 | `ansible/guest/roles/cleanup/tasks/main.yml` | Skip k3s/sek8s/gpu-verify cleanups + add benchmark SSH cleanup |
 | `ansible/guest/roles/cleanup/tasks/cleanup-benchmark-ssh.yml` | **New** — SSH key replacement + verification |
-| `ansible/guest/roles/attestation-service/files/benchmark-attest.py` | **New** — attestation verification script |
-| `ansible/guest/roles/attestation-service/tasks/install-benchmark-attestation.yml` | **New** — install TDX quote gen + trustauthority-cli + verification script |
+| `ansible/guest/roles/benchmark-attestation/tasks/main.yml` | **New** — install TDX quote gen + trustauthority-cli + nvevidence CLI + verification script |
+| `ansible/guest/roles/benchmark-attestation/files/benchmark-attest.py` | **New** — attestation verification script (Phase 3) |
 | `host-tools/scripts/network/benchmark-netlog.sh` | **New** — conntrack event logger |
 | `host-tools/scripts/network/benchmark-netlog.service` | **New** — systemd unit for persistent logging |
 | `host-tools/scripts/network/benchmark-netlog.logrotate` | **New** — log rotation config |
@@ -363,10 +366,11 @@ nvevidence).
 
 ## Rollout Notes
 
-- **Ansible variables**: Set `benchmark_build: true`, `debug_build: true`, and populate
-  `benchmark_ssh_keys` with the partner's public key(s) before building.
-- **Image distribution**: Upload `{version}-benchmark.qcow2` to `vm.chutes.ai` alongside
-  production and debug images. Add `--download-benchmark` to quick-launch.
+- **Ansible variables**: Set `benchmark_build: true` and populate `benchmark_ssh_keys`
+  with the partner's public key(s) before building. `debug_build` does not need to be set.
+- **Image distribution**: The benchmark image is built directly on the target server via
+  Ansible (same as production/debug). It is not uploaded or distributed. Point `base_image`
+  in `config.benchmark.yaml` to the built image path (`guest-tools/image/<env>/<version>-benchmark.qcow2`).
 - **Network logging**: `benchmark-netlog.service` is started by quick-launch in benchmark
   mode. Logs persist across VM restarts at `/var/log/chutes/benchmark-netlog/`. Stop and
   archive on evaluation teardown.

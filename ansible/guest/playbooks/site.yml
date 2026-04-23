@@ -11,7 +11,15 @@
           - "Build env: {{ build_env }}"
           - "VM version: {{ vm_version }}"
           - "Debug build: {{ debug_build | default(false) }}"
+          - "Benchmark build: {{ benchmark_build | default(false) }}"
           - "Final image: {{ final_img_path }}"
+
+    - name: Validate benchmark_ssh_keys is non-empty when benchmark_build is true
+      ansible.builtin.fail:
+        msg: "benchmark_ssh_keys must be a non-empty list when benchmark_build: true — add partner public key(s) to inventory.yml"
+      when:
+        - benchmark_build | default(false)
+        - benchmark_ssh_keys | default([]) | length == 0
 
     - name: Confirm intended build before starting VM
       ansible.builtin.pause:
@@ -58,6 +66,7 @@
     - name: Include k3s role
       ansible.builtin.include_role:
         name: k3s
+      when: not (benchmark_build | default(false))
 
 - name: GPU Setup
   hosts: vm
@@ -84,6 +93,7 @@
     - name: GPU verification service
       ansible.builtin.include_role:
         name: gpu-verify
+      when: not (benchmark_build | default(false))
 
 - name: Setup Chutes GPU Clusters
   hosts: vm
@@ -99,6 +109,7 @@
         name: chutes-gpu
         apply:
           tags: chutes-gpu
+      when: not (benchmark_build | default(false))
 
 - name: Install sek8s
   hosts: vm
@@ -114,6 +125,7 @@
         name: sek8s
         apply:
           tags: sek8s
+      when: not (benchmark_build | default(false))
 
 - name: Setup attestation-service
   hosts: vm
@@ -129,6 +141,7 @@
         name: attestation-service
         apply:
           tags: attestation-service
+      when: not (benchmark_build | default(false))
 
 - name: Setup admission controller
   hosts: vm
@@ -144,6 +157,7 @@
         name: admission-controller
         apply:
           tags: admission-controller
+      when: not (benchmark_build | default(false))
 
 - name: Setup system manager service (status + cache)
   hosts: vm
@@ -159,6 +173,7 @@
         name: system-manager
         apply:
           tags: system-manager
+      when: not (benchmark_build | default(false))
 
 - name: Setup cache volume service
   hosts: vm
@@ -174,6 +189,7 @@
         name: cache-volume
         apply:
           tags: cache-volume
+      when: not (benchmark_build | default(false))
 
 - name: Add dyanmic config services
   hosts: vm
@@ -190,6 +206,23 @@
         name: config
         apply:
           tags: config
+      when: not (benchmark_build | default(false))
+
+- name: Install benchmark attestation tools
+  hosts: vm
+  become: true
+  tags:
+    - benchmark-attestation
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Install benchmark attestation tools
+      ansible.builtin.include_role:
+        name: benchmark-attestation
+        apply:
+          tags: benchmark-attestation
+      when: benchmark_build | default(false)
 
 - name: Remove remote access
   hosts: vm
@@ -205,7 +238,7 @@
         name: harden-access
         apply:
           tags: harden-access
-      when: not debug_build | default(false)
+      when: not (debug_build | default(false)) and not (benchmark_build | default(false))
 
 - name: Security Hardening
   hosts: vm
@@ -250,7 +283,7 @@
         name: luks
         apply:
           tags: luks
-      when: not debug_build | default(false)
+      when: not (debug_build | default(false)) and not (benchmark_build | default(false))
 
 - name: Prime VM for stable TDX measurements
   hosts: host
@@ -266,4 +299,4 @@
         name: prime-vm
         apply:
           tags: prime-vm
-      when: not debug_build | default(false)
+      when: not (debug_build | default(false)) and not (benchmark_build | default(false))

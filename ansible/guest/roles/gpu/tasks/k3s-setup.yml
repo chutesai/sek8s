@@ -35,15 +35,14 @@
         - not k3s_config_tmpl_stat.stat.exists
         - not k3s_config_toml_stat.stat.exists
 
-- name: Setup NVIDIA Container Toolkit
+- name: Setup NVIDIA Container Toolkit for k3s containerd
   tags:
     - gpu-container-setup
   block:
-    - name: Configure NVIDIA Container Toolkit
+    - name: Configure NVIDIA Container Toolkit for containerd
       ansible.builtin.shell: |
-        nvidia-ctk runtime configure --runtime=docker --set-as-default
         nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
       register: container_runtime
       notify: restart k3s
       changed_when: >
-        container_runtime.stdout is search('changed|updated|modified') or  container_runtime.stderr is search('changed|updated|modified')
+        container_runtime.stdout is search('changed|updated|modified') or container_runtime.stderr is search('changed|updated|modified')
