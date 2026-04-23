@@ -49,6 +49,7 @@ endif
 
 .EXPORT_ALL_VARIABLES:
 
+include makefiles/changelog.mk
 include makefiles/development.mk
 include makefiles/images.mk
 include makefiles/help.mk

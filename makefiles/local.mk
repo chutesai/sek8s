@@ -47,11 +47,3 @@ test-local: ##@local Run test suite
 test-local: venv
 	${POETRY} run pytest -s --tb=native --durations=5 $(COV_ARGS) --cov-report=html tests
 	${POETRY} run coverage report --fail-under=50
-
-.PHONY: promote-changelogs
-promote-changelogs: ##@local Promote changelog fragments into CHANGELOG.md
-	python scripts/promote_changelogs.py --promote
-
-.PHONY: check-changelogs
-check-changelogs: ##@local Verify no orphaned changelog fragments remain
-	python scripts/promote_changelogs.py --check --strict
