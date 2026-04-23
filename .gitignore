@@ -24,3 +24,8 @@ host-tools/scripts/gpu-tools/*
 !host-tools/scripts/gpu-tools/entry_point.py
 !host-tools/scripts/gpu-tools/pyproject.toml
 # Note: .whl files are NOT ignored and should be committed
+
+# Local-only, site-specific playbooks not intended for the shared repo
+ansible/host/playbooks/vlan-setup.yml
+ansible/host/playbooks/storage-setup.yml
+ansible/host/playbooks/ssh-keys.yml

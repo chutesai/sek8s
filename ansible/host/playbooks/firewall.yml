@@ -1,0 +1,64 @@
+---
+# Configure UFW firewall on bare-metal TDX hosts.
+# Run before exposing any public interface (e.g. before adding the public VLAN).
+# Run from repo root or ansible/host:
+#   ansible-playbook -i inventory/hosts.yml playbooks/firewall.yml
+
+- name: Configure host firewall
+  hosts: td_hosts
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Install ufw
+      apt:
+        name: ufw
+        state: present
+        update_cache: true
+
+    - name: Reset ufw to defaults
+      ufw:
+        state: reset
+
+    - name: Set default inbound policy to deny
+      ufw:
+        default: deny
+        direction: incoming
+
+    - name: Set default outbound policy to allow
+      ufw:
+        default: allow
+        direction: outgoing
+
+    - name: Allow host SSH (management via bond0)
+      ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+
+    - name: Allow VM SSH (port 2222)
+      ufw:
+        rule: allow
+        port: "2222"
+        proto: tcp
+
+    - name: Allow k3s API (port 6443)
+      ufw:
+        rule: allow
+        port: "6443"
+        proto: tcp
+
+    - name: Allow system manager status API (port 8080)
+      ufw:
+        rule: allow
+        port: "8080"
+        proto: tcp
+
+    - name: Allow NodePort services (30000-32767)
+      ufw:
+        rule: allow
+        port: "30000:32767"
+        proto: tcp
+
+    - name: Enable ufw
+      ufw:
+        state: enabled

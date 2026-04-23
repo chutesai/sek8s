@@ -16,109 +16,108 @@
       and host-tools/README.md Step 2 for manual PCCS if you are not using automation.
   when: (pccs_key_present | bool) != (pccs_pass_present | bool)
 
-- name: Skip automated PCCS when credentials are not configured
-  when: not (pccs_key_present | bool and pccs_pass_present | bool)
-  block:
-    - name: Operator notice — automated PCCS not running
-      ansible.builtin.debug:
-        msg: >-
-          Automated PCCS is not running because pccs_api_key and pccs_password are not both set.
-          To enable: define both variables (use ansible-vault for secrets). If you configure PCCS
-          manually instead, follow host-tools/README.md Step 2; this role will make no changes.
-    - name: End PCCS role (remaining tasks require both secrets)
-      ansible.builtin.meta: end_role
-
-- name: Compute PCCS user/admin token SHA-512 hashes
-  ansible.builtin.shell: |
-    set -euo pipefail
-    printf '%s' '{{ pccs_password }}' | openssl dgst -sha512 | awk '{print $2}'
-  args:
-    executable: /bin/bash
-  register: pccs_hash_out
-  no_log: true
-  changed_when: false
-
-- name: Set hash facts for template
-  ansible.builtin.set_fact:
-    pccs_user_token_hash: "{{ pccs_hash_out.stdout | trim }}"
-    pccs_admin_token_hash: "{{ pccs_hash_out.stdout | trim }}"
-
-- name: Ensure PCCS config directory exists
-  ansible.builtin.file:
-    path: "{{ pccs_config_path | dirname }}"
-    state: directory
-    mode: "0755"
-
-- name: Ensure PCCS ssl_key directory exists
-  ansible.builtin.file:
-    path: "{{ pccs_ssl_dir }}"
-    state: directory
-    mode: "0755"
-
-- name: Generate PCCS TLS private key
-  ansible.builtin.command:
-    argv:
-      - openssl
-      - genrsa
-      - "-out"
-      - "{{ pccs_ssl_dir }}/private.pem"
-      - "3072"
-    creates: "{{ pccs_ssl_dir }}/private.pem"
-
-- name: Generate self-signed PCCS certificate
-  ansible.builtin.command:
-    argv:
-      - openssl
-      - req
-      - -new
-      - -x509
-      - -key
-      - "{{ pccs_ssl_dir }}/private.pem"
-      - -out
-      - "{{ pccs_ssl_dir }}/certificate.pem"
-      - -days
-      - "3650"
-      - -subj
-      - /CN=localhost
-    creates: "{{ pccs_ssl_dir }}/certificate.pem"
-
-- name: Secure private key permissions
-  ansible.builtin.file:
-    path: "{{ pccs_ssl_dir }}/private.pem"
-    mode: "0600"
-    state: file
-
-- name: Install PCCS default.json
-  ansible.builtin.template:
-    src: pccs_default.json.j2
-    dest: "{{ pccs_config_path }}"
-    mode: "0644"
-  notify: Restart pccs
-
-- name: Flush handlers so PCCS restarts before PCK tool
-  ansible.builtin.meta: flush_handlers
-
-- name: Ensure PCCS service is enabled and running
-  ansible.builtin.systemd:
-    name: pccs
-    state: started
-    enabled: true
-
-- name: Register platform with PCKIDRetrievalTool
-  ansible.builtin.shell: |
-    printf '%s\n' '{{ pccs_password }}' | sudo -E PCKIDRetrievalTool \
-      -url https://localhost:8081 \
-      -use_secure_cert false
-  args:
-    executable: /bin/bash
-  register: pck_tool
-  no_log: true
-  failed_when: false
-
-- name: Fail with manual remediation when PCK tool reports an error
-  ansible.builtin.fail:
+- name: Operator notice — automated PCCS not running
+  ansible.builtin.debug:
     msg: >-
-      PCKIDRetrievalTool did not succeed. stdout: {{ pck_tool.stdout | default('') }}.
-      Common causes: wrong pccs_password, PCCS not reachable, or service not yet started.
-      Complete host-tools/README.md Step 2 manually if needed.
-  when: "'the data has been sent to cache server successfully' not in (pck_tool.stdout | default(''))"
+      Automated PCCS is not running because pccs_api_key and pccs_password are not both set.
+      To enable: define both variables (use ansible-vault for secrets). If you configure PCCS
+      manually instead, follow host-tools/README.md Step 2; this role will make no changes.
+  when: not (pccs_key_present | bool and pccs_pass_present | bool)
+
+- name: Configure PCCS (requires both pccs_api_key and pccs_password)
+  when: pccs_key_present | bool and pccs_pass_present | bool
+  block:
+    - name: Compute PCCS user/admin token SHA-512 hashes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        printf '%s' '{{ pccs_password }}' | openssl dgst -sha512 | awk '{print $2}'
+      args:
+        executable: /bin/bash
+      register: pccs_hash_out
+      no_log: true
+      changed_when: false
+
+    - name: Set hash facts for template
+      ansible.builtin.set_fact:
+        pccs_user_token_hash: "{{ pccs_hash_out.stdout | trim }}"
+        pccs_admin_token_hash: "{{ pccs_hash_out.stdout | trim }}"
+
+    - name: Ensure PCCS config directory exists
+      ansible.builtin.file:
+        path: "{{ pccs_config_path | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure PCCS ssl_key directory exists
+      ansible.builtin.file:
+        path: "{{ pccs_ssl_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Generate PCCS TLS private key
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - genrsa
+          - "-out"
+          - "{{ pccs_ssl_dir }}/private.pem"
+          - "3072"
+        creates: "{{ pccs_ssl_dir }}/private.pem"
+
+    - name: Generate self-signed PCCS certificate
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -new
+          - -x509
+          - -key
+          - "{{ pccs_ssl_dir }}/private.pem"
+          - -out
+          - "{{ pccs_ssl_dir }}/certificate.pem"
+          - -days
+          - "3650"
+          - -subj
+          - /CN=localhost
+        creates: "{{ pccs_ssl_dir }}/certificate.pem"
+
+    - name: Secure private key permissions
+      ansible.builtin.file:
+        path: "{{ pccs_ssl_dir }}/private.pem"
+        mode: "0600"
+        state: file
+
+    - name: Install PCCS default.json
+      ansible.builtin.template:
+        src: pccs_default.json.j2
+        dest: "{{ pccs_config_path }}"
+        mode: "0644"
+      notify: Restart pccs
+
+    - name: Flush handlers so PCCS restarts before PCK tool
+      ansible.builtin.meta: flush_handlers
+
+    - name: Ensure PCCS service is enabled and running
+      ansible.builtin.systemd:
+        name: pccs
+        state: started
+        enabled: true
+
+    - name: Register platform with PCKIDRetrievalTool
+      ansible.builtin.shell: |
+        printf '%s\n' '{{ pccs_password }}' | sudo -E PCKIDRetrievalTool \
+          -url https://localhost:8081 \
+          -use_secure_cert false
+      args:
+        executable: /bin/bash
+      register: pck_tool
+      no_log: true
+      failed_when: false
+
+    - name: Fail with manual remediation when PCK tool reports an error
+      ansible.builtin.fail:
+        msg: >-
+          PCKIDRetrievalTool did not succeed. stdout: {{ pck_tool.stdout | default('') }}.
+          Common causes: wrong pccs_password, PCCS not reachable, or service not yet started.
+          Complete host-tools/README.md Step 2 manually if needed.
+      when: "'the data has been sent to cache server successfully' not in (pck_tool.stdout | default(''))"

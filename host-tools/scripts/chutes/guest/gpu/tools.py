@@ -70,7 +70,7 @@ def ensure_gpu_tools_available() -> str:
     venv_bin = os.path.join(venv_dir, 'bin')
     cli_symlink = '/usr/local/bin/nvidia-gpu-tools'
 
-    if not os.path.exists(venv_dir):
+    def _create_venv() -> None:
         print('  Creating virtual environment for GPU admin tools...')
         try:
             subprocess.check_call(
@@ -85,6 +85,9 @@ def ensure_gpu_tools_available() -> str:
                 "For Python 3.13 specifically: sudo apt install python3.13-venv"
             )
 
+    if not os.path.exists(venv_dir):
+        _create_venv()
+
     if not os.path.exists(venv_pip):
         print('  Bootstrapping pip in virtual environment...')
         try:
@@ -93,11 +96,15 @@ def ensure_gpu_tools_available() -> str:
                 stderr=subprocess.STDOUT,
             )
         except subprocess.CalledProcessError:
-            raise RuntimeError(
-                "pip is not available in the virtual environment and could not be bootstrapped. "
-                "The python3-venv package may need to be reinstalled, or you may need to install "
-                "python3-pip separately: sudo apt install python3-pip"
-            )
+            print('  Stale virtual environment detected (ensurepip unavailable) — recreating...')
+            subprocess.check_call(['sudo', 'rm', '-rf', venv_dir])
+            _create_venv()
+            # If pip still isn't present after a clean recreate, the venv package is broken
+            if not os.path.exists(venv_pip):
+                subprocess.check_call(
+                    ['sudo', venv_python, '-m', 'ensurepip', '--upgrade'],
+                    stderr=subprocess.STDOUT,
+                )
 
     print(f'  Installing GPU admin tools from bundled wheel: {os.path.basename(wheel_file)}')
     subprocess.check_call(
