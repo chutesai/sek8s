@@ -14,6 +14,7 @@
     - name: Seccomp profiles
       ansible.builtin.include_tasks: seccomp-profiles.yml
       tags: seccomp-profiles
+      when: not (benchmark_build | default(false))
     
     # - name: Attestation integration
     #   ansible.builtin.include_tasks: attestation-integration.yml

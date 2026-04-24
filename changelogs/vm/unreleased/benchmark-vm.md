@@ -31,6 +31,9 @@
 - `roles/benchmark-attestation` consolidated and renamed to `roles/benchmark` — the
   single role for all benchmark-specific VM tooling.
 - `docs/benchmark-mode.md` renamed to `docs/benchmark-vm.md`.
+- `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
+  in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
+- Security role (seccomp profiles, k3s containerd config) skipped for benchmark builds.
 
 ### Fixed
 -
