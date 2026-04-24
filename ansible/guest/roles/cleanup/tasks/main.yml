@@ -31,6 +31,7 @@
 
     - name: Cleanup verify storage service
       ansible.builtin.include_tasks: cleanup-verify-storage-service.yml
+      when: not (benchmark_build | default(false))
 
     - name: Cleanup cloud-init
       ansible.builtin.include_tasks: cleanup-cloud-init.yml
