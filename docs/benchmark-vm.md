@@ -1,14 +1,15 @@
-# Benchmark Mode
+# Benchmark VM
+
+Operator reference for building and launching the benchmark VM. For the partner-facing
+walkthrough, see [benchmark-guide.md](benchmark-guide.md). For the development debug
+build, see [debug-mode.md](debug-mode.md).
 
 ## Overview
 
 Benchmark mode builds a specialised guest image for NDA partner evaluation sessions.
 The image runs the full Chutes GPU stack without Kubernetes orchestration, provides
-SSH access for the partner, and ships two attestation tools — `attest` for in-VM
-TDX + GPU verification, and a host-side network logger that records all external
-connections for transparency.
-
-See also: [debug-mode.md](debug-mode.md) for the development-only debug build.
+SSH access for the partner, and ships the `attest` and `luks-setup` tools along with
+a host-side network logger that records all external connections for transparency.
 
 ## What changes vs. a production image
 
@@ -138,6 +139,34 @@ attest verify --json
 The file format is defined by Intel's `trustauthority-cli`. If absent, `attest verify`
 still completes GPU attestation and prints a clear message explaining that TDX remote
 verification was skipped.
+
+## Storage encryption: `luks-setup`
+
+`luks-setup` is installed at `/usr/local/bin/luks-setup` and must be run as root.
+It provides two subcommands:
+
+### `luks-setup setup`
+
+One-shot end-to-end: wipe, LUKS2-encrypt, format (XFS by default), mount, and persist
+entries in `/etc/crypttab` and `/etc/fstab` so the volume unlocks on reboot.
+
+```bash
+luks-setup setup /dev/vdb /data
+# with a custom label:
+luks-setup setup /dev/vdb /data --label mydata
+# with ext4 instead of XFS:
+luks-setup setup /dev/vdb /data --fs ext4
+# skip confirmation prompt:
+luks-setup setup /dev/vdb /data --yes
+```
+
+### `luks-setup open`
+
+Open and mount an already-encrypted device (manual use or recovery):
+
+```bash
+luks-setup open /dev/vdb /data
+```
 
 ## Host-side network logging
 

@@ -208,20 +208,20 @@
           tags: config
       when: not (benchmark_build | default(false))
 
-- name: Install benchmark attestation tools
+- name: Install benchmark tools
   hosts: vm
   become: true
   tags:
-    - benchmark-attestation
+    - benchmark
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Install benchmark attestation tools
+    - name: Install benchmark tools
       ansible.builtin.include_role:
-        name: benchmark-attestation
+        name: benchmark
         apply:
-          tags: benchmark-attestation
+          tags: benchmark
       when: benchmark_build | default(false)
 
 - name: Remove remote access

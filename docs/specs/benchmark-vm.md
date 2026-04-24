@@ -193,7 +193,7 @@ Success =
 - Extend `final_img_path`: `-benchmark` if `benchmark_build`, else `-debug` if `debug_build`,
   else empty.
 
-**1.8** New role `ansible/guest/roles/benchmark-attestation/tasks/main.yml`:
+**1.8** New role `ansible/guest/roles/benchmark/tasks/main.yml`:
 - Uses `include_role: name: attestation-service, tasks_from: common-setup` (creates
   `tdx-attest` group/user, required directories). Cross-role reuse keeps file lookups
   (e.g. `tdx-quote-generator.c`) correctly scoped to the attestation-service role.
@@ -232,7 +232,7 @@ Success =
 
 ### Phase 3: Attestation Verification Script
 
-**3.1** New file: `ansible/guest/roles/benchmark-attestation/files/benchmark-attest.py`
+**3.1** New file: `ansible/guest/roles/benchmark/files/attest.py`
 
 Two modes — measurement dump and full verification:
 
@@ -313,8 +313,9 @@ nvevidence).
 | `ansible/guest/roles/gpu/tasks/k3s-setup.yml` | Remove Docker runtime configure (now in device-setup) |
 | `ansible/guest/roles/cleanup/tasks/main.yml` | Skip k3s/sek8s/gpu-verify cleanups + add benchmark SSH cleanup |
 | `ansible/guest/roles/cleanup/tasks/cleanup-benchmark-ssh.yml` | **New** — SSH key replacement + verification |
-| `ansible/guest/roles/benchmark-attestation/tasks/main.yml` | **New** — install TDX quote gen + trustauthority-cli + nvevidence CLI + verification script |
-| `ansible/guest/roles/benchmark-attestation/files/benchmark-attest.py` | **New** — attestation verification script (Phase 3) |
+| `ansible/guest/roles/benchmark/tasks/main.yml` | **New** — install TDX quote gen + trustauthority-cli + nvevidence CLI + verification script |
+| `ansible/guest/roles/benchmark/files/attest.py` | **New** — attestation verification script (Phase 3) |
+| `ansible/guest/roles/benchmark/files/luks-setup.py` | **New** — LUKS encryption helper script |
 | `host-tools/scripts/network/benchmark-netlog.sh` | **New** — conntrack event logger |
 | `host-tools/scripts/network/benchmark-netlog.service` | **New** — systemd unit for persistent logging |
 | `host-tools/scripts/network/benchmark-netlog.logrotate` | **New** — log rotation config |
