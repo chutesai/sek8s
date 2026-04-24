@@ -4,7 +4,7 @@
 #   - TDX quote generator binary (reused from attestation-service)
 #   - trustauthority-cli (Intel SGX repo, added by quote generator tasks)
 #   - chutes-nvevidence CLI (nvevidence venv, root:tdx-attest ownership)
-#   - benchmark-attest verification script (Phase 3)
+#   - attest verification script
 
 - name: Attestation common setup (tdx-attest group/user/directories)
   ansible.builtin.include_role:
@@ -131,4 +131,10 @@
     owner: root
     group: tdx-attest
 
-# Phase 3 (benchmark-attest.py) — to be added in the next implementation phase
+- name: Install attest verification script
+  ansible.builtin.copy:
+    src: attest.py
+    dest: /usr/local/bin/attest
+    owner: root
+    group: tdx-attest
+    mode: '0750'
