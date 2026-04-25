@@ -20,16 +20,7 @@
     group: root
     mode: '0600'
 
-- name: Harden sshd_config for benchmark image
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  loop:
-    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
+
 
 - name: Read back authorized_keys for verification
   ansible.builtin.slurp:
