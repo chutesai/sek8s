@@ -195,6 +195,7 @@ async def cleanup(
     return CacheCleanupResponse(
         status="completed",
         freed_bytes=result.freed_bytes,
+        purged_bytes=result.purged_bytes,
         removed_chutes=result.removed_chutes,
     )
 

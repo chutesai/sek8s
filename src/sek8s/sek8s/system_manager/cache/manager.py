@@ -515,6 +515,48 @@ class HuggingFaceSnapshot:
                 e,
             )
 
+    async def purge_stale_revisions(self) -> int:
+        """Remove HF cache revisions that don't match the current revision.
+
+        Returns bytes freed.  Uses the HF hub ``delete_revisions`` API so
+        only orphaned blobs (not referenced by any remaining snapshot) are
+        removed.
+        """
+        if not self.hub_path.exists() or not self.revision:
+            return 0
+        try:
+            info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
+        except Exception:
+            return 0
+
+        stale_hashes: list[str] = []
+        for repo in info.repos:
+            for rev in repo.revisions:
+                if rev.commit_hash != self.revision:
+                    stale_hashes.append(rev.commit_hash)
+
+        if not stale_hashes:
+            return 0
+
+        try:
+            strategy = info.delete_revisions(*stale_hashes)
+            expected = strategy.expected_freed_size
+            logger.info(
+                "Purging {} stale revision(s) for chute_id={}, expected freed ~{}B",
+                len(stale_hashes),
+                self.chute_id,
+                expected,
+            )
+            strategy.execute()
+            return expected
+        except Exception:
+            logger.warning(
+                "Failed to purge stale revisions for chute_id={}",
+                self.chute_id,
+                exc_info=True,
+            )
+            return 0
+
     async def delete(self) -> None:
         self.cancel_download()
         if not self.path.exists():
@@ -748,4 +790,12 @@ class CacheManager:
                 freed += size
                 total_now -= size
 
-        return CleanupResult(freed_bytes=freed, removed_chutes=removed_list)
+        removed_set = set(removed_list)
+        surviving = [c for c, _, _ in candidates if c.chute_id not in removed_set]
+        purged = 0
+        for chute in surviving:
+            purged += await chute.purge_stale_revisions()
+
+        return CleanupResult(
+            freed_bytes=freed, removed_chutes=removed_list, purged_bytes=purged
+        )

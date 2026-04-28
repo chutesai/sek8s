@@ -80,7 +80,10 @@ class CacheOverviewResponse(BaseModel):
 
 class CacheCleanupResponse(BaseModel):
     status: str = Field(..., description="Cleanup status", examples=["completed"])
-    freed_bytes: int = Field(0, description="Bytes freed")
+    freed_bytes: int = Field(0, description="Bytes freed by removing entire chutes")
+    purged_bytes: int = Field(
+        0, description="Bytes freed by pruning stale HF revisions from kept chutes"
+    )
     removed_chutes: List[str] = Field(
         default_factory=list, description="Chute IDs removed"
     )
