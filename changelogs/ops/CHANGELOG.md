@@ -8,7 +8,6 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
 ### Added
 - Add firewall playbook to setup default firewall for host
 - Added support to create changelog for current branchin make commands
--
 
 ### Changed
 - Added python3 venv deps to host
@@ -16,10 +15,8 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
 
 ### Fixed
 - Fixed handlign of stale venv if previous ansible run had an issue in host setup playbooks.
--
 
 ### Removed
--
 -
 
 ## [2026-04-20]
