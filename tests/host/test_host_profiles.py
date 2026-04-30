@@ -198,12 +198,12 @@ def test_2604_does_not_need_tdx_release_ppa():
 
 
 def test_2604_has_intel_sgx_repo():
-    """26.04 uses Intel's official SGX/DCAP repository (noble suite)."""
+    """26.04 uses Intel's official SGX/DCAP repository (resolute suite)."""
     profile = Ubuntu2604Profile()
     assert len(profile.repos) >= 1
     intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
     assert len(intel_repos) == 1
-    assert intel_repos[0].suite == "noble"
+    assert intel_repos[0].suite == "resolute"
     assert "download.01.org" in intel_repos[0].uri
 
 

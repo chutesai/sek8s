@@ -197,7 +197,7 @@ class Ubuntu2604Profile(HostProfile):
             APTRepo(
                 name="intel-sgx",
                 uri="https://download.01.org/intel-sgx/sgx_repo/ubuntu/",
-                suite="noble",
+                suite="resolute",
                 components="main",
                 signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
             ),
