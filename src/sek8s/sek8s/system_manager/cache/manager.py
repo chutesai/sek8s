@@ -654,26 +654,31 @@ class CacheManager:
             await snap.reconcile()
 
     async def get(self, chute_id: str) -> Optional[HuggingFaceSnapshot]:
+        await self.sync_from_disk()
         async with self._lock:
             return self._chutes.get(chute_id)
 
     async def get_or_create(self, chute_id: str) -> HuggingFaceSnapshot:
+        await self.sync_from_disk()
         async with self._lock:
             if chute_id not in self._chutes:
                 self._chutes[chute_id] = HuggingFaceSnapshot(chute_id=chute_id)
             return self._chutes[chute_id]
 
     async def all(self) -> list[HuggingFaceSnapshot]:
+        await self.sync_from_disk()
         async with self._lock:
             return list(self._chutes.values())
 
     async def all_snapshots(self) -> list[ChuteSnapshot]:
         """Return snapshots for all tracked chutes, scanning concurrently."""
+        await self.sync_from_disk()
         async with self._lock:
             chutes = list(self._chutes.values())
         return list(await asyncio.gather(*(c.snapshot() for c in chutes)))
 
     async def remove(self, chute_id: str) -> bool:
+        await self.sync_from_disk()
         async with self._lock:
             chute = self._chutes.pop(chute_id, None)
         if chute is not None:
@@ -690,6 +695,7 @@ class CacheManager:
 
         When ``cleanup`` is True, partial files are deleted after cancelling.
         """
+        await self.sync_from_disk()
         async with self._lock:
             chute = self._chutes.get(chute_id)
         if chute is None:
@@ -717,6 +723,7 @@ class CacheManager:
         exclude_pattern: Optional[str] = None,
     ) -> CleanupResult:
         """Remove cache entries by age and enforce max size; skip in-progress downloads."""
+        await self.sync_from_disk()
         freed = 0
         removed_list: list[str] = []
         max_size_bytes = max_size_gb * 1024 * 1024 * 1024
@@ -778,3 +785,18 @@ class CacheManager:
         return CleanupResult(
             freed_bytes=freed, removed_chutes=removed_list, purged_bytes=purged
         )
+
+    async def purge_stale(self) -> int:
+        """Purge stale HF revisions from all tracked chutes.
+
+        Calls ``purge_stale_revisions()`` on every non-in-progress chute and
+        returns the total bytes freed.  Does not remove any chutes.
+        """
+        await self.sync_from_disk()
+        async with self._lock:
+            chutes = [c for c in self._chutes.values() if not c.is_in_progress]
+
+        results = await asyncio.gather(*(c.purge_stale_revisions() for c in chutes))
+        total = sum(results)
+        logger.info("Purged stale HF revisions: {}B freed across {} chutes", total, len(chutes))
+        return total

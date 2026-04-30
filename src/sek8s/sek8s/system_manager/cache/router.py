@@ -25,6 +25,7 @@ from .responses import (
     CacheDownloadStatusResponse,
     CacheOverviewEntry,
     CacheOverviewResponse,
+    CachePurgeResponse,
 )
 from .util import fetch_hf_info
 
@@ -83,7 +84,6 @@ async def download(
 ) -> CacheDownloadResponse:
     chute_id = _validate_chute_id(request.chute_id)
 
-    await mgr.sync_from_disk()
     chute = await mgr.get_or_create(chute_id)
 
     if chute.is_in_progress:
@@ -119,7 +119,6 @@ async def download_status(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadStatusResponse:
-    await mgr.sync_from_disk()
     if chute_id:
         chute = await mgr.get(chute_id)
         if chute is None:
@@ -160,7 +159,6 @@ async def delete_chute(
 ) -> dict:
     _validate_chute_id(chute_id)
 
-    await mgr.sync_from_disk()
     chute = await mgr.get(chute_id)
     if chute is None:
         return {"status": "ok", "message": "not found"}
@@ -202,6 +200,19 @@ async def cancel_download(
 
 
 @router.post(
+    "/purge",
+    response_model=CachePurgeResponse,
+    summary="Purge stale HuggingFace revisions from all cached chutes",
+)
+async def purge_stale(
+    mgr: CacheManager = Depends(get_cache_manager),
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
+) -> CachePurgeResponse:
+    purged_bytes = await mgr.purge_stale()
+    return CachePurgeResponse(status="completed", purged_bytes=purged_bytes)
+
+
+@router.post(
     "/cleanup",
     response_model=CacheCleanupResponse,
     summary="Cleanup cache by age and max size",
@@ -213,7 +224,6 @@ async def cleanup(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheCleanupResponse:
-    await mgr.sync_from_disk()
     age = body.max_age_days if body else max_age_days
     size = body.max_size_gb if body else max_size_gb
     exclude = (body.exclude_pattern if body else None) or os.environ.get(
@@ -238,7 +248,6 @@ async def overview(
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheOverviewResponse:
-    await mgr.sync_from_disk()
     snapshots = await mgr.all_snapshots()
     entries = [_snap_to_overview(s) for s in snapshots]
     total = sum(e.size_bytes for e in entries)
