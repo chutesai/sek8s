@@ -3,13 +3,16 @@
 luks-setup -- LUKS2 encryption helper for benchmark VM storage disks.
 
 Provides two commands:
-  setup  Wipe, encrypt, format, mount, and persist a device in crypttab/fstab.
+  setup  Wipe, encrypt, format, and mount a device for the current session.
   open   Open and mount a previously encrypted device.
+
+Intentionally does NOT persist to /etc/crypttab or /etc/fstab. The volume
+must be explicitly unlocked via `luks-setup open` after each reboot, ensuring
+only parties with the passphrase can access the data.
 """
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import typer
@@ -19,9 +22,6 @@ app = typer.Typer(
     help="LUKS2 encryption helper for benchmark VM storage disks.",
     no_args_is_help=True,
 )
-
-_CRYPTTAB = Path("/etc/crypttab")
-_FSTAB = Path("/etc/fstab")
 
 
 def _require_root() -> None:
@@ -77,28 +77,6 @@ def _device_has_data(device: str) -> bool:
     return bool(result.stdout.strip())
 
 
-def _append_crypttab(dm_name: str, uuid: str) -> None:
-    entry = f"{dm_name} UUID={uuid} none luks,discard\n"
-    existing = _CRYPTTAB.read_text() if _CRYPTTAB.exists() else ""
-    if dm_name in existing:
-        typer.echo(f"  crypttab: entry for '{dm_name}' already present, skipping.")
-        return
-    with _CRYPTTAB.open("a") as f:
-        f.write(entry)
-    typer.echo(f"  crypttab: added {entry.strip()}")
-
-
-def _append_fstab(dm_name: str, mount_point: str, fs: str) -> None:
-    entry = f"/dev/mapper/{dm_name} {mount_point} {fs} defaults,nofail 0 2\n"
-    existing = _FSTAB.read_text() if _FSTAB.exists() else ""
-    if f"/dev/mapper/{dm_name}" in existing:
-        typer.echo(f"  fstab: entry for '/dev/mapper/{dm_name}' already present, skipping.")
-        return
-    with _FSTAB.open("a") as f:
-        f.write(entry)
-    typer.echo(f"  fstab: added {entry.strip()}")
-
-
 @app.command()
 def setup(
     device: str = typer.Argument(..., help="Block device to encrypt (e.g. /dev/vdb)"),
@@ -114,8 +92,11 @@ def setup(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
 ) -> None:
     """
-    Full end-to-end setup: wipe, LUKS2-encrypt, format, mount, and persist
-    entries in /etc/crypttab and /etc/fstab.
+    One-time setup: wipe, LUKS2-encrypt, format, and mount a device.
+
+    The volume is mounted for the current session only. No entries are written
+    to /etc/crypttab or /etc/fstab — after a reboot, use `luks-setup open`
+    to unlock and mount the volume again.
 
     WARNING: all data on the device will be destroyed.
     """
@@ -140,34 +121,28 @@ def setup(
             typer.echo("Aborted.")
             raise typer.Exit(0)
 
-    typer.echo(f"\n[1/7] Wiping {device}...")
+    typer.echo(f"\n[1/5] Wiping {device}...")
     _run(["wipefs", "-a", device])
 
-    typer.echo(f"\n[2/7] Creating LUKS2 container on {device}...")
+    typer.echo(f"\n[2/5] Creating LUKS2 container on {device}...")
     typer.echo("      You will be prompted to enter and confirm a passphrase.")
     _run(["cryptsetup", "luksFormat", "--type", "luks2", "--label", label, device])
 
-    typer.echo(f"\n[3/7] Opening LUKS container as '{dm_name}'...")
+    typer.echo(f"\n[3/5] Opening LUKS container as '{dm_name}'...")
     typer.echo("      Enter the passphrase you just set.")
     _run(["cryptsetup", "luksOpen", device, dm_name])
 
-    typer.echo(f"\n[4/7] Creating {fs} filesystem on {mapper_dev}...")
+    typer.echo(f"\n[4/5] Creating {fs} filesystem on {mapper_dev}...")
     if fs == "xfs":
         _run(["mkfs.xfs", "-L", label, mapper_dev])
     else:
         _run(["mkfs.ext4", "-L", label, mapper_dev])
 
-    typer.echo(f"\n[5/7] Mounting {mapper_dev} at {mount_point}...")
+    typer.echo(f"\n[5/5] Mounting {mapper_dev} at {mount_point}...")
     Path(mount_point).mkdir(parents=True, exist_ok=True)
     _run(["mount", mapper_dev, mount_point])
 
-    typer.echo("\n[6/7] Persisting /etc/crypttab...")
     uuid = _get_device_uuid(device)
-    _append_crypttab(dm_name, uuid)
-
-    typer.echo("\n[7/7] Persisting /etc/fstab...")
-    _append_fstab(dm_name, mount_point, fs)
-
     typer.echo(f"""
 Setup complete.
 
@@ -178,7 +153,9 @@ Setup complete.
   Filesystem:   {fs}
   Mount point:  {mount_point}
 
-The volume will be unlocked automatically on next boot (passphrase prompt).
+The volume is mounted for this session. After a reboot, unlock it with:
+  luks-setup open {device} {mount_point}
+
 To verify encryption: cryptsetup status {dm_name}
 """)
 
@@ -191,9 +168,9 @@ def open(
     key_file: str = typer.Option("", "--key-file", help="Path to key file (omit for interactive passphrase)"),
 ) -> None:
     """
-    Open a previously encrypted device and mount it.
+    Open and mount a previously encrypted device.
 
-    Use this for manual recovery or if crypttab auto-unlock is not configured.
+    Run this after each reboot to unlock and mount the volume.
     """
     _require_root()
     _require_block_device(device)

@@ -119,8 +119,9 @@ remote verification JWT (if performed).
 ## Storage encryption
 
 `luks-setup` sets up LUKS2 full-disk encryption on a storage device. It handles
-everything in one command: wiping the device, creating the LUKS container, formatting,
-mounting, and persisting the configuration so the volume unlocks on every reboot.
+the one-time setup (wipe, encrypt, format, mount) and the per-session unlock after
+reboot. No unlock credentials are stored on the VM — the volume must be explicitly
+unlocked with your passphrase each time the VM starts, ensuring only you can access it.
 
 Must be run as root (already the case in this VM).
 
@@ -154,8 +155,7 @@ The command will:
 1. Wipe the device
 2. Create a LUKS2 container with the passphrase you set
 3. Format the encrypted volume as XFS
-4. Mount it at `/data`
-5. Add entries to `/etc/crypttab` and `/etc/fstab` for automatic unlock on reboot
+4. Mount it at `/data` for this session
 
 Output summary:
 
@@ -205,16 +205,17 @@ vdb       252:16   0  2000G  0 disk
 └─storage 253:0    0  2000G  0 crypt /data
 ```
 
-### Subsequent reboots
+### After each reboot
 
-On reboot, the system will prompt for the passphrase to unlock the volume before
-completing boot. This is handled by `/etc/crypttab` automatically.
-
-If you need to manually open the volume (e.g. during recovery):
+The volume is not configured for automatic unlock — no passphrase or key is stored
+on the VM. After each reboot, SSH in and unlock it yourself:
 
 ```bash
 luks-setup open /dev/vdb /data
 ```
+
+This ensures only parties with the passphrase can access the data, even if the VM
+is restarted by the host operator.
 
 ### Options
 

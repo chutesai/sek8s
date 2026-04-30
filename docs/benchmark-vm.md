@@ -147,8 +147,9 @@ It provides two subcommands:
 
 ### `luks-setup setup`
 
-One-shot end-to-end: wipe, LUKS2-encrypt, format (XFS by default), mount, and persist
-entries in `/etc/crypttab` and `/etc/fstab` so the volume unlocks on reboot.
+One-time setup: wipe, LUKS2-encrypt, format (XFS by default), and mount for the
+current session. No entries are written to `/etc/crypttab` or `/etc/fstab` — the
+volume must be explicitly unlocked via `luks-setup open` after each reboot.
 
 ```bash
 luks-setup setup /dev/vdb /data
