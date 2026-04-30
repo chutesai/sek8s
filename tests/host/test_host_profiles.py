@@ -13,6 +13,7 @@ from chutes.host.profiles import (
     HostProfile,
     Ubuntu2504Profile,
     Ubuntu2510Profile,
+    Ubuntu2604Profile,
     resolve_profile,
 )
 from chutes.host.setup import _get_kernel_version, install_dependencies, setup_host
@@ -169,7 +170,7 @@ def test_2510_enables_kvm_intel_tdx():
 
 @pytest.mark.parametrize(
     "profile_cls",
-    [Ubuntu2504Profile, Ubuntu2510Profile],
+    [Ubuntu2504Profile, Ubuntu2510Profile, Ubuntu2604Profile],
 )
 def test_host_profiles_do_not_include_libvirt(profile_cls):
     """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
@@ -182,6 +183,39 @@ def test_2504_does_not_set_kvm_intel_tdx():
     """25.04 gets TDX via PPA kernel -- no kvm_intel param needed."""
     profile = Ubuntu2504Profile()
     assert "kvm_intel.tdx=1" not in profile.grub_cmdline_additions
+
+
+# ---------------------------------------------------------------------------
+# Ubuntu 26.04 specifics
+# ---------------------------------------------------------------------------
+
+
+def test_2604_does_not_need_tdx_release_ppa():
+    """26.04 has native TDX kernel/QEMU -- no tdx-release PPA needed."""
+    profile = Ubuntu2604Profile()
+    ppa_names = {ppa.name for ppa in profile.ppas}
+    assert "tdx-release" not in ppa_names
+
+
+def test_2604_has_intel_sgx_repo():
+    """26.04 uses Intel's official SGX/DCAP repository (noble suite)."""
+    profile = Ubuntu2604Profile()
+    assert len(profile.repos) >= 1
+    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
+    assert len(intel_repos) == 1
+    assert intel_repos[0].suite == "noble"
+    assert "download.01.org" in intel_repos[0].uri
+
+
+def test_2604_uses_generic_kernel():
+    profile = Ubuntu2604Profile()
+    assert profile.kernel_package == "linux-image-generic"
+
+
+def test_2604_enables_kvm_intel_tdx():
+    """26.04 requires explicit kvm_intel.tdx=1 kernel param."""
+    profile = Ubuntu2604Profile()
+    assert "kvm_intel.tdx=1" in profile.grub_cmdline_additions
 
 
 # ---------------------------------------------------------------------------

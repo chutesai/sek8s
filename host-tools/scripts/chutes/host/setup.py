@@ -11,13 +11,45 @@ import re
 import subprocess
 import sys
 
-from chutes.host.profiles import HostProfile, PPA
+from chutes.host.profiles import APTRepo, HostProfile, PPA
 
 
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
     print(f"  $ {' '.join(cmd)}")
     subprocess.run(cmd, check=True, **kwargs)
+
+
+def _add_repo(repo: APTRepo):
+    """Add a generic APT repository with DEB822 sources and pinning.
+
+    Downloads the signing key from repo.signing_key_url, writes a
+    sources entry to /etc/apt/sources.list.d/, and creates a pin file.
+    """
+    print(f"  Adding repo: {repo.name} ({repo.uri})")
+    keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
+    sources_file = f"/etc/apt/sources.list.d/{repo.name}.sources"
+
+    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+    _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
+
+    sources_content = (
+        f"Types: deb\n"
+        f"URIs: {repo.uri}\n"
+        f"Suites: {repo.suite}\n"
+        f"Components: {repo.components}\n"
+        f"Signed-By: {keyring_path}\n"
+    )
+    _write_system_file(sources_file, sources_content)
+
+    # Pin the repo so its packages take priority over Ubuntu archive
+    pin_file = f"/etc/apt/preferences.d/{repo.name}-pin-{repo.pin_priority}"
+    pin_content = (
+        f"Package: *\n"
+        f"Pin: origin download.01.org\n"
+        f"Pin-Priority: {repo.pin_priority}\n"
+    )
+    _write_system_file(pin_file, pin_content)
 
 
 def _add_ppa(ppa: PPA, codename: str):
@@ -278,6 +310,10 @@ def setup_host(profile: HostProfile):
             _add_ppa(ppa, profile.codename)
     else:
         print("Step 1: No PPAs needed for this profile")
+
+    # 1b. Generic APT repos
+    for repo in profile.repos:
+        _add_repo(repo)
 
     # 2. apt update
     print("\nStep 2: Updating package index...")

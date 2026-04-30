@@ -6,7 +6,15 @@ set -euo pipefail
 # attaching the encrypted guest image. This script should
 # be run on the host *before* starting the real VM.
 
-TDVF="firmware/TDVF.fd"
+# Firmware path for ACPI extraction.
+#
+# All supported stacks (25.04, 25.10, 26.04) use TDVF.fd to maintain backward
+# compatibility and a single MRTD/RTMR attestation policy.
+#
+# OVMF.inteltdx.ms.fd is reserved for a future upgrade.  Override via env
+# only when testing the new firmware:
+#   TDVF_FIRMWARE=firmware/OVMF.inteltdx.ms.fd ./extract-acpi.sh
+TDVF="${TDVF_FIRMWARE:-firmware/TDVF.fd}"
 OUT_DIR="measure/acpi"
 
 # Match production defaults unless overridden via env

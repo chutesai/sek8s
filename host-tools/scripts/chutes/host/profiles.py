@@ -1,9 +1,10 @@
 """Host profile registry: per-Ubuntu-version TDX host setup parameters.
 
 Each supported Ubuntu version is a HostProfile subclass that declares PPAs,
-kernel package, apt packages, and GRUB cmdline additions. A single setup
-orchestrator consumes the profile — no OS-version branching in the setup logic.
-Adding a new Ubuntu version requires one subclass and one HOST_PROFILES entry.
+third-party APT repos, kernel package, apt packages, and GRUB cmdline additions.
+A single setup orchestrator consumes the profile — no OS-version branching in the
+setup logic.  Adding a new Ubuntu version requires one subclass and one
+HOST_PROFILES entry.
 """
 
 import subprocess
@@ -16,7 +17,7 @@ KOBUK_TEAM_KEY = "0C0E6AF955CE463C03FC51574D098D70AFBE5E1F"
 
 @dataclass
 class PPA:
-    """APT PPA descriptor with pinning priority.
+    """Launchpad PPA descriptor with pinning priority.
 
     When suite is set, the PPA sources entry uses that suite instead of the
     host codename.  This is needed when a PPA hasn't published packages for
@@ -33,6 +34,23 @@ class PPA:
     @property
     def uri(self) -> str:
         return f"ppa:{self.team}/{self.name}"
+
+
+@dataclass
+class APTRepo:
+    """Generic APT repository (non-Launchpad).
+
+    Used for vendor repositories such as Intel's download.01.org that are
+    not Launchpad PPAs.  The signing key URL is downloaded and saved to
+    /etc/apt/keyrings/ before writing a DEB822 sources entry.
+    """
+
+    name: str
+    uri: str
+    suite: str
+    components: str
+    signing_key_url: str
+    pin_priority: int = 4000
 
 
 class HostProfile(ABC):
@@ -156,9 +174,61 @@ class Ubuntu2510Profile(HostProfile):
         return ["nohibernate", "kvm_intel.tdx=1"]
 
 
+class Ubuntu2604Profile(HostProfile):
+    """Ubuntu 26.04 (Resolute) — native TDX kernel and QEMU 10.2, attestation via PPA."""
+
+    @property
+    def name(self) -> str:
+        return "26.04"
+
+    @property
+    def codename(self) -> str:
+        return "resolute"
+
+    @property
+    def ppas(self) -> list[PPA]:
+        return []
+
+    @property
+    def repos(self) -> list[APTRepo]:
+        # Intel official SGX/DCAP attestation repository (no Launchpad equivalent).
+        # Provides sgx-dcap-pccs, tdx-qgs, libsgx-dcap-default-qpl for TDX attestation.
+        return [
+            APTRepo(
+                name="intel-sgx",
+                uri="https://download.01.org/intel-sgx/sgx_repo/ubuntu/",
+                suite="noble",
+                components="main",
+                signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
+            ),
+        ]
+
+    @property
+    def kernel_package(self) -> str:
+        return "linux-image-generic"
+
+    @property
+    def packages(self) -> list[str]:
+        return [
+            "qemu-system-x86",
+            "ovmf-inteltdx",
+            "sgx-dcap-pccs",
+            "tdx-qgs",
+            "libsgx-dcap-default-qpl",
+            "sgx-ra-service",
+            "sgx-pck-id-retrieval-tool",
+        ]
+
+    @property
+    def grub_cmdline_additions(self) -> list[str]:
+        # kvm_intel.tdx=1 required for native TDX kernel
+        return ["nohibernate", "kvm_intel.tdx=1"]
+
+
 HOST_PROFILES: dict[str, HostProfile] = {
     "25.04": Ubuntu2504Profile(),
     "25.10": Ubuntu2510Profile(),
+    "26.04": Ubuntu2604Profile(),
 }
 
 
