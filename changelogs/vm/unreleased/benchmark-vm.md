@@ -24,6 +24,9 @@
   verification, attestation, storage encryption, and network transparency.
 
 ### Changed
+- NVIDIA driver pin bumped from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1` (bug-fix
+  release; resolves broken package state caused by base image advancing ahead of the pin).
+- CUDA toolkit bumped from `13-0` to `13-2` (`cuda-toolkit-13-2` metapackage).
 - `benchmark_build: true` now implicitly applies all debug-mode skips (no LUKS,
   no access hardening, no prime-vm); `debug_build` does not need to be set separately.
 - `gpu/tasks/device-setup.yml`: Docker NVIDIA Container Runtime is now configured
