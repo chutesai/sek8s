@@ -1,5 +1,5 @@
 ---
-k3s_version: v1.33.7+k3s1
+k3s_version: v1.35.4+k3s1
 k3s_server_location: /var/lib/rancher/k3s
 # Helm paths for cluster-init (must match setup_chutes.yml).
 # On root volume (VM-version-specific); not on storage so no sync needed.
