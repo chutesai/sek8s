@@ -1,23 +1,9 @@
 ---
 - name: Install cosign
   block:
-    - name: Get latest cosign version from GitHub API
-      ansible.builtin.uri:
-        url: https://api.github.com/repos/sigstore/cosign/releases/latest
-        method: GET
-        return_content: yes
-      register: cosign_release_info
-      retries: 3
-      delay: 5
-      until: cosign_release_info.status == 200
-
-    - name: Extract version number
-      ansible.builtin.set_fact:
-        cosign_version: "{{ cosign_release_info.json.tag_name | regex_replace('^v', '') }}"
-
     - name: Download cosign .deb package
       ansible.builtin.get_url:
-        url: "https://github.com/sigstore/cosign/releases/latest/download/cosign_{{ cosign_version }}_amd64.deb"
+        url: "https://github.com/sigstore/cosign/releases/download/v{{ cosign_version }}/cosign_{{ cosign_version }}_amd64.deb"
         dest: "/tmp/cosign_{{ cosign_version }}_amd64.deb"
         mode: '0644'
       register: cosign_download

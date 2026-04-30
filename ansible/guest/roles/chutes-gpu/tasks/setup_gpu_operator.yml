@@ -1,18 +1,72 @@
 ---
-- name: Add NVIDIA Helm repository
-  kubernetes.core.helm_repository:
-    name: nvidia
-    repo_url: https://helm.ngc.nvidia.com/nvidia
+# Helm config dirs are also created by setup_chutes.yml, but GPU operator runs first
+# so we create them here too (idempotent).
+- name: Create Helm config directories for GPU operator build-time use
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ helm_config_home }}"
+    - "{{ helm_cache_home }}"
+    - "{{ helm_data_home }}"
+
+- name: Add NVIDIA Helm repository to pre-configured Helm paths
+  ansible.builtin.shell: |
+    helm repo add nvidia https://helm.ngc.nvidia.com/nvidia
+    helm repo update
+  environment:
+    HELM_CONFIG_HOME: "{{ helm_config_home }}"
+    HELM_CACHE_HOME: "{{ helm_cache_home }}"
+    HELM_DATA_HOME: "{{ helm_data_home }}"
+  args:
+    executable: /bin/bash
 
 - name: Install GPU Operator
   ansible.builtin.command: >
     helm upgrade --install gpu-operator nvidia/gpu-operator
     --namespace gpu-operator
-    --version v26.3.1
+    --version {{ gpu_operator_chart_version }}
     --set driver.enabled=false
     --set toolkit.enabled=false
-    --set operator.upgradeCRD=false
+    --set operator.upgradeCRD=true
     --create-namespace
     --kubeconfig=/etc/rancher/k3s/k3s.yaml
+  environment:
+    HELM_CONFIG_HOME: "{{ helm_config_home }}"
+    HELM_CACHE_HOME: "{{ helm_cache_home }}"
+    HELM_DATA_HOME: "{{ helm_data_home }}"
   register: helm_result
   changed_when: helm_result.rc == 0
+
+- name: Ensure chart metadata directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/chutes/chart-versions
+    - /etc/chutes/chart-configs
+    - /etc/chutes/chart-upgrade-overrides
+  when: helm_result.rc == 0
+
+- name: Write GPU operator chart version marker
+  ansible.builtin.copy:
+    content: "{{ gpu_operator_chart_version }}"
+    dest: /etc/chutes/chart-versions/gpu-operator
+    mode: '0644'
+  when: helm_result.rc == 0
+
+- name: Install GPU operator chart config
+  ansible.builtin.copy:
+    src: chart-configs/gpu-operator.conf
+    dest: /etc/chutes/chart-configs/gpu-operator.conf
+    mode: '0644'
+
+- name: Install GPU operator chart upgrade override script
+  ansible.builtin.copy:
+    src: chart-upgrade-overrides/gpu-operator.sh
+    dest: /etc/chutes/chart-upgrade-overrides/gpu-operator.sh
+    owner: root
+    group: root
+    mode: '0755'
