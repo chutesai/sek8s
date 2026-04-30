@@ -11,12 +11,13 @@ from .models import CacheChuteStatusEnum
 
 
 class CacheDownloadStatus(str, Enum):
-    """Status returned by the download (POST) endpoint."""
+    """Status returned by the download (POST) and cancel (POST) endpoints."""
 
     STARTED = "started"
     PRESENT = "present"
     IN_PROGRESS = "in_progress"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class CacheDownloadResponse(BaseModel):
@@ -24,6 +25,14 @@ class CacheDownloadResponse(BaseModel):
     status: CacheDownloadStatus = Field(
         ...,
         description="One of: started, present, in_progress, failed",
+    )
+
+
+class CacheCancelResponse(BaseModel):
+    chute_id: str = Field(..., description="Chute ID")
+    status: CacheDownloadStatus = Field(
+        ...,
+        description="One of: cancelled, not_in_progress, not_found",
     )
 
 

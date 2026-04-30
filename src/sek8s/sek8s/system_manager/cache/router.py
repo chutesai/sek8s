@@ -17,6 +17,7 @@ from sek8s.services.util import authorize
 from .manager import CacheManager
 from .models import CacheChuteStatusEnum, ChuteSnapshot, CleanupRequest, DownloadRequest
 from .responses import (
+    CacheCancelResponse,
     CacheChuteStatus,
     CacheCleanupResponse,
     CacheDownloadResponse,
@@ -170,6 +171,34 @@ async def delete_chute(
 
     await mgr.remove(chute_id)
     return {"status": "ok", "message": "deleted"}
+
+
+@router.post(
+    "/{chute_id}/cancel",
+    response_model=CacheCancelResponse,
+    summary="Cancel an in-progress download",
+)
+async def cancel_download(
+    chute_id: str,
+    cleanup: bool = Query(
+        False,
+        description="Delete partial files from disk after cancelling",
+    ),
+    mgr: CacheManager = Depends(get_cache_manager),
+    _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
+) -> CacheCancelResponse:
+    _validate_chute_id(chute_id)
+
+    try:
+        await mgr.cancel(chute_id, cleanup=cleanup)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Chute not found")
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return CacheCancelResponse(
+        chute_id=chute_id,
+        status=CacheDownloadStatus.CANCELLED,
+    )
 
 
 @router.post(
