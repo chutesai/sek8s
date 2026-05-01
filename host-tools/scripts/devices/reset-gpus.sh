@@ -81,8 +81,28 @@ if [[ -z "$CMD" ]]; then
     exit 1
 fi
 
-echo "Resetting GPUs via Secondary Bus Reset..."
-sudo "$CMD" --reset-with-sbr --reset-after-ppcie-mode-switch
+# Abort if nvidia-gpu-tools processes are already running (likely stuck in D state).
+STUCK_PIDS=$(pgrep -f 'nvidia-gpu-tools' 2>/dev/null | grep -v "^$$\$" || true)
+if [[ -n "$STUCK_PIDS" ]]; then
+    echo "Error: nvidia-gpu-tools process(es) already running:"
+    ps -fp $STUCK_PIDS 2>/dev/null || true
+    echo ""
+    echo "These are likely stuck in uninterruptible sleep (D state) from a"
+    echo "previous reset attempt. A host reboot is required to clear them."
+    echo "Running another reset will also hang."
+    exit 1
+fi
+
+GPU_TOOLS_TIMEOUT=120
+
+echo "Resetting GPUs via Secondary Bus Reset (timeout: ${GPU_TOOLS_TIMEOUT}s)..."
+if ! timeout "$GPU_TOOLS_TIMEOUT" sudo "$CMD" --reset-with-sbr --reset-after-ppcie-mode-switch; then
+    echo ""
+    echo "Error: GPU reset timed out or failed after ${GPU_TOOLS_TIMEOUT}s."
+    echo "GPU hardware may be wedged at the PCIe level."
+    echo "A host reboot is likely required to recover."
+    exit 1
+fi
 echo "GPU reset complete."
 
 # PCI remove + rescan: clear stale kernel state (driver bindings, iommufd
