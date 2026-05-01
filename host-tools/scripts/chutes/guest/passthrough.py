@@ -26,19 +26,34 @@ from chutes.guest.vfio import (
 _gpu_tools_cmd: str | None = None
 
 
+GPU_TOOLS_TIMEOUT_SECS = 120
+
+
 def _run_gpu_tools(*args: str):
     """Run an nvidia-gpu-tools command with sudo.
 
     Resolves and caches the tool path on first call via ensure_gpu_tools_available().
+    Times out after GPU_TOOLS_TIMEOUT_SECS to prevent indefinite hangs when GPU
+    hardware is wedged at the PCIe level.
     """
     global _gpu_tools_cmd
     if _gpu_tools_cmd is None:
         print('  Ensuring GPU admin tools are available...')
         _gpu_tools_cmd = ensure_gpu_tools_available()
-    subprocess.check_call(
-        ['sudo', _gpu_tools_cmd, *args],
-        stderr=subprocess.STDOUT,
-    )
+    cmd = ['sudo', _gpu_tools_cmd, *args]
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stderr=subprocess.STDOUT,
+            timeout=GPU_TOOLS_TIMEOUT_SECS,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f'nvidia-gpu-tools timed out after {GPU_TOOLS_TIMEOUT_SECS}s '
+            f'(args: {args}). GPU hardware may be wedged — a host reboot is '
+            f'likely required to recover PCIe state.'
+        )
 
 
 def _scripts_dir() -> str:
@@ -76,13 +91,47 @@ def _configure_gpus(
             _run_gpu_tools(*tool_args, f'--gpu-bdf={gpu}')
 
 
+def _device_config_readable(bdf: str) -> bool:
+    """Return True if the device's PCI config space responds (vendor ID read)."""
+    vendor_path = f'/sys/bus/pci/devices/{bdf}/vendor'
+    try:
+        result = subprocess.run(
+            ['cat', vendor_path],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0 and result.stdout.strip() != b'0xffff'
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _wait_devices_ready(devices: list[str], timeout_secs: int = 30) -> bool:
+    """Poll until all devices respond to config-space reads, or timeout."""
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        if all(_device_config_readable(bdf) for bdf in devices):
+            return True
+        time.sleep(2)
+    unready = [bdf for bdf in devices if not _device_config_readable(bdf)]
+    if unready:
+        print(f'  Warning: devices still unresponsive after {timeout_secs}s: {unready}')
+    return not unready
+
+
+SBR_SETTLE_SECS = 30
+
+
 def _prepare_devices(
     gpus: list[str],
     nvswitches: list[str],
     ib_devices: list[str],
     profile: GpuProfile,
 ):
-    """Clean stale PCI state, configure CC/PPCIe modes, bind to vfio-pci, udev."""
+    """Clean stale PCI state, configure CC/PPCIe modes, bind to vfio-pci, udev.
+
+    Strategy: try lightweight unbind first (works after clean VM shutdown).
+    Only escalate to SBR if unbind fails (device truly wedged from crash).
+    """
     total_gpus = len(gpus)
 
     all_devices = list(gpus)
@@ -93,13 +142,29 @@ def _prepare_devices(
 
     if has_stale_vfio_devices(all_devices):
         print('  Stale vfio-pci devices detected from previous session')
-        print('  SBR reset (via parent bridge) to restore device responsiveness...')
-        _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
-        sbr_settle = 5
-        print(f'  Waiting {sbr_settle}s for devices to re-initialize after SBR...')
-        time.sleep(sbr_settle)
-        print('  Unbinding stale vfio-pci devices...')
+        print('  Unbinding stale vfio-pci devices (no SBR needed for clean shutdown)...')
         unbind_stale_vfio_devices(all_devices)
+
+        if has_stale_vfio_devices(all_devices):
+            print('  Some devices could not be unbound — escalating to SBR reset...')
+            _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+            print(f'  Waiting {SBR_SETTLE_SECS}s for devices to re-initialize after SBR...')
+            time.sleep(SBR_SETTLE_SECS)
+            print('  Verifying device responsiveness...')
+            if not _wait_devices_ready(all_devices):
+                raise RuntimeError(
+                    'Devices unresponsive after SBR reset. '
+                    'A host reboot is likely required.'
+                )
+            print('  Retrying unbind after SBR...')
+            unbind_stale_vfio_devices(all_devices)
+
+    if not _wait_devices_ready(all_devices, timeout_secs=10):
+        raise RuntimeError(
+            'GPU/NVSwitch devices not responding to config-space reads. '
+            'Cannot proceed with CC/PPCIe mode configuration. '
+            'A host reboot may be required.'
+        )
 
     _configure_nvswitches(nvswitches, profile, total_gpus)
     _configure_gpus(gpus, profile, total_gpus)
