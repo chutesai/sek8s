@@ -1,0 +1,143 @@
+---
+# site-benchmark.yml — Benchmark VM guest image build playbook.
+#
+# Builds a standalone benchmark image for NDA partner evaluation sessions.
+# This playbook is completely independent of site.yml and includes only the
+# roles that a benchmark VM requires. There is no k3s, no admission controller,
+# no system-manager, and no cache volume.
+#
+# Config setup (hostname + network) is owned entirely by the benchmark role,
+# which installs a stripped-down process-config.py and config-manager.service
+# that contain no k3s or miner credential logic.
+#
+# Usage:
+#   ansible-playbook -i local/inventory.benchmark.yml playbooks/site-benchmark.yml
+
+- name: Confirm benchmark guest image build configuration
+  hosts: host
+  become: false
+  tags:
+    - always
+  tasks:
+    - name: Output build configuration
+      ansible.builtin.debug:
+        msg:
+          - "Build env: {{ build_env }}"
+          - "VM version: {{ vm_version }}"
+          - "Benchmark build: {{ benchmark_build | default(false) }}"
+          - "Final image: {{ final_img_path }}"
+
+    - name: Assert benchmark_build is true
+      ansible.builtin.assert:
+        that: benchmark_build | default(false)
+        msg: "benchmark_build must be true when using site-benchmark.yml"
+
+    - name: Assert benchmark_ssh_keys is non-empty
+      ansible.builtin.fail:
+        msg: "benchmark_ssh_keys must be a non-empty list — add partner public key(s) to inventory"
+      when: benchmark_ssh_keys | default([]) | length == 0
+
+    - name: Confirm intended build before starting VM
+      ansible.builtin.pause:
+        prompt: >-
+          Is this the intended benchmark build? The next step launches the TDX guest VM
+          toward {{ final_img_path }}. Press Enter to continue, or Ctrl+C to abort.
+
+- name: Run TDX guest image
+  hosts: host
+  become: true
+  tags:
+    - run-vm
+    - always
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include run TDX vm role
+      ansible.builtin.include_role:
+        name: run-vm
+
+- name: Common Setup
+  hosts: vm
+  become: true
+  tags:
+    - common
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include common role
+      ansible.builtin.include_role:
+        name: common
+
+- name: GPU Setup
+  hosts: vm
+  become: true
+  tags:
+    - gpu
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include gpu role
+      ansible.builtin.include_role:
+        name: gpu
+
+- name: Install benchmark tools
+  hosts: vm
+  become: true
+  tags:
+    - benchmark
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Install benchmark tools
+      ansible.builtin.include_role:
+        name: benchmark
+        apply:
+          tags: benchmark
+
+- name: Remove remote access
+  hosts: vm
+  become: true
+  tags:
+    - harden-access
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Remove remote access
+      ansible.builtin.include_role:
+        name: harden-access
+        apply:
+          tags: harden-access
+
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
+
+- name: Cleanup to ensure fresh state
+  hosts: all
+  become: true
+  any_errors_fatal: false
+  tags:
+    - cleanup
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup
+      ansible.builtin.include_role:
+        name: cleanup
+        apply:
+          tags: cleanup

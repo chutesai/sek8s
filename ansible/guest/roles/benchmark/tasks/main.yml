@@ -1,11 +1,145 @@
 ---
-# Install benchmark-specific tools into the guest image:
-#   - tdx-attest group/user + directories (reused from attestation-service)
-#   - TDX quote generator binary (reused from attestation-service)
-#   - trustauthority-cli (Intel SGX repo, added by quote generator tasks)
-#   - chutes-nvevidence CLI (nvevidence venv, root:tdx-attest ownership)
-#   - attest verification script
-#   - luks-setup LUKS2 encryption helper
+# Benchmark role: all benchmark-specific guest image setup.
+# Used exclusively by site-benchmark.yml — not site.yml.
+#
+# This role owns:
+#   - Config volume services (simplified process-config.py, config-manager.service,
+#     var-config.mount, config-volume-validator.service, netplan-apply.service)
+#   - Storage setup service (setup-storage-bind-mounts.service, benchmark-storage-setup.sh)
+#   - Attestation tools (attest, chutes-nvevidence, TDX quote generator)
+#   - LUKS helper (luks-setup)
+
+# ------------------------------------------------------------------
+# Config volume services
+# ------------------------------------------------------------------
+
+- name: Ensure /usr/local/bin exists
+  ansible.builtin.file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy config volume verification script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/verify-config-volume.sh"
+    dest: /usr/local/bin/verify-config-volume.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy benchmark process-config script
+  ansible.builtin.copy:
+    src: process-config.py
+    dest: /usr/local/bin/process-config.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy config volume validator service
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/config-volume-validator.service"
+    dest: /etc/systemd/system/config-volume-validator.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy benchmark config-manager service
+  ansible.builtin.copy:
+    src: config-manager.service
+    dest: /etc/systemd/system/config-manager.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy var-config mount unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/var-config.mount"
+    dest: /etc/systemd/system/var-config.mount
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy netplan-apply service
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/netplan-apply.service"
+    dest: /etc/systemd/system/netplan-apply.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd daemon after config units
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Create /var/config mount point
+  ansible.builtin.file:
+    path: /var/config
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Enable config-volume-validator.service
+  ansible.builtin.systemd:
+    name: config-volume-validator.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable var-config.mount
+  ansible.builtin.systemd:
+    name: var-config.mount
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable config-manager.service
+  ansible.builtin.systemd:
+    name: config-manager.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable netplan-apply.service
+  ansible.builtin.systemd:
+    name: netplan-apply.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Verify config-volume-validator.service is enabled
+  ansible.builtin.command: systemctl is-enabled config-volume-validator.service
+  register: _cv_status
+  changed_when: false
+  failed_when: _cv_status.stdout != "enabled"
+
+- name: Verify var-config.mount is enabled
+  ansible.builtin.command: systemctl is-enabled var-config.mount
+  register: _mount_status
+  changed_when: false
+  failed_when: _mount_status.stdout != "enabled"
+
+- name: Verify config-manager.service is enabled
+  ansible.builtin.command: systemctl is-enabled config-manager.service
+  register: _cm_status
+  changed_when: false
+  failed_when: _cm_status.stdout != "enabled"
+
+- name: Verify netplan-apply.service is enabled
+  ansible.builtin.command: systemctl is-enabled netplan-apply.service
+  register: _np_status
+  changed_when: false
+  failed_when: _np_status.stdout != "enabled"
+
+# ------------------------------------------------------------------
+# Attestation tools
+# ------------------------------------------------------------------
 
 - name: Attestation common setup (tdx-attest group/user/directories)
   ansible.builtin.include_role:

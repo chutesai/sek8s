@@ -48,13 +48,13 @@ image with no partner access is never shipped.
 
 ```bash
 cd ansible/guest
-ansible-playbook -i inventory.yml playbooks/site.yml
+ansible-playbook -i inventory.yml playbooks/site-benchmark.yml
 ```
 
 The resulting image is written to:
 
 ```
-<img_dir>/<build_env>/<vm_version>-benchmark.qcow2
+<img_dir>/<build_env>/<vm_version>.qcow2
 ```
 
 ### 3. Reset inventory after building

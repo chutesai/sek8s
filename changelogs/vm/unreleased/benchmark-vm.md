@@ -1,10 +1,12 @@
 ### Added
-- Benchmark VM build profile (`benchmark_build: true`) for NDA partner evaluation
-  sessions. Builds a guest image with no Kubernetes orchestration, partner-provided
-  SSH keys as the only authorised access, and no LUKS encryption.
-- `benchmark` Ansible role: installs the TDX quote generator, `trustauthority-cli`,
-  `chutes-nvevidence`, the `attest` verification script, and the `luks-setup` storage
-  encryption helper into the benchmark image.
+- `playbooks/site-benchmark.yml`: dedicated benchmark VM build playbook. Fully
+  independent of `site.yml` — includes only the roles a benchmark VM needs (`run-vm`,
+  `common`, `gpu`, `benchmark`, `harden-access`, `security`, `cleanup`). No k3s,
+  admission controller, system-manager, cache-volume, luks, or prime-vm plays.
+- `benchmark` Ansible role: self-contained benchmark image setup. Now owns the full
+  config volume stack (simplified `process-config.py`, `config-manager.service`,
+  `var-config.mount`, `config-volume-validator.service`, `netplan-apply.service`) in
+  addition to the TDX/GPU attestation tools, LUKS helper, and storage setup service.
 - `attest` in-VM tool: `attest dump` prints TDX hardware measurements (MRTD, RTMRs,
   MRSEAM); `attest verify` adds NVIDIA NRAS GPU attestation (ES384-signed JWT) and
   optional Intel Tiber Trust Services TDX remote verification.
@@ -23,7 +25,7 @@
   asserts key count and content before finalising the image.
 - `config/config.benchmark.example.yaml`: ready-to-use launch config template.
 - `config/config-schema.benchmark.json`: dedicated JSON schema for benchmark configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` which are not applicable. `quick-launch.sh --benchmark` automatically uses this schema during config validation.
-- Benchmark VMs now receive a config volume (hostname + network config) on launch. The existing `config` role, `process-config.py`, and `netplan-apply.service` handle hostname and network setup identically to production — no new in-VM machinery needed. Miner credential files are omitted from the benchmark config volume; `process-config.py` detects their absence and skips k3s credential writing. `create-config.sh` now accepts empty miner credential arguments for this purpose.
+- Benchmark VMs receive a config volume (hostname + network config) on launch via a simplified `process-config.py` that contains no k3s, miner credential, or Docker Hub logic. `create-config.sh` accepts empty miner credential arguments so the host-side config volume creation step is identical whether miner creds are provided or not.
 - `serial-getty@ttyS0` and all virtual console getty services are now masked in benchmark images. `harden-access` now runs for benchmark builds; only the two SSH-related tasks (mask service, remove packages) are conditionally skipped via `when: not (benchmark_build ...)` since SSH is the only access path for partners.
 - `benchmark-storage-setup.sh` + `setup-storage-bind-mounts.service` (benchmark role): at boot, identifies the storage block device, creates a stable `/dev/chutes-storage` symlink and `/data` mount point. Auto-mounts the device if it already has a filesystem; logs `luks-setup` instructions otherwise. Service name matches the production service so existing systemd ordering constraints are satisfied without any changes to `config-manager.service`.
 - `docs/benchmark-vm.md`: operator reference for building and launching the benchmark VM.
@@ -34,8 +36,6 @@
 - NVIDIA driver pin bumped from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1` (bug-fix
   release; resolves broken package state caused by base image advancing ahead of the pin).
 - CUDA toolkit bumped from `13-0` to `13-2` (`cuda-toolkit-13-2` metapackage).
-- `benchmark_build: true` now implicitly applies all debug-mode skips (no LUKS,
-  no access hardening, no prime-vm); `debug_build` does not need to be set separately.
 - `gpu/tasks/device-setup.yml`: Docker NVIDIA Container Runtime is now configured
   here (alongside containerd) so benchmark images have Docker GPU support without k3s.
 - `roles/benchmark-attestation` consolidated and renamed to `roles/benchmark` — the
@@ -43,10 +43,11 @@
 - `docs/benchmark-mode.md` renamed to `docs/benchmark-vm.md`.
 - `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
   in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
-- Security role (seccomp profiles, k3s containerd config) skipped for benchmark builds.
+- `site.yml` is now production-only — all `benchmark_build` conditions and the
+  benchmark tools play have been removed. Benchmark builds use `site-benchmark.yml`.
 
 ### Fixed
--
+- `process-config.py`: `apply_docker_hub_and_registries` now returns early with success when the `admission` group is absent and no Docker Hub credentials are present, instead of hard-failing. This prevented `config-manager.service` from starting in benchmark VMs (which have no admission controller).
 
 ### Removed
 -

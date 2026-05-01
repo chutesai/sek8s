@@ -225,6 +225,10 @@ def apply_docker_hub_and_registries(username, token):
     try:
         admission_gid = grp.getgrnam("admission").gr_gid
     except KeyError:
+        if username is None and token is None:
+            # No admission controller and no Docker Hub creds — nothing to do.
+            log("Group 'admission' not found and no Docker Hub credentials present — skipping docker config")
+            return True
         log("Group 'admission' not found; cannot configure docker-config", "ERROR")
         return False
 
