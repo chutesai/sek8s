@@ -1245,6 +1245,87 @@
         }
       }
     },
+    "/cache/purge": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Purge stale HuggingFace revisions from all cached chutes",
+        "operationId": "purge_stale_cache_purge_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CachePurgeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cache/cleanup": {
       "post": {
         "tags": [
@@ -2207,6 +2288,29 @@
           "chutes"
         ],
         "title": "CacheOverviewResponse"
+      },
+      "CachePurgeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Purge status",
+            "examples": [
+              "completed"
+            ]
+          },
+          "purged_bytes": {
+            "type": "integer",
+            "title": "Purged Bytes",
+            "description": "Bytes freed by pruning stale HF revisions",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CachePurgeResponse"
       },
       "CleanupRequest": {
         "properties": {
