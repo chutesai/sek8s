@@ -19,6 +19,7 @@
 - `cleanup-benchmark-ssh.yml`: removes builder SSH keys, writes partner keys, and
   asserts key count and content before finalising the image.
 - `config/config.benchmark.example.yaml`: ready-to-use launch config template.
+- `config/config-schema.benchmark.json`: dedicated JSON schema for benchmark configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` which are not applicable. `quick-launch.sh --benchmark` automatically uses this schema during config validation.
 - `docs/benchmark-vm.md`: operator reference for building and launching the benchmark VM.
 - `docs/benchmark-guide.md`: user-facing walkthrough covering SSH access, GPU
   verification, attestation, storage encryption, and network transparency.

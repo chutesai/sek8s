@@ -316,8 +316,14 @@ if [[ -n "$CONFIG_FILE" ]]; then
     exit 1
   fi
 
+  # Pre-scan for --benchmark so the correct schema is used during validation.
+  # CLI_BENCHMARK is not yet applied to BENCHMARK at this point in the script,
+  # so we check the raw CLI variable directly.
+  CONFIG_SCHEMA_FLAG=""
+  [[ "$CLI_BENCHMARK" == "true" ]] && CONFIG_SCHEMA_FLAG="--benchmark"
+
   set +e
-  CONFIG_OUTPUT=$(python3 -m chutes.guest.config "$CONFIG_FILE" 2>&1)
+  CONFIG_OUTPUT=$(python3 -m chutes.guest.config $CONFIG_SCHEMA_FLAG "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
   set -e
 
