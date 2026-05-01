@@ -147,3 +147,25 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: Install benchmark storage setup script
+  ansible.builtin.copy:
+    src: benchmark-storage-setup.sh
+    dest: /usr/local/bin/benchmark-storage-setup.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install benchmark setup-storage-bind-mounts service
+  ansible.builtin.copy:
+    src: setup-storage-bind-mounts.service
+    dest: /etc/systemd/system/setup-storage-bind-mounts.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable benchmark storage setup service
+  ansible.builtin.systemd:
+    name: setup-storage-bind-mounts.service
+    enabled: yes
+    daemon_reload: yes

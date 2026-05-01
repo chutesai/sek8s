@@ -14,8 +14,12 @@ only parties with the passphrase can access the data.
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 import typer
+
+DEFAULT_DEVICE = "/dev/chutes-storage"
+DEFAULT_MOUNT = "/data"
 
 app = typer.Typer(
     name="luks-setup",
@@ -79,8 +83,8 @@ def _device_has_data(device: str) -> bool:
 
 @app.command()
 def setup(
-    device: str = typer.Argument(..., help="Block device to encrypt (e.g. /dev/vdb)"),
-    mount_point: str = typer.Argument(..., help="Where to mount the encrypted volume (e.g. /data)"),
+    device: Optional[str] = typer.Argument(None, help=f"Block device to encrypt (default: {DEFAULT_DEVICE})"),
+    mount_point: Optional[str] = typer.Argument(None, help=f"Where to mount the encrypted volume (default: {DEFAULT_MOUNT})"),
     label: str = typer.Option("storage", "--label", "-l", help="Filesystem and LUKS header label"),
     dm_name: str = typer.Option(
         "",
@@ -94,12 +98,18 @@ def setup(
     """
     One-time setup: wipe, LUKS2-encrypt, format, and mount a device.
 
+    Defaults to /dev/chutes-storage (the benchmark storage volume) mounted at /data.
+
     The volume is mounted for the current session only. No entries are written
     to /etc/crypttab or /etc/fstab — after a reboot, use `luks-setup open`
     to unlock and mount the volume again.
 
     WARNING: all data on the device will be destroyed.
     """
+    if device is None:
+        device = DEFAULT_DEVICE
+    if mount_point is None:
+        mount_point = DEFAULT_MOUNT
     _require_root()
     _require_block_device(device)
 
@@ -154,7 +164,7 @@ Setup complete.
   Mount point:  {mount_point}
 
 The volume is mounted for this session. After a reboot, unlock it with:
-  luks-setup open {device} {mount_point}
+  luks-setup open
 
 To verify encryption: cryptsetup status {dm_name}
 """)
@@ -162,16 +172,22 @@ To verify encryption: cryptsetup status {dm_name}
 
 @app.command()
 def open(
-    device: str = typer.Argument(..., help="Encrypted block device (e.g. /dev/vdb)"),
-    mount_point: str = typer.Argument(..., help="Where to mount the volume"),
+    device: Optional[str] = typer.Argument(None, help=f"Encrypted block device (default: {DEFAULT_DEVICE})"),
+    mount_point: Optional[str] = typer.Argument(None, help=f"Where to mount the volume (default: {DEFAULT_MOUNT})"),
     dm_name: str = typer.Option("", "--name", "-n", help="Device-mapper name (defaults to device basename)"),
     key_file: str = typer.Option("", "--key-file", help="Path to key file (omit for interactive passphrase)"),
 ) -> None:
     """
     Open and mount a previously encrypted device.
 
+    Defaults to /dev/chutes-storage (the benchmark storage volume) mounted at /data.
+
     Run this after each reboot to unlock and mount the volume.
     """
+    if device is None:
+        device = DEFAULT_DEVICE
+    if mount_point is None:
+        mount_point = DEFAULT_MOUNT
     _require_root()
     _require_block_device(device)
 

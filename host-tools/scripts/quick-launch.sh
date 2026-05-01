@@ -707,6 +707,7 @@ fi
 if [[ "$BENCHMARK" == "true" ]]; then
   # Benchmark: no cache volume (partner manages storage directly via luks-setup).
   # Config volume IS created (hostname + network config only, no miner creds).
+  LAUNCH_ARGS+=(--ssh)
   LAUNCH_ARGS+=(--config-volume "$CONFIG_VOLUME")
   LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
 else

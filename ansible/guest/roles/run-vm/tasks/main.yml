@@ -12,6 +12,7 @@
       - cloud-image-utils
     state: present
     update_cache: yes
+    cache_valid_time: 3600
 
 - name: Ensure libvirt default network is active
   ansible.builtin.command: virsh net-start default

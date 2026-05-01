@@ -118,33 +118,21 @@ remote verification JWT (if performed).
 
 ## Storage encryption
 
-`luks-setup` sets up LUKS2 full-disk encryption on a storage device. It handles
-the one-time setup (wipe, encrypt, format, mount) and the per-session unlock after
-reboot. No unlock credentials are stored on the VM — the volume must be explicitly
-unlocked with your passphrase each time the VM starts, ensuring only you can access it.
+`luks-setup` sets up LUKS2 full-disk encryption on the storage volume attached to
+the VM. It handles the one-time setup (wipe, encrypt, format, mount) and the
+per-session unlock after reboot. No unlock credentials are stored on the VM — the
+volume must be explicitly unlocked with your passphrase each time the VM starts,
+ensuring only you can access the data.
 
 Must be run as root (already the case in this VM).
 
+The storage volume is identified automatically at boot and is always accessible as
+`/dev/chutes-storage`. The standard mount point is `/data`.
+
 ### First-time setup
 
-Identify the device you want to encrypt:
-
 ```bash
-lsblk
-```
-
-Look for an unformatted disk (no mountpoint, no filesystem type). For example:
-
-```
-NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
-vda    252:0    0    50G  0 disk /
-vdb    252:16   0  2000G  0 disk
-```
-
-Here `vdb` is the storage disk. Run setup:
-
-```bash
-luks-setup setup /dev/vdb /data
+luks-setup setup
 ```
 
 You will be asked to confirm (all data on the device will be wiped), then prompted
@@ -152,7 +140,7 @@ to enter and confirm a passphrase. Choose a strong passphrase and keep it safe �
 will be required on every reboot.
 
 The command will:
-1. Wipe the device
+1. Wipe `/dev/chutes-storage`
 2. Create a LUKS2 container with the passphrase you set
 3. Format the encrypted volume as XFS
 4. Mount it at `/data` for this session
@@ -162,14 +150,15 @@ Output summary:
 ```
 Setup complete.
 
-  Device:       /dev/vdb
+  Device:       /dev/chutes-storage
   UUID:         a1b2c3d4-e5f6-...
   LUKS label:   storage
   Mapper name:  storage  (/dev/mapper/storage)
   Filesystem:   xfs
   Mount point:  /data
 
-The volume will be unlocked automatically on next boot (passphrase prompt).
+The volume is mounted for this session. After a reboot, unlock it with:
+  luks-setup open
 To verify encryption: cryptsetup status storage
 ```
 
@@ -189,19 +178,19 @@ Expected output:
   cipher:  aes-xts-plain64
   keysize: 512 bits
   key location: keyring
-  device:  /dev/vdb
+  device:  /dev/chutes-storage
   ...
 ```
 
 Check the mount:
 
 ```bash
-lsblk /dev/vdb
+lsblk /dev/chutes-storage
 ```
 
 ```
 NAME      MAJ:MIN RM   SIZE RO TYPE  MOUNTPOINTS
-vdb       252:16   0  2000G  0 disk
+vdc       252:32   0  2000G  0 disk
 └─storage 253:0    0  2000G  0 crypt /data
 ```
 
@@ -211,7 +200,7 @@ The volume is not configured for automatic unlock — no passphrase or key is st
 on the VM. After each reboot, SSH in and unlock it yourself:
 
 ```bash
-luks-setup open /dev/vdb /data
+luks-setup open
 ```
 
 This ensures only parties with the passphrase can access the data, even if the VM
@@ -220,9 +209,9 @@ is restarted by the host operator.
 ### Options
 
 ```
-luks-setup setup /dev/vdb /data --label mydata   # custom label and mapper name
-luks-setup setup /dev/vdb /data --fs ext4        # ext4 instead of XFS
-luks-setup setup /dev/vdb /data --yes            # skip confirmation prompt
+luks-setup setup --label mydata   # custom label and mapper name
+luks-setup setup --fs ext4        # ext4 instead of XFS
+luks-setup setup --yes            # skip confirmation prompt
 ```
 
 ## Network transparency

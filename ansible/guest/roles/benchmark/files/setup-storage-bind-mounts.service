@@ -1,0 +1,16 @@
+[Unit]
+Description=Benchmark storage device setup
+Documentation=man:systemd.service(5)
+After=local-fs.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/benchmark-storage-setup.sh
+RemainAfterExit=yes
+TimeoutStartSec=30
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
