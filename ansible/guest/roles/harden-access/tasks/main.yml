@@ -16,6 +16,7 @@
         - ssh.socket
         - sshd.socket
       failed_when: false  # Don't fail if service doesn't exist
+      when: not (benchmark_build | default(false))
 
     - name: Remove SSH packages completely
       package:
@@ -27,6 +28,7 @@
         - dropbear
         - dropbear-bin
       failed_when: false
+      when: not (benchmark_build | default(false))
 
     - name: Disable and mask console access services
       systemd:

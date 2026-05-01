@@ -61,9 +61,14 @@ populate_config_into_mount() {
     echo "$HOSTNAME" > "$MOUNT_DIR/hostname"
     print_info "  ✓ hostname: $HOSTNAME"
 
-    echo "$MINER_SS58" > "$MOUNT_DIR/miner-ss58"
-    echo "$MINER_SEED" > "$MOUNT_DIR/miner-seed"
-    print_info "  ✓ miner credential files"
+    if [[ -n "$MINER_SS58" && -n "$MINER_SEED" ]]; then
+        echo "$MINER_SS58" > "$MOUNT_DIR/miner-ss58"
+        echo "$MINER_SEED" > "$MOUNT_DIR/miner-seed"
+        chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
+        print_info "  ✓ miner credential files"
+    else
+        print_info "  - miner credentials empty, skipping (benchmark mode)"
+    fi
 
     cat > "$MOUNT_DIR/network-config.yaml" << EOF
 network:
@@ -84,7 +89,6 @@ EOF
     print_info "  ✓ network-config.yaml (${VM_IP} via ${VM_GATEWAY})"
 
     chmod 644 "$MOUNT_DIR/hostname" "$MOUNT_DIR/network-config.yaml"
-    chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
 
     if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
         printf '%s' "$DOCKER_HUB_USER" > "$MOUNT_DIR/docker-hub-username"

@@ -573,26 +573,35 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Config volume (not used in benchmark mode — no miner credentials in guest)
+# Config volume (hostname + network for all modes; miner creds for production only)
 # --------------------------------------------------------------------
-if [[ "$BENCHMARK" != "true" ]]; then
-  echo "Step 4: Setting up config volume..."
-  if [[ -z "$CONFIG_VOLUME" ]]; then
-    CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
-  fi
-  if [[ -f "$CONFIG_VOLUME" ]]; then
-    echo "Refreshing existing config volume from current config: $CONFIG_VOLUME"
+echo "Step 4: Setting up config volume..."
+if [[ -z "$CONFIG_VOLUME" ]]; then
+  CONFIG_VOLUME="config-${HOSTNAME}.qcow2"
+fi
+if [[ -f "$CONFIG_VOLUME" ]]; then
+  echo "Refreshing existing config volume from current config: $CONFIG_VOLUME"
+else
+  echo "Creating config volume: $CONFIG_VOLUME"
+fi
+if [[ "$BENCHMARK" == "true" ]]; then
+  # Benchmark: config volume carries hostname + network config only.
+  # Pass empty miner credentials so create-config.sh skips writing those files.
+  if sudo ./volumes/create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "" "" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
+    echo "✓ Config volume ready (benchmark: no miner credentials)"
   else
-    echo "Creating config volume: $CONFIG_VOLUME"
+    echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
+    exit 1
   fi
+else
   if run_create_config "$CONFIG_VOLUME"; then
     echo "✓ Config volume ready"
   else
     echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
     exit 1
   fi
-  echo ""
 fi
+echo ""
 
 # --------------------------------------------------------------------
 # Step 4b: Prepare VM image (verify base SHA256, create/reuse overlay)
@@ -696,8 +705,9 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
 fi
 
 if [[ "$BENCHMARK" == "true" ]]; then
-  # Benchmark: storage volume only — partner partitions and mounts it themselves.
-  # No config volume (no miner credentials) and no cache volume.
+  # Benchmark: no cache volume (partner manages storage directly via luks-setup).
+  # Config volume IS created (hostname + network config only, no miner creds).
+  LAUNCH_ARGS+=(--config-volume "$CONFIG_VOLUME")
   LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
 else
   LAUNCH_ARGS+=(--config-volume "$CONFIG_VOLUME")

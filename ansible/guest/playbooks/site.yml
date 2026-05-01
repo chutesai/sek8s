@@ -206,7 +206,6 @@
         name: config
         apply:
           tags: config
-      when: not (benchmark_build | default(false))
 
 - name: Install benchmark tools
   hosts: vm
@@ -238,7 +237,7 @@
         name: harden-access
         apply:
           tags: harden-access
-      when: not (debug_build | default(false)) and not (benchmark_build | default(false))
+      when: not (debug_build | default(false))
 
 - name: Security Hardening
   hosts: vm

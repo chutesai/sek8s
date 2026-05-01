@@ -20,6 +20,8 @@
   asserts key count and content before finalising the image.
 - `config/config.benchmark.example.yaml`: ready-to-use launch config template.
 - `config/config-schema.benchmark.json`: dedicated JSON schema for benchmark configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` which are not applicable. `quick-launch.sh --benchmark` automatically uses this schema during config validation.
+- Benchmark VMs now receive a config volume (hostname + network config) on launch. The existing `config` role, `process-config.py`, and `netplan-apply.service` handle hostname and network setup identically to production — no new in-VM machinery needed. Miner credential files are omitted from the benchmark config volume; `process-config.py` detects their absence and skips k3s credential writing. `create-config.sh` now accepts empty miner credential arguments for this purpose.
+- `serial-getty@ttyS0` and all virtual console getty services are now masked in benchmark images. `harden-access` now runs for benchmark builds; only the two SSH-related tasks (mask service, remove packages) are conditionally skipped via `when: not (benchmark_build ...)` since SSH is the only access path for partners.
 - `docs/benchmark-vm.md`: operator reference for building and launching the benchmark VM.
 - `docs/benchmark-guide.md`: user-facing walkthrough covering SSH access, GPU
   verification, attestation, storage encryption, and network transparency.
