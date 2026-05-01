@@ -172,8 +172,13 @@ elif [ $# -eq 9 ]; then
 fi
 
 # Basic validation
-if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" || -z "$VM_IP" || -z "$VM_GATEWAY" || -z "$VM_DNS" ]]; then
-    print_error "Hostname, miner credentials, VM IP, gateway, and DNS must be non-empty"
+if [[ -z "$HOSTNAME" || -z "$VM_IP" || -z "$VM_GATEWAY" || -z "$VM_DNS" ]]; then
+    print_error "Hostname, VM IP, gateway, and DNS must be non-empty"
+    exit 1
+fi
+
+if [[ -n "$MINER_SS58" && -z "$MINER_SEED" ]] || [[ -z "$MINER_SS58" && -n "$MINER_SEED" ]]; then
+    print_error "Miner SS58 and seed must both be provided or both be empty"
     exit 1
 fi
 
