@@ -77,7 +77,7 @@
 
 - name: "-> {{ _next_version }}: reboot after OS upgrade"
   ansible.builtin.reboot:
-    reboot_timeout: 1800
+    reboot_timeout: 3600
     msg: "Rebooting after do-release-upgrade to {{ _next_version }}"
 
 - name: "-> {{ _next_version }}: gather facts post-reboot"
@@ -92,16 +92,21 @@
       {{ ansible_facts['distribution_version'] }}.
       do-release-upgrade output: {{ _upgrade_result.stdout | default('') }}
 
-# ── Re-provision for new OS ────────────────────────────────────────────────
+# ── Re-provision for new OS (final hop only) ──────────────────────────────
 # Run setup-tdx-host via the same roles used by setup.yml so the host lands
 # in an identical state to a freshly provisioned machine: Intel DCAP repo,
 # attestation packages, correct kernel selected, TDX verified in dmesg.
 # PCCS config and chutes_dirs survive the OS upgrade and are not re-run here.
+#
+# Skipped on intermediate hops (e.g. 25.04 -> 25.10 when target is 26.04) to
+# avoid provisioning a version that will immediately be upgraded again.
 
 - name: "-> {{ _next_version }}: install host script dependencies for new OS"
   ansible.builtin.include_role:
     name: host_prerequisites
+  when: _next_version == _upgrade_hops | last
 
 - name: "-> {{ _next_version }}: run setup-tdx-host for new OS profile"
   ansible.builtin.include_role:
     name: tdx_bootstrap
+  when: _next_version == _upgrade_hops | last

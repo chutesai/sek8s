@@ -5,4 +5,9 @@
 # must shut it down manually first to avoid score impact.
 #
 # Override in inventory host_vars/group_vars or with -e auto_drain_vm=true.
-auto_drain_vm: false
+auto_drain_vm: true
+
+# Set to true (default) to automatically relaunch the VM and poll node-health
+# after all upgrade hops complete. Set to false to leave the host upgraded but
+# the VM stopped (e.g. for maintenance or manual inspection).
+relaunch_vm: true

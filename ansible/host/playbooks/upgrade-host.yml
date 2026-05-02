@@ -112,3 +112,16 @@
       loop_control:
         loop_var: _next_version
         label: "{{ ansible_facts['distribution_version'] }} -> {{ _next_version }}"
+
+    # ── Relaunch VM ─────────────────────────────────────────────────────────
+    # Render config, start the VM, and poll node-health so this host exits
+    # maintenance and the next host in the serial run can begin immediately.
+    # Requires chutes_miner_ss58, chutes_miner_seed (for config.yaml) and
+    # chutes_hotkey_path (for node-health) in inventory / Vault.
+    # Set relaunch_vm=false to leave the VM stopped after upgrading.
+
+    - name: Relaunch VM and verify node health
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: launch_and_verify.yml
+      when: relaunch_vm | bool
