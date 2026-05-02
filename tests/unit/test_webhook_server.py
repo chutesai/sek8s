@@ -387,6 +387,98 @@ def test_mutate_non_chutes_namespace_no_patch(client):
     assert data["response"].get("patch") is None
 
 
+def test_mutate_pod_update_skips_sa_token_patch(client):
+    """Pod UPDATE must not mutate automountServiceAccountToken (immutable field)."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-pod-update-1",
+            "operation": "UPDATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Pod"},
+            "object": {
+                "spec": {"containers": [{"name": "app", "image": "busybox"}]}
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["response"]["allowed"] is True
+    assert data["response"].get("patch") is None
+
+
+def test_mutate_pod_update_still_applies_image_pin(client, webhook_server):
+    """Pod UPDATE still applies image digest pinning (image is a mutable field)."""
+    import time
+
+    from sek8s.validators.cosign import _TagVerification
+
+    webhook_server.controller._cosign_validator._tag_cache[
+        "docker.io/parachutes/foo:latest"
+    ] = _TagVerification(
+        digest="sha256:aaa111",
+        verified_at=time.monotonic(),
+        ttl=3600.0,
+    )
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-pod-update-2",
+            "operation": "UPDATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Pod"},
+            "object": {
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "docker.io/parachutes/foo:latest"}
+                    ]
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    patches = _decode_mutate_patch(resp.json())
+    image_patches = [p for p in patches if p["path"].endswith("/image")]
+    sa_patches = [p for p in patches if "automountServiceAccountToken" in p["path"]]
+    assert len(image_patches) == 1, "image digest pin should still apply on UPDATE"
+    assert len(sa_patches) == 0, "SA token patch must NOT apply on Pod UPDATE"
+
+
+def test_mutate_job_update_still_patches(client):
+    """Job UPDATE may still mutate template spec (template is mutable)."""
+    review = {
+        "apiVersion": "admission.k8s.io/v1",
+        "kind": "AdmissionReview",
+        "request": {
+            "uid": "sa-job-update-1",
+            "operation": "UPDATE",
+            "namespace": "chutes",
+            "kind": {"kind": "Job"},
+            "object": {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{"name": "app", "image": "busybox"}],
+                        }
+                    }
+                }
+            },
+        },
+    }
+    resp = client.post("/mutate", json=review)
+    assert resp.status_code == 200
+    patches = _decode_mutate_patch(resp.json())
+    assert any(
+        p["path"] == "/spec/template/spec/automountServiceAccountToken"
+        and p["value"] is False
+        for p in patches
+    )
+
+
 def test_mutate_invalid_json(client):
     """SEK8S-047: Invalid JSON on /mutate returns 400 (not allowed=true)."""
     resp = client.post(
