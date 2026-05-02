@@ -119,8 +119,8 @@ ensuring only you can access the data.
 
 Must be run as root (already the case in this VM).
 
-The storage volume is identified automatically at boot and is always accessible as
-`/dev/chutes-storage`. The standard mount point is `/data`.
+The storage volume is identified automatically — you do not need to know the raw
+device name. The standard mount point is `/data`.
 
 ### First-time setup
 
@@ -128,22 +128,25 @@ The storage volume is identified automatically at boot and is always accessible 
 luks-setup setup
 ```
 
-You will be asked to confirm (all data on the device will be wiped), then prompted
-to enter and confirm a passphrase. Choose a strong passphrase and keep it safe — it
-will be required on every reboot.
+You will be asked to confirm the wipe, then shown a generated 128-character hex
+passphrase. **Save this passphrase immediately** — it is not stored anywhere on
+the system and is required every time you unlock the volume after a reboot. Store
+it in a password manager before confirming.
 
 The command will:
-1. Wipe `/dev/chutes-storage`
-2. Create a LUKS2 container with the passphrase you set
-3. Format the encrypted volume as XFS
-4. Mount it at `/data` for this session
+1. Generate a cryptographically secure passphrase and display it
+2. Auto-detect and unmount the storage device
+3. Create a LUKS2 container using the generated passphrase
+4. Format the encrypted volume as XFS
+5. Mount it at `/data` for this session
 
 Output summary:
 
 ```
+Auto-detected storage device: /dev/vdb
 Setup complete.
 
-  Device:       /dev/chutes-storage
+  Device:       /dev/vdb
   UUID:         a1b2c3d4-e5f6-...
   LUKS label:   storage
   Mapper name:  storage  (/dev/mapper/storage)
@@ -171,19 +174,19 @@ Expected output:
   cipher:  aes-xts-plain64
   keysize: 512 bits
   key location: keyring
-  device:  /dev/chutes-storage
+  device:  /dev/vdb
   ...
 ```
 
 Check the mount:
 
 ```bash
-lsblk /dev/chutes-storage
+lsblk
 ```
 
 ```
 NAME      MAJ:MIN RM   SIZE RO TYPE  MOUNTPOINTS
-vdc       252:32   0  2000G  0 disk
+vdb       252:32   0  2000G  0 disk
 └─storage 253:0    0  2000G  0 crypt /data
 ```
 

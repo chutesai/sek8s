@@ -1,35 +1,40 @@
 #!/bin/bash
 # benchmark-storage-setup.sh - Identify and prepare the storage block device for benchmark VMs.
 #
-# In benchmark mode the virtio device order is:
-#   vda = boot disk    (qcow2 image)
-#   vdb = config volume  (labeled tdx-config, mounted at /var/config)
-#   vdc = storage volume  (labeled 'storage' when new, LUKS header after encryption)
+# The storage volume is expected to carry the 'storage' filesystem label (set by
+# create-cache.sh on the host). After luks-setup encrypts the volume the LUKS
+# header also receives that label, so /dev/disk/by-label/storage continues to
+# resolve to the correct raw device across reboots.
 #
 # This script:
-#   1. Locates the storage device (first virtio disk that is not boot and not the config volume)
-#   2. Creates /dev/chutes-storage as a stable symlink to the identified device
-#   3. Creates /data as the standard mount point
-#   4. If the device has a plain filesystem, mounts it at /data automatically
-#   5. If the device is LUKS encrypted, logs that luks-setup open is needed
-#   6. If the device is unformatted, logs that luks-setup setup is needed
+#   1. Locates the storage device by label, falling back to positional detection
+#   2. Creates /data as the standard mount point
+#   3. If the device has a plain filesystem, mounts it at /data automatically
+#   4. If the device is LUKS encrypted, logs that luks-setup open is needed
+#   5. If the device is unformatted, logs that luks-setup setup is needed
 
 set -euo pipefail
 
 LOG_TAG="benchmark-storage"
 MOUNT_POINT="/data"
-SYMLINK="/dev/chutes-storage"
+STORAGE_LABEL="storage"
 
 log() { echo "$1"; logger -t "$LOG_TAG" "$1" 2>/dev/null || true; }
 
 find_storage_device() {
-    # The config volume carries the 'tdx-config' label; skip it.
+    # Primary: locate by filesystem / LUKS header label.
+    local by_label="/dev/disk/by-label/${STORAGE_LABEL}"
+    if [[ -L "$by_label" ]]; then
+        readlink -f "$by_label"
+        return 0
+    fi
+
+    # Fallback: first virtio disk that is not the boot disk and not the config volume.
     local config_dev
     config_dev=$(blkid -l -o device -t LABEL=tdx-config 2>/dev/null || true)
 
     for dev in /dev/vdb /dev/vdc /dev/vdd /dev/vde; do
         [[ -b "$dev" ]] || continue
-        [[ "$dev" == "/dev/vda" ]] && continue
         if [[ -n "$config_dev" ]]; then
             [[ "$(readlink -f "$dev")" == "$(readlink -f "$config_dev")" ]] && continue
         fi
@@ -40,14 +45,10 @@ find_storage_device() {
 }
 
 DEVICE=$(find_storage_device) || {
-    log "ERROR: Could not find storage block device"
+    log "ERROR: Could not find storage block device (label '${STORAGE_LABEL}' not found)"
     exit 1
 }
 log "Storage device identified: $DEVICE"
-
-# Create stable symlink so tools and documentation can reference a fixed path
-ln -sf "$DEVICE" "$SYMLINK"
-log "Symlink: $SYMLINK -> $DEVICE"
 
 # Ensure the standard mount point exists
 mkdir -p "$MOUNT_POINT"
