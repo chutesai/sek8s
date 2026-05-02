@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from chutes.host.profiles import (
     HOST_PROFILES,
-    APTRepo,
     PPA,
     HostProfile,
     Ubuntu2510Profile,
