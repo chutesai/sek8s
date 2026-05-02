@@ -11,6 +11,30 @@
 #   upgrade_drain_timeout_seconds  — seconds to wait for pod drain
 #   upgrade_powerdown_timeout_seconds — seconds to wait for guest power-down
 
+# Check VM liveness first so all subsequent steps can skip cleanly on re-run
+# when the guest was already shut down by a previous (partial) run.
+- name: Check whether a live QEMU guest is running
+  ansible.builtin.script:
+    executable: /bin/bash
+    cmd: is_live_chutes_td.sh
+  register: _vm_live_check
+  failed_when: false
+  changed_when: false
+
+- name: Check current maintenance status
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - maintenance-status
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --raw-json
+  delegate_to: localhost
+  become: false
+  register: _maintenance_status
+  changed_when: false
+
 - name: Enter maintenance mode (validator API)
   ansible.builtin.command:
     argv:
@@ -24,9 +48,20 @@
       - "{{ chutes_hotkey_path }}"
       - --validator-api
       - "{{ chutes_validator_api }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
       - --raw-json
   delegate_to: localhost
   become: false
+  vars:
+    _status: "{{ _maintenance_status.stdout | from_json }}"
+  when: >-
+    not ((_status.servers | selectattr('name', 'equalto', chutes_tee_server_name)
+          | map(attribute='in_maintenance') | first | default(false)) | bool)
+
+# The following steps are only needed when the guest is still running.
+# If the VM is already down (rc != 0) we skip drain and shutdown — the
+# guest was stopped in a prior run and there is nothing left to drain.
 
 - name: Sync kubeconfig from miner API
   ansible.builtin.command:
@@ -41,6 +76,7 @@
       - "{{ chutes_miner_api }}"
   delegate_to: localhost
   become: false
+  when: _vm_live_check.rc == 0
 
 - name: Wait for validator to drain all chute pods (maintenance mode auto-purge)
   ansible.builtin.command:
@@ -63,8 +99,10 @@
   until: _pods_remaining.stdout | trim == ''
   retries: "{{ (upgrade_drain_timeout_seconds | int) // 10 }}"
   delay: 10
+  when: _vm_live_check.rc == 0
 
 - name: Shutdown guest via chutes-miner and wait for power off
   ansible.builtin.include_role:
     name: chutes_tee_vm
     tasks_from: shutdown_via_miner.yml
+  when: _vm_live_check.rc == 0
