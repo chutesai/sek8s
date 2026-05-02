@@ -135,7 +135,8 @@ The generated `config.yaml` matches the shape of [`config.tmpl.yaml`](../../host
 
 | Ubuntu | Status | TDX kernel |
 |---|---|---|
-| **25.10** | current target | native `linux-image-generic` |
-| 25.04 | **EOL Jan 2026** — migrate to 25.10 | kobuk-team PPA `linux-image-intel` |
+| **26.04** | current target | native `linux-image-generic` |
+| 25.10 | **EOL July 2026** — migrate to 26.04 | kobuk-team PPA `linux-image-intel` |
+| 25.04 | **EOL Jan 2026** — migrate to 26.04 | kobuk-team PPA `linux-image-intel` |
 
 See [docs/specs/ansible-playbooks.md](../../docs/specs/ansible-playbooks.md) for the full contract.

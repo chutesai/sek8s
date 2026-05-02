@@ -28,18 +28,18 @@ cluster_cidr: 10.42.0.0/16
 service_cidr: 10.43.0.0/16
 
 # K3s Configuration
-k3s_version: v1.33.7+k3s1
+k3s_version: v1.35.4+k3s1
 
 # Ubuntu major/minor version.
 ubuntu_major: "24"
 ubuntu_minor: "04"
 # CUDA version - leave as-is unless using h200s, in which case either use 12-5 or skip_cuda: true (if provider already pre-installed drivers)
-cuda_version: "13-0"
+cuda_version: "13-2"
 # NVIDIA driver branch
 nvidia_version: "595"
 # Package version pin — 595 uses unversioned package names from the CUDA repo only;
 # all driver/lib packages are pinned to this single version string.
-nvidia_pkg_version: "595.58.03-1ubuntu1"
+nvidia_pkg_version: "595.71.05-1ubuntu1"
 # 595 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
 # linux-headers and dkms are installed automatically by the gpu role.
 # Flag to skip the cuda install entirely, if the provider already has cuda 12.x+ installed (note some chutes will not work unless 12.6+)

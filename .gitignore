@@ -15,6 +15,7 @@ tests/integration/test-data
 host-tools/scripts/config.yaml
 measure
 **/*.qcow2
+**/*.raw
 
 # GPU admin tools - ignore source files and build artifacts, keep wheel and config files
 host-tools/scripts/gpu-tools/*
