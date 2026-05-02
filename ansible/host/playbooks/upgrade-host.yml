@@ -28,11 +28,6 @@
   gather_facts: true
   become: true
   vars:
-    # Set to true to automatically put the server into maintenance, drain all
-    # chute pods, and shut down the VM before upgrading. When false (default),
-    # the playbook fails if a TEE guest is detected running so the operator
-    # must shut it down manually first to avoid score impact.
-    auto_drain_vm: false
     chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
 
   roles:
