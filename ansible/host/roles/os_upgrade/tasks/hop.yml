@@ -65,6 +65,12 @@
     create: true
     mode: '0644'
 
+# Run detached from the SSH session. The SSH daemon is restarted mid-upgrade
+# when openssh-server is upgraded; if Ansible holds a synchronous connection
+# the pty drop can cause dpkg post-install scripts (including GRUB config) to
+# fail silently and leave packages half-configured. async detaches cleanly
+# before the SSH restart occurs.
+# async: 7200 = 2h ceiling; poll: 30 = reconnect every 30s to check status.
 - name: "-> {{ _next_version }}: run do-release-upgrade"
   ansible.builtin.command:
     argv:
@@ -74,6 +80,8 @@
   register: _upgrade_result
   changed_when: true
   failed_when: _upgrade_result.rc not in [0, 1]
+  async: 7200
+  poll: 30
 
 - name: "-> {{ _next_version }}: reboot after OS upgrade"
   ansible.builtin.reboot:
