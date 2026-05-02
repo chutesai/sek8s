@@ -48,6 +48,9 @@
 
 ### Fixed
 - `process-config.py`: `apply_docker_hub_and_registries` now returns early with success when the `admission` group is absent and no Docker Hub credentials are present, instead of hard-failing. This prevented `config-manager.service` from starting in benchmark VMs (which have no admission controller).
+- `attest verify`: GPU attestation now passes `options={"ppcie_mode": False}` to `get_evidence()`, matching how `chutes_nvevidence.NvClient.gather_evidence()` works — fixes evidence collection on H200s in Protected PCIe mode.
+- `attest verify`: TDX verification replaced `trustauthority-cli` with `dcap_qvl.get_collateral_and_verify()` — no API key or config file required, same library used in production validator. `dcap-qvl` is now installed in the nvevidence venv.
+- `docs/benchmark-guide.md`: corrected GPU verification command (`nvidia-smi conf-compute -q`, not `-s`), updated description for PPCIe mode, removed references to `trustauthority-cli` and Intel API key config.
 
 ### Removed
 -

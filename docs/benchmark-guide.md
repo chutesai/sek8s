@@ -24,15 +24,28 @@ Confirm the GPU is visible and the driver is loaded:
 nvidia-smi
 ```
 
-Check that Confidential Computing (CC) mode is active — this is required for
-hardware attestation:
+Check the confidential compute configuration — the H200 runs in Protected PCIe
+(PPCIe) mode, which is required for hardware attestation:
 
 ```bash
-nvidia-smi conf-compute -s
+nvidia-smi conf-compute -q
 ```
 
-Expected output includes `CC status: ON`. If CC mode is not active, GPU attestation
-will fail.
+Expected output:
+
+```
+==============NVSMI CONF-COMPUTE LOG==============
+
+    CC State                   : OFF
+    Multi-GPU Mode             : Protected PCIe
+    CPU CC Capabilities        : INTEL TDX
+    GPU CC Capabilities        : CC Capable
+    CC GPUs Ready State        : Ready
+```
+
+The key fields are `Multi-GPU Mode: Protected PCIe`, `CPU CC Capabilities: INTEL TDX`,
+and `CC GPUs Ready State: Ready`. If the GPU is not in PPCIe mode or not ready,
+attestation will fail.
 
 ## Attestation
 
@@ -73,37 +86,17 @@ attest dump --json
 Performs three checks in sequence:
 
 1. **TDX measurement dump** — same as `attest dump`
-2. **GPU attestation** — sends GPU evidence to NVIDIA's Remote Attestation Service
-   (NRAS) and receives a signed JWT. The token is signed with NVIDIA's ES384 private
-   key and can be independently verified against NVIDIA's public certificates.
-3. **TDX remote verification** — verifies the TDX quote against Intel Tiber Trust
-   Services (requires a config file — see below).
+2. **GPU attestation** — collects GPU evidence and sends it to NVIDIA's Remote
+   Attestation Service (NRAS), which returns a JWT signed with NVIDIA's ES384
+   private key. The token can be independently verified against NVIDIA's public
+   certificates. Evidence collection uses `ppcie_mode: False` so it works
+   correctly on H200s in Protected PCIe mode.
+3. **TDX quote verification** — verifies the TDX quote signature using Intel's DCAP
+   collateral via `dcap_qvl`. No API key or config file required.
 
 ```bash
 attest verify
 ```
-
-#### Intel TDX remote verification
-
-To enable TDX remote verification, provide a config file for Intel's Tiber Trust
-Services. The format is defined by Intel's `trustauthority-cli`:
-
-```json
-{
-  "trustauthority_url": "https://portal.trustauthority.intel.com",
-  "trustauthority_api_url": "https://api.trustauthority.intel.com",
-  "trustauthority_api_key": "<YOUR_INTEL_API_KEY>"
-}
-```
-
-Save the file and pass it to `attest verify`:
-
-```bash
-attest verify --tdx-config /path/to/tdx-attest-config.json
-```
-
-If the config file is absent, TDX remote verification is skipped and a clear message
-is printed. GPU attestation and measurement dump still run.
 
 #### JSON output
 

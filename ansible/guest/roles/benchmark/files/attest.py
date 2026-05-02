@@ -4,7 +4,7 @@ attest — TDX + GPU attestation verification.
 
 Commands:
   dump    Parse and display TDX measurements (offline, no internet required).
-  verify  Full remote attestation: GPU via NVIDIA + TDX via Intel Tiber Trust Services.
+  verify  Full attestation: TDX quote (Intel DCAP) + GPU (NVIDIA NRAS).
 
 TDX quote v4 binary layout (Intel DCAP format):
   Header (48 bytes):
@@ -31,14 +31,9 @@ TDX quote v4 binary layout (Intel DCAP format):
     [520:568] rtmr3            (48 bytes) — runtime measurement register 3
     [568:632] report_data      (64 bytes) — user-supplied nonce/data
 
-For TDX remote verification, create /etc/tdx-attest-config.json:
-  {
-    "trustauthority_url": "https://portal.trustauthority.intel.com",
-    "trustauthority_api_url": "https://api.trustauthority.intel.com",
-    "trustauthority_api_key": "<your-api-key>"
-  }
 """
 
+import asyncio
 import json
 import secrets
 import struct
@@ -49,6 +44,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from dcap_qvl import get_collateral_and_verify
 from nv_attestation_sdk import attestation as att
 
 app = typer.Typer(
@@ -58,8 +54,6 @@ app = typer.Typer(
 )
 
 _QUOTE_GENERATOR = "/usr/bin/tdx-quote-generator"
-_TRUSTAUTHORITY_CLI = "/usr/bin/trustauthority-cli"
-_DEFAULT_TDX_CONFIG = "/etc/tdx-attest-config.json"
 
 # Absolute byte offsets within the quote binary (header = 48 bytes)
 _FIELDS = [
@@ -184,20 +178,14 @@ def dump(
 @app.command()
 def verify(
     name: str = typer.Option("benchmark-vm", help="Node name for GPU attestation"),
-    tdx_config: Path = typer.Option(
-        _DEFAULT_TDX_CONFIG,
-        help="Intel Tiber Trust Services config JSON for TDX remote verification",
-    ),
     json_out: bool = typer.Option(False, "--json", help="Emit results as JSON"),
 ) -> None:
     """
-    Full remote attestation: GPU (NVIDIA) + TDX (Intel Tiber Trust Services).
+    Full attestation: TDX quote (Intel DCAP) + GPU (NVIDIA NRAS).
 
-    GPU verification runs locally against NVIDIA's root certificates (no GPU
-    evidence is sent to any external service). TDX remote verification requires
-    /etc/tdx-attest-config.json
-    with an Intel Tiber Trust Services API key — if absent the step is skipped
-    (measurement dump and GPU verification still run).
+    TDX verification uses dcap_qvl to verify the quote signature and collateral
+    against Intel's infrastructure — no API key required. GPU verification sends
+    evidence to NVIDIA's Remote Attestation Service and returns an ES384-signed JWT.
     """
     results: dict = {}
     all_passed = True
@@ -211,8 +199,20 @@ def verify(
         if not json_out:
             _print_table(parsed)
     except Exception as exc:
-        typer.echo(f"Warning: could not generate TDX quote: {exc}", err=True)
-        results["measurements"] = None
+        typer.echo(f"Error: could not generate TDX quote: {exc}", err=True)
+        raise typer.Exit(1)
+
+    # --- TDX quote signature verification via Intel DCAP ---
+    typer.echo("Verifying TDX quote signature (Intel DCAP)...")
+    tdx = _verify_tdx(data)
+    results["tdx"] = tdx
+    if not json_out:
+        status = "PASS" if tdx.get("passed") else "FAIL"
+        typer.echo(f"TDX verification: {status}")
+        if tdx.get("error"):
+            typer.echo(f"  {tdx['error']}", err=True)
+    if not tdx.get("passed"):
+        all_passed = False
 
     # --- GPU attestation (NVIDIA NRAS, ES384-signed JWT) ---
     typer.echo("Verifying GPU attestation (NVIDIA Remote Attestation Service)...")
@@ -226,28 +226,6 @@ def verify(
     if not gpu.get("passed"):
         all_passed = False
 
-    # --- TDX remote verification via Intel ---
-    tdx_config_path = Path(str(tdx_config))
-    if not tdx_config_path.exists():
-        msg = (
-            f"Skipping TDX remote verification: {tdx_config} not found.\n"
-            "Create it with your Intel Tiber Trust Services API key to enable TDX verification.\n"
-            "Measurement dump above is still valid for manual comparison."
-        )
-        typer.echo(msg, err=True)
-        results["tdx_remote"] = {"skipped": True, "reason": f"{tdx_config} not found"}
-    else:
-        typer.echo("Verifying TDX quote (Intel Tiber Trust Services)...")
-        tdx = _verify_tdx(str(tdx_config_path))
-        results["tdx_remote"] = tdx
-        if not json_out:
-            status = "PASS" if tdx.get("passed") else "FAIL"
-            typer.echo(f"TDX remote verification: {status}")
-            if tdx.get("error"):
-                typer.echo(f"  {tdx['error']}", err=True)
-        if not tdx.get("passed"):
-            all_passed = False
-
     if json_out:
         typer.echo(json.dumps(results, indent=2))
 
@@ -258,60 +236,33 @@ def verify(
 def _verify_gpu(name: str) -> dict:
     """Verify GPU attestation via NVIDIA's Remote Attestation Service (NRAS).
 
-    Environment.REMOTE sends GPU evidence to NRAS, which returns a JWT signed
-    with NVIDIA's ES384 private key. This token can be independently verified
-    against NVIDIA's public certificates, making it suitable for third-party
-    inspection. No API key is required.
+    Mirrors chutes_nvevidence.NvClient.gather_evidence(): passes
+    options={"ppcie_mode": False} to get_evidence() so evidence collection
+    works correctly on PPCIe systems (H200 in Protected PCIe mode).
     """
-    nonce = secrets.token_hex(32)  # 64 hex chars = 32 bytes
+    nonce = secrets.token_hex(32)
     try:
         client = att.Attestation()
         client.set_name(name)
         client.set_nonce(nonce)
         client.set_claims_version("3.0")
         client.add_verifier(att.Devices.GPU, att.Environment.REMOTE, "", "")
-        evidence = client.get_evidence()
+        evidence = client.get_evidence(options={"ppcie_mode": False})
         passed = client.attest(evidence)
         return {"passed": bool(passed)}
     except Exception as exc:
         return {"passed": False, "error": str(exc)}
 
 
-def _verify_tdx(config_path: str) -> dict:
-    """Verify TDX quote via Intel trustauthority-cli."""
-    cli = _TRUSTAUTHORITY_CLI
-    if not Path(cli).exists():
-        # Try alternate install location
-        alt = "/usr/local/bin/trustauthority-cli"
-        if Path(alt).exists():
-            cli = alt
-        else:
-            return {
-                "passed": False,
-                "error": (
-                    f"trustauthority-cli not found at {_TRUSTAUTHORITY_CLI} or {alt}. "
-                    "Install from the Intel SGX repo."
-                ),
-            }
+def _verify_tdx(quote_bytes: bytes) -> dict:
+    """Verify TDX quote signature via Intel DCAP (dcap_qvl).
+
+    Fetches PCK collateral from Intel and verifies the quote cryptographically.
+    No API key required — equivalent to verify_quote_signature() in chutes-api.
+    """
     try:
-        result = subprocess.run(
-            [cli, "token", "--config", config_path],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            return {
-                "passed": False,
-                "error": f"trustauthority-cli failed (exit {result.returncode}): {result.stderr.strip()}",
-            }
-        token = result.stdout.strip()
-        return {
-            "passed": bool(token),
-            "token_preview": (token[:40] + "...") if len(token) > 40 else token,
-        }
-    except subprocess.TimeoutExpired:
-        return {"passed": False, "error": "trustauthority-cli timed out after 60s"}
+        report = asyncio.run(get_collateral_and_verify(quote_bytes))
+        return {"passed": True, "report": str(report)}
     except Exception as exc:
         return {"passed": False, "error": str(exc)}
 

@@ -244,6 +244,12 @@
     state: present
     extra_args: "-e"
 
+- name: Install dcap-qvl for TDX quote verification
+  ansible.builtin.pip:
+    name: dcap-qvl
+    virtualenv: /opt/chutes-nvevidence/venv
+    state: present
+
 - name: Clean up nvevidence temporary build directory
   ansible.builtin.file:
     path: "{{ build_dir.path }}"
