@@ -2,7 +2,7 @@
 # Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
 # Controller: chutes-miner, kubectl. chutes-miner --name defaults to inventory_hostname; set tee_server_name to override.
 #
-#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade.yml
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
 
 - name: Upgrade TDX guest base image
   hosts: td_hosts

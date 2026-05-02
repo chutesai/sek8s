@@ -60,7 +60,7 @@ Primary references:
    - Interactive **`pccs-configure`** has no useful non-interactive flags on target Ubuntu; automation **templates** `/opt/intel/sgx-dcap-pccs/config/default.json`, generates TLS key/cert under `pccs_ssl_dir`, restarts **`pccs`**, runs **`PCKIDRetrievalTool`** with the Vault password. **Intel `ApiKey` is stored plaintext in that JSON on the host** (PCCS requirement); protect with Vault on the controller and filesystem permissions on metal. On failure, operator follows [host-tools/README.md](../../host-tools/README.md) Step 2 manually. **`setup.yml`** always includes **`pccs_configure`**: if **`pccs_api_key`** and **`pccs_password`** are **both** set, the role runs; if **neither** is set, the role prints why it skipped and exits the role; **only one** set fails the play with an inventory remediation message.
 
 6. **Launch vs upgrade (checksum drift)**  
-   - **Launch:** `quick-launch.sh --download` **only** when the default base image path is **missing**. If the file **exists** and verification fails → **fail** and direct to **`upgrade.yml`** (no auto-download overwrite).  
+   - **Launch:** `quick-launch.sh --download` **only** when the default base image path is **missing**. If the file **exists** and verification fails → **fail** and direct to **`upgrade-guest.yml`** (no auto-download overwrite).  
    - **Upgrade:** Stage with **`aria2c`** to **`tdx-guest-staged.qcow2`**, verify SHA256 matches **`EXPECTED_BASE_SHA256`** from synced `quick-launch.sh`, then after shutdown **rename** current `tdx-guest.qcow2` → `tdx-guest-<YYYY-MM-DD>.qcow2`, **rename** staged → `tdx-guest.qcow2`, **relaunch** with default path (no `--base-image` override).
 
 7. **Host content on metal**  
@@ -76,7 +76,7 @@ Primary references:
     - All three playbooks intended **safe to re-run**; **`quick-launch.sh`** refuses a second live **`chutes-td`** QEMU unless **`--force`**.
 
 11. **Per-host `config.yaml`**  
-    - **`launch.yml`** and **`upgrade.yml`** install **`config.yaml`** by templating on the host (**`chutes_vm_config`**): miner credentials from Ansible vars, **`vm.hostname`** from inventory (with override), **`network.public_interface`** from the default route (with override), and **`vm_ip` / `bridge_ip`** on a **`/24`** that does not overlap existing host IPv4 assignments (deterministic scan with manual CIDR escape hatch).
+    - **`launch.yml`** and **`upgrade-guest.yml`** install **`config.yaml`** by templating on the host (**`chutes_vm_config`**): miner credentials from Ansible vars, **`vm.hostname`** from inventory (with override), **`network.public_interface`** from the default route (with override), and **`vm_ip` / `bridge_ip`** on a **`/24`** that does not overlap existing host IPv4 assignments (deterministic scan with manual CIDR escape hatch).
 
 ---
 
@@ -104,9 +104,9 @@ Operators **provision**, **launch**, and **upgrade** TDX hosts from one inventor
 
 ### 2b. Shutdown (`shutdown.yml`)
 
-- **`chutes-miner tee shutdown`** from **`delegate_to: localhost`**, then poll **`/tmp/tdx-guest-td.log`** for **`Power down`** on the metal host (shared **`chutes_tee_vm`** role tasks used by **`upgrade.yml`**).
+- **`chutes-miner tee shutdown`** from **`delegate_to: localhost`**, then poll **`/tmp/tdx-guest-td.log`** for **`Power down`** on the metal host (shared **`chutes_tee_vm`** role tasks used by **`upgrade-guest.yml`**).
 
-### 3. Guest upgrade (`upgrade.yml`)
+### 3. Guest upgrade (`upgrade-guest.yml`)
 
 - Requires **`chutes_hotkey_path`**. **`chutes-miner --name`** defaults to the **inventory hostname**; set **`tee_server_name`** only when that differs from the registered TEE server name. Before relaunch, **`chutes_vm_config`** re-renders **`config.yaml`** with the same variable contract as **`launch.yml`**.  
 - Rsync, stage + verify, **`start-maintenance`**, **`sync-kubeconfig`**, **`kubectl delete`** chute pods, **`tee shutdown`**, wait **`Power down`** in **`/tmp/tdx-guest-td.log`**, **rename** cutover, **`quick-launch.sh`**, **`tee node-health`** poll.
@@ -130,7 +130,7 @@ ansible/host/
   README.md
   ansible.cfg
   requirements.yml
-  playbooks/setup.yml | launch.yml | shutdown.yml | upgrade.yml
+  playbooks/setup.yml | launch.yml | shutdown.yml | upgrade-guest.yml | upgrade-host.yml
   inventory/hosts.yml
   group_vars/all.yml
   roles/chutes_vm_config/…
@@ -141,7 +141,7 @@ ansible/host/
 
 On checksum / verification failure, **`launch.yml`** fails with instructions to run:
 
-`ansible-playbook -i … ansible/host/playbooks/upgrade.yml`
+`ansible-playbook -i … ansible/host/playbooks/upgrade-guest.yml`
 
 or fix/remove the qcow2 manually.
 
