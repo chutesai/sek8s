@@ -1,0 +1,64 @@
+---
+# Pre-upgrade tasks for hosts currently on Ubuntu 25.04 (Plucky).
+# Removes kobuk-team PPA sources and attestation packages installed by the
+# old Ubuntu2504Profile (both tdx-release and tdx-attestation-release PPAs).
+# All removals are idempotent — missing files and uninstalled packages are
+# handled gracefully.
+
+- name: "Pre 25.04: stop tdx-qgs service if running"
+  ansible.builtin.service:
+    name: tdx-qgs
+    state: stopped
+  failed_when: false
+
+- name: "Pre 25.04: stop sgx-dcap-pccs service if running"
+  ansible.builtin.service:
+    name: sgx-dcap-pccs
+    state: stopped
+  failed_when: false
+
+- name: "Pre 25.04: remove kobuk PPA source files"
+  ansible.builtin.file:
+    path: "{{ _apt_source }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-plucky.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-noble.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-oracular.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-plucky.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-noble.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-oracular.sources
+    - /etc/apt/sources.list.d/kobuk-kobuk-team-tdx-attestation-release.sources
+    - /etc/apt/sources.list.d/kobuk-kobuk-team-tdx-release.sources
+  loop_control:
+    loop_var: _apt_source
+
+- name: "Pre 25.04: find kobuk pin and unattended-upgrades files"
+  ansible.builtin.find:
+    paths:
+      - /etc/apt/preferences.d
+      - /etc/apt/apt.conf.d
+    patterns:
+      - "*kobuk*"
+  register: _kobuk_files
+
+- name: "Pre 25.04: delete kobuk pin and unattended-upgrades files"
+  ansible.builtin.file:
+    path: "{{ _kobuk_file.path }}"
+    state: absent
+  loop: "{{ _kobuk_files.files }}"
+  loop_control:
+    loop_var: _kobuk_file
+    label: "{{ _kobuk_file.path }}"
+
+- name: "Pre 25.04: purge kobuk-sourced attestation packages"
+  ansible.builtin.apt:
+    name:
+      - tdx-qgs
+      - sgx-dcap-pccs
+      - libsgx-dcap-default-qpl
+      - sgx-ra-service
+      - sgx-pck-id-retrieval-tool
+    state: absent
+    purge: true
+  failed_when: false

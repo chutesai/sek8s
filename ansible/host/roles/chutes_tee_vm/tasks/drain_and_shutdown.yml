@@ -1,0 +1,70 @@
+---
+# Full maintenance-drain-shutdown sequence for playbooks that need to take a
+# running TEE guest offline before making host-level changes.
+#
+# Expects (from caller scope or vars):
+#   chutes_tee_server_name   — TEE server name registered with chutes-miner
+#   chutes_hotkey_path       — controller path to Bittensor hotkey JSON
+#   chutes_kubeconfig_path   — controller kubeconfig path (written by sync-kubeconfig)
+#   chutes_miner_api         — miner API URL (default http://127.0.0.1:32000)
+#   chutes_validator_api     — validator API URL
+#   upgrade_drain_timeout_seconds  — seconds to wait for pod drain
+#   upgrade_powerdown_timeout_seconds — seconds to wait for guest power-down
+
+- name: Enter maintenance mode (validator API)
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - start-maintenance
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --yes
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --validator-api
+      - "{{ chutes_validator_api }}"
+      - --raw-json
+  delegate_to: localhost
+  become: false
+
+- name: Sync kubeconfig from miner API
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - sync-kubeconfig
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --path
+      - "{{ chutes_kubeconfig_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
+
+- name: Wait for validator to drain all chute pods (maintenance mode auto-purge)
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ chutes_kubeconfig_path }}"
+      - --context
+      - "{{ chutes_tee_server_name }}"
+      - get
+      - pods
+      - -n
+      - chutes
+      - -l
+      - "chutes/chute=true"
+      - --no-headers
+  delegate_to: localhost
+  become: false
+  register: _pods_remaining
+  until: _pods_remaining.stdout | trim == ''
+  retries: "{{ (upgrade_drain_timeout_seconds | int) // 10 }}"
+  delay: 10
+
+- name: Shutdown guest via chutes-miner and wait for power off
+  ansible.builtin.include_role:
+    name: chutes_tee_vm
+    tasks_from: shutdown_via_miner.yml

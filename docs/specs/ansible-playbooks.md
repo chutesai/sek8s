@@ -23,7 +23,7 @@ Primary references:
 **Dependencies**
 
 - **Operator machine:** Ansible, `chutes-miner`, `kubectl` (upgrade only), `rsync`
-- **Bare metal:** Ubuntu 25.04 / 25.10 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `setup-tdx-host`)
+- **Bare metal:** Ubuntu 25.10 or 26.04 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `setup-tdx-host`)
 
 ### External tooling contract (v1)
 
