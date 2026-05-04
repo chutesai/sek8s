@@ -12,3 +12,7 @@ build_vm_vcpus: 4
 build_vm_mac: "52:54:00:60:a6:0a"
 build_vm_ip: "192.168.122.176"
 base_img_resize: "100G"
+# Preferred apt mirror. Used by virt-customize during base image prep and as the
+# fallback in the guest when no apt-cacher-ng proxy is available.
+# Override per-host in inventory to match the closest regional mirror.
+apt_mirror: "au.archive.ubuntu.com/ubuntu"

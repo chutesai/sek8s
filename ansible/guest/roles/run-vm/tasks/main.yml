@@ -90,8 +90,10 @@
     - name: Install kernel and boot packages offline
       ansible.builtin.command: >
         virt-customize -a "{{ base_img_path }}"
+        --run-command 'echo "Acquire::http::Mirror \"http://{{ apt_mirror }}\";" > /etc/apt/apt.conf.d/99mirror'
         --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
         --run-command 'systemctl mask grub-initrd-fallback.service'
+        --run-command 'rm -f /etc/apt/apt.conf.d/99mirror'
       changed_when: true
 
     - name: Ensure build env image directory exists
