@@ -9,10 +9,17 @@ import data.helpers
 # =============================================================================
 # CHUTES NAMESPACE: NO ROOT / NO SUDO
 # =============================================================================
-# Pod-spec rules (root, runAsUser, runAsNonRoot, command) apply only on CREATE/UPDATE.
-# DELETE must not be denied based on the existing object's spec.
+# Pod-spec rules (root, runAsUser, runAsNonRoot, command) apply on CREATE for all
+# resources, and on UPDATE for higher-level resources whose template spec is mutable.
+# Pod specs are immutable after creation so UPDATE validation is redundant and would
+# block operations (e.g. finalizer removal) on pre-existing pods.
 chutes_apply_pod_spec_rules if {
-	input.request.operation in ["CREATE", "UPDATE"]
+	input.request.operation == "CREATE"
+}
+
+chutes_apply_pod_spec_rules if {
+	input.request.operation == "UPDATE"
+	input.request.kind.kind != "Pod"
 }
 
 # In chutes namespace no pod/container may run as root (UID 0). There is exactly
