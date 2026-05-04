@@ -161,15 +161,14 @@ See role-specific defaults for component configuration.
 ├── host-tools/           # TDX host setup and VM deployment
 │   ├── scripts/          # GPU binding, network setup, VM launch
 │   └── docs/             # Cache volume and deployment guides
-├── guest-tools/          # VM testing and validation tools
-└── tdx/                  # TDX host kernel and firmware setup (submodule)
+└── guest-tools/          # VM testing and validation tools
 ```
 
 ## Components Built by This Automation
 
 This Ansible playbook builds the VM image only. The following are handled by host-tools:
 
-- ❌ TDX-enabled host system setup → See `tdx/setup-tdx-host/`
+- ❌ TDX-enabled host system setup → See `host-tools/scripts/chutes/host/`
 - ❌ GPU passthrough configuration → Handled automatically by `run-td`
 - ❌ Network infrastructure → See `host-tools/scripts/network/setup-bridge.sh`
 - ❌ Config/cache/storage volume creation → See `host-tools/scripts/volumes/create-*.sh`

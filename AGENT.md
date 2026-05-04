@@ -65,7 +65,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **ansible/guest/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **ansible/host/** | Operational Ansible (setup / launch / upgrade) for bare-metal TDX hosts over SSH |
 | **opa/** | OPA policy files for admission controller |
-| **tdx/** | Git submodule: Intel TDX guest image creation (Canonical). Host setup is handled by `host-tools/scripts/setup-tdx-host` |
+| **guest-tools/** | Boot measurement extraction tools (`extract-acpi.sh`, `extract-vm-measurements.sh`) |
 
 ## Environment Setup
 

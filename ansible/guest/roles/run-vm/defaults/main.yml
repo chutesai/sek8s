@@ -1,4 +1,3 @@
-tdx_repo: "{{ repo_root }}/tdx"
 charts_dir: "{{ repo_root }}/charts"
 logfile: "{{ repo_root }}/tdx-image-build.log"
 vnc_port: "5901"

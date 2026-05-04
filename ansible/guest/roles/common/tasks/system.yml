@@ -136,6 +136,10 @@
           - snapd
           - iputils-ping
           - systemd-timesyncd
+          - linux-image-generic
+          - shim-signed
+          - grub-efi-amd64-signed
+          - grub-efi-amd64-bin
         update_cache: true
 
     - name: Set vim as default editor

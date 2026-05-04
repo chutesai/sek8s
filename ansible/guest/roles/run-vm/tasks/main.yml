@@ -43,8 +43,35 @@
 - name: Check if base image exists
   ansible.builtin.stat:
     path: "{{ base_img_path }}"
-  register: base_image
-  failed_when: not base_image.stat.exists
+  register: base_image_stat
+
+- name: Prepare base image (download + resize)
+  when: not base_image_stat.stat.exists or no_cache == 'true'
+  block:
+    - name: Remove stale base image
+      ansible.builtin.file:
+        path: "{{ base_img_path }}"
+        state: absent
+      when: no_cache == 'true'
+
+    - name: Download Ubuntu cloud image
+      ansible.builtin.get_url:
+        url: "https://cloud-images.ubuntu.com/releases/{{ ubuntu_version }}/release/ubuntu-{{ ubuntu_version }}-server-cloudimg-amd64.img"
+        dest: "{{ base_img_path }}"
+        checksum: "sha256:https://cloud-images.ubuntu.com/releases/{{ ubuntu_version }}/release/SHA256SUMS"
+        mode: '0644'
+
+    - name: Resize cloud image
+      ansible.builtin.command: qemu-img resize "{{ base_img_path }}" +100G
+      changed_when: true
+
+    - name: Expand rootfs partition
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}" --no-network
+        --run-command 'growpart /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0 1'
+        --run-command 'resize2fs /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0-part1'
+        --run-command 'systemctl mask pollinate.service'
+      changed_when: true
 
 - name: Check if build image exists
   ansible.builtin.stat:

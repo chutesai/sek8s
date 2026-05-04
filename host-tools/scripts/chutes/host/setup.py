@@ -181,8 +181,8 @@ def _get_kernel_version(kernel_package: str) -> str:
 def _grub_set_kernel(kernel_version: str):
     """Set the given kernel as the default boot entry via grub-editenv.
 
-    Same logic as tdx/setup-tdx-common grub_switch_kernel() (awk + cut on
-    /boot/grub/grub.cfg). Newer Ubuntu sometimes omits the Advanced options
+    Uses awk + cut on /boot/grub/grub.cfg to locate the kernel entry and
+    saves it via grub-editenv. Newer Ubuntu sometimes omits the Advanced options
     submenu (flat kernel list); then MID is empty and saved_entry is just KID.
     """
     print(f"  Setting default kernel: {kernel_version}")
