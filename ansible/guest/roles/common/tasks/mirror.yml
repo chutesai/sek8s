@@ -1,0 +1,73 @@
+---
+- name: Check if host apt-cacher-ng is available
+  ansible.builtin.uri:
+    url: "http://{{ libvirt_bridge_ip | default('192.168.122.1') }}:3142"
+    timeout: 3
+    status_code: [200, 406]
+  register: apt_cache_check
+  failed_when: false
+  changed_when: false
+
+- name: Configure apt to use host cache
+  ansible.builtin.copy:
+    content: |
+      Acquire::http::Proxy "http://{{ libvirt_bridge_ip | default('192.168.122.1') }}:3142";
+    dest: /etc/apt/apt.conf.d/01proxy
+    mode: '0644'
+  when: apt_cache_check.status is defined and apt_cache_check.status in [200, 406]
+
+- name: Log apt cache usage
+  ansible.builtin.debug:
+    msg: "{{ 'Using host apt-cacher-ng at ' + (libvirt_bridge_ip | default('192.168.122.1')) + ':3142' if apt_cache_check.status is defined and apt_cache_check.status in [200, 406] else 'No host apt cache found — benchmarking public mirrors' }}"
+
+- name: Benchmark Ubuntu mirrors and select fastest
+  ansible.builtin.shell: |
+    best_mirror="archive.ubuntu.com"
+    best_speed=0
+    release="{{ ansible_distribution_release }}"
+    for mirror in \
+        au.archive.ubuntu.com \
+        nz.archive.ubuntu.com \
+        us.archive.ubuntu.com \
+        de.archive.ubuntu.com \
+        gb.archive.ubuntu.com \
+        archive.ubuntu.com; do
+      speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
+        -w "%{speed_download}" \
+        "http://${mirror}/ubuntu/dists/${release}/Release" 2>/dev/null \
+        | awk '{print int($1)}')
+      speed=${speed:-0}
+      if [ "$speed" -gt "$best_speed" ]; then
+        best_speed="$speed"
+        best_mirror="$mirror"
+      fi
+    done
+    echo "${best_mirror}"
+  register: fastest_mirror
+  changed_when: false
+  when: apt_cache_check.status is not defined or apt_cache_check.status not in [200, 406]
+
+- name: Log selected public mirror
+  ansible.builtin.debug:
+    msg: "Fastest public mirror: {{ fastest_mirror.stdout | trim }}"
+  when: fastest_mirror is not skipped
+
+- name: Update apt sources to use fastest public mirror
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+    regexp: 'http://archive\.ubuntu\.com/ubuntu'
+    replace: "http://{{ fastest_mirror.stdout | trim }}/ubuntu"
+  when:
+    - fastest_mirror is not skipped
+    - fastest_mirror.stdout | trim != 'archive.ubuntu.com'
+  failed_when: false
+
+- name: Update legacy sources.list if present
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list
+    regexp: 'http://archive\.ubuntu\.com/ubuntu'
+    replace: "http://{{ fastest_mirror.stdout | trim }}/ubuntu"
+  when:
+    - fastest_mirror is not skipped
+    - fastest_mirror.stdout | trim != 'archive.ubuntu.com'
+  failed_when: false

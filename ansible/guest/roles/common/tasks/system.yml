@@ -53,6 +53,9 @@
       changed_when: true
       failed_when: false
 
+- name: Select fastest apt mirror
+  ansible.builtin.include_tasks: mirror.yml
+
 - name: Setup system packages
   block:
     - name: Clean and update apt cache

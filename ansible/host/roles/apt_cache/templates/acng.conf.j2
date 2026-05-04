@@ -1,0 +1,22 @@
+CacheDir: /var/cache/apt-cacher-ng
+LogDir: /var/log/apt-cacher-ng
+Port: {{ apt_cache_port }}
+{% if apt_cache_bind_address %}
+BindAddress: {{ apt_cache_bind_address }}
+{% endif %}
+Remap-debrep: file:deb_mirror*.gz /debian ; file:backends_debian
+Remap-uburep: file:ubuntu_mirrors /ubuntu ; file:backends_ubuntu
+Remap-ubusec: file:ubuntu_security_mirrors /ubuntu-security ; file:backends_ubuntu_security
+Remap-cygwin: file:cygwin_mirrors /cygwin # ; file:backends_cygwin
+Remap-sfnet:  file:sfnet_mirrors
+Remap-alxrep: file:archlx_mirrors /archlinux
+Remap-fedora: file:fedora_mirrors
+Remap-epel:   file:epel_mirrors
+Remap-slrep:  file:sl_mirrors
+Remap-gentoo: file:gentoo_mirrors.gz /gentoo ; file:backends_gentoo
+ReportPage: acng-report.html
+ExThreshold: 4
+{% if apt_cache_max_size > 0 %}
+CacheSize: {{ apt_cache_max_size }}
+{% endif %}
+PassThroughPattern: {{ apt_cache_passthrough_pattern }}

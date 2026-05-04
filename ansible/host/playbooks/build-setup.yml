@@ -1,0 +1,18 @@
+---
+# One-time setup for a host used to build guest VM images.
+# Run this after setup.yml when provisioning a new build host.
+#
+# Usage (from repo root or ansible/host):
+#   ansible-playbook -i inventory/hosts.yml playbooks/build-setup.yml
+#
+# What this does:
+#   - Installs and configures apt-cacher-ng so guest VM builds pull packages
+#     from the host cache instead of the internet. Reduces common package
+#     install from ~30 min to <2 min on subsequent NO_CACHE builds.
+
+- name: Build host setup
+  hosts: td_hosts
+  gather_facts: true
+  become: true
+  roles:
+    - role: apt_cache
