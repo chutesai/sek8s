@@ -1,0 +1,60 @@
+---
+# Pre-upgrade tasks for hosts currently on Ubuntu 25.10 (Questing).
+# Handles hosts that were provisioned with the old Ubuntu2510Profile which used
+# the kobuk-team tdx-attestation-release PPA (suite: oracular) for attestation.
+# Hosts provisioned after that profile was migrated to Intel DCAP will not have
+# any of these files — all removals are graceful.
+
+- name: "Pre 25.10: stop tdx-qgs service if running"
+  ansible.builtin.service:
+    name: tdx-qgs
+    state: stopped
+  failed_when: false
+
+- name: "Pre 25.10: stop sgx-dcap-pccs service if running"
+  ansible.builtin.service:
+    name: sgx-dcap-pccs
+    state: stopped
+  failed_when: false
+
+- name: "Pre 25.10: remove kobuk attestation PPA source files"
+  ansible.builtin.file:
+    path: "{{ _apt_source }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-oracular.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-noble.sources
+    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-plucky.sources
+    - /etc/apt/sources.list.d/kobuk-kobuk-team-tdx-attestation-release.sources
+  loop_control:
+    loop_var: _apt_source
+
+- name: "Pre 25.10: find kobuk pin and unattended-upgrades files"
+  ansible.builtin.find:
+    paths:
+      - /etc/apt/preferences.d
+      - /etc/apt/apt.conf.d
+    patterns:
+      - "*kobuk*"
+  register: _kobuk_files
+
+- name: "Pre 25.10: delete kobuk pin and unattended-upgrades files"
+  ansible.builtin.file:
+    path: "{{ _kobuk_file.path }}"
+    state: absent
+  loop: "{{ _kobuk_files.files }}"
+  loop_control:
+    loop_var: _kobuk_file
+    label: "{{ _kobuk_file.path }}"
+
+- name: "Pre 25.10: purge kobuk-sourced attestation packages"
+  ansible.builtin.apt:
+    name:
+      - tdx-qgs
+      - sgx-dcap-pccs
+      - libsgx-dcap-default-qpl
+      - sgx-ra-service
+      - sgx-pck-id-retrieval-tool
+    state: absent
+    purge: true
+  failed_when: false

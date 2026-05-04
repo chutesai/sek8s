@@ -11,7 +11,6 @@ from chutes.host.profiles import (
     HOST_PROFILES,
     PPA,
     HostProfile,
-    Ubuntu2504Profile,
     Ubuntu2510Profile,
     Ubuntu2604Profile,
     resolve_profile,
@@ -114,47 +113,24 @@ def test_describe_contains_version_and_codename(version):
 
 
 # ---------------------------------------------------------------------------
-# Ubuntu 25.04 specifics
-# ---------------------------------------------------------------------------
-
-
-def test_2504_needs_tdx_release_ppa():
-    """25.04 doesn't have native TDX, so it needs the tdx-release PPA."""
-    profile = Ubuntu2504Profile()
-    ppa_names = {ppa.name for ppa in profile.ppas}
-    assert "tdx-release" in ppa_names
-
-
-def test_2504_uses_intel_kernel():
-    profile = Ubuntu2504Profile()
-    assert profile.kernel_package == "linux-image-intel"
-
-
-# ---------------------------------------------------------------------------
 # Ubuntu 25.10 specifics
 # ---------------------------------------------------------------------------
 
 
-def test_2510_does_not_need_tdx_release_ppa():
-    """25.10 has native TDX kernel -- no tdx-release PPA needed."""
+def test_2510_has_no_ppas():
+    """25.10 uses Intel DCAP repo for attestation -- no PPAs needed."""
     profile = Ubuntu2510Profile()
-    ppa_names = {ppa.name for ppa in profile.ppas}
-    assert "tdx-release" not in ppa_names
+    assert profile.ppas == []
 
 
-def test_2510_attestation_ppa_pinned_to_oracular():
-    """25.10 attestation PPA must use oracular suite (no questing packages)."""
+def test_2510_has_intel_sgx_repo():
+    """25.10 uses Intel's official SGX/DCAP repository (noble suite)."""
     profile = Ubuntu2510Profile()
-    attestation_ppas = [p for p in profile.ppas if "attestation" in p.name]
-    assert len(attestation_ppas) == 1
-    assert attestation_ppas[0].suite == "oracular"
-
-
-def test_2504_ppas_use_native_suite():
-    """25.04 PPAs should not override suite (packages published for plucky)."""
-    profile = Ubuntu2504Profile()
-    for ppa in profile.ppas:
-        assert ppa.suite is None
+    assert len(profile.repos) >= 1
+    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
+    assert len(intel_repos) == 1
+    assert intel_repos[0].suite == "noble"
+    assert "download.01.org" in intel_repos[0].uri
 
 
 def test_2510_uses_generic_kernel():
@@ -170,7 +146,7 @@ def test_2510_enables_kvm_intel_tdx():
 
 @pytest.mark.parametrize(
     "profile_cls",
-    [Ubuntu2504Profile, Ubuntu2510Profile, Ubuntu2604Profile],
+    [Ubuntu2510Profile, Ubuntu2604Profile],
 )
 def test_host_profiles_do_not_include_libvirt(profile_cls):
     """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
@@ -179,10 +155,28 @@ def test_host_profiles_do_not_include_libvirt(profile_cls):
     assert "libvirt-clients" not in profile.packages
 
 
-def test_2504_does_not_set_kvm_intel_tdx():
-    """25.04 gets TDX via PPA kernel -- no kvm_intel param needed."""
-    profile = Ubuntu2504Profile()
-    assert "kvm_intel.tdx=1" not in profile.grub_cmdline_additions
+# ---------------------------------------------------------------------------
+# Every profile: Intel DCAP repo required
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+def test_every_profile_has_intel_sgx_repo(version):
+    """All supported profiles must source attestation from Intel's DCAP repo."""
+    profile = HOST_PROFILES[version]
+    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
+    assert len(intel_repos) == 1, f"{version} missing intel-sgx repo"
+    assert "download.01.org" in intel_repos[0].uri
+    assert intel_repos[0].components == "main"
+    assert intel_repos[0].signing_key_url.endswith("intel-sgx-deb.key")
+
+
+@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+def test_every_profile_has_no_kobuk_ppas(version):
+    """No profile should reference kobuk-team PPAs (unreliable, superseded by Intel DCAP)."""
+    profile = HOST_PROFILES[version]
+    kobuk_ppas = [p for p in profile.ppas if "kobuk" in p.team]
+    assert kobuk_ppas == [], f"{version} still has kobuk PPAs: {kobuk_ppas}"
 
 
 # ---------------------------------------------------------------------------

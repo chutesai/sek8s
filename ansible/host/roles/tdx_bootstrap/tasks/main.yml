@@ -34,7 +34,7 @@
 
 - name: Reboot host and wait
   ansible.builtin.reboot:
-    reboot_timeout: 900
+    reboot_timeout: 1800
   when: tdx_reboot_needed | bool
 
 - name: Re-check dmesg for TDX after reboot

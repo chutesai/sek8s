@@ -1,0 +1,64 @@
+---
+# Render config, start the VM via quick-launch.sh, and wait for node-health.
+# Used by upgrade-guest.yml and upgrade-host.yml after the guest has been shut down.
+#
+# Expects (from caller scope or vars):
+#   chutes_tee_server_name        — TEE server name registered with chutes-miner
+#   chutes_hotkey_path            — controller path to Bittensor hotkey JSON
+#   chutes_miner_api              — miner API URL
+#   chutes_config_remote_path     — path to config.yaml on the remote host
+#   sek8s_remote_host_tools       — path to host-tools checkout on the remote host
+#   upgrade_health_poll_seconds   — seconds to poll node-health before giving up
+
+- name: Render config.yaml on host before launch
+  ansible.builtin.include_role:
+    name: chutes_vm_config
+
+- name: Check if base image exists
+  ansible.builtin.stat:
+    path: "{{ upgrade_default_base_image }}"
+  register: _base_img_stat
+
+- name: Download base image when missing
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ./quick-launch.sh --download 2>&1 | tee /tmp/chutes-download.log
+    exit ${PIPESTATUS[0]}
+  args:
+    chdir: "{{ sek8s_remote_host_tools }}/scripts"
+    executable: /bin/bash
+  when: not _base_img_stat.stat.exists
+  changed_when: true
+
+- name: Launch VM via quick-launch.sh
+  ansible.builtin.command:
+    chdir: "{{ sek8s_remote_host_tools }}/scripts"
+    argv:
+      - ./quick-launch.sh
+      - "{{ chutes_config_remote_path }}"
+  register: _qlaunch
+  changed_when: true
+
+- name: Fail with quick-launch diagnostics
+  ansible.builtin.fail:
+    msg: "quick-launch.sh failed (rc={{ _qlaunch.rc }}). stderr={{ _qlaunch.stderr | default('') }}"
+  when: _qlaunch.rc != 0
+
+- name: Poll node health until VM is registered and healthy
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - node-health
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
+  register: _health_poll
+  until: _health_poll.rc == 0
+  retries: "{{ [((upgrade_health_poll_seconds | int) // 5), 1] | max }}"
+  delay: 5

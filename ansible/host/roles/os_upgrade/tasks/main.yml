@@ -1,0 +1,10 @@
+---
+# This role is always included with tasks_from=… (see hop.yml).
+# hop.yml     — common upgrade skeleton; loop over it from upgrade-host.yml
+# pre_<ver>.yml — version-specific pre-upgrade hooks (e.g. pre_2510.yml)
+- name: Mis-invoked os_upgrade role
+  ansible.builtin.fail:
+    msg: >-
+      Include this role with ansible.builtin.include_role and tasks_from: hop.yml.
+      Per-version pre-upgrade hooks (pre_2504.yml, pre_2510.yml, …) are included
+      automatically by hop.yml and should not be called directly.

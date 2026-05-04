@@ -5,7 +5,7 @@ Operational playbooks run from your workstation against inventory over SSH. Gues
 ## Prerequisites (controller)
 
 - Ansible 2.17+ recommended
-- `chutes-miner` and `kubectl` on the controller for `upgrade.yml`
+- `chutes-miner` and `kubectl` on the controller for `upgrade-guest.yml` and `upgrade-host.yml` (when `auto_drain_vm=true`)
 
 ## Quick start
 
@@ -57,7 +57,7 @@ The inventory hostname is used as both `vm.hostname` in `config.yaml` and `chute
 
 ---
 
-### `upgrade.yml` — stage new image, drain, cutover, relaunch
+### `upgrade-guest.yml` — stage new image, drain, cutover, relaunch
 
 Requires everything in `launch.yml` plus:
 
@@ -76,6 +76,55 @@ Upgrade timeouts (all in `group_vars/all.yml`, override as needed):
 | `upgrade_drain_timeout` | `600s` |
 | `upgrade_powerdown_timeout_seconds` | `300` |
 | `upgrade_health_poll_seconds` | `60` |
+
+---
+
+### `upgrade-host.yml` — upgrade the host OS (do-release-upgrade)
+
+Advances the host OS by one or more versions following the `os_upgrade_path` defined in `group_vars/all.yml`. After the upgrade, re-run `setup.yml` to apply the matching host profile.
+
+```bash
+# Single hop (e.g. 25.10 -> 26.04):
+ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml
+
+# Multi-hop to a target version (e.g. 25.04 -> 25.10 -> 26.04 in one run):
+ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml \
+  -e target_version=26.04
+
+# Auto-drain running VM before upgrading (requires miner credentials):
+ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml \
+  -e auto_drain_vm=true
+```
+
+| Variable | Scope | Default | Notes |
+|---|---|---|---|
+| `auto_drain_vm` | `-e` | `false` | When `true`, enters maintenance mode, drains pods, and shuts down the VM before upgrading. When `false`, fails if a VM is detected running. |
+| `target_version` | `-e` | unset | Target Ubuntu version (e.g. `26.04`). When unset, performs a single hop. |
+| `chutes_hotkey_path` | group / Vault | — | Required when `auto_drain_vm=true` |
+| `chutes_kubeconfig_path` | group | — | Required when `auto_drain_vm=true` |
+| `chutes_miner_api` | group | `http://127.0.0.1:32000` | Required when `auto_drain_vm=true` |
+
+The upgrade path is defined in `group_vars/all.yml`:
+
+```yaml
+os_upgrade_path:
+  "25.10": "26.04"
+  "25.04": "25.10"  # 25.04 EOL; no setup.yml profile, but hop still works
+```
+
+To add future upgrade hops (e.g. `26.04 -> 26.10`), add an entry to `os_upgrade_path`.
+
+After each hop the playbook automatically runs `host_prerequisites` and `tdx_bootstrap` (the same roles `setup.yml` uses), leaving the host fully re-provisioned with the correct kernel, Intel DCAP attestation repo, and TDX verified. No manual `setup.yml` re-run is needed. PCCS config and volume directories survive the OS upgrade unchanged.
+
+**Idempotency and failure recovery:**
+
+The playbook is safe to re-run after most failures:
+
+| Failure point | Re-run behaviour |
+|---|---|
+| Pre-hook or `dist-upgrade` | Hop retries from the start; all cleanup steps are idempotent |
+| `do-release-upgrade` fails or is interrupted | Re-run retries `do-release-upgrade`; it is designed to resume partial upgrades |
+| Reboot timeout or `tdx_bootstrap` fails after a successful OS upgrade | The host is already on the new OS version; re-running `upgrade-host.yml` will compute the **next** hop rather than re-provisioning the current one. Run `setup.yml` directly to complete provisioning without triggering another OS upgrade. |
 
 ---
 
@@ -133,10 +182,47 @@ The generated `config.yaml` matches the shape of [`config.tmpl.yaml`](../../host
 
 ## OS support
 
-| Ubuntu | Status | TDX kernel |
+| Ubuntu | Status | TDX kernel | Attestation |
+|---|---|---|---|
+| **26.04** | current target | native `linux-image-generic` | Intel DCAP repo (`resolute` suite) |
+| 25.10 | supported — EOL July 2026; upgrade to 26.04 with `upgrade-host.yml` | native `linux-image-generic` | Intel DCAP repo (`noble` suite) |
+| 25.04 | **EOL Jan 2026 — no profile.** Use `upgrade-host.yml` to advance to 25.10. | — | — |
+
+---
+
+## How the playbooks and roles fit together
+
+```
+upgrade-host.yml                   upgrade-guest.yml
+     │                                    │
+     │  include_role: os_upgrade/hop      │  include_role: chutes_tee_vm/drain_and_shutdown
+     │  (loop over _upgrade_hops)         │
+     │       │                            │
+     │       ├─ pre-upgrade hook          └─ include_role: chutes_tee_vm/shutdown_via_miner
+     │       │  (roles/os_upgrade/tasks/pre_<ver>.yml — skipped if absent)
+     │       └─ do-release-upgrade + reboot + assert
+     │
+     └─ include_role: chutes_tee_vm/assert_not_running  (when auto_drain_vm=false)
+        include_role: chutes_tee_vm/drain_and_shutdown  (when auto_drain_vm=true)
+```
+
+### Shared roles
+
+| Role | Task file | Used by |
 |---|---|---|
-| **26.04** | current target | native `linux-image-generic` |
-| 25.10 | **EOL July 2026** — migrate to 26.04 | kobuk-team PPA `linux-image-intel` |
-| 25.04 | **EOL Jan 2026** — migrate to 26.04 | kobuk-team PPA `linux-image-intel` |
+| `chutes_tee_vm` | `assert_not_running.yml` | `launch.yml`, `upgrade-host.yml` |
+| `chutes_tee_vm` | `drain_and_shutdown.yml` | `upgrade-guest.yml`, `upgrade-host.yml` |
+| `chutes_tee_vm` | `shutdown_via_miner.yml` | `shutdown.yml`, `drain_and_shutdown.yml` |
+| `os_upgrade` | `hop.yml` | `upgrade-host.yml` (looped per hop) |
+
+### Adding a new OS upgrade hop
+
+1. Add an entry to `os_upgrade_path` in `group_vars/all.yml`:
+   ```yaml
+   os_upgrade_path:
+     "26.04": "26.10"   # new
+   ```
+2. Optionally add `roles/os_upgrade/tasks/pre_2604.yml` with any migration tasks to run before `do-release-upgrade` on that version (e.g. removing stale repos). Omit the file if no pre-upgrade work is needed.
+3. Add a host profile in `host-tools/scripts/chutes/host/profiles.py` for the new target version so `setup-tdx-host` (called automatically by the hop) can configure it correctly.
 
 See [docs/specs/ansible-playbooks.md](../../docs/specs/ansible-playbooks.md) for the full contract.

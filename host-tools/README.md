@@ -7,7 +7,7 @@ This guide walks you through setting up a baremetal host to launch TDX-enabled V
 ## Prerequisites
 
 - **Hardware**: Intel TDX-capable CPU and NVIDIA GPUs. **8× H200: NVSwitch required** (validated stack). **RTX Pro 6000** has no NVSwitch. See [Validated host topologies](#validated-host-topologies).
-- **OS**: Host profiles exist for Ubuntu **25.04**, **25.10**, and **26.04**; **lab-validated** topologies are narrower (see below).
+- **OS**: Host profiles exist for Ubuntu **25.10** and **26.04**. Ubuntu 25.04 is EOL (Jan 2026) and no longer has a supported profile — use `upgrade-host.yml` to advance to 25.10 first. See [Validated host topologies](#validated-host-topologies).
 
 ### Validated host topologies
 
@@ -15,9 +15,9 @@ This guide walks you through setting up a baremetal host to launch TDX-enabled V
 
 | Ubuntu | GPU SKU      | GPU count | Status    | Notes |
 |--------|--------------|-----------|-----------|-------|
-| 25.04  | H200         | 8         | Validated | NVSwitch required. Legacy (Kobuk PPA). |
-| 25.10  | RTX Pro 6000 | 8         | Validated | No NVSwitch. Kobuk PPA (QEMU 9.2.1 tdx 2.0). |
-| 26.04  | —            | —         | Planned   | Native QEMU 10.2.1; not yet lab-validated. |
+| 26.04  | H200         | 8         | Validated | NVSwitch required. Native QEMU 10.2.1; Intel DCAP attestation. |
+| 25.10  | RTX Pro 6000 | 8         | Validated | No NVSwitch. Native TDX kernel; Intel DCAP attestation. |
+| 25.04  | —            | —         | EOL       | No profile. Run `upgrade-host.yml` to advance to 25.10. |
 
 Print the canonical matrix from the repo (no sudo):
 
@@ -77,18 +77,13 @@ cd host-tools/scripts
 
 ### Step 1: Install TDX Host Prerequisites
 
-The host setup script configures the kernel, QEMU, attestation services, and firmware for TDX support. It reads the **running** Ubuntu release from `lsb_release` and selects the matching profile (PPAs, kernel, packages, GRUB config). There is **no** CLI flag to force a different OS version—use the correct Ubuntu install for your hardware (e.g. 25.04 vs 25.10 vs 26.04) before running setup.
+The host setup script configures the kernel, QEMU, attestation services, and firmware for TDX support. It reads the **running** Ubuntu release from `lsb_release` and selects the matching profile (kernel package, Intel DCAP attestation repo, packages, GRUB config). There is **no** CLI flag to force a different OS version — if your host is on an unsupported release, upgrade it first with `ansible/host/playbooks/upgrade-host.yml` before running setup.
 
 **Supported OS versions (host profile):**
-- **Ubuntu 25.04** — legacy `tdx/setup-tdx-host.sh` (Kobuk PPA kernel, H200-class hosts). Transitioning away.
-- **Ubuntu 25.10** — production Python orchestrator (`setup-tdx-host`), Kobuk PPA kernel/QEMU 9.2.1 tdx 2.0.
-- **Ubuntu 26.04** — production Python orchestrator (`setup-tdx-host`), native kernel and QEMU 10.2.1, no Kobuk PPA.
+- **Ubuntu 25.10** — native TDX kernel (`linux-image-generic`), QEMU 9.2; Intel DCAP repo for attestation.
+- **Ubuntu 26.04** — native TDX kernel and QEMU 10.2; Intel DCAP repo for attestation.
 
-> **Legacy vs production paths**
-> - On **25.04**, use the legacy bash script in the repo root: `sudo ./tdx/setup-tdx-host.sh`.
-> - On **25.10/26.04**, use the Python orchestrator: `cd host-tools/scripts && sudo ./setup-tdx-host`.
->   - **25.10**: consumes profile with Kobuk PPA (QEMU 9.2.1 tdx 2.0).
->   - **26.04**: consumes profile with native QEMU 10.2.1 (no Kobuk PPA).
+> **Ubuntu 25.04 is EOL** (Jan 2026) and no longer has a host profile. Run `ansible/host/playbooks/upgrade-host.yml` to advance to 25.10 — it automatically re-provisions the host via `setup-tdx-host` after upgrading.
 
 ```bash
 # Clone the repository
@@ -106,9 +101,7 @@ sudo reboot
 **After reboot, verify TDX is available:**
 ```bash
 dmesg | grep -i tdx
-# Expected output includes one of:
-#   [    x.xxxxx] tdx: TDX module initialized        (older kobuk kernel)
-#   [    x.xxxxx] virt/tdx: module initialized        (newer kobuk / upstream kernel)
+# Expected: [    x.xxxxx] virt/tdx: module initialized
 ```
 
 ---

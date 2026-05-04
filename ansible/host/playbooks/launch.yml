@@ -3,6 +3,7 @@
 #
 # Required (host_vars / group_vars / Vault):
 #   chutes_miner_ss58, chutes_miner_seed — miner credentials for the guest config
+#   chutes_hotkey_path                   — controller path to Bittensor hotkey JSON (for node-health poll)
 #
 # Optional:
 #   chutes_config_remote_path — default {{ sek8s_remote_host_tools }}/scripts/config.yaml
@@ -11,7 +12,7 @@
 #   chutes_public_interface — override default-route NIC used for the guest bridge
 #   chutes_docker_hub_username / chutes_docker_hub_token — optional docker_hub block
 #
-# On checksum mismatch for an existing image, quick-launch fails; run upgrade.yml or fix the image manually.
+# On checksum mismatch for an existing image, quick-launch fails; run upgrade-guest.yml or fix the image manually.
 # If a chutes-td QEMU guest is already running, launch fails immediately; use playbooks/shutdown.yml first.
 
 - name: Launch TDX guest VM
@@ -22,6 +23,13 @@
     chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
 
   pre_tasks:
+    - name: Require chutes_hotkey_path
+      ansible.builtin.assert:
+        that:
+          - chutes_hotkey_path is defined
+          - chutes_hotkey_path | length > 0
+        fail_msg: "Set chutes_hotkey_path in inventory or Vault."
+
     - name: Refuse launch while a chutes-td guest is already running
       ansible.builtin.include_role:
         name: chutes_tee_vm
@@ -32,52 +40,7 @@
     - role: host_prerequisites
 
   tasks:
-    - name: Resolve default base image path on host
-      ansible.builtin.set_fact:
-        launch_base_image: "{{ upgrade_default_base_image }}"
-
-    - name: Check if base image exists
-      ansible.builtin.stat:
-        path: "{{ launch_base_image }}"
-      register: base_img_stat
-
-    - name: Download base image when missing
-      ansible.builtin.shell: |
-        set -euo pipefail
-        ./quick-launch.sh --download 2>&1 | tee /tmp/chutes-download.log
-        exit ${PIPESTATUS[0]}
-      args:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
-        executable: /bin/bash
-      when: not base_img_stat.stat.exists
-      register: qdl
-      changed_when: true
-
-    - name: Render config.yaml on host (hostname, miner, network)
+    - name: Launch VM (download image if missing, render config, run quick-launch)
       ansible.builtin.include_role:
-        name: chutes_vm_config
-
-    - name: Run quick-launch (checksum verify + start VM)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        ./quick-launch.sh "{{ chutes_config_remote_path }}" 2>&1 | tee /tmp/chutes-launch.log
-        exit ${PIPESTATUS[0]}
-      args:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
-        executable: /bin/bash
-      register: qlaunch
-      changed_when: qlaunch.rc == 0
-      failed_when: false
-
-    - name: Show quick-launch output
-      ansible.builtin.debug:
-        var: qlaunch.stdout_lines
-
-    - name: Hand off to upgrade playbook on launch failure (often checksum mismatch)
-      ansible.builtin.fail:
-        msg: >-
-          quick-launch.sh failed (rc={{ qlaunch.rc }}). If the base image exists but does not match
-          the expected SHA256 in quick-launch.sh, run the upgrade playbook:
-            ansible-playbook -i <inventory> ansible/host/playbooks/upgrade.yml
-          Or replace/remove the qcow2 manually per host-tools/README.md.
-      when: qlaunch.rc != 0
+        name: chutes_tee_vm
+        tasks_from: launch_and_verify.yml

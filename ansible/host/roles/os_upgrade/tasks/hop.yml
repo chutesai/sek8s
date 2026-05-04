@@ -1,0 +1,135 @@
+---
+# Common OS upgrade hop skeleton. Called by upgrade-host.yml for each entry in
+# _upgrade_hops with _next_version set by the loop.
+#
+# Version-specific hooks run before and after each hop. Hook files follow the
+# naming convention:
+#   roles/os_upgrade/tasks/pre_<major><minor>.yml   — before upgrading FROM that version
+#   roles/os_upgrade/tasks/post_<major><minor>.yml  — after upgrading FROM that version
+# Both are silently skipped when no file exists for the current version.
+
+- name: "-> {{ _next_version }}: check free disk space on /"
+  ansible.builtin.shell: |
+    df --output=avail -BG / | tail -1 | tr -d 'G '
+  register: _root_free_gb
+  changed_when: false
+
+- name: "-> {{ _next_version }}: fail when less than 5 GiB free on /"
+  ansible.builtin.fail:
+    msg: >-
+      Only {{ _root_free_gb.stdout | trim }} GiB free on /. At least 5 GiB required
+      for do-release-upgrade. Free up space and retry.
+  when: (_root_free_gb.stdout | default('999', true) | trim | int) < 5
+
+# Capture source version before the reboot so post_ hook can reference it.
+- name: "-> {{ _next_version }}: record source version"
+  ansible.builtin.set_fact:
+    _source_version: "{{ ansible_facts['distribution_version'] }}"
+
+# ── Version-specific pre-upgrade hook ──────────────────────────────────────
+# Runs before apt touches the package index so unreachable repos (e.g. kobuk
+# PPA under DDoS) are removed before dist-upgrade attempts to contact them.
+
+- name: "-> {{ _next_version }}: run pre-upgrade tasks for {{ _source_version }}"
+  ansible.builtin.include_tasks: "{{ item }}"
+  with_first_found:
+    - files:
+        - "pre_{{ _source_version | replace('.', '') }}.yml"
+      skip: true
+
+- name: "-> {{ _next_version }}: dist-upgrade all packages"
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: dist
+    autoremove: true
+
+- name: "-> {{ _next_version }}: check if reboot required after dist-upgrade"
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: _reboot_required
+
+- name: "-> {{ _next_version }}: reboot if dist-upgrade requires it"
+  ansible.builtin.reboot:
+    reboot_timeout: 1800
+    msg: "Rebooting after dist-upgrade before OS version upgrade"
+  when: _reboot_required.stat.exists
+
+# ── Run do-release-upgrade ─────────────────────────────────────────────────
+
+- name: "-> {{ _next_version }}: ensure update-manager-core is installed"
+  ansible.builtin.apt:
+    name: update-manager-core
+    state: present
+
+- name: "-> {{ _next_version }}: set Prompt=normal in release-upgrades config"
+  ansible.builtin.lineinfile:
+    path: /etc/update-manager/release-upgrades
+    regexp: '^Prompt='
+    line: 'Prompt=normal'
+    create: true
+    mode: '0644'
+
+# Run detached from the SSH session. The SSH daemon is restarted mid-upgrade
+# when openssh-server is upgraded; if Ansible holds a synchronous connection
+# the pty drop can cause dpkg post-install scripts (including GRUB config) to
+# fail silently and leave packages half-configured. async detaches cleanly
+# before the SSH restart occurs.
+# async: 7200 = 2h ceiling; poll: 30 = reconnect every 30s to check status.
+- name: "-> {{ _next_version }}: run do-release-upgrade"
+  ansible.builtin.command:
+    argv:
+      - do-release-upgrade
+      - -f
+      - DistUpgradeViewNonInteractive
+  register: _upgrade_result
+  changed_when: true
+  failed_when: _upgrade_result.rc not in [0, 1]
+  async: 7200
+  poll: 30
+
+- name: "-> {{ _next_version }}: reboot after OS upgrade"
+  ansible.builtin.reboot:
+    reboot_timeout: 3600
+    msg: "Rebooting after do-release-upgrade to {{ _next_version }}"
+
+- name: "-> {{ _next_version }}: gather facts post-reboot"
+  ansible.builtin.setup:
+
+- name: "-> {{ _next_version }}: assert version is now {{ _next_version }}"
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution_version'] == _next_version
+    fail_msg: >-
+      Expected Ubuntu {{ _next_version }} after upgrade but found
+      {{ ansible_facts['distribution_version'] }}.
+      do-release-upgrade output: {{ _upgrade_result.stdout | default('') }}
+
+# ── Version-specific post-upgrade hook ─────────────────────────────────────
+# Runs after the new OS is confirmed. Use for cleanup of transitional state
+# introduced by the corresponding pre_ hook.
+
+- name: "-> {{ _next_version }}: run post-upgrade tasks for {{ _source_version }}"
+  ansible.builtin.include_tasks: "{{ item }}"
+  with_first_found:
+    - files:
+        - "post_{{ _source_version | replace('.', '') }}.yml"
+      skip: true
+
+# ── Re-provision for new OS (final hop only) ──────────────────────────────
+# Run setup-tdx-host via the same roles used by setup.yml so the host lands
+# in an identical state to a freshly provisioned machine: Intel DCAP repo,
+# attestation packages, correct kernel selected, TDX verified in dmesg.
+# PCCS config and chutes_dirs survive the OS upgrade and are not re-run here.
+#
+# Skipped on intermediate hops (e.g. 25.04 -> 25.10 when target is 26.04) to
+# avoid provisioning a version that will immediately be upgraded again.
+
+- name: "-> {{ _next_version }}: install host script dependencies for new OS"
+  ansible.builtin.include_role:
+    name: host_prerequisites
+  when: _next_version == _upgrade_hops | last
+
+- name: "-> {{ _next_version }}: run setup-tdx-host for new OS profile"
+  ansible.builtin.include_role:
+    name: tdx_bootstrap
+  when: _next_version == _upgrade_hops | last

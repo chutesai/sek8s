@@ -1,0 +1,127 @@
+---
+# Upgrade the host OS using do-release-upgrade. Follows the configured upgrade
+# path in os_upgrade_path (group_vars/all.yml). Supports single-hop (default)
+# or multi-hop to a specific target_version.
+#
+# After each hop the host is automatically re-provisioned via host_prerequisites
+# and tdx_bootstrap (same as setup.yml), leaving it in a consistent state with
+# the correct kernel, Intel DCAP attestation repo, and TDX verified.
+#
+# Usage:
+#   # Single hop (e.g. 25.10 -> 26.04):
+#   ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml
+#
+#   # Multi-hop to a target version (e.g. 25.04 -> 25.10 -> 26.04 in one run):
+#   ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml \
+#     -e target_version=26.04
+#
+#   # Auto-drain a running VM before upgrading:
+#   ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml \
+#     -e auto_drain_vm=true
+#
+# Required when auto_drain_vm=true (inventory / Vault):
+#   chutes_hotkey_path, chutes_kubeconfig_path, chutes_miner_api
+
+- name: Upgrade host OS
+  hosts: td_hosts
+  serial: 1
+  gather_facts: true
+  become: true
+  vars:
+    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
+
+  roles:
+    - role: host_tools
+
+  tasks:
+    # ── Compute the hop sequence ────────────────────────────────────────────
+    # Walk os_upgrade_path from the current version to build an ordered list
+    # of target versions (e.g. ["25.10", "26.04"] for a 25.04 -> 26.04 run).
+    # When target_version is unset only a single hop is performed.
+
+    - name: Compute upgrade hop sequence
+      ansible.builtin.set_fact:
+        _upgrade_hops: >-
+          {%- set ns = namespace(cur=ansible_facts['distribution_version'], hops=[]) -%}
+          {%- for _ in range(os_upgrade_path | length) -%}
+            {%- if ns.cur in os_upgrade_path and (target_version is defined or ns.hops | length == 0) -%}
+              {%- if target_version is not defined or ns.cur != target_version -%}
+                {%- set ns.cur = os_upgrade_path[ns.cur] -%}
+                {%- set ns.hops = ns.hops + [ns.cur] -%}
+              {%- endif -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.hops }}
+
+    - name: Report planned upgrade hops
+      ansible.builtin.debug:
+        msg: >-
+          Planned: {{ ansible_facts['distribution_version'] }} ->
+          {{ _upgrade_hops | join(' -> ') if _upgrade_hops else '(none)' }}
+
+    - name: Skip host when already at target or no upgrade path found
+      ansible.builtin.meta: end_host
+      when: _upgrade_hops | length == 0
+
+    - name: Confirm upgrade
+      ansible.builtin.pause:
+        prompt: >-
+          About to upgrade {{ inventory_hostname }} from
+          {{ ansible_facts['distribution_version'] }} ->
+          {{ _upgrade_hops | join(' -> ') }}.
+          Type "yes" to continue (anything else aborts)
+      register: _upgrade_confirm
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Upgrade aborted by operator."
+      when: _upgrade_confirm.user_input | lower != 'yes'
+
+    # ── Guard: VM must not be running ──────────────────────────────────────
+    # When auto_drain_vm=false, reuse the same assert_not_running check that
+    # launch.yml uses — fails immediately with a remediation message.
+    # When auto_drain_vm=true, skip the assert and drain instead.
+
+    - name: Fail if VM is running and auto_drain_vm is false
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: assert_not_running.yml
+      when: not (auto_drain_vm | bool)
+
+    - name: Require chutes_hotkey_path when auto-draining
+      ansible.builtin.assert:
+        that:
+          - chutes_hotkey_path is defined
+          - chutes_hotkey_path | length > 0
+        fail_msg: "Set chutes_hotkey_path in inventory or Vault to use auto_drain_vm=true."
+      when: auto_drain_vm | bool
+
+    - name: Drain pods and shut down guest
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: drain_and_shutdown.yml
+      when: auto_drain_vm | bool
+
+    # ── Upgrade hops ────────────────────────────────────────────────────────
+
+    - name: Run OS upgrade hops
+      ansible.builtin.include_role:
+        name: os_upgrade
+        tasks_from: hop.yml
+      loop: "{{ _upgrade_hops }}"
+      loop_control:
+        loop_var: _next_version
+        label: "{{ ansible_facts['distribution_version'] }} -> {{ _next_version }}"
+
+    # ── Relaunch VM ─────────────────────────────────────────────────────────
+    # Render config, start the VM, and poll node-health so this host exits
+    # maintenance and the next host in the serial run can begin immediately.
+    # Requires chutes_miner_ss58, chutes_miner_seed (for config.yaml) and
+    # chutes_hotkey_path (for node-health) in inventory / Vault.
+    # Set relaunch_vm=false to leave the VM stopped after upgrading.
+
+    - name: Relaunch VM and verify node health
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: launch_and_verify.yml
+      when: relaunch_vm | bool

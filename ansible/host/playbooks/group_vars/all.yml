@@ -26,3 +26,13 @@ upgrade_drain_timeout: 600s
 upgrade_drain_timeout_seconds: 600
 upgrade_powerdown_timeout_seconds: 300
 upgrade_health_poll_seconds: 60
+
+# OS upgrade path for upgrade-host.yml.
+# Maps current Ubuntu version -> next supported version via do-release-upgrade.
+# do-release-upgrade only supports sequential releases (no skipping non-LTS).
+# To add a new hop, append an entry here.
+os_upgrade_path:
+  "25.10": "26.04"
+  # 25.04 is EOL. setup.yml no longer supports it, but upgrade-host.yml can
+  # still advance it to 25.10 so the miner can then run setup.yml.
+  "25.04": "25.10"
