@@ -2,10 +2,11 @@
 # Common OS upgrade hop skeleton. Called by upgrade-host.yml for each entry in
 # _upgrade_hops with _next_version set by the loop.
 #
-# Version-specific pre-upgrade tasks run first so stale/unreachable repos are
-# removed before apt touches the package index. Hook files follow the convention:
-#   roles/os_upgrade/tasks/pre_<major><minor>.yml  (e.g. pre_2510.yml)
-# Silently skipped when no file exists for the current version.
+# Version-specific hooks run before and after each hop. Hook files follow the
+# naming convention:
+#   roles/os_upgrade/tasks/pre_<major><minor>.yml   — before upgrading FROM that version
+#   roles/os_upgrade/tasks/post_<major><minor>.yml  — after upgrading FROM that version
+# Both are silently skipped when no file exists for the current version.
 
 - name: "-> {{ _next_version }}: check free disk space on /"
   ansible.builtin.shell: |
@@ -20,17 +21,20 @@
       for do-release-upgrade. Free up space and retry.
   when: (_root_free_gb.stdout | default('999', true) | trim | int) < 5
 
+# Capture source version before the reboot so post_ hook can reference it.
+- name: "-> {{ _next_version }}: record source version"
+  ansible.builtin.set_fact:
+    _source_version: "{{ ansible_facts['distribution_version'] }}"
+
 # ── Version-specific pre-upgrade hook ──────────────────────────────────────
 # Runs before apt touches the package index so unreachable repos (e.g. kobuk
 # PPA under DDoS) are removed before dist-upgrade attempts to contact them.
-# To add migration logic for a new version, drop a file here:
-#   roles/os_upgrade/tasks/pre_<major><minor>.yml  (e.g. pre_2604.yml)
 
-- name: "-> {{ _next_version }}: run pre-upgrade tasks for {{ ansible_facts['distribution_version'] }}"
+- name: "-> {{ _next_version }}: run pre-upgrade tasks for {{ _source_version }}"
   ansible.builtin.include_tasks: "{{ item }}"
   with_first_found:
     - files:
-        - "pre_{{ ansible_facts['distribution_version'] | replace('.', '') }}.yml"
+        - "pre_{{ _source_version | replace('.', '') }}.yml"
       skip: true
 
 - name: "-> {{ _next_version }}: dist-upgrade all packages"
@@ -99,6 +103,17 @@
       Expected Ubuntu {{ _next_version }} after upgrade but found
       {{ ansible_facts['distribution_version'] }}.
       do-release-upgrade output: {{ _upgrade_result.stdout | default('') }}
+
+# ── Version-specific post-upgrade hook ─────────────────────────────────────
+# Runs after the new OS is confirmed. Use for cleanup of transitional state
+# introduced by the corresponding pre_ hook.
+
+- name: "-> {{ _next_version }}: run post-upgrade tasks for {{ _source_version }}"
+  ansible.builtin.include_tasks: "{{ item }}"
+  with_first_found:
+    - files:
+        - "post_{{ _source_version | replace('.', '') }}.yml"
+      skip: true
 
 # ── Re-provision for new OS (final hop only) ──────────────────────────────
 # Run setup-tdx-host via the same roles used by setup.yml so the host lands
