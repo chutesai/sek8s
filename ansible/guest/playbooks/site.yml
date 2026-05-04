@@ -46,18 +46,6 @@
       ansible.builtin.include_role:
         name: common
 
-- name: Save prepared packages checkpoint
-  hosts: host
-  become: true
-  tags:
-    - checkpoint-packages
-  tasks:
-    - name: Save prepared packages checkpoint
-      ansible.builtin.include_role:
-        name: save-checkpoint
-      vars:
-        checkpoint_img_path: "{{ prepared_img_path }}"
-
 - name: Setup K3S clusters
   hosts: vm
   become: true

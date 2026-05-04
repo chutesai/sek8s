@@ -40,20 +40,34 @@
   failed_when: false
   changed_when: "'Updated' in reservation_result.stdout or reservation_result.rc == 0"
 
-- name: Check if base image exists
-  ansible.builtin.stat:
-    path: "{{ base_img_path }}"
-  register: base_image_stat
-
-- name: Prepare base image (download + resize)
-  when: not base_image_stat.stat.exists or no_cache == 'true'
+- name: Invalidate all image caches
+  when: no_cache == 'true'
   block:
     - name: Remove stale base image
       ansible.builtin.file:
         path: "{{ base_img_path }}"
         state: absent
-      when: no_cache == 'true'
 
+    - name: Remove stale prepared image
+      ansible.builtin.file:
+        path: "{{ prepared_img_path }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove stale GPU image
+      ansible.builtin.file:
+        path: "{{ gpu_img_path }}"
+        state: absent
+      failed_when: false
+
+- name: Check if prepared image cache exists
+  ansible.builtin.stat:
+    path: "{{ prepared_img_path }}"
+  register: prepared_img_stat
+
+- name: Prepare base image and save offline checkpoint
+  when: not prepared_img_stat.stat.exists
+  block:
     - name: Download Ubuntu cloud image
       ansible.builtin.get_url:
         url: "https://cloud-images.ubuntu.com/releases/{{ ubuntu_version }}/release/ubuntu-{{ ubuntu_version }}-server-cloudimg-amd64.img"
@@ -78,14 +92,20 @@
         virt-customize -a "{{ base_img_path }}"
         --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
         --run-command 'systemctl mask grub-initrd-fallback.service'
-      environment:
-        LIBGUESTFS_BACKEND: direct
       changed_when: true
 
-- name: Check if prepared image cache exists
-  ansible.builtin.stat:
-    path: "{{ prepared_img_path }}"
-  register: prepared_img_stat
+    - name: Ensure build env image directory exists
+      ansible.builtin.file:
+        path: "{{ img_dir }}/{{ build_env }}"
+        state: directory
+        mode: '0755'
+
+    - name: Save prepared offline checkpoint
+      ansible.builtin.copy:
+        src: "{{ base_img_path }}"
+        dest: "{{ prepared_img_path }}"
+        remote_src: true
+        mode: '0644'
 
 - name: Check if GPU image cache exists
   ansible.builtin.stat:
@@ -96,8 +116,13 @@
   ansible.builtin.set_fact:
     start_img_path: >-
       {{ gpu_img_path if (gpu_img_stat.stat.exists and no_cache != 'true')
-         else (prepared_img_path if (prepared_img_stat.stat.exists and no_cache != 'true')
-               else base_img_path) }}
+         else prepared_img_path }}
+
+- name: Log starting image selection
+  ansible.builtin.debug:
+    msg: >-
+      Starting build from: {{ start_img_path | basename }}
+      (gpu_cached={{ gpu_img_stat.stat.exists }}, no_cache={{ no_cache }})
 
 - name: Check if build image exists
   ansible.builtin.stat:

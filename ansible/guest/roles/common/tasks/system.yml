@@ -107,6 +107,10 @@
         name: "{{ system_packages }}"
         state: present
 
+    - name: Log Ubuntu-specific package installation
+      ansible.builtin.debug:
+        msg: "Installing Ubuntu-specific packages (15-30 min on first run). Monitor via SSH: tail -f /var/log/dpkg.log"
+
     - name: Install Ubuntu-specific packages
       ansible.builtin.apt:
         name:
