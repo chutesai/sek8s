@@ -73,6 +73,15 @@
         --run-command 'systemctl mask pollinate.service'
       changed_when: true
 
+    - name: Install kernel and boot packages offline
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}"
+        --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
+        --run-command 'systemctl mask grub-initrd-fallback.service'
+      environment:
+        LIBGUESTFS_BACKEND: direct
+      changed_when: true
+
 - name: Check if prepared image cache exists
   ansible.builtin.stat:
     path: "{{ prepared_img_path }}"
