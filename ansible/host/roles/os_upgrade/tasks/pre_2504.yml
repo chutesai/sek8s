@@ -17,32 +17,18 @@
     state: stopped
   failed_when: false
 
-- name: "Pre 25.04: remove kobuk PPA source files"
-  ansible.builtin.file:
-    path: "{{ _apt_source }}"
-    state: absent
-  loop:
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-plucky.sources
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-noble.sources
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-release-oracular.sources
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-plucky.sources
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-noble.sources
-    - /etc/apt/sources.list.d/kobuk-team-ubuntu-tdx-attestation-release-oracular.sources
-    - /etc/apt/sources.list.d/kobuk-kobuk-team-tdx-attestation-release.sources
-    - /etc/apt/sources.list.d/kobuk-kobuk-team-tdx-release.sources
-  loop_control:
-    loop_var: _apt_source
-
-- name: "Pre 25.04: find kobuk pin and unattended-upgrades files"
+- name: "Pre 25.04: find all kobuk-related apt files"
   ansible.builtin.find:
     paths:
+      - /etc/apt/sources.list.d
       - /etc/apt/preferences.d
       - /etc/apt/apt.conf.d
+      - /etc/apt/keyrings
     patterns:
       - "*kobuk*"
   register: _kobuk_files
 
-- name: "Pre 25.04: delete kobuk pin and unattended-upgrades files"
+- name: "Pre 25.04: delete all kobuk apt files including any .save/.distUpgrade backups"
   ansible.builtin.file:
     path: "{{ _kobuk_file.path }}"
     state: absent
