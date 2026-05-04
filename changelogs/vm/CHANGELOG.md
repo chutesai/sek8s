@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.1.0] - 2026-04-07
+## [1.1.0] - 2026-05-04
 
 ### Added
 - nvidia-imex package (GPU memory mapping over NVLink).
 - libnvidia-nscq package (NVSwitch Configuration and Query library).
 - DKMS build verification step in device-setup.
+- 
 
 ### Changed
 - NVIDIA 595 drivers — guest stack moves from 590 to 595 driver branch.
@@ -21,6 +22,14 @@ Version source of truth: `ansible/guest/VERSION`
   time (no prebuilt linux-modules-nvidia-*-open). Requires nvidia-dkms-open.
 - Single version pin: `nvidia_pkg_version` replaces `nvidia_pkg_release_ubuntu`
   and `nvidia_pkg_release_cuda` in group_vars.
+- k3s bumped from `v1.33.7+k3s1` to `v1.35.4+k3s1`.
+- CUDA version bumped from `13-0` to `13-2`.
+- NVIDIA driver package version bumped from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1`.
+- GPU operator helm chart bumped from `v24.9.2` to `v26.3.1`.
+- `extract-acpi.sh`: firmware path now overridable via `$TDVF_FIRMWARE` env var (defaults to `firmware/TDVF.fd`). Allows testing `OVMF.inteltdx.ms.fd` without modifying the script.
+
+### Fixed
+-
 
 ### Removed
 - nvidia-utils, nvidia-compute-utils, xserver-xorg-video-nvidia (folded into
@@ -28,6 +37,7 @@ Version source of truth: `ansible/guest/VERSION`
 - Prebuilt linux-modules-nvidia resolution and assertion (replaced by DKMS).
 - nvidia_pkg_release_ubuntu, nvidia_pkg_release_cuda, nvidia_firmware_pkg
   variables (replaced by nvidia_pkg_version).
+-
 
 ## [0.2.7] - 2026-03-31
 
