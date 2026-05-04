@@ -16,6 +16,31 @@ from sek8s.services.util import sign_request
 
 from .models import HfInfoResponse
 
+CACHE_COMPLETE_MARKER = ".cache_complete"
+CACHE_STALE_MARKER = ".cache_stale"
+
+
+def chmod_if_owned(path: Path, mode: int) -> None:
+    """chmod path to mode only when we own it (we created it).
+
+    When the directory already exists, we skip chmod—we don't own it and can't change
+    it. This only works because external creators (cache-init, pod) are expected to
+    set 777 on the cache dir, so we can write without needing to chmod.
+    """
+    try:
+        if path.exists() and path.stat().st_uid == os.getuid():
+            os.chmod(path, mode)
+    except OSError:
+        pass
+
+
+def chmod_tree(path: Path, mode: int) -> None:
+    """Recursively chmod path and all contents; skips entries we don't own."""
+    for p in path.rglob("*"):
+        chmod_if_owned(p, mode)
+    chmod_if_owned(path, mode)
+
+
 # In-memory cache for /misc/hf_repo_info responses keyed by (repo_id, revision).
 _repo_info_cache: dict[tuple[str, str], dict] = {}
 _repo_info_cache_lock = asyncio.Lock()

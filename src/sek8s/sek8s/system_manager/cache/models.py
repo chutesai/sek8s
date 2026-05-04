@@ -67,3 +67,4 @@ class CleanupResult:
 
     freed_bytes: int
     removed_chutes: list[str]
+    purged_bytes: int = 0

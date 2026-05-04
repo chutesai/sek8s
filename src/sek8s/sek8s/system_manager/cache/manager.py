@@ -3,36 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import time
 from pathlib import Path
 from typing import Optional
 
-from huggingface_hub import scan_cache_dir, snapshot_download
+from huggingface_hub import scan_cache_dir
 from loguru import logger
 
 from sek8s.config import cache_config
 
+from .download import DownloadProcess
 from .models import CacheChuteStatusEnum, ChuteSnapshot, CleanupResult
-from .util import fetch_hf_info, fetch_repo_total_size, verify_cache
-
-CACHE_COMPLETE_MARKER = ".cache_complete"
-CACHE_STALE_MARKER = ".cache_stale"
-
-
-def _chmod_if_owned(path: Path, mode: int) -> None:
-    """chmod path to mode only when we own it (we created it).
-
-    When the directory already exists, we skip chmod—we don't own it and can't change
-    it. This only works because external creators (cache-init, pod) are expected to
-    set 777 on the cache dir, so we can write without needing to chmod.
-    """
-    try:
-        if path.exists() and path.stat().st_uid == os.getuid():
-            os.chmod(path, mode)
-    except OSError:
-        pass
+from .util import (
+    CACHE_COMPLETE_MARKER,
+    CACHE_STALE_MARKER,
+    chmod_if_owned,
+    fetch_hf_info,
+    fetch_repo_total_size,
+    verify_cache,
+)
 
 
 class HuggingFaceSnapshot:
@@ -55,10 +45,7 @@ class HuggingFaceSnapshot:
         self.repo_id = repo_id
         self.revision = revision
         self.externally_managed = externally_managed
-        self._task: Optional[asyncio.Task] = None
-        self._total_bytes: Optional[int] = None
-        self._started_at: Optional[float] = None
-        self._initial_bytes: Optional[int] = None
+        self._download: Optional[DownloadProcess] = None
         self._reconciled: bool = False
         self._scan_cache: Optional[
             tuple[int, Optional[str], Optional[str], Optional[float]]
@@ -87,22 +74,21 @@ class HuggingFaceSnapshot:
 
     @property
     def is_in_progress(self) -> bool:
-        return self._task is not None and not self._task.done()
+        return self._download is not None and self._download.is_running
 
     @property
     def needs_reconciliation(self) -> bool:
         """True when this entry should be (re-)verified against the validator."""
-        return not self._reconciled and self._task is None and self.is_present_on_disk
+        return (
+            self._download is None and not self._reconciled and self.is_present_on_disk
+        )
 
     @property
     def status(self) -> CacheChuteStatusEnum:
-        if self._task is not None:
-            if not self._task.done():
+        if self._download is not None:
+            if self._download.is_running:
                 return CacheChuteStatusEnum.IN_PROGRESS
-            try:
-                if self._task.exception() is not None:
-                    return CacheChuteStatusEnum.FAILED
-            except asyncio.CancelledError:
+            if self._download.is_done and not self._download.succeeded:
                 return CacheChuteStatusEnum.FAILED
         if (self.path / CACHE_COMPLETE_MARKER).exists():
             return CacheChuteStatusEnum.PRESENT
@@ -114,13 +100,8 @@ class HuggingFaceSnapshot:
 
     @property
     def error(self) -> Optional[str]:
-        if self._task is not None and self._task.done():
-            try:
-                exc = self._task.exception()
-                if exc is not None:
-                    return str(exc)
-            except asyncio.CancelledError:
-                return "Download was cancelled"
+        if self._download is not None:
+            return self._download.error
         return None
 
     @property
@@ -137,27 +118,28 @@ class HuggingFaceSnapshot:
     def percent_complete(self) -> Optional[float]:
         if (
             not self.is_in_progress
-            or self._total_bytes is None
-            or self._total_bytes <= 0
+            or self._download is None
+            or self._download.total_bytes is None
+            or self._download.total_bytes <= 0
         ):
             return None
         size = self.size_bytes
         if size is not None:
-            return min(100.0, max(0.0, 100.0 * size / self._total_bytes))
+            return min(100.0, max(0.0, 100.0 * size / self._download.total_bytes))
         return None
 
     @property
     def download_rate(self) -> Optional[float]:
         """Average bytes/sec since this download session started."""
-        if not self.is_in_progress or self._started_at is None:
+        if not self.is_in_progress or self._download is None:
             return None
-        elapsed = time.monotonic() - self._started_at
+        elapsed = time.monotonic() - self._download.started_at
         if elapsed <= 0:
             return None
         size = self.size_bytes
         if size is None:
             return None
-        downloaded = size - (self._initial_bytes or 0)
+        downloaded = size - self._download.initial_bytes
         if downloaded <= 0:
             return None
         return downloaded / elapsed
@@ -166,9 +148,14 @@ class HuggingFaceSnapshot:
     def eta_seconds(self) -> Optional[float]:
         """Estimated seconds remaining based on current download rate."""
         rate = self.download_rate
-        if rate is None or rate <= 0 or self._total_bytes is None:
+        if (
+            rate is None
+            or rate <= 0
+            or self._download is None
+            or self._download.total_bytes is None
+        ):
             return None
-        remaining = self._total_bytes - (self.size_bytes or 0)
+        remaining = self._download.total_bytes - (self.size_bytes or 0)
         if remaining <= 0:
             return 0.0
         return remaining / rate
@@ -262,15 +249,21 @@ class HuggingFaceSnapshot:
         pct = None
         rate = None
         eta = None
-        if self.is_in_progress and self._total_bytes and self._total_bytes > 0 and size:
-            pct = min(100.0, max(0.0, 100.0 * size / self._total_bytes))
-            if self._started_at is not None:
-                elapsed = time.monotonic() - self._started_at
-                downloaded = size - (self._initial_bytes or 0)
-                if elapsed > 0 and downloaded > 0:
-                    rate = downloaded / elapsed
-                    remaining = self._total_bytes - size
-                    eta = remaining / rate if remaining > 0 else 0.0
+        dl = self._download
+        if (
+            self.is_in_progress
+            and dl is not None
+            and dl.total_bytes
+            and dl.total_bytes > 0
+            and size
+        ):
+            pct = min(100.0, max(0.0, 100.0 * size / dl.total_bytes))
+            elapsed = time.monotonic() - dl.started_at
+            downloaded = size - dl.initial_bytes
+            if elapsed > 0 and downloaded > 0:
+                rate = downloaded / elapsed
+                remaining = dl.total_bytes - size
+                eta = remaining / rate if remaining > 0 else 0.0
         return ChuteSnapshot(
             chute_id=self.chute_id,
             repo_id=self.repo_id or scan_repo_id or "",
@@ -289,92 +282,49 @@ class HuggingFaceSnapshot:
     # ------------------------------------------------------------------
 
     async def start_download(self, repo_id: str, revision: str) -> None:
-        """Prepare directories and launch the download task."""
+        """Prepare directories, create a DownloadProcess, and start it."""
         self.repo_id = repo_id
         self.revision = revision
         self._scan_cache = None
 
         self.path.mkdir(parents=True, exist_ok=True)
-        _chmod_if_owned(self.path, 0o2775)  # nosec B103
+        chmod_if_owned(self.path, 0o2775)  # nosec B103
         self.hub_path.mkdir(exist_ok=True)
-        _chmod_if_owned(self.hub_path, 0o2775)  # nosec B103
+        chmod_if_owned(self.hub_path, 0o2775)  # nosec B103
 
-        total_bytes = await fetch_repo_total_size(repo_id, revision)
-        if total_bytes > 0:
-            self._total_bytes = total_bytes
+        total_bytes: Optional[int] = None
+        fetched = await fetch_repo_total_size(repo_id, revision)
+        if fetched > 0:
+            total_bytes = fetched
 
+        initial_bytes = 0
         if self.hub_path.exists():
             try:
                 info = await asyncio.to_thread(
                     scan_cache_dir, cache_dir=str(self.hub_path)
                 )
-                self._initial_bytes = info.size_on_disk
-            except Exception:
-                self._initial_bytes = 0
-        else:
-            self._initial_bytes = 0
-        self._started_at = time.monotonic()
-        self._task = asyncio.create_task(self._run_download())
-        self._task.add_done_callback(self._on_task_done)
-
-    def _on_task_done(self, task: asyncio.Task) -> None:
-        """Invalidate scan cache so the next snapshot reflects final state."""
-        self._scan_cache = None
-        if not task.cancelled():
-            task.exception()
-
-    @staticmethod
-    def _chmod_tree(path: Path, mode: int) -> None:
-        """Recursively chmod path and contents so group can write. Only when we own them;
-        externally-created content (cache-init 777) is already writable.
-        """
-        for p in path.rglob("*"):
-            _chmod_if_owned(p, mode)
-        _chmod_if_owned(path, mode)
-
-    async def _run_download(self) -> None:
-        """Execute snapshot_download, verify, chmod, and write markers."""
-        hub_cache_dir = str(self.hub_path)
-        try:
-
-            def do_download() -> str:
-                return snapshot_download(
-                    repo_id=self.repo_id,
-                    revision=self.revision or "main",
-                    cache_dir=hub_cache_dir,
-                )
-
-            await asyncio.to_thread(do_download)
-
-            await verify_cache(
-                repo_id=self.repo_id,
-                revision=self.revision or "main",
-                cache_dir=str(self.path),
-            )
-
-            self._chmod_tree(self.path, 0o2775)  # nosec B103
-
-            (self.path / CACHE_COMPLETE_MARKER).write_text(
-                f"{self.repo_id}\n{self.revision or 'main'}", encoding="utf-8"
-            )
-            stale_marker = self.path / CACHE_STALE_MARKER
-            if stale_marker.exists():
-                stale_marker.unlink()
-        except Exception:
-            logger.exception("Download failed for chute_id={}", self.chute_id)
-            try:
-                await self.delete()
-            except OSError as cleanup_err:
-                logger.warning(
-                    "Failed to clean up cache dir for chute_id={}: {}",
+                initial_bytes = info.size_on_disk
+            except Exception as e:
+                logger.debug(
+                    "Could not read initial cache size for chute_id={}: {}",
                     self.chute_id,
-                    cleanup_err,
+                    e,
                 )
-            raise
+
+        self._download = DownloadProcess(
+            chute_id=self.chute_id,
+            repo_id=repo_id,
+            revision=revision,
+            path=self.path,
+            total_bytes=total_bytes,
+            initial_bytes=initial_bytes,
+        )
+        task = asyncio.create_task(self._download.start())
+        task.add_done_callback(lambda _: self.__dict__.update({"_scan_cache": None}))
 
     def cancel_download(self) -> None:
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
+        if self._download is not None:
+            self._download.cancel()
 
     # ------------------------------------------------------------------
     # Identity & reconciliation
@@ -514,6 +464,48 @@ class HuggingFaceSnapshot:
                 revision[:12],
                 e,
             )
+
+    async def purge_stale_revisions(self) -> int:
+        """Remove HF cache revisions that don't match the current revision.
+
+        Returns bytes freed.  Uses the HF hub ``delete_revisions`` API so
+        only orphaned blobs (not referenced by any remaining snapshot) are
+        removed.
+        """
+        if not self.hub_path.exists() or not self.revision:
+            return 0
+        try:
+            info = await asyncio.to_thread(scan_cache_dir, cache_dir=str(self.hub_path))
+        except Exception:
+            return 0
+
+        stale_hashes: list[str] = []
+        for repo in info.repos:
+            for rev in repo.revisions:
+                if rev.commit_hash != self.revision:
+                    stale_hashes.append(rev.commit_hash)
+
+        if not stale_hashes:
+            return 0
+
+        try:
+            strategy = info.delete_revisions(*stale_hashes)
+            expected = strategy.expected_freed_size
+            logger.info(
+                "Purging {} stale revision(s) for chute_id={}, expected freed ~{}B",
+                len(stale_hashes),
+                self.chute_id,
+                expected,
+            )
+            strategy.execute()
+            return expected
+        except Exception:
+            logger.warning(
+                "Failed to purge stale revisions for chute_id={}",
+                self.chute_id,
+                exc_info=True,
+            )
+            return 0
 
     async def delete(self) -> None:
         self.cancel_download()
@@ -662,32 +654,67 @@ class CacheManager:
             await snap.reconcile()
 
     async def get(self, chute_id: str) -> Optional[HuggingFaceSnapshot]:
+        await self.sync_from_disk()
         async with self._lock:
             return self._chutes.get(chute_id)
 
     async def get_or_create(self, chute_id: str) -> HuggingFaceSnapshot:
+        await self.sync_from_disk()
         async with self._lock:
             if chute_id not in self._chutes:
                 self._chutes[chute_id] = HuggingFaceSnapshot(chute_id=chute_id)
             return self._chutes[chute_id]
 
     async def all(self) -> list[HuggingFaceSnapshot]:
+        await self.sync_from_disk()
         async with self._lock:
             return list(self._chutes.values())
 
     async def all_snapshots(self) -> list[ChuteSnapshot]:
         """Return snapshots for all tracked chutes, scanning concurrently."""
+        await self.sync_from_disk()
         async with self._lock:
             chutes = list(self._chutes.values())
         return list(await asyncio.gather(*(c.snapshot() for c in chutes)))
 
     async def remove(self, chute_id: str) -> bool:
+        await self.sync_from_disk()
         async with self._lock:
             chute = self._chutes.pop(chute_id, None)
         if chute is not None:
             await chute.delete()
             return True
         return False
+
+    async def cancel(self, chute_id: str, cleanup: bool = False) -> None:
+        """Cancel an in-progress download.
+
+        Raises:
+            KeyError: if ``chute_id`` is not tracked.
+            ValueError: if the download is not currently in progress.
+
+        When ``cleanup`` is True, partial files are deleted after cancelling.
+        """
+        await self.sync_from_disk()
+        async with self._lock:
+            chute = self._chutes.get(chute_id)
+        if chute is None:
+            raise KeyError(chute_id)
+        if not chute.is_in_progress:
+            raise ValueError(f"No download in progress for chute_id={chute_id}")
+        chute.cancel_download()
+        logger.info("Cancelled download for chute_id={}, cleanup={}", chute_id, cleanup)
+        if cleanup:
+            async with self._lock:
+                self._chutes.pop(chute_id, None)
+            try:
+                await chute.delete()
+            except OSError as e:
+                logger.warning(
+                    "Failed to delete partial cache after cancel for chute_id={}: {}",
+                    chute_id,
+                    e,
+                )
 
     async def cleanup(
         self,
@@ -696,6 +723,7 @@ class CacheManager:
         exclude_pattern: Optional[str] = None,
     ) -> CleanupResult:
         """Remove cache entries by age and enforce max size; skip in-progress downloads."""
+        await self.sync_from_disk()
         freed = 0
         removed_list: list[str] = []
         max_size_bytes = max_size_gb * 1024 * 1024 * 1024
@@ -748,4 +776,27 @@ class CacheManager:
                 freed += size
                 total_now -= size
 
-        return CleanupResult(freed_bytes=freed, removed_chutes=removed_list)
+        removed_set = set(removed_list)
+        surviving = [c for c, _, _ in candidates if c.chute_id not in removed_set]
+        purged = 0
+        for chute in surviving:
+            purged += await chute.purge_stale_revisions()
+
+        return CleanupResult(
+            freed_bytes=freed, removed_chutes=removed_list, purged_bytes=purged
+        )
+
+    async def purge_stale(self) -> int:
+        """Purge stale HF revisions from all tracked chutes.
+
+        Calls ``purge_stale_revisions()`` on every non-in-progress chute and
+        returns the total bytes freed.  Does not remove any chutes.
+        """
+        await self.sync_from_disk()
+        async with self._lock:
+            chutes = [c for c in self._chutes.values() if not c.is_in_progress]
+
+        results = await asyncio.gather(*(c.purge_stale_revisions() for c in chutes))
+        total = sum(results)
+        logger.info("Purged stale HF revisions: {}B freed across {} chutes", total, len(chutes))
+        return total

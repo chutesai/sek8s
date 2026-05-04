@@ -11,12 +11,13 @@ from .models import CacheChuteStatusEnum
 
 
 class CacheDownloadStatus(str, Enum):
-    """Status returned by the download (POST) endpoint."""
+    """Status returned by the download (POST) and cancel (POST) endpoints."""
 
     STARTED = "started"
     PRESENT = "present"
     IN_PROGRESS = "in_progress"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class CacheDownloadResponse(BaseModel):
@@ -24,6 +25,14 @@ class CacheDownloadResponse(BaseModel):
     status: CacheDownloadStatus = Field(
         ...,
         description="One of: started, present, in_progress, failed",
+    )
+
+
+class CacheCancelResponse(BaseModel):
+    chute_id: str = Field(..., description="Chute ID")
+    status: CacheDownloadStatus = Field(
+        ...,
+        description="One of: cancelled, not_in_progress, not_found",
     )
 
 
@@ -78,9 +87,17 @@ class CacheOverviewResponse(BaseModel):
     chutes: List[CacheOverviewEntry] = Field(..., description="Entries per chute")
 
 
+class CachePurgeResponse(BaseModel):
+    status: str = Field(..., description="Purge status", examples=["completed"])
+    purged_bytes: int = Field(0, description="Bytes freed by pruning stale HF revisions")
+
+
 class CacheCleanupResponse(BaseModel):
     status: str = Field(..., description="Cleanup status", examples=["completed"])
-    freed_bytes: int = Field(0, description="Bytes freed")
+    freed_bytes: int = Field(0, description="Bytes freed by removing entire chutes")
+    purged_bytes: int = Field(
+        0, description="Bytes freed by pruning stale HF revisions from kept chutes"
+    )
     removed_chutes: List[str] = Field(
         default_factory=list, description="Chute IDs removed"
     )
