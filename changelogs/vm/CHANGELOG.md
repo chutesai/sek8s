@@ -12,6 +12,9 @@ Version source of truth: `ansible/guest/VERSION`
 ### Changed
 - Updated sek8s to 0.3.0: HuggingFace cache improvements including download cancellation, stale revision purging, and isolated download subprocess.
 
+### Fixed
+- OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations, preventing the Job controller from being permanently blocked when removing tracking finalizers from completed CronJob pods that predate the `automountServiceAccountToken` policy.
+
 ## [1.1.0] - 2026-05-04
 
 ### Added

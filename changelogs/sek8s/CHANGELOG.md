@@ -24,6 +24,10 @@ Version source of truth: `src/sek8s/VERSION`
 - `CacheCleanupResponse` now includes a `purged_bytes` field alongside `freed_bytes` and `removed_chutes`.
 - `CACHE_COMPLETE_MARKER`, `CACHE_STALE_MARKER`, and `chmod_if_owned` moved from `manager.py` to `util.py` to support the subprocess entry point without circular imports.
 
+### Fixed
+- Mutating webhook no longer applies `automountServiceAccountToken: false` on Pod UPDATE operations, preventing the API server from rejecting immutable-field mutations (e.g. Job controller finalizer sync on completed CronJob pods).
+- OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations; pod specs are immutable after creation, so spec checks on UPDATE blocked finalizer removal and pod cleanup for pods created before the SA token policy was deployed.
+
 ## [0.2.6] - 2026-04-07
 
 ### Changed
