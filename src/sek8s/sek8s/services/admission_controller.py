@@ -424,9 +424,14 @@ class AdmissionWebhookServer(WebServer):
             req = request_data.get("request", {})
             uid = req.get("uid", "unknown")
             namespace = req.get("namespace", "")
+            operation = req.get("operation", "")
+            kind = req.get("kind", {}).get("kind", "")
 
             patches = self.controller.build_image_pin_patches(req)
-            if namespace == "chutes":
+
+            # automountServiceAccountToken is immutable on existing Pods.
+            can_patch_sa_token = not (kind == "Pod" and operation != "CREATE")
+            if namespace == "chutes" and can_patch_sa_token:
                 patches.extend(self._build_sa_token_patches(req))
 
             patch_type: Optional[str] = None
