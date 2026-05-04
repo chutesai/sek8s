@@ -75,6 +75,7 @@ CLI_DOWNLOAD=""
 CLI_DOCKER_HUB_USERNAME=""
 CLI_DOCKER_HUB_TOKEN=""
 CLI_FORCE=""
+CLI_CLEAN=""
 
 # --------------------------------------------------------------------
 # Duplicate-instance guard (chutes-td QEMU must not stack without --force)
@@ -136,6 +137,7 @@ while [[ $# -gt 0 ]]; do
     --docker-hub-username) CLI_DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
     --force) CLI_FORCE="true"; shift ;;
+    --clean) CLI_CLEAN="true"; shift ;;
     --download)
       echo "=== Downloading VM Base Image (production) ==="
       BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
@@ -175,26 +177,6 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
 
-    --clean)
-      echo "=== Cleaning Up TEE VM Environment ==="
-      if [[ -x "./run-td" ]]; then
-        echo "Stopping Chutes VM (if running)..."
-        ./run-td --clean 2>/dev/null || true
-      fi
-
-      echo "Waiting for VM processes to exit..."
-      for i in {1..15}; do
-        if ! pgrep -f 'qemu-system|qemu-kvm|run-td' >/dev/null 2>&1; then
-          echo "No VM processes found. Proceeding with bridge cleanup."
-          break
-        fi
-        echo "VM processes still running; waiting... ($i/15)"
-        sleep 1
-      done
-
-      ./network/setup-bridge.sh --clean 2>/dev/null || true
-      exit 0
-      ;;
 
     --template)
       cp config/config.tmpl.yaml config.yaml
@@ -245,7 +227,7 @@ Runtime:
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
 Management:
-  --clean                   Clean up VM and bridge
+  --clean                   Stop VM and remove bridge/iptables rules (pass config for correct interface)
   --download                Download VM base image (production) to /var/lib/chutes/base-images/
   --download-debug          Download VM debug image to /var/lib/chutes/base-images/
   --force                   Allow launch even if a chutes-td QEMU instance appears running (unsafe)
@@ -349,6 +331,58 @@ if [[ -n "$CLI_DOCKER_HUB_USERNAME" || -n "$CLI_DOCKER_HUB_TOKEN" ]]; then
   fi
   DOCKER_HUB_USERNAME="$CLI_DOCKER_HUB_USERNAME"
   DOCKER_HUB_TOKEN="$CLI_DOCKER_HUB_TOKEN"
+fi
+
+# --------------------------------------------------------------------
+# Resolve public interface
+# Empty = auto-detect from default route (normal case).
+# Non-empty = explicit override (multi-homed hosts); warn if the named
+# interface doesn't exist so a stale NIC name after an OS upgrade is
+# caught here rather than silently producing broken iptables rules.
+# --------------------------------------------------------------------
+if [[ -z "$PUBLIC_IFACE" ]] || ! ip link show "$PUBLIC_IFACE" >/dev/null 2>&1; then
+  DETECTED_IFACE=$(ip -j route show default 2>/dev/null \
+    | python3 -c "import json,sys; r=json.load(sys.stdin); print(r[0]['dev'] if r else '')" \
+    2>/dev/null || true)
+  if [[ -z "$DETECTED_IFACE" ]]; then
+    echo "Error: could not determine public interface — auto-detection found no default route."
+    echo "  Fix: set network.public_interface in your config.yaml, or pass --public-iface."
+    exit 1
+  fi
+  if [[ -n "$PUBLIC_IFACE" ]]; then
+    echo "⚠ Warning: configured public interface '$PUBLIC_IFACE' not found on this system."
+    echo "  Auto-detected '$DETECTED_IFACE' from default route. Updating PUBLIC_IFACE."
+    echo "  Update network.public_interface in config.yaml to silence this warning."
+  fi
+  PUBLIC_IFACE="$DETECTED_IFACE"
+fi
+
+# --------------------------------------------------------------------
+# Deferred --clean: runs after config + CLI overrides so bridge cleanup
+# uses the correct PUBLIC_IFACE, BRIDGE_IP, and VM_IP from config.yaml.
+# --------------------------------------------------------------------
+if [[ "$CLI_CLEAN" == "true" ]]; then
+  echo "=== Cleaning Up TEE VM Environment ==="
+  if [[ -x "./run-td" ]]; then
+    echo "Stopping Chutes VM (if running)..."
+    ./run-td --clean 2>/dev/null || true
+  fi
+
+  echo "Waiting for VM processes to exit..."
+  for i in {1..15}; do
+    if ! pgrep -f 'qemu-system|qemu-kvm|run-td' >/dev/null 2>&1; then
+      echo "No VM processes found. Proceeding with bridge cleanup."
+      break
+    fi
+    echo "VM processes still running; waiting... ($i/15)"
+    sleep 1
+  done
+
+  ./network/setup-bridge.sh --clean \
+    --bridge-ip "$BRIDGE_IP" \
+    --vm-ip "${VM_IP}/24" \
+    --public-iface "$PUBLIC_IFACE" 2>/dev/null || true
+  exit 0
 fi
 
 # Default base image and overlay directory when not specified
