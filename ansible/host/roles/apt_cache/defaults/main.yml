@@ -2,9 +2,9 @@
 apt_cache_port: 3142
 # IP of the libvirt default network bridge — guests connect to apt-cacher-ng through this
 libvirt_bridge_ip: "192.168.122.1"
+# Upstream mirror apt-cacher-ng fetches packages from. Should match apt_mirror / host_mirror selection.
+apt_cache_upstream_mirror: "au.archive.ubuntu.com"
 # Interface/address apt-cacher-ng binds to. Empty = all interfaces.
 apt_cache_bind_address: ""
 # Max cache size in MB (0 = unlimited)
 apt_cache_max_size: 0
-# Passthrough HTTPS repos directly (avoids MITM cert issues for https-only repos)
-apt_cache_passthrough_pattern: "DIRECT"

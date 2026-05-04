@@ -3,7 +3,7 @@
   ansible.builtin.shell: |
     best_mirror="archive.ubuntu.com"
     best_speed=0
-    release="{{ ansible_distribution_release }}"
+    release="{{ ansible_facts['distribution_release'] }}"
     for mirror in \
         au.archive.ubuntu.com \
         nz.archive.ubuntu.com \

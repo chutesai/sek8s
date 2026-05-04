@@ -1,5 +1,5 @@
 ---
-- name: Install apt-cacher-ng
+- name: Ensure apt-cacher-ng is installed
   ansible.builtin.apt:
     name: apt-cacher-ng
     state: present
@@ -11,6 +11,9 @@
     dest: /etc/apt-cacher-ng/acng.conf
     mode: '0644'
   notify: Restart apt-cacher-ng
+
+- name: Apply apt-cacher-ng config immediately
+  ansible.builtin.meta: flush_handlers
 
 - name: Enable and start apt-cacher-ng
   ansible.builtin.systemd:

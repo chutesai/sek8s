@@ -1,42 +1,23 @@
 ---
-- name: Check if host apt-cacher-ng is available
-  ansible.builtin.uri:
-    url: "http://{{ libvirt_bridge_ip | default('192.168.122.1') }}:3142"
-    timeout: 3
-    status_code: [200, 406]
-  register: apt_cache_check
+- name: Remove any stale apt-cacher-ng proxy config
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/01proxy
+    state: absent
+
+- name: Update apt sources to use configured mirror
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/ubuntu.sources
+    regexp: 'http://archive\.ubuntu\.com/ubuntu'
+    replace: "http://{{ apt_mirror }}/ubuntu"
   failed_when: false
-  changed_when: false
 
-- name: Configure apt to use host cache
-  ansible.builtin.copy:
-    content: |
-      Acquire::http::Proxy "http://{{ libvirt_bridge_ip | default('192.168.122.1') }}:3142";
-    dest: /etc/apt/apt.conf.d/01proxy
-    mode: '0644'
-  when: apt_cache_check.status is defined and apt_cache_check.status in [200, 406]
+- name: Update legacy sources.list if present
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list
+    regexp: 'http://archive\.ubuntu\.com/ubuntu'
+    replace: "http://{{ apt_mirror }}/ubuntu"
+  failed_when: false
 
-- name: Log apt cache usage
+- name: Log configured mirror
   ansible.builtin.debug:
-    msg: "{{ 'Using host apt-cacher-ng at ' + (libvirt_bridge_ip | default('192.168.122.1')) + ':3142' if apt_cache_check.status is defined and apt_cache_check.status in [200, 406] else 'No host apt cache found — benchmarking public mirrors' }}"
-
-- name: Configure apt mirror
-  when: apt_cache_check.status is not defined or apt_cache_check.status not in [200, 406]
-  block:
-    - name: Update apt sources to use configured mirror
-      ansible.builtin.replace:
-        path: /etc/apt/sources.list.d/ubuntu.sources
-        regexp: 'http://archive\.ubuntu\.com/ubuntu'
-        replace: "http://{{ apt_mirror }}/ubuntu"
-      failed_when: false
-
-    - name: Update legacy sources.list if present
-      ansible.builtin.replace:
-        path: /etc/apt/sources.list
-        regexp: 'http://archive\.ubuntu\.com/ubuntu'
-        replace: "http://{{ apt_mirror }}/ubuntu"
-      failed_when: false
-
-    - name: Log configured mirror
-      ansible.builtin.debug:
-        msg: "Using apt mirror: {{ apt_mirror }}"
+    msg: "apt mirror set to {{ apt_mirror }}"
