@@ -73,6 +73,23 @@
         --run-command 'systemctl mask pollinate.service'
       changed_when: true
 
+- name: Check if prepared image cache exists
+  ansible.builtin.stat:
+    path: "{{ prepared_img_path }}"
+  register: prepared_img_stat
+
+- name: Check if GPU image cache exists
+  ansible.builtin.stat:
+    path: "{{ gpu_img_path }}"
+  register: gpu_img_stat
+
+- name: Determine best starting image
+  ansible.builtin.set_fact:
+    start_img_path: >-
+      {{ gpu_img_path if (gpu_img_stat.stat.exists and no_cache != 'true')
+         else (prepared_img_path if (prepared_img_stat.stat.exists and no_cache != 'true')
+               else base_img_path) }}
+
 - name: Check if build image exists
   ansible.builtin.stat:
     path: "{{ build_img_path }}"
@@ -136,8 +153,8 @@
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
-    src: "{{ base_img_path }}"
-    dest: "{{  build_img_path }}"
+    src: "{{ start_img_path }}"
+    dest: "{{ build_img_path }}"
     mode: "0644"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')

@@ -1,0 +1,6 @@
+---
+# Required: path where the checkpoint image will be saved.
+# Set via `vars:` when including this role, e.g.:
+#   vars:
+#     checkpoint_img_path: "{{ prepared_img_path }}"
+checkpoint_img_path: ""

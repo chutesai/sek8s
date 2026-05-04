@@ -1,6 +1,9 @@
 ---
 # Common variables for all hosts
 
+# Build control
+no_cache: "{{ lookup('env', 'NO_CACHE') | default('false', true) | lower }}"
+
 # System configuration
 ansible_port: 22
 ansible_ssh_common_args: -o StrictHostKeyChecking=no
