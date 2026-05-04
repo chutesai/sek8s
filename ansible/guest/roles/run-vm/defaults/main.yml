@@ -11,3 +11,4 @@ build_vm_ram: 8192
 build_vm_vcpus: 4
 build_vm_mac: "52:54:00:60:a6:0a"
 build_vm_ip: "192.168.122.176"
+base_img_resize: "100G"

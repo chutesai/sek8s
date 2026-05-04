@@ -62,7 +62,7 @@
         mode: '0644'
 
     - name: Resize cloud image
-      ansible.builtin.command: qemu-img resize "{{ base_img_path }}" +100G
+      ansible.builtin.command: qemu-img resize "{{ base_img_path }}" +{{ base_img_resize }}
       changed_when: true
 
     - name: Expand rootfs partition
