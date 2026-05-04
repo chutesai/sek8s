@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `src/attestation-proxy/VERSION`
 
+## [0.2.0] - 2026-05-04
+
+### Added
+- X-Signature response header on all externally proxied responses. The header contains a base64-encoded RSA-PKCS1v15-SHA256 signature of the response body, signed with the host TLS private key, enabling clients to verify the responder holds the private key corresponding to the TDX-attested certificate.
+
 ## [0.1.1] - 2026-04-07
 
 ### Changed
