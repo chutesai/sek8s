@@ -1,0 +1,49 @@
+---
+- name: Validate checkpoint_img_path is set
+  ansible.builtin.assert:
+    that: checkpoint_img_path | length > 0
+    fail_msg: "checkpoint_img_path must be set when including the save-checkpoint role"
+
+- name: Check if checkpoint image already exists
+  ansible.builtin.stat:
+    path: "{{ checkpoint_img_path }}"
+  register: checkpoint_img_stat
+
+- name: Save checkpoint image
+  when: not checkpoint_img_stat.stat.exists or no_cache == 'true'
+  block:
+    - name: Clean cloud-init state on build VM
+      ansible.builtin.command: cloud-init clean --logs
+      delegate_to: build-node
+      become: true
+      changed_when: true
+
+    - name: Suspend build VM
+      ansible.builtin.command: virsh suspend "{{ vm_name }}"
+      changed_when: true
+
+    - name: Copy build disk to checkpoint image
+      ansible.builtin.copy:
+        src: "{{ build_img_path }}"
+        dest: "{{ checkpoint_img_path }}"
+        remote_src: true
+        mode: '0644'
+
+    - name: Resume build VM
+      ansible.builtin.command: virsh resume "{{ vm_name }}"
+      changed_when: true
+
+    - name: Wait for VM network to recover after resume
+      ansible.builtin.wait_for:
+        host: "{{ build_vm_ip }}"
+        port: 22
+        timeout: 60
+        delay: 5
+
+    - name: Restore network state in VM after resume
+      ansible.builtin.shell: |
+        systemctl restart systemd-networkd
+        systemctl restart systemd-resolved
+      delegate_to: build-node
+      become: true
+      changed_when: false

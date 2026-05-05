@@ -6,7 +6,7 @@ install-hooks: ##@development Install git hooks (blocks sensitive pushes to publ
 .PHONY: install-opa
 install-opa: ##@development Install OPA binary
 	mkdir -p bin
-	curl -L -o bin/opa https://openpolicyagent.org/downloads/v1.3.0/opa_linux_amd64_static
+	curl -L -o bin/opa https://openpolicyagent.org/downloads/v1.15.2/opa_linux_amd64_static
 	chmod 755 ./bin/opa
 
 .PHONY: install

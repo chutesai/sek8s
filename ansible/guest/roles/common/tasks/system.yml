@@ -53,6 +53,9 @@
       changed_when: true
       failed_when: false
 
+- name: Select fastest apt mirror
+  ansible.builtin.include_tasks: mirror.yml
+
 - name: Setup system packages
   block:
     - name: Clean and update apt cache
@@ -106,6 +109,10 @@
       ansible.builtin.package:
         name: "{{ system_packages }}"
         state: present
+
+    - name: Log Ubuntu-specific package installation
+      ansible.builtin.debug:
+        msg: "Installing Ubuntu-specific packages (15-30 min on first run). Monitor via SSH: tail -f /var/log/dpkg.log"
 
     - name: Install Ubuntu-specific packages
       ansible.builtin.apt:

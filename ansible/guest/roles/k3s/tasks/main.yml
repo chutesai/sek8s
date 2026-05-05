@@ -14,3 +14,8 @@
 - name: Setup cluster init service
   ansible.builtin.include_tasks: setup_cluster_init.yml
   tags: k3s-cluster-init
+
+- name: Configure NVIDIA container runtime for K3s
+  ansible.builtin.include_tasks: nvidia-runtime.yml
+  tags: k3s-nvidia-runtime
+  when: ansible_facts.packages['nvidia-container-toolkit'] is defined

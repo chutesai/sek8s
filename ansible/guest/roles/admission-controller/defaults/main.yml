@@ -7,7 +7,12 @@ update_repository: true
 update_dependencies: false
 
 # OPA settings
-opa_version: "0.68.0"
+opa_version: "1.15.2"
+
+# cosign version — pinned for deterministic builds (fetching 'latest' at build time is non-deterministic).
+# v2.6.3 is the last v2 security patch (fixes CVE-2026-39395). Project uses 'cosign verify --key'
+# which is stable across v2 and v3; staying on v2 avoids any v3 bundle-format changes.
+cosign_version: "2.6.3"
 opa_log_level: "info"
 opa_decision_logs: false
 

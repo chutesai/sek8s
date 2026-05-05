@@ -14,7 +14,7 @@ Confidential GPU infrastructure for Chutes miners and zero-trust workloads. This
 | `**docs/**`             | Integration guide with [chutes-miner](https://github.com/chutesai/chutes-miner) and system-status service documentation |
 | `ansible/guest/`          | Ansible roles for guest image build automation                                                                          |
 | `sek8s/`, `nvevidence/` | Python services running inside the guest (attestation, evidence verification, system status)                            |
-| `tdx/`                  | Submodule with Intel's TDX host enablement scripts                                                                      |
+| `guest-tools/`          | Boot measurement extraction tools (`extract-acpi.sh`, `extract-vm-measurements.sh`)                                     |
 
 
 ---
