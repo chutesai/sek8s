@@ -61,6 +61,31 @@ test_deny_gpu_operator_non_nvidia_crd if {
 }
 
 # ---------------------------------------------------------------------------
+# GPU operator SA allowed to manage bundled NFD CRDs (gpu-operator v26+)
+# ---------------------------------------------------------------------------
+
+test_allow_gpu_operator_update_nfd_crd if {
+	req := _crd_request("UPDATE", "nodefeatures.nfd.k8s-sigs.io", "system:serviceaccount:gpu-operator:gpu-operator-upgrade-crd")
+	count({m | deny[m]; contains(m, "CRD operation")}) == 0 with input as {"request": req}
+}
+
+test_allow_gpu_operator_update_nodefeaturerules_crd if {
+	req := _crd_request("UPDATE", "nodefeaturerules.nfd.k8s-sigs.io", "system:serviceaccount:gpu-operator:gpu-operator")
+	count({m | deny[m]; contains(m, "CRD operation")}) == 0 with input as {"request": req}
+}
+
+test_allow_gpu_operator_create_nfd_crd if {
+	req := _crd_request("CREATE", "nodefeaturegroups.nfd.k8s-sigs.io", "system:serviceaccount:gpu-operator:gpu-operator")
+	count({m | deny[m]; contains(m, "CRD operation")}) == 0 with input as {"request": req}
+}
+
+# Non-nvidia, non-NFD CRDs are still denied even for gpu-operator SAs
+test_deny_gpu_operator_arbitrary_non_bundled_crd if {
+	req := _crd_request("CREATE", "widgets.example.com", "system:serviceaccount:gpu-operator:gpu-operator")
+	deny["CRD operation 'CREATE' on 'widgets.example.com' is not allowed"] with input as {"request": req}
+}
+
+# ---------------------------------------------------------------------------
 # K3s system exemptions still work
 # ---------------------------------------------------------------------------
 
