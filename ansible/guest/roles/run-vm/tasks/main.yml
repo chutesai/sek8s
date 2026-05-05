@@ -221,10 +221,14 @@
   changed_when: false
   failed_when: false
 
-# - name: Set qemu user and group
-#   ansible.builtin.set_fact:
-#     qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
-#     qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
+# Read the QEMU user/group that libvirt will use for dynamic ownership so we can
+# pre-set the disk ownership before virt-install. Without this, libvirt registers
+# the disk's current owner (root:root) at domain-define time, then fails at
+# domain-start time when it tries to relabel to the QEMU user — "already in use".
+- name: Set qemu user and group
+  ansible.builtin.set_fact:
+    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
+    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
 
 - name: Ensure libvirt image directory exists
   ansible.builtin.file:
@@ -239,6 +243,12 @@
     mode: "0644"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
+
+- name: Set build disk ownership for libvirt DAC security driver
+  ansible.builtin.file:
+    path: "{{ build_img_path }}"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
 
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:
@@ -261,25 +271,6 @@
   ansible.builtin.file:
     path: /var/lib/libvirt/boot/tdx-cloudinit.iso
     mode: "0644"
-
-- name: Diagnose disk state before virt-install
-  ansible.builtin.shell: |
-    echo "=== virsh list --all ==="
-    virsh list --all
-    echo "=== pool-refresh ==="
-    virsh pool-refresh default 2>&1 || true
-    echo "=== vol-info ==="
-    virsh vol-info --pool default tdx-guest.qcow2 2>&1 || true
-    echo "=== file ownership ==="
-    stat "{{ build_img_path }}"
-  register: diag_out
-  changed_when: false
-  when: vm_exists.rc != 0 or no_cache == 'true'
-
-- name: Show pre-virt-install diagnostics
-  ansible.builtin.debug:
-    msg: "{{ diag_out.stdout_lines }}"
-  when: vm_exists.rc != 0 or no_cache == 'true'
 
 - name: Start temporary VM
   ansible.builtin.command: |
