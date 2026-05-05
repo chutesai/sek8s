@@ -66,12 +66,26 @@ upgrade_chart() {
     expected_version=$(tr -d '\n' < "$marker_file")
 
     # Query installed release by name within its namespace
+    local helm_list_output helm_list_err helm_list_rc
+    helm_list_err=$(mktemp)
+    helm_list_rc=0
+    helm_list_output=$(helm list -n "$NAMESPACE" -o json 2>"$helm_list_err") || helm_list_rc=$?
+
+    if [ $helm_list_rc -ne 0 ]; then
+        log "[$chart_name] WARNING: helm list failed (rc=$helm_list_rc): $(cat "$helm_list_err")"
+        rm -f "$helm_list_err"
+        log "[$chart_name] Skipping upgrade due to helm list failure"
+        return 1
+    fi
+    rm -f "$helm_list_err"
+
     local release_json
-    release_json=$(helm list -n "$NAMESPACE" -o json 2>/dev/null \
+    release_json=$(echo "$helm_list_output" \
         | jq -r --arg r "$RELEASE" '.[] | select(.name == $r)' || true)
 
     if [ -z "$release_json" ]; then
         log "[$chart_name] WARNING: Release '$RELEASE' not found in namespace '$NAMESPACE'. Skipping (release must be pre-installed at image build time)."
+        log "[$chart_name] helm list returned: $helm_list_output"
         return 0
     fi
 

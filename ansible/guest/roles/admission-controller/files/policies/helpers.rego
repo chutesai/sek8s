@@ -67,6 +67,12 @@ is_system_or_controller_user if {
     startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
 }
 
+# GPU operator service accounts managing NVIDIA CRDs (e.g. gpu-operator-upgrade-crd job).
+is_gpu_operator_crd_operation if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
+    endswith(input.request.name, ".nvidia.com")
+}
+
 is_system_or_controller_user if {
     startswith(input.request.userInfo.username, "system:serviceaccount:attestation-system:")
 }
