@@ -455,34 +455,51 @@ fi
 # --------------------------------------------------------------------
 echo "Step 0: Verifying host configuration..."
 
-# Check if TDX module is initialized via dmesg
-TDX_DMESG=$(sudo dmesg | grep -i tdx 2>/dev/null || echo "")
+# Check TDX is active using sysfs (persists across dmesg ring-buffer rollover)
+# then /proc/cpuinfo, and finally dmesg as a last resort.
+_tdx_ok=0
+_tdx_source=""
 
-if ! echo "$TDX_DMESG" | grep -q "module initialized"; then
-  echo "✗ Error: TDX module not initialized on this host"
+# kvm_intel exposes whether TDX support is compiled and active
+if [[ "$(cat /sys/module/kvm_intel/parameters/tdx 2>/dev/null)" == "Y" ]]; then
+  _tdx_ok=1
+  _tdx_source="sysfs (/sys/module/kvm_intel/parameters/tdx=Y)"
+fi
+
+# /proc/cpuinfo reports tdx_host_platform when TDX is enabled in the firmware/kernel
+if [[ $_tdx_ok -eq 0 ]] && grep -qw 'tdx_host_platform\|tdx' /proc/cpuinfo 2>/dev/null; then
+  _tdx_ok=1
+  _tdx_source="/proc/cpuinfo"
+fi
+
+# Fallback: dmesg ring buffer — may be absent on long-running hosts
+if [[ $_tdx_ok -eq 0 ]]; then
+  TDX_DMESG=$(sudo dmesg | grep -i tdx 2>/dev/null || echo "")
+  if echo "$TDX_DMESG" | grep -q "module initialized"; then
+    _tdx_ok=1
+    _tdx_source="dmesg"
+  fi
+fi
+
+if [[ $_tdx_ok -eq 0 ]]; then
+  echo "✗ Error: TDX does not appear to be active on this host"
   echo ""
-  echo "TDX-related kernel messages:"
+  echo "Checked: sysfs, /proc/cpuinfo, dmesg — none confirmed TDX active."
+  TDX_DMESG="${TDX_DMESG:-$(sudo dmesg | grep -i tdx 2>/dev/null || echo "")}"
   if [[ -n "$TDX_DMESG" ]]; then
+    echo "TDX-related dmesg entries:"
     echo "$TDX_DMESG" | tail -n 10
-  else
-    echo "  (none found)"
   fi
   echo ""
   echo "To enable TDX:"
   echo "  1. Verify CPU supports TDX: grep tdx /proc/cpuinfo"
   echo "  2. Enable TDX in BIOS/UEFI settings"
   echo "  3. Ensure TDX kernel support is installed"
-  echo "  4. Reboot and check: dmesg | grep -i tdx"
+  echo "  4. Reboot and check: cat /sys/module/kvm_intel/parameters/tdx"
   exit 1
 fi
 
-# Additionally check CPU support
-if ! grep -q tdx /proc/cpuinfo 2>/dev/null; then
-  echo "⚠ Warning: TDX instruction not found in /proc/cpuinfo"
-  echo "  This may indicate incomplete TDX support"
-fi
-
-echo "✓ TDX module initialized"
+echo "✓ TDX active (confirmed via $_tdx_source)"
 
 # Ensure NUMA zone reclaim is disabled (allows cross-node allocation for QEMU/KVM)
 ZONE_RECLAIM=$(sysctl -n vm.zone_reclaim_mode 2>/dev/null || echo "unknown")
