@@ -7,7 +7,7 @@ BindAddress: {{ apt_cache_bind_address }}
 
 # Route Ubuntu package requests through the configured fast mirror.
 # This avoids apt-cacher-ng having to fall back to the slow global archive.ubuntu.com.
-Remap-uburep: http://{{ apt_cache_upstream_mirror }}/ubuntu/ /ubuntu
+Remap-uburep: http://{{ apt_mirror | default('archive.ubuntu.com') }}/ubuntu/ /ubuntu
 Remap-ubusec: http://security.ubuntu.com/ubuntu/ /ubuntu-security
 
 Remap-debrep: file:deb_mirror*.gz /debian ; file:backends_debian

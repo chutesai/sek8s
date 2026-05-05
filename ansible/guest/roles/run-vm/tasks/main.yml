@@ -65,6 +65,40 @@
     path: "{{ prepared_img_path }}"
   register: prepared_img_stat
 
+- name: Benchmark Ubuntu mirrors and select fastest
+  ansible.builtin.shell: |
+    best_mirror="archive.ubuntu.com"
+    best_speed=0
+    for mirror in \
+        au.archive.ubuntu.com \
+        nz.archive.ubuntu.com \
+        us.archive.ubuntu.com \
+        de.archive.ubuntu.com \
+        gb.archive.ubuntu.com \
+        archive.ubuntu.com; do
+      speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
+        -w "%{speed_download}" \
+        "http://${mirror}/ubuntu/dists/noble/Release" 2>/dev/null \
+        | awk '{print int($1)}')
+      speed=${speed:-0}
+      if [ "$speed" -gt "$best_speed" ]; then
+        best_speed="$speed"
+        best_mirror="$mirror"
+      fi
+    done
+    echo "${best_mirror}"
+  register: benchmarked_mirror_host
+  changed_when: false
+  when: apt_mirror | length == 0
+
+- name: Set effective apt mirror fact
+  ansible.builtin.set_fact:
+    effective_apt_mirror: "{{ apt_mirror if apt_mirror | length > 0 else benchmarked_mirror_host.stdout | trim }}"
+
+- name: Log selected mirror
+  ansible.builtin.debug:
+    msg: "{{ 'Using pinned apt mirror: ' + effective_apt_mirror if apt_mirror | length > 0 else 'Auto-detected fastest apt mirror: ' + effective_apt_mirror }}"
+
 - name: Prepare base image and save offline checkpoint
   when: not prepared_img_stat.stat.exists
   block:
@@ -90,7 +124,7 @@
     - name: Install kernel and boot packages offline
       ansible.builtin.command: >
         virt-customize -a "{{ base_img_path }}"
-        --run-command 'echo "Acquire::http::Mirror \"http://{{ apt_mirror }}\";" > /etc/apt/apt.conf.d/99mirror'
+        --run-command 'echo "Acquire::http::Mirror \"http://{{ effective_apt_mirror }}\";" > /etc/apt/apt.conf.d/99mirror'
         --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
         --run-command 'systemctl mask grub-initrd-fallback.service'
         --run-command 'rm -f /etc/apt/apt.conf.d/99mirror'

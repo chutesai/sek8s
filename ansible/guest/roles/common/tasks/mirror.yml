@@ -4,20 +4,50 @@
     path: /etc/apt/apt.conf.d/01proxy
     state: absent
 
-- name: Update apt sources to use configured mirror
+- name: Benchmark Ubuntu mirrors and select fastest
+  ansible.builtin.shell: |
+    best_mirror="archive.ubuntu.com"
+    best_speed=0
+    for mirror in \
+        au.archive.ubuntu.com \
+        nz.archive.ubuntu.com \
+        us.archive.ubuntu.com \
+        de.archive.ubuntu.com \
+        gb.archive.ubuntu.com \
+        archive.ubuntu.com; do
+      speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
+        -w "%{speed_download}" \
+        "http://${mirror}/ubuntu/dists/noble/Release" 2>/dev/null \
+        | awk '{print int($1)}')
+      speed=${speed:-0}
+      if [ "$speed" -gt "$best_speed" ]; then
+        best_speed="$speed"
+        best_mirror="$mirror"
+      fi
+    done
+    echo "${best_mirror}"
+  register: benchmarked_mirror
+  changed_when: false
+  when: apt_mirror | length == 0
+
+- name: Set effective apt mirror fact
+  ansible.builtin.set_fact:
+    effective_apt_mirror: "{{ apt_mirror if apt_mirror | length > 0 else benchmarked_mirror.stdout | trim }}"
+
+- name: Log selected mirror
+  ansible.builtin.debug:
+    msg: "{{ 'Using pinned apt mirror: ' + effective_apt_mirror if apt_mirror | length > 0 else 'Auto-detected fastest apt mirror: ' + effective_apt_mirror }}"
+
+- name: Update apt sources to use selected mirror
   ansible.builtin.replace:
     path: /etc/apt/sources.list.d/ubuntu.sources
-    regexp: 'http://archive\.ubuntu\.com/ubuntu'
-    replace: "http://{{ apt_mirror }}/ubuntu"
+    regexp: 'http://[^/]*/ubuntu'
+    replace: "http://{{ effective_apt_mirror }}/ubuntu"
   failed_when: false
 
 - name: Update legacy sources.list if present
   ansible.builtin.replace:
     path: /etc/apt/sources.list
-    regexp: 'http://archive\.ubuntu\.com/ubuntu'
-    replace: "http://{{ apt_mirror }}/ubuntu"
+    regexp: 'http://[^/]*/ubuntu'
+    replace: "http://{{ effective_apt_mirror }}/ubuntu"
   failed_when: false
-
-- name: Log configured mirror
-  ansible.builtin.debug:
-    msg: "apt mirror set to {{ apt_mirror }}"
