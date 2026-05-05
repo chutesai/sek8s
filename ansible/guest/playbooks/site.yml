@@ -46,19 +46,6 @@
       ansible.builtin.include_role:
         name: common
 
-- name: Setup K3S clusters
-  hosts: vm
-  become: true
-  tags:
-    - k3s
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Include k3s role
-      ansible.builtin.include_role:
-        name: k3s
-
 - name: GPU Setup
   hosts: vm
   become: true
@@ -83,6 +70,19 @@
         name: save-checkpoint
       vars:
         checkpoint_img_path: "{{ gpu_img_path }}"
+
+- name: Setup K3S clusters
+  hosts: vm
+  become: true
+  tags:
+    - k3s
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include k3s role
+      ansible.builtin.include_role:
+        name: k3s
 
 - name: GPU verification service
   hosts: vm
