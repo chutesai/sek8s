@@ -262,6 +262,12 @@
     path: /var/lib/libvirt/boot/tdx-cloudinit.iso
     mode: "0644"
 
+- name: Restart libvirtd to clear stale security label state before VM creation
+  ansible.builtin.systemd:
+    name: libvirtd
+    state: restarted
+  when: vm_exists.rc != 0 or no_cache == 'true'
+
 - name: Start temporary VM
   ansible.builtin.command: |
     virt-install \
