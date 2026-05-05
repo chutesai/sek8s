@@ -32,3 +32,18 @@
     - name: Resume build VM
       ansible.builtin.command: virsh resume "{{ vm_name }}"
       changed_when: true
+
+    - name: Wait for VM network to recover after resume
+      ansible.builtin.wait_for:
+        host: "{{ build_vm_ip }}"
+        port: 22
+        timeout: 60
+        delay: 5
+
+    - name: Restore network state in VM after resume
+      ansible.builtin.shell: |
+        systemctl restart systemd-networkd
+        systemctl restart systemd-resolved
+      delegate_to: build-node
+      become: true
+      changed_when: false
