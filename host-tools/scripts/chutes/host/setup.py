@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from chutes.host.profiles import APTRepo, AptPin, HostProfile, PPA
+from chutes.host.profiles import APTRepo, HostProfile, PPA
 
 
 def _run(cmd: list[str], **kwargs):
@@ -23,19 +23,15 @@ def _run(cmd: list[str], **kwargs):
 def _add_repo(repo: APTRepo):
     """Add a generic APT repository with DEB822 sources and pinning.
 
-    When repo.signed_by_path is set, that pre-installed keyring is used
-    directly and no key download is performed.  Otherwise the key is
-    downloaded from repo.signing_key_url and saved to /etc/apt/keyrings/.
+    Downloads the signing key from repo.signing_key_url, writes a
+    sources entry to /etc/apt/sources.list.d/, and creates a pin file.
     """
     print(f"  Adding repo: {repo.name} ({repo.uri})")
+    keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
     sources_file = f"/etc/apt/sources.list.d/{repo.name}.sources"
 
-    if repo.signed_by_path:
-        keyring_path = repo.signed_by_path
-    else:
-        keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
-        _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
-        _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
+    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+    _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
 
     sources_content = (
         f"Types: deb\n"
@@ -46,18 +42,11 @@ def _add_repo(repo: APTRepo):
     )
     _write_system_file(sources_file, sources_content)
 
-    # Pin the repo so its packages resolve at the configured priority.
-    # For vendor repos (e.g. Intel SGX) this is high (4000); for auxiliary
-    # archive pockets (e.g. questing on resolute) this is low (100) so apt
-    # only draws from them when an explicit per-package pin requests it.
+    # Pin the repo so its packages take priority over Ubuntu archive
     pin_file = f"/etc/apt/preferences.d/{repo.name}-pin-{repo.pin_priority}"
-    if "download.01.org" in repo.uri:
-        pin_origin = "download.01.org"
-    else:
-        pin_origin = repo.uri.split("//", 1)[-1].rstrip("/").split("/")[0]
     pin_content = (
         f"Package: *\n"
-        f"Pin: origin {pin_origin}\n"
+        f"Pin: origin download.01.org\n"
         f"Pin-Priority: {repo.pin_priority}\n"
     )
     _write_system_file(pin_file, pin_content)
@@ -282,6 +271,67 @@ def _grub_update_cmdline(additions: list[str]):
         _run(["sudo", "grub-install", "--no-nvram"])
 
 
+def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
+    """Ensure QCNL accepts PCCS's self-signed TLS certificate.
+
+    PCCS runs locally with a self-signed cert.  The default QCNL config ships
+    with use_secure_cert=true which causes CURL error 60 on every quote
+    request.  We patch it to false so QGS can reach the local PCCS.
+
+    The file is a JSON5-ish format (allows comments and trailing commas) so
+    we use a regex patch rather than json.loads to avoid stripping comments.
+    """
+    import re as _re
+
+    if not os.path.exists(conf_path):
+        print(f"  {conf_path} not found — QCNL not installed yet, skipping")
+        return
+
+    with open(conf_path) as f:
+        original = f.read()
+
+    updated = _re.sub(
+        r'"use_secure_cert"\s*:\s*true',
+        '"use_secure_cert": false',
+        original,
+    )
+
+    if updated == original:
+        print(f"  {conf_path} already has use_secure_cert=false")
+        return
+
+    print(f"  Patching {conf_path}: use_secure_cert → false")
+    _write_system_file(conf_path, updated)
+
+
+def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
+    """Ensure QGS uses vsock (port 4050) rather than a Unix domain socket.
+
+    The default shipped config has the port line commented out, which causes
+    QGS to bind a Unix socket that the VM cannot reach.  We uncomment/set
+    'port = 4050' so QGS listens on vsock and restarts the service if the
+    file was changed.
+    """
+    import re as _re
+
+    if not os.path.exists(conf_path):
+        print(f"  {conf_path} not found — QGS not installed yet, skipping")
+        return
+
+    with open(conf_path) as f:
+        original = f.read()
+
+    updated = _re.sub(r"^#?\s*port\s*=.*$", "port = 4050", original, flags=_re.MULTILINE)
+
+    if updated == original:
+        print(f"  {conf_path} already set to vsock port 4050")
+        return
+
+    print(f"  Configuring {conf_path}: enabling vsock port 4050")
+    _write_system_file(conf_path, updated)
+    _run(["sudo", "systemctl", "restart", "qgsd"])
+
+
 def _add_user_to_kvm():
     """Add the invoking (non-root) user to the kvm group."""
     user = os.environ.get("SUDO_USER") or os.environ.get("USER")
@@ -290,19 +340,6 @@ def _add_user_to_kvm():
         return
     print(f"  Adding {user} to kvm group")
     _run(["sudo", "usermod", "-aG", "kvm", user])
-
-
-def _write_apt_pins(pins: list[AptPin]):
-    """Write per-package APT preferences entries to /etc/apt/preferences.d/."""
-    for pin in pins:
-        pin_file = f"/etc/apt/preferences.d/{pin.name}-pin-{pin.priority}"
-        pin_content = (
-            f"Package: {pin.package}\n"
-            f"Pin: {pin.pin}\n"
-            f"Pin-Priority: {pin.priority}\n"
-        )
-        print(f"  Writing apt pin: {pin.package} -> {pin.pin} (priority {pin.priority})")
-        _write_system_file(pin_file, pin_content)
 
 
 def setup_host(profile: HostProfile):
@@ -314,8 +351,10 @@ def setup_host(profile: HostProfile):
     3. Install kernel + packages
     4. Set kernel as default boot target
     5. Update GRUB cmdline
-    6. Add user to kvm group
-    7. Install dependencies (CLI symlinks + nvidia-gpu-tools)
+    6. Configure QGS for vsock (port 4050)
+    7. Configure QCNL to accept local PCCS self-signed cert
+    8. Add user to kvm group
+    9. Install dependencies (CLI symlinks + nvidia-gpu-tools)
     """
     print(f"\n{'=' * 60}")
     print(f"  TDX Host Setup: {profile.describe()}")
@@ -338,11 +377,6 @@ def setup_host(profile: HostProfile):
     # 1b. Generic APT repos
     for repo in profile.repos:
         _add_repo(repo)
-
-    # 1c. Per-package APT preferences pins
-    if profile.apt_pins:
-        print("Step 1c: Writing per-package APT pins...")
-        _write_apt_pins(profile.apt_pins)
 
     # 2. apt update
     print("\nStep 2: Updating package index...")
@@ -374,12 +408,20 @@ def setup_host(profile: HostProfile):
     print("\nStep 5: Updating GRUB cmdline...")
     _grub_update_cmdline(profile.grub_cmdline_additions)
 
-    # 6. kvm group
-    print("\nStep 6: Configuring kvm group...")
+    # 6. QGS vsock mode
+    print("\nStep 6: Configuring QGS for vsock (port 4050)...")
+    _configure_qgs_vsock()
+
+    # 7. QCNL self-signed cert
+    print("\nStep 7: Configuring QCNL to accept local PCCS self-signed cert...")
+    _configure_qcnl()
+
+    # 8. kvm group
+    print("\nStep 8: Configuring kvm group...")
     _add_user_to_kvm()
 
-    # 7. Host dependencies (repo CLIs + nvidia-gpu-tools)
-    print("\nStep 7: Installing dependencies...")
+    # 9. Host dependencies (repo CLIs + nvidia-gpu-tools)
+    print("\nStep 9: Installing dependencies...")
     install_dependencies()
 
     print(f"\n{'=' * 60}")
