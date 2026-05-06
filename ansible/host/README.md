@@ -75,7 +75,7 @@ Upgrade timeouts (all in `group_vars/all.yml`, override as needed):
 |---|---|
 | `upgrade_drain_timeout` | `600s` |
 | `upgrade_powerdown_timeout_seconds` | `300` |
-| `upgrade_health_poll_seconds` | `60` |
+| `upgrade_health_poll_seconds` | `900` |
 
 ---
 

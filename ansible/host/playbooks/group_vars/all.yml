@@ -25,7 +25,7 @@ upgrade_chute_label: "chutes/chute=true"
 upgrade_drain_timeout: 600s
 upgrade_drain_timeout_seconds: 600
 upgrade_powerdown_timeout_seconds: 300
-upgrade_health_poll_seconds: 60
+upgrade_health_poll_seconds: 900
 
 # OS upgrade path for upgrade-host.yml.
 # Maps current Ubuntu version -> next supported version via do-release-upgrade.

@@ -60,5 +60,5 @@
   become: false
   register: _health_poll
   until: _health_poll.rc == 0
-  retries: "{{ [((upgrade_health_poll_seconds | int) // 5), 1] | max }}"
-  delay: 5
+  retries: "{{ [((upgrade_health_poll_seconds | int) // 30), 1] | max }}"
+  delay: 30
