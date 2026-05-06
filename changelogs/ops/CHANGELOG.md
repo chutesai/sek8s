@@ -3,6 +3,12 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Date-stamped entries, not paired with any VERSION file. Run `make promote-changelogs` to aggregate fragments.
 
+## [2026-05-06]
+
+### Fixed
+- `setup-tdx-host` now configures QGS for vsock mode (`port = 4050` in `/etc/qgs.conf`) on all hosts; the Intel-shipped default leaves this commented out, silently breaking TDX quote generation in VMs
+- `setup-tdx-host` now sets `use_secure_cert: false` in `/etc/sgx_default_qcnl.conf` so QGS can reach the local PCCS instance which uses a self-signed certificate
+
 ## [2026-05-05]
 
 ### Added
