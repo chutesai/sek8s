@@ -46,6 +46,30 @@ jobs:
       - name: Run unit tests
         run: make test-local
 
+  changelog:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Require fragment (non-main targets)
+        if: github.base_ref != 'main'
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | python scripts/promote_changelogs.py --check-branch "${{ github.head_ref }}"
+
+      - name: Require no pending fragments (main target)
+        if: github.base_ref == 'main'
+        run: python scripts/promote_changelogs.py --check --strict
+
   opa:
     runs-on: ubuntu-latest
     steps:
