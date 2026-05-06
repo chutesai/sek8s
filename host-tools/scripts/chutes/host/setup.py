@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from chutes.host.profiles import APTRepo, HostProfile, PPA
+from chutes.host.profiles import APTRepo, AptPin, HostProfile, PPA
 
 
 def _run(cmd: list[str], **kwargs):
@@ -23,15 +23,19 @@ def _run(cmd: list[str], **kwargs):
 def _add_repo(repo: APTRepo):
     """Add a generic APT repository with DEB822 sources and pinning.
 
-    Downloads the signing key from repo.signing_key_url, writes a
-    sources entry to /etc/apt/sources.list.d/, and creates a pin file.
+    When repo.signed_by_path is set, that pre-installed keyring is used
+    directly and no key download is performed.  Otherwise the key is
+    downloaded from repo.signing_key_url and saved to /etc/apt/keyrings/.
     """
     print(f"  Adding repo: {repo.name} ({repo.uri})")
-    keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
     sources_file = f"/etc/apt/sources.list.d/{repo.name}.sources"
 
-    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
-    _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
+    if repo.signed_by_path:
+        keyring_path = repo.signed_by_path
+    else:
+        keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
+        _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+        _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
 
     sources_content = (
         f"Types: deb\n"
@@ -42,11 +46,18 @@ def _add_repo(repo: APTRepo):
     )
     _write_system_file(sources_file, sources_content)
 
-    # Pin the repo so its packages take priority over Ubuntu archive
+    # Pin the repo so its packages resolve at the configured priority.
+    # For vendor repos (e.g. Intel SGX) this is high (4000); for auxiliary
+    # archive pockets (e.g. questing on resolute) this is low (100) so apt
+    # only draws from them when an explicit per-package pin requests it.
     pin_file = f"/etc/apt/preferences.d/{repo.name}-pin-{repo.pin_priority}"
+    if "download.01.org" in repo.uri:
+        pin_origin = "download.01.org"
+    else:
+        pin_origin = repo.uri.split("//", 1)[-1].rstrip("/").split("/")[0]
     pin_content = (
         f"Package: *\n"
-        f"Pin: origin download.01.org\n"
+        f"Pin: origin {pin_origin}\n"
         f"Pin-Priority: {repo.pin_priority}\n"
     )
     _write_system_file(pin_file, pin_content)
@@ -281,6 +292,19 @@ def _add_user_to_kvm():
     _run(["sudo", "usermod", "-aG", "kvm", user])
 
 
+def _write_apt_pins(pins: list[AptPin]):
+    """Write per-package APT preferences entries to /etc/apt/preferences.d/."""
+    for pin in pins:
+        pin_file = f"/etc/apt/preferences.d/{pin.name}-pin-{pin.priority}"
+        pin_content = (
+            f"Package: {pin.package}\n"
+            f"Pin: {pin.pin}\n"
+            f"Pin-Priority: {pin.priority}\n"
+        )
+        print(f"  Writing apt pin: {pin.package} -> {pin.pin} (priority {pin.priority})")
+        _write_system_file(pin_file, pin_content)
+
+
 def setup_host(profile: HostProfile):
     """Execute TDX host setup using the given profile.
 
@@ -314,6 +338,11 @@ def setup_host(profile: HostProfile):
     # 1b. Generic APT repos
     for repo in profile.repos:
         _add_repo(repo)
+
+    # 1c. Per-package APT preferences pins
+    if profile.apt_pins:
+        print("Step 1c: Writing per-package APT pins...")
+        _write_apt_pins(profile.apt_pins)
 
     # 2. apt update
     print("\nStep 2: Updating package index...")

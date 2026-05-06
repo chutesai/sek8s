@@ -39,14 +39,39 @@ class APTRepo:
     Used for vendor repositories such as Intel's download.01.org that are
     not Launchpad PPAs.  The signing key URL is downloaded and saved to
     /etc/apt/keyrings/ before writing a DEB822 sources entry.
+
+    When signed_by_path is set, that pre-installed keyring is used directly
+    (no key download).  signing_key_url is ignored in that case and may be
+    left as an empty string.  Use this for Ubuntu archive pockets whose
+    keyring ships with every Ubuntu install.
     """
 
     name: str
     uri: str
     suite: str
     components: str
-    signing_key_url: str
+    signing_key_url: str = ""
     pin_priority: int = 4000
+    signed_by_path: str = ""
+
+
+@dataclass
+class AptPin:
+    """APT preferences pin for specific packages or package patterns.
+
+    Writes a snippet to /etc/apt/preferences.d/ so apt resolves the named
+    packages from a particular release or origin at the given priority.
+
+    package:  space-separated package names or a glob (e.g. "qemu*")
+    pin:      apt pin expression (e.g. "release a=questing")
+    priority: pin priority (>500 overrides the default archive preference)
+    name:     used as part of the preferences.d filename; must be unique
+    """
+
+    package: str
+    pin: str
+    priority: int
+    name: str
 
 
 class HostProfile(ABC):
@@ -72,6 +97,11 @@ class HostProfile(ABC):
     @property
     def repos(self) -> list[APTRepo]:
         """Third-party APT repos (non-PPA) to add before installing packages."""
+        return []
+
+    @property
+    def apt_pins(self) -> list[AptPin]:
+        """Per-package APT preferences pins written to /etc/apt/preferences.d/."""
         return []
 
     @property
@@ -143,7 +173,14 @@ class Ubuntu2510Profile(HostProfile):
 
 
 class Ubuntu2604Profile(HostProfile):
-    """Ubuntu 26.04 (Resolute) — native TDX kernel and QEMU 10.2, attestation via Intel DCAP repo."""
+    """Ubuntu 26.04 (Resolute) — native TDX kernel, QEMU pinned to 10.1, attestation via Intel DCAP repo.
+
+    QEMU is pinned to the 10.1 release (same as Ubuntu 25.10) so that both
+    host releases share a single set of TDX boot measurements.  The Ubuntu
+    questing (25.10) archive is added as a low-priority source solely to
+    supply the QEMU 10.1 packages; all other packages resolve from the
+    resolute archive as normal.
+    """
 
     @property
     def name(self) -> str:
@@ -161,6 +198,10 @@ class Ubuntu2604Profile(HostProfile):
     def repos(self) -> list[APTRepo]:
         # Intel official SGX/DCAP attestation repository (no Launchpad equivalent).
         # Provides sgx-dcap-pccs, tdx-qgs, libsgx-dcap-default-qpl for TDX attestation.
+        #
+        # Ubuntu questing (25.10) archive added at low priority (100) so that only
+        # explicitly pinned packages (qemu*) are drawn from it.  The Ubuntu archive
+        # keyring is pre-installed on every Ubuntu system, so no key download needed.
         return [
             APTRepo(
                 name="intel-sgx",
@@ -168,6 +209,28 @@ class Ubuntu2604Profile(HostProfile):
                 suite="resolute",
                 components="main",
                 signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
+            ),
+            APTRepo(
+                name="ubuntu-questing",
+                uri="http://archive.ubuntu.com/ubuntu/",
+                suite="questing",
+                components="main universe",
+                signed_by_path="/usr/share/keyrings/ubuntu-archive-keyring.gpg",
+                pin_priority=100,
+            ),
+        ]
+
+    @property
+    def apt_pins(self) -> list[AptPin]:
+        # Pull all qemu* packages from questing (10.1) rather than the resolute
+        # archive (10.2).  Priority 600 beats the default archive preference (500)
+        # so apt selects questing's 10.1 build when multiple versions are available.
+        return [
+            AptPin(
+                package="qemu*",
+                pin="release a=questing",
+                priority=600,
+                name="qemu-questing-10.1",
             ),
         ]
 
