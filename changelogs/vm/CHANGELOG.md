@@ -7,12 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.1.0] - 2026-04-07
+## [1.2.0] - 2026-05-05
+
+### Added
+- Boot-time Helm upgrade script (`04-helm-chart-upgrade.sh`) refactored into a generic multi-chart dispatcher; per-chart configs in `/etc/chutes/chart-configs/` and optional override scripts in `/etc/chutes/chart-upgrade-overrides/` support custom upgrade logic (e.g. GPU Operator CRD migration)
+- GPU Operator boot-time upgrade override script handles CRD migration with `--disable-openapi-validation` and `operator.upgradeCRD=true` for persistent clusters upgrading across major chart versions
+
+### Changed
+- Updated sek8s to 0.3.0: HuggingFace cache improvements including download cancellation, stale revision purging, and isolated download subprocess.
+- k3s upgraded from `v1.33.7+k3s1` to `v1.35.4+k3s1`
+- CUDA toolkit upgraded from `13-0` to `13-2`
+- NVIDIA driver package upgraded from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1`
+- GPU Operator Helm chart upgraded from `v24.9.2` to `v26.3.1`; build-time install now uses `operator.upgradeCRD=true`
+- Helm CLI upgraded from `v3.11.3` to `v3.20.2`
+- OPA upgraded from `0.68.0` to `1.15.2` (0.x to 1.x major bump; existing policy tests confirmed passing)
+- cosign pinned to `v2.6.3` (previously fetched `latest` at build time, non-deterministic; fixes CVE-2026-39395)
+- `nv-attestation-sdk` constraint bumped from `^2.6.2` to `^2.7.0` in `nvevidence/`
+
+### Fixed
+- OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations, preventing the Job controller from being permanently blocked when removing tracking finalizers from completed CronJob pods that predate the `automountServiceAccountToken` policy.
+
+## [1.1.0] - 2026-05-04
 
 ### Added
 - nvidia-imex package (GPU memory mapping over NVLink).
 - libnvidia-nscq package (NVSwitch Configuration and Query library).
 - DKMS build verification step in device-setup.
+- 
 
 ### Changed
 - NVIDIA 595 drivers — guest stack moves from 590 to 595 driver branch.
@@ -21,6 +42,14 @@ Version source of truth: `ansible/guest/VERSION`
   time (no prebuilt linux-modules-nvidia-*-open). Requires nvidia-dkms-open.
 - Single version pin: `nvidia_pkg_version` replaces `nvidia_pkg_release_ubuntu`
   and `nvidia_pkg_release_cuda` in group_vars.
+- k3s bumped from `v1.33.7+k3s1` to `v1.35.4+k3s1`.
+- CUDA version bumped from `13-0` to `13-2`.
+- NVIDIA driver package version bumped from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1`.
+- GPU operator helm chart bumped from `v24.9.2` to `v26.3.1`.
+- `extract-acpi.sh`: firmware path now overridable via `$TDVF_FIRMWARE` env var (defaults to `firmware/TDVF.fd`). Allows testing `OVMF.inteltdx.ms.fd` without modifying the script.
+
+### Fixed
+-
 
 ### Removed
 - nvidia-utils, nvidia-compute-utils, xserver-xorg-video-nvidia (folded into
@@ -28,6 +57,7 @@ Version source of truth: `ansible/guest/VERSION`
 - Prebuilt linux-modules-nvidia resolution and assertion (replaced by DKMS).
 - nvidia_pkg_release_ubuntu, nvidia_pkg_release_cuda, nvidia_firmware_pkg
   variables (replaced by nvidia_pkg_version).
+-
 
 ## [0.2.7] - 2026-03-31
 

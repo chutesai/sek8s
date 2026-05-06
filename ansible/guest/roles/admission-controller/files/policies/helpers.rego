@@ -67,6 +67,19 @@ is_system_or_controller_user if {
     startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
 }
 
+# GPU operator service accounts managing NVIDIA CRDs (e.g. gpu-operator-upgrade-crd job).
+is_gpu_operator_crd_operation if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
+    endswith(input.request.name, ".nvidia.com")
+}
+
+# GPU operator v26+ bundles Node Feature Discovery (NFD); its upgrade job also updates
+# NFD CRDs (nodefeatures.nfd.k8s-sigs.io, nodefeaturerules.nfd.k8s-sigs.io, etc.).
+is_gpu_operator_crd_operation if {
+    startswith(input.request.userInfo.username, "system:serviceaccount:gpu-operator:")
+    endswith(input.request.name, ".nfd.k8s-sigs.io")
+}
+
 is_system_or_controller_user if {
     startswith(input.request.userInfo.username, "system:serviceaccount:attestation-system:")
 }

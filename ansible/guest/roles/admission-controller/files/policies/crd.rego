@@ -13,6 +13,7 @@ deny contains msg if {
     not helpers.is_bootstrap_operation
     not helpers.is_k3s_system_operation
     not helpers.is_k3s_system_crd
+    not helpers.is_gpu_operator_crd_operation
     # Allow Gatekeeper CRDs
     not startswith(input.request.name, "gatekeeper")
     not endswith(input.request.name, ".gatekeeper.sh")

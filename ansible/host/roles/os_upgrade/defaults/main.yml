@@ -1,0 +1,13 @@
+---
+# Set to true to automatically put the server into maintenance, drain all
+# chute pods, and shut down the VM before upgrading. When false (default),
+# the playbook fails if a TEE guest is detected running so the operator
+# must shut it down manually first to avoid score impact.
+#
+# Override in inventory host_vars/group_vars or with -e auto_drain_vm=true.
+auto_drain_vm: true
+
+# Set to true (default) to automatically relaunch the VM and poll node-health
+# after all upgrade hops complete. Set to false to leave the host upgraded but
+# the VM stopped (e.g. for maintenance or manual inspection).
+relaunch_vm: true

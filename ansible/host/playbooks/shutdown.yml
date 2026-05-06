@@ -1,6 +1,6 @@
 ---
 # Graceful TEE guest shutdown: lock → purge deployments → wait for drain → shutdown → wait for power-down.
-# Does not change base images or relaunch. For upgrades use upgrade.yml (validator handles drain via maintenance).
+# Does not change base images or relaunch. For guest image upgrades use upgrade-guest.yml (validator handles drain via maintenance).
 #
 #   cd ansible/host && ansible-playbook -i inventory/hosts.yml playbooks/shutdown.yml
 #

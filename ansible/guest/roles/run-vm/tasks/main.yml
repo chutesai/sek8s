@@ -14,6 +14,17 @@
     update_cache: yes
     cache_valid_time: 3600
 
+- name: Configure libvirt to enable dynamic ownership
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/qemu.conf
+    regexp: '^#?dynamic_ownership\s*='
+    line: 'dynamic_ownership = 1'
+    backup: yes
+  notify: restart libvirtd
+
+- name: Apply libvirt config before any disk operations
+  ansible.builtin.meta: flush_handlers
+
 - name: Ensure libvirt default network is active
   ansible.builtin.command: virsh net-start default
   changed_when: false
@@ -41,11 +52,125 @@
   failed_when: false
   changed_when: "'Updated' in reservation_result.stdout or reservation_result.rc == 0"
 
-- name: Check if base image exists
+- name: Invalidate all image caches
+  when: no_cache == 'true'
+  block:
+    - name: Remove stale base image
+      ansible.builtin.file:
+        path: "{{ base_img_path }}"
+        state: absent
+
+    - name: Remove stale prepared image
+      ansible.builtin.file:
+        path: "{{ prepared_img_path }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove stale GPU image
+      ansible.builtin.file:
+        path: "{{ gpu_img_path }}"
+        state: absent
+      failed_when: false
+
+- name: Check if prepared image cache exists
   ansible.builtin.stat:
-    path: "{{ base_img_path }}"
-  register: base_image
-  failed_when: not base_image.stat.exists
+    path: "{{ prepared_img_path }}"
+  register: prepared_img_stat
+
+- name: Benchmark Ubuntu mirrors and select fastest
+  ansible.builtin.shell: |
+    best_mirror="archive.ubuntu.com"
+    best_speed=0
+    for mirror in \
+        au.archive.ubuntu.com \
+        nz.archive.ubuntu.com \
+        us.archive.ubuntu.com \
+        de.archive.ubuntu.com \
+        gb.archive.ubuntu.com \
+        archive.ubuntu.com; do
+      speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
+        -w "%{speed_download}" \
+        "http://${mirror}/ubuntu/dists/noble/Release" 2>/dev/null \
+        | awk '{print int($1)}')
+      speed=${speed:-0}
+      if [ "$speed" -gt "$best_speed" ]; then
+        best_speed="$speed"
+        best_mirror="$mirror"
+      fi
+    done
+    echo "${best_mirror}"
+  register: benchmarked_mirror_host
+  changed_when: false
+  when: apt_mirror | length == 0
+
+- name: Set effective apt mirror fact
+  ansible.builtin.set_fact:
+    effective_apt_mirror: "{{ apt_mirror if apt_mirror | length > 0 else benchmarked_mirror_host.stdout | trim }}"
+
+- name: Log selected mirror
+  ansible.builtin.debug:
+    msg: "{{ 'Using pinned apt mirror: ' + effective_apt_mirror if apt_mirror | length > 0 else 'Auto-detected fastest apt mirror: ' + effective_apt_mirror }}"
+
+- name: Prepare base image and save offline checkpoint
+  when: not prepared_img_stat.stat.exists
+  block:
+    - name: Download Ubuntu cloud image
+      ansible.builtin.get_url:
+        url: "https://cloud-images.ubuntu.com/releases/{{ ubuntu_version }}/release/ubuntu-{{ ubuntu_version }}-server-cloudimg-amd64.img"
+        dest: "{{ base_img_path }}"
+        checksum: "sha256:https://cloud-images.ubuntu.com/releases/{{ ubuntu_version }}/release/SHA256SUMS"
+        mode: '0644'
+
+    - name: Resize cloud image
+      ansible.builtin.command: qemu-img resize "{{ base_img_path }}" +{{ base_img_resize }}
+      changed_when: true
+
+    - name: Expand rootfs partition
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}" --no-network
+        --run-command 'growpart /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0 1'
+        --run-command 'resize2fs /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0-part1'
+        --run-command 'systemctl mask pollinate.service'
+      changed_when: true
+
+    - name: Install kernel and boot packages offline
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}"
+        --run-command 'echo "Acquire::http::Mirror \"http://{{ effective_apt_mirror }}\";" > /etc/apt/apt.conf.d/99mirror'
+        --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
+        --run-command 'systemctl mask grub-initrd-fallback.service'
+        --run-command 'rm -f /etc/apt/apt.conf.d/99mirror'
+      changed_when: true
+
+    - name: Ensure build env image directory exists
+      ansible.builtin.file:
+        path: "{{ img_dir }}/{{ build_env }}"
+        state: directory
+        mode: '0755'
+
+    - name: Save prepared offline checkpoint
+      ansible.builtin.copy:
+        src: "{{ base_img_path }}"
+        dest: "{{ prepared_img_path }}"
+        remote_src: true
+        mode: '0644'
+
+- name: Check if GPU image cache exists
+  ansible.builtin.stat:
+    path: "{{ gpu_img_path }}"
+  register: gpu_img_stat
+
+- name: Determine best starting image
+  ansible.builtin.set_fact:
+    start_img_path: >-
+      {{ gpu_img_path if (gpu_img_stat.stat.exists and no_cache != 'true')
+         else prepared_img_path }}
+
+- name: Log starting image selection
+  ansible.builtin.debug:
+    msg: >-
+      Starting build from: {{ start_img_path | basename }}
+      (gpu_cached={{ gpu_img_stat.stat.exists }}, no_cache={{ no_cache }})
 
 - name: Check if build image exists
   ansible.builtin.stat:
@@ -97,10 +222,14 @@
   changed_when: false
   failed_when: false
 
-# - name: Set qemu user and group
-#   ansible.builtin.set_fact:
-#     qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
-#     qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
+# Read the QEMU user/group that libvirt will use for dynamic ownership so we can
+# pre-set the disk ownership before virt-install. Without this, libvirt registers
+# the disk's current owner (root:root) at domain-define time, then fails at
+# domain-start time when it tries to relabel to the QEMU user — "already in use".
+- name: Set qemu user and group
+  ansible.builtin.set_fact:
+    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
+    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
 
 - name: Ensure libvirt image directory exists
   ansible.builtin.file:
@@ -110,22 +239,17 @@
 
 - name: Copy QCOW2 image into libvirt storage
   ansible.builtin.copy:
-    src: "{{ base_img_path }}"
-    dest: "{{  build_img_path }}"
+    src: "{{ start_img_path }}"
+    dest: "{{ build_img_path }}"
     mode: "0644"
     remote_src: yes
   when: (not build_image.stat.exists) or (no_cache == 'true')
 
-- name: Configure libvirt to enable dynamic ownership
-  ansible.builtin.lineinfile:
-    path: /etc/libvirt/qemu.conf
-    regexp: '^#?dynamic_ownership\s*='
-    line: 'dynamic_ownership = 1'
-    backup: yes
-  notify: restart libvirtd
-
-- name: Ensure libvirt changes are applied
-  ansible.builtin.meta: flush_handlers
+- name: Set build disk ownership for libvirt DAC security driver
+  ansible.builtin.file:
+    path: "{{ build_img_path }}"
+    owner: "{{ qemu_user }}"
+    group: "{{ qemu_group }}"
 
 - name: Fix permissions on libvirt cloud-init ISO directory
   ansible.builtin.file:

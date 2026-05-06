@@ -97,7 +97,7 @@ def main():
     vm_ip = network.get('vm_ip', '192.168.100.2')
     bridge_ip = network.get('bridge_ip', '192.168.100.1/24')
     vm_dns = network.get('dns', '8.8.8.8')
-    public_iface = network.get('public_interface', 'ens9f0np0')
+    public_iface = network.get('public_interface', '')
     network_type = network.get('type', 'tap')
     ssh_port = network.get('ssh_port', 2222)
 

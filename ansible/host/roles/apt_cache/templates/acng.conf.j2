@@ -1,0 +1,29 @@
+CacheDir: /var/cache/apt-cacher-ng
+LogDir: /var/log/apt-cacher-ng
+Port: {{ apt_cache_port }}
+{% if apt_cache_bind_address %}
+BindAddress: {{ apt_cache_bind_address }}
+{% endif %}
+
+# Route Ubuntu package requests through the configured fast mirror.
+# This avoids apt-cacher-ng having to fall back to the slow global archive.ubuntu.com.
+Remap-uburep: http://{{ apt_mirror | default('archive.ubuntu.com') }}/ubuntu/ /ubuntu
+Remap-ubusec: http://security.ubuntu.com/ubuntu/ /ubuntu-security
+
+Remap-debrep: file:deb_mirror*.gz /debian ; file:backends_debian
+Remap-cygwin: file:cygwin_mirrors /cygwin # ; file:backends_cygwin
+Remap-sfnet:  file:sfnet_mirrors
+Remap-alxrep: file:archlx_mirrors /archlinux
+Remap-fedora: file:fedora_mirrors
+Remap-epel:   file:epel_mirrors
+Remap-slrep:  file:sl_mirrors
+Remap-gentoo: file:gentoo_mirrors.gz /gentoo ; file:backends_gentoo
+
+ReportPage: acng-report.html
+ExThreshold: 4
+{% if apt_cache_max_size > 0 %}
+CacheSize: {{ apt_cache_max_size }}
+{% endif %}
+
+# Pass HTTPS directly — apt-cacher-ng cannot MITM TLS without extra cert setup
+PassThroughPattern: .*:443$

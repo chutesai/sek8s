@@ -25,7 +25,10 @@ network:
   vm_ip: "192.168.100.2"
   bridge_ip: "192.168.100.1/24"
   dns: "8.8.8.8"
-  public_interface: "ens9f0np0"
+  # public_interface: auto-detected from default route when empty or omitted.
+  # Set explicitly only on multi-homed hosts where the default-route NIC is not
+  # the intended outbound interface for VM traffic (e.g. management vs data NIC).
+  public_interface: ""
   type: "tap"  # Network type: "tap" (bridged) or "user" (SLIRP/port forwarding)
   ssh_port: 2222  # SSH port for user mode networking
 

@@ -161,10 +161,7 @@ fi
 # Provide connection instructions
 log "Connect to the VM using one of the following methods:"
 log "2. Console: Run 'virsh console $VM_NAME' to access the text console (exit with Ctrl+])."
-log "Default credentials (if not customized):"
-log "  Username: tdx"
-log "  Password: 123456"
-log "To customize credentials, edit cloud-init in setup-server.sh or check tdx/guest-tools/image/cloud-init/."
+log "Default credentials: root login via SSH key (configured in ansible/guest/roles/run-vm/tasks/main.yml)."
 
 # Validate custom setup
 if [ -f "$USER_DATA_TMPL" ]; then

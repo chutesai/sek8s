@@ -1,0 +1,32 @@
+---
+- name: Ensure apt-cacher-ng is installed
+  ansible.builtin.apt:
+    name: apt-cacher-ng
+    state: present
+    update_cache: true
+
+- name: Configure apt-cacher-ng
+  ansible.builtin.template:
+    src: acng.conf.j2
+    dest: /etc/apt-cacher-ng/acng.conf
+    mode: '0644'
+  notify: Restart apt-cacher-ng
+
+- name: Apply apt-cacher-ng config immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start apt-cacher-ng
+  ansible.builtin.systemd:
+    name: apt-cacher-ng
+    state: started
+    enabled: true
+
+- name: Ensure apt-cacher-ng is reachable on the libvirt bridge
+  ansible.builtin.wait_for:
+    host: "{{ libvirt_bridge_ip }}"
+    port: "{{ apt_cache_port }}"
+    timeout: 15
+
+- name: Show apt cache URL for guest VMs
+  ansible.builtin.debug:
+    msg: "apt-cacher-ng running at http://{{ libvirt_bridge_ip }}:{{ apt_cache_port }} — guest VMs will auto-detect it"

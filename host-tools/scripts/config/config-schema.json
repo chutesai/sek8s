@@ -47,7 +47,7 @@
     },
     "network": {
       "type": "object",
-      "required": ["vm_ip", "bridge_ip", "dns", "public_interface"],
+      "required": ["vm_ip", "bridge_ip", "dns"],
       "additionalProperties": false,
       "properties": {
         "vm_ip": {
@@ -67,8 +67,8 @@
         },
         "public_interface": {
           "type": "string",
-          "description": "Public network interface for NAT/forwarding",
-          "minLength": 1
+          "description": "Public network interface for NAT/forwarding. Empty string (default) auto-detects from the default route. Set explicitly only on multi-homed hosts where the default route interface is not the intended outbound NIC.",
+          "minLength": 0
         },
         "type": {
           "type": "string",

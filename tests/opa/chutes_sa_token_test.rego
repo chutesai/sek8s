@@ -64,6 +64,27 @@ test_allow_pod_with_automount_false if {
 }
 
 # =============================================================================
+# Pod UPDATE: spec is immutable, must not block finalizer removal etc.
+# =============================================================================
+
+test_allow_pod_update_without_automount_false if {
+	req := {
+		"operation": "UPDATE",
+		"namespace": "chutes",
+		"kind": {"kind": "Pod"},
+		"object": {
+			"metadata": {"labels": {}},
+			"spec": {
+				"securityContext": {"runAsUser": 1000},
+				"containers": [{"name": "app", "image": "busybox", "resources": {"limits": {"memory": "1Gi"}}}],
+			},
+		},
+		"userInfo": {"username": "system:serviceaccount:kube-system:job-controller"},
+	}
+	count({m | deny[m]; contains(m, "automountServiceAccountToken")}) == 0 with input as {"request": req}
+}
+
+# =============================================================================
 # Job: automountServiceAccountToken must be false in chutes namespace
 # =============================================================================
 

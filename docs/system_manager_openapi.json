@@ -1143,6 +1143,189 @@
         }
       }
     },
+    "/cache/{chute_id}/cancel": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Cancel an in-progress download",
+        "operationId": "cancel_download_cache__chute_id__cancel_post",
+        "parameters": [
+          {
+            "name": "chute_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Chute Id"
+            }
+          },
+          {
+            "name": "cleanup",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Delete partial files from disk after cancelling",
+              "default": false,
+              "title": "Cleanup"
+            },
+            "description": "Delete partial files from disk after cancelling"
+          },
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CacheCancelResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cache/purge": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "summary": "Purge stale HuggingFace revisions from all cached chutes",
+        "operationId": "purge_stale_cache_purge_post",
+        "parameters": [
+          {
+            "name": "X-Chutes-Hotkey",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Hotkey"
+            }
+          },
+          {
+            "name": "X-Chutes-Nonce",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Nonce"
+            }
+          },
+          {
+            "name": "X-Chutes-Signature",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Chutes-Signature"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CachePurgeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/cache/cleanup": {
       "post": {
         "tags": [
@@ -1808,6 +1991,25 @@
   },
   "components": {
     "schemas": {
+      "CacheCancelResponse": {
+        "properties": {
+          "chute_id": {
+            "type": "string",
+            "title": "Chute Id",
+            "description": "Chute ID"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CacheDownloadStatus",
+            "description": "One of: cancelled, not_in_progress, not_found"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chute_id",
+          "status"
+        ],
+        "title": "CacheCancelResponse"
+      },
       "CacheChuteStatus": {
         "properties": {
           "chute_id": {
@@ -1937,7 +2139,13 @@
           "freed_bytes": {
             "type": "integer",
             "title": "Freed Bytes",
-            "description": "Bytes freed",
+            "description": "Bytes freed by removing entire chutes",
+            "default": 0
+          },
+          "purged_bytes": {
+            "type": "integer",
+            "title": "Purged Bytes",
+            "description": "Bytes freed by pruning stale HF revisions from kept chutes",
             "default": 0
           },
           "removed_chutes": {
@@ -1980,10 +2188,11 @@
           "started",
           "present",
           "in_progress",
-          "failed"
+          "failed",
+          "cancelled"
         ],
         "title": "CacheDownloadStatus",
-        "description": "Status returned by the download (POST) endpoint."
+        "description": "Status returned by the download (POST) and cancel (POST) endpoints."
       },
       "CacheDownloadStatusResponse": {
         "properties": {
@@ -2079,6 +2288,29 @@
           "chutes"
         ],
         "title": "CacheOverviewResponse"
+      },
+      "CachePurgeResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Purge status",
+            "examples": [
+              "completed"
+            ]
+          },
+          "purged_bytes": {
+            "type": "integer",
+            "title": "Purged Bytes",
+            "description": "Bytes freed by pruning stale HF revisions",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "CachePurgeResponse"
       },
       "CleanupRequest": {
         "properties": {

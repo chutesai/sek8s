@@ -9,6 +9,8 @@ from urllib.parse import urljoin
 import backoff
 import httpx
 from attestation_proxy.config import AttestationProxyConfig
+from attestation_proxy.signing import load_private_key, sign_response_body
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
 from sek8s_common.auth import authorize
@@ -35,7 +37,7 @@ class SharedProxyResources:
         self._lock = asyncio.Lock()
 
     async def initialize(self):
-        """Initialize shared HTTP clients (idempotent)"""
+        """Initialize shared HTTP clients (idempotent)."""
         async with self._lock:
             if self._initialized:
                 logger.debug("Shared resources already initialized, skipping")
@@ -319,6 +321,26 @@ class ExternalProxyServer(BaseProxyServer):
         self, config: AttestationProxyConfig, shared_resources: SharedProxyResources
     ):
         super().__init__(config, shared_resources, "EXTERNAL")
+        self._private_key: Optional[RSAPrivateKey] = load_private_key(
+            config.tls_key_path
+        )
+        if self._private_key is None:
+            raise RuntimeError(
+                f"TLS private key could not be loaded from {config.tls_key_path}; "
+                "cannot start external proxy without signing key"
+            )
+
+    @backoff.on_exception(backoff.expo, httpx.ConnectError, max_tries=2, max_time=5)
+    async def proxy_request(self, *args, **kwargs) -> Response:
+        """Proxy request and attach an X-Signature header for key-possession proof."""
+        response = await super().proxy_request(*args, **kwargs)
+        assert (
+            self._private_key is not None
+        )  # nosec B101 -- guaranteed by __init__ guard
+        response.headers["X-Signature"] = sign_response_body(
+            self._private_key, response.body
+        )
+        return response
 
     def _setup_routes(self):
         """Setup routes with validator authentication."""

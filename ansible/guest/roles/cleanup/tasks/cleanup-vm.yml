@@ -13,6 +13,12 @@
   changed_when: false
   failed_when: vm_shutdown.rc == 0
 
+- name: Undefine build VM from libvirt
+  ansible.builtin.command: virsh undefine "{{ vm_name }}"
+  register: undefine_result
+  changed_when: undefine_result.rc == 0
+  failed_when: false
+
 - name: Ensure final image directory exists
   ansible.builtin.file:
     path: "{{ final_img_path | dirname }}"
@@ -21,11 +27,11 @@
     owner: root
     group: libvirt-qemu
 
-- name: Copy sek8s image to final image
-  ansible.builtin.command: cp "{{ build_img_path }}" "{{ final_img_path }}"
-  register: copy_result
-  changed_when: copy_result.rc == 0
-  failed_when: copy_result.rc != 0
+- name: Move sek8s image to final image
+  ansible.builtin.command: mv "{{ build_img_path }}" "{{ final_img_path }}"
+  register: move_result
+  changed_when: move_result.rc == 0
+  failed_when: move_result.rc != 0
 
 - name: Set permissions on final image
   ansible.builtin.file:

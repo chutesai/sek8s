@@ -2,7 +2,7 @@
 # Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
 # Controller: chutes-miner, kubectl. chutes-miner --name defaults to inventory_hostname; set tee_server_name to override.
 #
-#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade.yml
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
 
 - name: Upgrade TDX guest base image
   hosts: td_hosts
@@ -147,63 +147,10 @@
           Staged image checksum {{ upgrade_staged_sha }} != expected {{ upgrade_expected_sha }}.
           Delete {{ staged_image_path }} and re-run.
 
-    - name: Enter maintenance (validator API)
-      ansible.builtin.command:
-        argv:
-          - chutes-miner
-          - tee
-          - start-maintenance
-          - --name
-          - "{{ chutes_tee_server_name }}"
-          - --yes
-          - --hotkey
-          - "{{ chutes_hotkey_path }}"
-          - --validator-api
-          - "{{ chutes_validator_api }}"
-          - --raw-json
-      delegate_to: localhost
-      become: false
-
-    - name: Sync kubeconfig from miner API
-      ansible.builtin.command:
-        argv:
-          - chutes-miner
-          - sync-kubeconfig
-          - --hotkey
-          - "{{ chutes_hotkey_path }}"
-          - --path
-          - "{{ chutes_kubeconfig_path }}"
-          - --miner-api
-          - "{{ chutes_miner_api }}"
-      delegate_to: localhost
-      become: false
-
-    - name: Wait for validator to drain all chute pods (maintenance mode auto-purge)
-      ansible.builtin.command:
-        argv:
-          - kubectl
-          - --kubeconfig
-          - "{{ chutes_kubeconfig_path }}"
-          - --context
-          - "{{ chutes_tee_server_name }}"
-          - get
-          - pods
-          - -n
-          - chutes
-          - -l
-          - "chutes/chute=true"
-          - --no-headers
-      delegate_to: localhost
-      become: false
-      register: _pods_remaining
-      until: _pods_remaining.stdout | trim == ''
-      retries: "{{ (upgrade_drain_timeout_seconds | int) // 10 }}"
-      delay: 10
-
-    - name: Shutdown guest via chutes-miner and wait for power off
+    - name: Drain pods and shut down guest
       ansible.builtin.include_role:
         name: chutes_tee_vm
-        tasks_from: shutdown_via_miner.yml
+        tasks_from: drain_and_shutdown.yml
 
     - name: Backup current base qcow2 by date
       ansible.builtin.command:
@@ -219,38 +166,7 @@
           - "{{ staged_image_path }}"
           - "{{ upgrade_default_base_image }}"
 
-    - name: Refresh config.yaml on host before relaunch
+    - name: Relaunch VM and verify node health
       ansible.builtin.include_role:
-        name: chutes_vm_config
-
-    - name: Relaunch VM with new base image
-      ansible.builtin.command:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
-        argv:
-          - ./quick-launch.sh
-          - "{{ chutes_config_remote_path }}"
-      register: qlaunch_up
-
-    - name: Fail relaunch diagnostics
-      ansible.builtin.fail:
-        msg: "quick-launch.sh failed after upgrade (rc={{ qlaunch_up.rc }}). stderr={{ qlaunch_up.stderr | default('') }}"
-      when: qlaunch_up.rc != 0
-
-    - name: Poll node health after upgrade
-      ansible.builtin.command:
-        argv:
-          - chutes-miner
-          - tee
-          - node-health
-          - --name
-          - "{{ chutes_tee_server_name }}"
-          - --hotkey
-          - "{{ chutes_hotkey_path }}"
-          - --miner-api
-          - "{{ chutes_miner_api }}"
-      delegate_to: localhost
-      become: false
-      register: health_poll
-      until: health_poll.rc == 0
-      retries: "{{ [((upgrade_health_poll_seconds | int) // 5), 1] | max }}"
-      delay: 5
+        name: chutes_tee_vm
+        tasks_from: launch_and_verify.yml

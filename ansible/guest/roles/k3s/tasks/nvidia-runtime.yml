@@ -1,7 +1,7 @@
 ---
 - name: Ensure k3s containerd config template exists
   tags:
-    - gpu-container-setup
+    - k3s-nvidia-runtime
   block:
     - name: Check if k3s containerd config template exists
       ansible.builtin.stat:
@@ -24,7 +24,7 @@
         mode: "0644"
       when:
         - not k3s_config_tmpl_stat.stat.exists
-        - k3s_config_toml_stat.stat.exists # Only copy if the .toml source exists
+        - k3s_config_toml_stat.stat.exists
       notify:
         - restart k3s
 
@@ -35,14 +35,16 @@
         - not k3s_config_tmpl_stat.stat.exists
         - not k3s_config_toml_stat.stat.exists
 
-- name: Setup NVIDIA Container Toolkit for k3s containerd
+- name: Configure NVIDIA Container Toolkit for K3s containerd
   tags:
-    - gpu-container-setup
+    - k3s-nvidia-runtime
   block:
-    - name: Configure NVIDIA Container Toolkit for containerd
+    - name: Configure NVIDIA container runtime
       ansible.builtin.shell: |
+        nvidia-ctk runtime configure --runtime=docker --set-as-default
         nvidia-ctk runtime configure --runtime=containerd --config=/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
       register: container_runtime
       notify: restart k3s
       changed_when: >
-        container_runtime.stdout is search('changed|updated|modified') or container_runtime.stderr is search('changed|updated|modified')
+        container_runtime.stdout is search('changed|updated|modified') or
+        container_runtime.stderr is search('changed|updated|modified')

@@ -30,9 +30,14 @@
       firmware/
     mode: "0644"
 
-- name: Pull latest host-tools
+- name: Fetch latest host-tools
   ansible.builtin.command:
-    cmd: git pull --depth 1
+    cmd: git fetch --depth 1 origin {{ sek8s_repo_branch | default('main') }}
     chdir: "{{ sek8s_remote_root }}"
-  register: git_pull
-  changed_when: "'Already up to date' not in git_pull.stdout"
+
+- name: Reset to latest remote
+  ansible.builtin.command:
+    cmd: git reset --hard origin/{{ sek8s_repo_branch | default('main') }}
+    chdir: "{{ sek8s_remote_root }}"
+  register: git_reset
+  changed_when: git_reset.rc == 0
