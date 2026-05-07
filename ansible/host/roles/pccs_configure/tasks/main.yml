@@ -101,6 +101,8 @@
       ansible.builtin.file:
         path: "{{ pccs_ssl_dir }}"
         state: directory
+        owner: pccs
+        group: pccs
         mode: "0755"
 
     - name: Generate PCCS TLS private key
@@ -130,10 +132,20 @@
           - /CN=localhost
         creates: "{{ pccs_ssl_dir }}/file.crt"
 
-    - name: Secure private key permissions
+    - name: Set ownership and permissions on TLS private key
       ansible.builtin.file:
         path: "{{ pccs_ssl_dir }}/private.pem"
+        owner: pccs
+        group: pccs
         mode: "0600"
+        state: file
+
+    - name: Set ownership on TLS certificate
+      ansible.builtin.file:
+        path: "{{ pccs_ssl_dir }}/file.crt"
+        owner: pccs
+        group: pccs
+        mode: "0644"
         state: file
 
     - name: Install PCCS default.json

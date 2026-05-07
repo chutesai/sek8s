@@ -37,13 +37,13 @@
           skip: true
       when: not (skip_cleanup | bool)
 
-    - name: Re-provision | host_tools (sync latest repo to remote)
-      ansible.builtin.include_role:
-        name: host_tools
-
     - name: Re-provision | host prerequisites
       ansible.builtin.include_role:
         name: host_prerequisites
+
+    - name: Re-provision | host_tools (sync latest repo to remote)
+      ansible.builtin.include_role:
+        name: host_tools
 
     - name: Re-provision | tdx_bootstrap
       ansible.builtin.include_role:
