@@ -91,7 +91,7 @@ def build_base_cmd(
         'qemu-system-x86_64',
         '-accel', 'kvm',
         '-m', mem,
-        '-smp', vcpus,
+        '-smp', f'{vcpus},sockets=1,cores={vcpus},threads=1',
         '-name', f'{process_name},process={process_name},debug-threads=on',
         '-cpu', cpu_args,
         '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
