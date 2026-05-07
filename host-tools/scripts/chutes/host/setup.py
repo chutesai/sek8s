@@ -272,24 +272,6 @@ def _grub_update_cmdline(additions: list[str]):
 
 
 
-def _purge_conflicting_sgx_packages():
-    """Purge pre-existing SGX/attestation packages that conflict with Intel DCAP repo.
-
-    Idempotent — no-op when no conflicting packages are installed.
-    """
-    result = subprocess.run(
-        ["bash", "-c", "dpkg --list | grep -iE 'sgx|libmpa' | awk '{print $2}'"],
-        capture_output=True,
-        text=True,
-    )
-    installed = [pkg for pkg in result.stdout.strip().splitlines() if pkg]
-    if not installed:
-        return
-
-    print(f"  Purging {len(installed)} existing SGX package(s) for clean reinstall...")
-    subprocess.run(["apt", "purge", "--yes"] + installed, check=False)
-    subprocess.run(["apt", "autoremove", "--yes"], check=False)
-
 
 def _blacklist_gpu_drivers():
     """Blacklist nouveau and nvidia kernel modules on the host.
@@ -404,7 +386,29 @@ def _add_user_to_kvm():
     _run(["sudo", "usermod", "-aG", "kvm", user])
 
 
-def setup_host(profile: HostProfile):
+def _ensure_pccs_node_modules(pccs_dir: str = "/opt/intel/sgx-dcap-pccs"):
+    """Run npm install in the PCCS directory when node_modules are absent.
+
+    sgx-dcap-pccs Debian post-install only calls npm install during interactive
+    debconf prompts.  With DEBIAN_FRONTEND=noninteractive the step is skipped,
+    leaving node_modules/ empty and the service unable to start.
+    """
+    node_modules = os.path.join(pccs_dir, "node_modules")
+    if os.path.isdir(node_modules):
+        print(f"  {pccs_dir}/node_modules already present, skipping npm install")
+        return
+
+    package_json = os.path.join(pccs_dir, "package.json")
+    if not os.path.exists(package_json):
+        print(f"  {pccs_dir}/package.json not found — sgx-dcap-pccs not installed, skipping")
+        return
+
+    print(f"  node_modules missing in {pccs_dir}, running npm install...")
+    _run(["npm", "install", "--prefer-offline"], cwd=pccs_dir)
+    print("  ✓ PCCS node_modules installed")
+
+
+def setup_host(profile: HostProfile, noninteractive: bool = False):
     """Execute TDX host setup using the given profile.
 
     Must be run as root (or via sudo). Steps:
@@ -417,6 +421,14 @@ def setup_host(profile: HostProfile):
     7. Configure QCNL to accept local PCCS self-signed cert
     8. Add user to kvm group
     9. Install dependencies (CLI symlinks + nvidia-gpu-tools)
+
+    When noninteractive=True (e.g. called by Ansible via --noninteractive),
+    DEBIAN_FRONTEND=noninteractive is set so apt never blocks on prompts.
+    An explicit npm install is then run for sgx-dcap-pccs since the package's
+    debconf post-install hook is skipped in non-interactive mode.
+    In interactive mode (default for direct human use) apt prompts normally,
+    so sgx-dcap-pccs configures itself during install and npm runs as part of
+    its own post-install flow.
     """
     print(f"\n{'=' * 60}")
     print(f"  TDX Host Setup: {profile.describe()}")
@@ -426,7 +438,8 @@ def setup_host(profile: HostProfile):
         print("Error: this script must be run as root (sudo).", file=sys.stderr)
         sys.exit(1)
 
-    os.environ["DEBIAN_FRONTEND"] = "noninteractive"
+    if noninteractive:
+        os.environ["DEBIAN_FRONTEND"] = "noninteractive"
 
     # 1. PPAs
     if profile.ppas:
@@ -447,8 +460,6 @@ def setup_host(profile: HostProfile):
     _run(["apt", "update"])
 
     # 3. Install kernel + packages
-    _purge_conflicting_sgx_packages()
-
     print(f"\nStep 3: Installing kernel ({profile.kernel_package}) and packages...")
     all_packages = [profile.kernel_package] + profile.packages
     _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
@@ -465,6 +476,11 @@ def setup_host(profile: HostProfile):
     )
     if result.returncode != 0:
         print(f"  {modules_extra} not available (may be built into the kernel package)")
+
+    if noninteractive:
+        # sgx-dcap-pccs post-install only runs npm install during interactive
+        # debconf prompts; in non-interactive mode we must do it ourselves.
+        _ensure_pccs_node_modules()
 
     # 4. Set kernel as default boot
     print(f"\nStep 4: Setting kernel {kernel_version} as default boot target...")

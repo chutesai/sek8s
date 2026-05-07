@@ -5,9 +5,21 @@ Detects the Ubuntu version, resolves the matching host profile, and
 executes the setup steps (PPAs, kernel, packages, GRUB, kvm group).
 
 Usage:
-    sudo ./setup-tdx-host                    # auto-detect Ubuntu from lsb_release
-    sudo ./setup-tdx-host --install-tools-only  # dependencies only (same as full setup step 7)
-    ./setup-tdx-host --topology-matrix       # print lab-validated Ubuntu × GPU × count
+    sudo ./setup-tdx-host                       # auto-detect Ubuntu, interactive apt
+    sudo ./setup-tdx-host --noninteractive       # suppress apt/debconf prompts (Ansible)
+    sudo ./setup-tdx-host --install-tools-only   # dependencies only (same as full setup step 7)
+    ./setup-tdx-host --topology-matrix           # print lab-validated Ubuntu × GPU × count
+
+Interactive vs non-interactive:
+    By default the script lets apt run interactively so that packages like
+    sgx-dcap-pccs can prompt for their configuration (API key, password, etc.)
+    and complete their post-install steps (npm install) in one shot.
+
+    Pass --noninteractive when the caller handles post-install configuration
+    externally (e.g. Ansible's pccs_configure role).  In that mode
+    DEBIAN_FRONTEND=noninteractive is set and the script runs an explicit
+    `npm install` in /opt/intel/sgx-dcap-pccs to compensate for the skipped
+    debconf post-install hook.
 """
 
 import argparse
@@ -32,6 +44,15 @@ def main() -> int:
         action="store_true",
         help="Install host dependencies (CLI symlinks + nvidia-gpu-tools); then exit",
     )
+    parser.add_argument(
+        "--noninteractive",
+        action="store_true",
+        help=(
+            "Suppress apt/debconf prompts (sets DEBIAN_FRONTEND=noninteractive). "
+            "Use when an external tool (e.g. Ansible) handles post-install "
+            "configuration such as PCCS setup."
+        ),
+    )
     args = parser.parse_args()
 
     if args.topology_matrix:
@@ -48,7 +69,7 @@ def main() -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    setup_host(profile)
+    setup_host(profile, noninteractive=args.noninteractive)
     print()
     print(
         "Validated hardware topologies are listed in the support matrix "

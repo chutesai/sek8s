@@ -1,0 +1,50 @@
+---
+# Remediate an existing TDX host in-place without an OS upgrade.
+#
+# Detects the current Ubuntu version and runs the matching version-specific
+# cleanup tasks (same pre_<version>.yml hooks used by upgrade-host.yml),
+# then re-provisions via the same roles as setup.yml so the host lands in
+# the correct end state.
+#
+# To add remediation support for a new Ubuntu version, create:
+#   roles/os_upgrade/tasks/pre_<major><minor>.yml
+# It will be picked up automatically by both upgrade-host.yml and this playbook.
+#
+# Usage:
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml
+#
+#   # With automated PCCS (set both or omit both):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e pccs_api_key=<key> -e pccs_password=<pass>
+#
+#   # Skip cleanup (re-provision only — useful when packages are already correct):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e skip_cleanup=true
+
+- name: Remediate TDX host
+  hosts: td_hosts
+  gather_facts: true
+  become: true
+  vars:
+    skip_cleanup: false
+
+  tasks:
+    - name: Run version-specific cleanup for {{ ansible_facts['distribution_version'] }}
+      ansible.builtin.include_tasks: "{{ item }}"
+      with_first_found:
+        - files:
+            - "{{ playbook_dir }}/../roles/os_upgrade/tasks/pre_{{ ansible_facts['distribution_version'] | replace('.', '') }}.yml"
+          skip: true
+      when: not (skip_cleanup | bool)
+
+    - name: Re-provision | host prerequisites
+      ansible.builtin.include_role:
+        name: host_prerequisites
+
+    - name: Re-provision | tdx_bootstrap
+      ansible.builtin.include_role:
+        name: tdx_bootstrap
+
+    - name: Re-provision | pccs_configure
+      ansible.builtin.include_role:
+        name: pccs_configure
