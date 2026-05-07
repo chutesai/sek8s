@@ -364,6 +364,8 @@ def setup_host(profile: HostProfile):
         print("Error: this script must be run as root (sudo).", file=sys.stderr)
         sys.exit(1)
 
+    os.environ["DEBIAN_FRONTEND"] = "noninteractive"
+
     # 1. PPAs
     if profile.ppas:
         print("Step 1: Adding APT PPAs...")
