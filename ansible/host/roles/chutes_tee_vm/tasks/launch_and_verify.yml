@@ -62,3 +62,17 @@
   until: _health_poll.rc == 0
   retries: "{{ [((upgrade_health_poll_seconds | int) // 30), 1] | max }}"
   delay: 30
+
+- name: Unlock server to resume gepetto scheduling
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - unlock
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
