@@ -271,6 +271,27 @@ def _grub_update_cmdline(additions: list[str]):
         _run(["sudo", "grub-install", "--no-nvram"])
 
 
+def _purge_conflicting_sgx_packages():
+    """Purge any pre-existing SGX/attestation packages before installing from Intel DCAP.
+
+    Ubuntu archive and older kobuk PPAs ship SGX libs under different package
+    names that install the same .so files as Intel's DCAP repo, causing dpkg
+    overwrite conflicts. Purging everything SGX-related first ensures a clean slate.
+    """
+    result = subprocess.run(
+        ["bash", "-c", "dpkg --list | grep -iE 'sgx|libmpa' | awk '{print $2}'"],
+        capture_output=True,
+        text=True,
+    )
+    installed = [pkg for pkg in result.stdout.strip().splitlines() if pkg]
+    if not installed:
+        return
+
+    print(f"  Purging {len(installed)} existing SGX package(s) for clean reinstall...")
+    subprocess.run(["apt", "purge", "--yes"] + installed, check=False)
+    subprocess.run(["apt", "autoremove", "--yes"], check=False)
+
+
 def _blacklist_gpu_drivers():
     """Blacklist nouveau and nvidia kernel modules on the host.
 
@@ -427,6 +448,11 @@ def setup_host(profile: HostProfile):
     _run(["apt", "update"])
 
     # 3. Install kernel + packages
+    # First, purge Ubuntu-archive SGX packages that conflict with Intel DCAP repo.
+    # Ubuntu ships libsgx-enclave-common1, libsgx-urts2, etc. (numbered suffixes)
+    # which install the same .so files as Intel's libsgx-enclave-common, libsgx-urts.
+    _purge_conflicting_sgx_packages()
+
     print(f"\nStep 3: Installing kernel ({profile.kernel_package}) and packages...")
     all_packages = [profile.kernel_package] + profile.packages
     _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)

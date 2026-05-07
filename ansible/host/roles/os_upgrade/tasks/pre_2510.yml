@@ -47,14 +47,22 @@
     loop_var: _kobuk_file
     label: "{{ _kobuk_file.path }}"
 
-- name: "Pre 25.10: purge kobuk-sourced attestation packages"
+- name: "Pre 25.10: find all installed SGX/attestation packages"
+  ansible.builtin.shell:
+    cmd: dpkg --list | grep -iE 'sgx|libmpa' | awk '{print $2}' || true
+    executable: /bin/bash
+  register: _sgx_packages
+  changed_when: false
+
+- name: "Pre 25.10: purge all SGX/attestation packages"
   ansible.builtin.apt:
-    name:
-      - tdx-qgs
-      - sgx-dcap-pccs
-      - libsgx-dcap-default-qpl
-      - sgx-ra-service
-      - sgx-pck-id-retrieval-tool
+    name: "{{ _sgx_packages.stdout_lines }}"
     state: absent
     purge: true
+  when: _sgx_packages.stdout_lines | length > 0
+  failed_when: false
+
+- name: "Pre 25.10: autoremove orphaned dependencies"
+  ansible.builtin.apt:
+    autoremove: true
   failed_when: false
