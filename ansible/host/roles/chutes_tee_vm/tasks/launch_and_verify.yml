@@ -30,6 +30,38 @@
   when: not _base_img_stat.stat.exists
   changed_when: true
 
+# ── Image integrity pre-flight ───────────────────────────────────────────────
+# Validate the base image SHA256 against what quick-launch.sh expects before
+# attempting to start the VM. Failing here gives a clear actionable message;
+# failing inside quick-launch.sh produces a cryptic checksum error with no
+# remediation hint.
+
+- name: Read expected base image SHA256 from quick-launch.sh
+  ansible.builtin.shell: |
+    grep -E '^EXPECTED_BASE_SHA256=' "{{ sek8s_remote_host_tools }}/scripts/quick-launch.sh" \
+      | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'"
+  args:
+    executable: /bin/bash
+  register: _launch_expected_sha
+  changed_when: false
+
+- name: Compute SHA256 of current base image
+  ansible.builtin.command:
+    argv:
+      - sha256sum
+      - "{{ upgrade_default_base_image }}"
+  register: _launch_actual_sha
+  changed_when: false
+
+- name: Fail with clear message when base image SHA does not match
+  ansible.builtin.fail:
+    msg: >-
+      Base image checksum mismatch — cannot launch safely.
+      Expected: {{ _launch_expected_sha.stdout | trim }}.
+      Actual:   {{ _launch_actual_sha.stdout.split()[0] }}.
+      Run upgrade-guest.yml to download and promote the correct image before launching.
+  when: _launch_actual_sha.stdout.split()[0] != (_launch_expected_sha.stdout | trim)
+
 - name: Launch VM via quick-launch.sh
   ansible.builtin.command:
     chdir: "{{ sek8s_remote_host_tools }}/scripts"

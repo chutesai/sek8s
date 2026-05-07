@@ -20,6 +20,17 @@
 #   # Skip cleanup (re-provision only — useful when packages are already correct):
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
 #     -e skip_cleanup=true
+#
+#   # Auto-drain a running VM before remediating (requires chutes_hotkey_path):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e auto_drain_vm=true
+#
+# Recommended order when combining with a guest image upgrade (2-play flow):
+#   1. remediate-host.yml -e auto_drain_vm=true  (drain + remediate, VM stays down)
+#   2. upgrade-guest.yml                          (update image if needed + relaunch VM)
+#
+# Use -e force_upgrade=true on either play if the validator denies maintenance
+# due to sole_survivor or other blocking deployments.
 
 - name: Remediate TDX host
   hosts: td_hosts
@@ -27,8 +38,29 @@
   become: true
   vars:
     skip_cleanup: false
+    auto_drain_vm: false
+    force_upgrade: false
 
   tasks:
+    # ── VM guard ────────────────────────────────────────────────────────────
+    # Remediation may trigger a host reboot (new kernel) or service restarts
+    # that disrupt a running VM. Fail fast unless the VM is already down or
+    # the caller explicitly opts in to auto-drain.
+
+    - name: Fail if VM is running and auto_drain_vm is false
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: assert_not_running.yml
+      when: not (auto_drain_vm | bool)
+
+    - name: Drain pods and shut down guest
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: drain_and_shutdown.yml
+      when: auto_drain_vm | bool
+
+    # ── Version-specific cleanup ─────────────────────────────────────────────
+
     - name: Run version-specific cleanup for {{ ansible_facts['distribution_version'] }}
       ansible.builtin.include_tasks: "{{ item }}"
       with_first_found:
