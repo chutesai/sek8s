@@ -12,7 +12,7 @@
 #   chutes_public_interface — override default-route NIC used for the guest bridge
 #   chutes_docker_hub_username / chutes_docker_hub_token — optional docker_hub block
 #
-# On checksum mismatch for an existing image, quick-launch fails; run upgrade-guest.yml or fix the image manually.
+# On checksum mismatch for an existing image, launch fails with an explicit message pointing to upgrade-guest.yml.
 # If a chutes-td QEMU guest is already running, launch fails immediately; use playbooks/shutdown.yml first.
 
 - name: Launch TDX guest VM

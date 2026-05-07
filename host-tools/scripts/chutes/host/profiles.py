@@ -138,8 +138,7 @@ class Ubuntu2510Profile(HostProfile):
 
     @property
     def grub_cmdline_additions(self) -> list[str]:
-        # kvm_intel.tdx=1 required per https://bugs.launchpad.net/ubuntu/+source/linux/+bug/2121873
-        return ["nohibernate", "kvm_intel.tdx=1"]
+        return ["nohibernate", "kvm_intel.tdx=1", "modprobe.blacklist=nouveau"]
 
 
 class Ubuntu2604Profile(HostProfile):
@@ -189,8 +188,7 @@ class Ubuntu2604Profile(HostProfile):
 
     @property
     def grub_cmdline_additions(self) -> list[str]:
-        # kvm_intel.tdx=1 required for native TDX kernel
-        return ["nohibernate", "kvm_intel.tdx=1"]
+        return ["nohibernate", "kvm_intel.tdx=1", "modprobe.blacklist=nouveau"]
 
 
 HOST_PROFILES: dict[str, HostProfile] = {

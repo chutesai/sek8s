@@ -1,8 +1,16 @@
 ---
 # Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
-# Controller: chutes-miner, kubectl. chutes-miner --name defaults to inventory_hostname; set tee_server_name to override.
+# Controller: chutes-miner, kubectl. chutes-miner --name comes from chutes_tee_server_name (group_vars/all.yml; override via tee_server_name in host_vars).
 #
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
+#
+#   # Drain + promote image but skip relaunch (e.g. to run remediate-host.yml next):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml \
+#     -e relaunch_vm=false
+#
+#   # Force upgrade even when validator denies maintenance (e.g. sole_survivor):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml \
+#     -e force_upgrade=true
 
 - name: Upgrade TDX guest base image
   hosts: td_hosts
@@ -12,8 +20,8 @@
   vars:
     chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
     staged_image_path: "/var/lib/chutes/base-images/{{ upgrade_staged_basename }}"
-    # chutes-miner tee * --name: use inventory host key by default; set tee_server_name if it differs (e.g. SSH alias).
-    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
+    relaunch_vm: true
+    force_upgrade: false
   pre_tasks:
     - name: Require chutes_hotkey_path
       ansible.builtin.assert:
@@ -170,3 +178,4 @@
       ansible.builtin.include_role:
         name: chutes_tee_vm
         tasks_from: launch_and_verify.yml
+      when: relaunch_vm | bool

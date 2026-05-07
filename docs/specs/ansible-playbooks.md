@@ -35,7 +35,7 @@ Primary references:
   - **Kubeconfig:** `chutes-miner sync-kubeconfig --hotkey <path> --path <kubeconfig> [--miner-api <url>]`
   - **Health:** `chutes-miner tee node-health --name <server> --hotkey <path> [--miner-api <url>]`
   - **Image pull/list/etc.:** `chutes-miner tee image-*` — **not** used for base qcow2 staging; staging uses `aria2c` on the host (see Upgrade).
-- **Maintenance clear:** No separate “exit maintenance” command — validator clears maintenance after the upgraded VM boots successfully.
+  - **Unlock:** `chutes-miner unlock --name <server> --hotkey <path> [--miner-api <url>]` — resumes gepetto scheduling after maintenance; must be called explicitly after node-health passes (validator does **not** auto-clear the lock).
 - **`kubectl`** — uses kubeconfig from `sync-kubeconfig`; upgrade drain deletes pods in namespace **`chutes`** with label **`chutes/chute=true`** (`upgrade_chute_label` in `group_vars`).
 - **Alternative rejected by default:** installing **`chutes-miner` on bare metal**.
 
@@ -156,7 +156,8 @@ or fix/remove the qcow2 manually.
 7. Poll **`/tmp/tdx-guest-td.log`** for **`Power down`** (same substring as [`ansible/guest/roles/prime-vm/tasks/main.yml`](../../ansible/guest/roles/prime-vm/tasks/main.yml)).  
 8. **`mv`** current **`tdx-guest.qcow2`** → dated backup; **`mv`** staged → **`tdx-guest.qcow2`**.  
 9. **`quick-launch.sh`** with default base path.  
-10. **`chutes-miner tee node-health`** poll.
+10. **`chutes-miner tee node-health`** poll.  
+11. **`chutes-miner unlock`** — resumes gepetto scheduling (validator does not auto-clear the maintenance lock).
 
 ---
 

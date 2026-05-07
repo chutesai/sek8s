@@ -271,6 +271,111 @@ def _grub_update_cmdline(additions: list[str]):
         _run(["sudo", "grub-install", "--no-nvram"])
 
 
+
+
+def _blacklist_gpu_drivers():
+    """Blacklist nouveau and nvidia kernel modules on the host.
+
+    GPUs on passthrough hosts must not be claimed by any driver — they are
+    bound to vfio-pci at VM launch time.  nouveau auto-loading is the most
+    common cause of GPU hangs during CC/PPCIe mode configuration.
+    """
+    blacklist_path = "/etc/modprobe.d/blacklist-gpu-host.conf"
+    blacklist_content = (
+        "# GPU drivers must not load on VFIO passthrough hosts.\n"
+        "# GPUs are configured via nvidia-gpu-tools and bound to vfio-pci at launch.\n"
+        "blacklist nouveau\n"
+        "blacklist nvidia\n"
+        "blacklist nvidia_drm\n"
+        "blacklist nvidia_modeset\n"
+        "blacklist nvidia_uvm\n"
+        "options nouveau modeset=0\n"
+    )
+    already_current = False
+    if os.path.exists(blacklist_path):
+        with open(blacklist_path, 'r') as f:
+            if f.read() == blacklist_content:
+                print(f"  {blacklist_path} already up to date")
+                already_current = True
+
+    if not already_current:
+        _write_system_file(blacklist_path, blacklist_content)
+        _run(["sudo", "update-initramfs", "-u"])
+        print(f"  ✓ GPU driver blacklist installed ({blacklist_path})")
+
+    # Unload nouveau immediately if currently loaded (no reboot required)
+    result = subprocess.run(
+        ["lsmod"],
+        capture_output=True,
+        text=True,
+    )
+    if any(line.split()[0] == "nouveau" for line in result.stdout.splitlines()[1:]):
+        print("  Unloading nouveau module (currently loaded)...")
+        subprocess.run(["sudo", "rmmod", "nouveau"], check=False)
+        print("  ✓ nouveau unloaded")
+
+
+def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
+    """Ensure QCNL accepts PCCS's self-signed TLS certificate.
+
+    PCCS runs locally with a self-signed cert.  The default QCNL config ships
+    with use_secure_cert=true which causes CURL error 60 on every quote
+    request.  We patch it to false so QGS can reach the local PCCS.
+
+    The file is a JSON5-ish format (allows comments and trailing commas) so
+    we use a regex patch rather than json.loads to avoid stripping comments.
+    """
+    import re as _re
+
+    if not os.path.exists(conf_path):
+        print(f"  {conf_path} not found — QCNL not installed yet, skipping")
+        return
+
+    with open(conf_path) as f:
+        original = f.read()
+
+    updated = _re.sub(
+        r'"use_secure_cert"\s*:\s*true',
+        '"use_secure_cert": false',
+        original,
+    )
+
+    if updated == original:
+        print(f"  {conf_path} already has use_secure_cert=false")
+        return
+
+    print(f"  Patching {conf_path}: use_secure_cert → false")
+    _write_system_file(conf_path, updated)
+
+
+def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
+    """Ensure QGS uses vsock (port 4050) rather than a Unix domain socket.
+
+    The default shipped config has the port line commented out, which causes
+    QGS to bind a Unix socket that the VM cannot reach.  We uncomment/set
+    'port = 4050' so QGS listens on vsock and restarts the service if the
+    file was changed.
+    """
+    import re as _re
+
+    if not os.path.exists(conf_path):
+        print(f"  {conf_path} not found — QGS not installed yet, skipping")
+        return
+
+    with open(conf_path) as f:
+        original = f.read()
+
+    updated = _re.sub(r"^#?\s*port\s*=.*$", "port = 4050", original, flags=_re.MULTILINE)
+
+    if updated == original:
+        print(f"  {conf_path} already set to vsock port 4050")
+        return
+
+    print(f"  Configuring {conf_path}: enabling vsock port 4050")
+    _write_system_file(conf_path, updated)
+    _run(["sudo", "systemctl", "restart", "qgsd"])
+
+
 def _add_user_to_kvm():
     """Add the invoking (non-root) user to the kvm group."""
     user = os.environ.get("SUDO_USER") or os.environ.get("USER")
@@ -281,7 +386,29 @@ def _add_user_to_kvm():
     _run(["sudo", "usermod", "-aG", "kvm", user])
 
 
-def setup_host(profile: HostProfile):
+def _ensure_pccs_node_modules(pccs_dir: str = "/opt/intel/sgx-dcap-pccs"):
+    """Run npm install in the PCCS directory when node_modules are absent.
+
+    sgx-dcap-pccs Debian post-install only calls npm install during interactive
+    debconf prompts.  With DEBIAN_FRONTEND=noninteractive the step is skipped,
+    leaving node_modules/ empty and the service unable to start.
+    """
+    node_modules = os.path.join(pccs_dir, "node_modules")
+    if os.path.isdir(node_modules):
+        print(f"  {pccs_dir}/node_modules already present, skipping npm install")
+        return
+
+    package_json = os.path.join(pccs_dir, "package.json")
+    if not os.path.exists(package_json):
+        print(f"  {pccs_dir}/package.json not found — sgx-dcap-pccs not installed, skipping")
+        return
+
+    print(f"  node_modules missing in {pccs_dir}, running npm install...")
+    _run(["npm", "install", "--prefer-offline"], cwd=pccs_dir)
+    print("  ✓ PCCS node_modules installed")
+
+
+def setup_host(profile: HostProfile, noninteractive: bool = False):
     """Execute TDX host setup using the given profile.
 
     Must be run as root (or via sudo). Steps:
@@ -290,8 +417,18 @@ def setup_host(profile: HostProfile):
     3. Install kernel + packages
     4. Set kernel as default boot target
     5. Update GRUB cmdline
-    6. Add user to kvm group
-    7. Install dependencies (CLI symlinks + nvidia-gpu-tools)
+    6. Configure QGS for vsock (port 4050)
+    7. Configure QCNL to accept local PCCS self-signed cert
+    8. Add user to kvm group
+    9. Install dependencies (CLI symlinks + nvidia-gpu-tools)
+
+    When noninteractive=True (e.g. called by Ansible via --noninteractive),
+    DEBIAN_FRONTEND=noninteractive is set so apt never blocks on prompts.
+    An explicit npm install is then run for sgx-dcap-pccs since the package's
+    debconf post-install hook is skipped in non-interactive mode.
+    In interactive mode (default for direct human use) apt prompts normally,
+    so sgx-dcap-pccs configures itself during install and npm runs as part of
+    its own post-install flow.
     """
     print(f"\n{'=' * 60}")
     print(f"  TDX Host Setup: {profile.describe()}")
@@ -300,6 +437,9 @@ def setup_host(profile: HostProfile):
     if os.geteuid() != 0:
         print("Error: this script must be run as root (sudo).", file=sys.stderr)
         sys.exit(1)
+
+    if noninteractive:
+        os.environ["DEBIAN_FRONTEND"] = "noninteractive"
 
     # 1. PPAs
     if profile.ppas:
@@ -337,6 +477,11 @@ def setup_host(profile: HostProfile):
     if result.returncode != 0:
         print(f"  {modules_extra} not available (may be built into the kernel package)")
 
+    if noninteractive:
+        # sgx-dcap-pccs post-install only runs npm install during interactive
+        # debconf prompts; in non-interactive mode we must do it ourselves.
+        _ensure_pccs_node_modules()
+
     # 4. Set kernel as default boot
     print(f"\nStep 4: Setting kernel {kernel_version} as default boot target...")
     _grub_set_kernel(kernel_version)
@@ -345,12 +490,24 @@ def setup_host(profile: HostProfile):
     print("\nStep 5: Updating GRUB cmdline...")
     _grub_update_cmdline(profile.grub_cmdline_additions)
 
-    # 6. kvm group
-    print("\nStep 6: Configuring kvm group...")
+    # 5b. Blacklist GPU drivers on host (GPUs are for VFIO passthrough only)
+    print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
+    _blacklist_gpu_drivers()
+
+    # 6. QGS vsock mode
+    print("\nStep 6: Configuring QGS for vsock (port 4050)...")
+    _configure_qgs_vsock()
+
+    # 7. QCNL self-signed cert
+    print("\nStep 7: Configuring QCNL to accept local PCCS self-signed cert...")
+    _configure_qcnl()
+
+    # 8. kvm group
+    print("\nStep 8: Configuring kvm group...")
     _add_user_to_kvm()
 
-    # 7. Host dependencies (repo CLIs + nvidia-gpu-tools)
-    print("\nStep 7: Installing dependencies...")
+    # 9. Host dependencies (repo CLIs + nvidia-gpu-tools)
+    print("\nStep 9: Installing dependencies...")
     install_dependencies()
 
     print(f"\n{'=' * 60}")

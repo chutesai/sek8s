@@ -13,8 +13,8 @@
   become: true
   vars:
   roles:
-    - role: host_tools
     - role: host_prerequisites
+    - role: host_tools
     - role: tdx_bootstrap
     - role: chutes_dirs
     - role: pccs_configure

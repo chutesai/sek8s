@@ -1,0 +1,91 @@
+---
+# Remediate an existing TDX host in-place without an OS upgrade.
+#
+# Detects the current Ubuntu version and runs the matching version-specific
+# cleanup tasks (same pre_<version>.yml hooks used by upgrade-host.yml),
+# then re-provisions via the same roles as setup.yml so the host lands in
+# the correct end state.
+#
+# To add remediation support for a new Ubuntu version, create:
+#   roles/os_upgrade/tasks/pre_<major><minor>.yml
+# It will be picked up automatically by both upgrade-host.yml and this playbook.
+#
+# Usage:
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml
+#
+#   # With automated PCCS (set both or omit both):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e pccs_api_key=<key> -e pccs_password=<pass>
+#
+#   # Skip cleanup (re-provision only — useful when packages are already correct):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e skip_cleanup=true
+#
+#   # Auto-drain a running VM before remediating (requires chutes_hotkey_path):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e auto_drain_vm=true
+#
+#   # VM is running AND validator denies maintenance (e.g. sole_survivor):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e auto_drain_vm=true -e force_upgrade=true
+#   auto_drain_vm  — drain gracefully instead of aborting when VM is running
+#   force_upgrade  — bypass validator denial: purge server, wait 5 min for drain,
+#                    force-evict any remaining pods, then retry maintenance
+#
+# Recommended 2-play flow when combining host remediation with a guest image upgrade:
+#   1. remediate-host.yml -e auto_drain_vm=true [-e force_upgrade=true]
+#   2. upgrade-guest.yml  (update image if needed + relaunch VM)
+
+- name: Remediate TDX host
+  hosts: td_hosts
+  gather_facts: true
+  become: true
+  vars:
+    skip_cleanup: false
+    auto_drain_vm: false
+    force_upgrade: false
+    chutes_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/chutes.config"
+
+  tasks:
+    # ── VM guard ────────────────────────────────────────────────────────────
+    # Remediation may trigger a host reboot (new kernel) or service restarts
+    # that disrupt a running VM. Fail fast unless the VM is already down or
+    # the caller explicitly opts in to auto-drain.
+
+    - name: Fail if VM is running and auto_drain_vm is false
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: assert_not_running.yml
+      when: not (auto_drain_vm | bool)
+
+    - name: Drain pods and shut down guest
+      ansible.builtin.include_role:
+        name: chutes_tee_vm
+        tasks_from: drain_and_shutdown.yml
+      when: auto_drain_vm | bool
+
+    # ── Version-specific cleanup ─────────────────────────────────────────────
+
+    - name: Run version-specific cleanup for {{ ansible_facts['distribution_version'] }}
+      ansible.builtin.include_tasks: "{{ item }}"
+      with_first_found:
+        - files:
+            - "{{ playbook_dir }}/../roles/os_upgrade/tasks/pre_{{ ansible_facts['distribution_version'] | replace('.', '') }}.yml"
+          skip: true
+      when: not (skip_cleanup | bool)
+
+    - name: Re-provision | host prerequisites
+      ansible.builtin.include_role:
+        name: host_prerequisites
+
+    - name: Re-provision | host_tools (sync latest repo to remote)
+      ansible.builtin.include_role:
+        name: host_tools
+
+    - name: Re-provision | tdx_bootstrap
+      ansible.builtin.include_role:
+        name: tdx_bootstrap
+
+    - name: Re-provision | pccs_configure
+      ansible.builtin.include_role:
+        name: pccs_configure

@@ -3,13 +3,15 @@
 # running TEE guest offline before making host-level changes.
 #
 # Expects (from caller scope or vars):
-#   chutes_tee_server_name   — TEE server name registered with chutes-miner
-#   chutes_hotkey_path       — controller path to Bittensor hotkey JSON
-#   chutes_kubeconfig_path   — controller kubeconfig path (written by sync-kubeconfig)
-#   chutes_miner_api         — miner API URL (default http://127.0.0.1:32000)
-#   chutes_validator_api     — validator API URL
+#   chutes_tee_server_name         — TEE server name registered with chutes-miner
+#   chutes_hotkey_path             — controller path to Bittensor hotkey JSON
+#   chutes_kubeconfig_path         — controller kubeconfig path (written by sync-kubeconfig)
+#   chutes_miner_api               — miner API URL (default http://127.0.0.1:32000)
+#   chutes_validator_api           — validator API URL
 #   upgrade_drain_timeout_seconds  — seconds to wait for pod drain
 #   upgrade_powerdown_timeout_seconds — seconds to wait for guest power-down
+#   force_upgrade                  — (default false) force-evict all chute pods and proceed
+#                                    even when the validator denies maintenance (e.g. sole_survivor)
 
 # Check VM liveness first so all subsequent steps can skip cleanly on re-run
 # when the guest was already shut down by a previous (partial) run.
@@ -35,7 +37,19 @@
   register: _maintenance_status
   changed_when: false
 
-- name: Enter maintenance mode (validator API)
+- name: Set already-in-maintenance fact
+  ansible.builtin.set_fact:
+    _already_in_maintenance: >-
+      {{
+        (_maintenance_status.stdout | from_json).servers
+        | selectattr('name', 'equalto', chutes_tee_server_name)
+        | map(attribute='in_maintenance')
+        | first | default(false) | bool
+      }}
+
+# ── Enter maintenance mode ──────────────────────────────────────────────────
+
+- name: Request maintenance mode (validator API)
   ansible.builtin.command:
     argv:
       - chutes-miner
@@ -53,12 +67,159 @@
       - --raw-json
   delegate_to: localhost
   become: false
-  vars:
-    _status: "{{ _maintenance_status.stdout | from_json }}"
-  when: >-
-    not ((_status.servers | selectattr('name', 'equalto', chutes_tee_server_name)
-          | map(attribute='in_maintenance') | first | default(false)) | bool)
+  register: _maintenance_request
+  failed_when: false
+  when: not _already_in_maintenance | bool
 
+- name: Parse maintenance denial
+  ansible.builtin.set_fact:
+    _maintenance_denied: "{{ _maintenance_request.rc | default(0) != 0 }}"
+    _maintenance_denial_json: >-
+      {{ (_maintenance_request.stdout | default('{}') | from_json)
+         if (_maintenance_request.rc | default(0) != 0) else {} }}
+  when: not _already_in_maintenance | bool
+
+- name: Fail with readable denial message
+  # Surfaces the denial reason and blocking chute IDs clearly instead of
+  # dumping raw JSON. Pass -e force_upgrade=true to override.
+  ansible.builtin.fail:
+    msg: >-
+      Cannot enter maintenance mode for {{ chutes_tee_server_name }}.
+      Reason: {{ _maintenance_denial_json.denial_reasons | map(attribute='reason') | join(', ') }}.
+      Blocking instances: {{
+        _maintenance_denial_json.blocking_chute_ids
+        | map(attribute='chute_id') | zip(
+          _maintenance_denial_json.blocking_chute_ids | map(attribute='instance_id')
+        )
+        | map('join', ' / instance ')
+        | join('; ')
+      }}.
+      Re-run with -e force_upgrade=true to forcibly evict these deployments and proceed.
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - not (force_upgrade | default(false) | bool)
+
+# ── Force path: purge server, wait for drain, force-delete stragglers ────────
+# Only entered when the validator denied maintenance (e.g. sole_survivor) and
+# force_upgrade=true. Steps:
+#   1. Notify validator + miner control plane via purge-server (clean signal)
+#   2. Wait up to 5 minutes for pods to drain on their own
+#   3. Force-delete any pods still remaining after the timeout
+#   4. Retry start-maintenance (should succeed now that pods are gone)
+
+- name: Force-evict | sync kubeconfig
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - sync-kubeconfig
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --path
+      - "{{ chutes_kubeconfig_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - force_upgrade | default(false) | bool
+
+- name: Force-evict | purge server (notify validator + miner to stop routing)
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - purge-server
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+  delegate_to: localhost
+  become: false
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - force_upgrade | default(false) | bool
+
+- name: Force-evict | wait up to 5 minutes for pods to drain after purge
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ chutes_kubeconfig_path }}"
+      - --context
+      - "{{ chutes_tee_server_name }}"
+      - get
+      - pods
+      - -n
+      - chutes
+      - -l
+      - "{{ upgrade_chute_label }}"
+      - --no-headers
+  delegate_to: localhost
+  become: false
+  register: _force_pods_remaining
+  until: _force_pods_remaining.stdout | trim == ''
+  retries: 30
+  delay: 10
+  failed_when: false
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - force_upgrade | default(false) | bool
+
+- name: Force-evict | force-delete pods that did not drain within timeout
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --kubeconfig
+      - "{{ chutes_kubeconfig_path }}"
+      - --context
+      - "{{ chutes_tee_server_name }}"
+      - delete
+      - pods
+      - -n
+      - chutes
+      - -l
+      - "{{ upgrade_chute_label }}"
+      - --force
+      - --grace-period=0
+  delegate_to: localhost
+  become: false
+  failed_when: false
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - force_upgrade | default(false) | bool
+    - _force_pods_remaining.stdout | default('') | trim != ''
+
+- name: Force-evict | retry maintenance mode after purge
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - start-maintenance
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --yes
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --validator-api
+      - "{{ chutes_validator_api }}"
+      - --miner-api
+      - "{{ chutes_miner_api }}"
+      - --raw-json
+  delegate_to: localhost
+  become: false
+  when:
+    - not _already_in_maintenance | bool
+    - _maintenance_denied | default(false) | bool
+    - force_upgrade | default(false) | bool
+
+# ── Drain and shutdown ───────────────────────────────────────────────────────
 # The following steps are only needed when the guest is still running.
 # If the VM is already down (rc != 0) we skip drain and shutdown — the
 # guest was stopped in a prior run and there is nothing left to drain.
@@ -91,7 +252,7 @@
       - -n
       - chutes
       - -l
-      - "chutes/chute=true"
+      - "{{ upgrade_chute_label }}"
       - --no-headers
   delegate_to: localhost
   become: false

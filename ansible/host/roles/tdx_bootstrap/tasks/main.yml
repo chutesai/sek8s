@@ -3,6 +3,7 @@
   ansible.builtin.command:
     argv:
       - "{{ sek8s_remote_host_tools }}/scripts/setup-tdx-host"
+      - "--noninteractive"
   register: setup_tdx
   changed_when: setup_tdx.rc == 0
 

@@ -3,6 +3,10 @@
 # Adjacent to playbooks/ so Ansible loads this regardless of which inventory is used.
 # Override any value in your inventory group_vars, host_vars, or with -e.
 
+# TEE server name passed to chutes-miner --name flags.
+# Defaults to inventory_hostname; set tee_server_name in host_vars to override (e.g. SSH alias differs from registered name).
+chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
+
 sek8s_remote_root: /opt/sek8s
 sek8s_remote_host_tools: "{{ sek8s_remote_root }}/host-tools"
 
@@ -25,7 +29,7 @@ upgrade_chute_label: "chutes/chute=true"
 upgrade_drain_timeout: 600s
 upgrade_drain_timeout_seconds: 600
 upgrade_powerdown_timeout_seconds: 300
-upgrade_health_poll_seconds: 60
+upgrade_health_poll_seconds: 900
 
 # OS upgrade path for upgrade-host.yml.
 # Maps current Ubuntu version -> next supported version via do-release-upgrade.

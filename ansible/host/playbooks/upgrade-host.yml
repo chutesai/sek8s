@@ -27,9 +27,6 @@
   serial: 1
   gather_facts: true
   become: true
-  vars:
-    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
-
   roles:
     - role: host_tools
 
