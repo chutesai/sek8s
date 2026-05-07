@@ -25,12 +25,16 @@
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
 #     -e auto_drain_vm=true
 #
-# Recommended order when combining with a guest image upgrade (2-play flow):
-#   1. remediate-host.yml -e auto_drain_vm=true  (drain + remediate, VM stays down)
-#   2. upgrade-guest.yml                          (update image if needed + relaunch VM)
+#   # VM is running AND validator denies maintenance (e.g. sole_survivor):
+#   ansible-playbook -i ../inventory/hosts.yml playbooks/remediate-host.yml \
+#     -e auto_drain_vm=true -e force_upgrade=true
+#   auto_drain_vm  — drain gracefully instead of aborting when VM is running
+#   force_upgrade  — bypass validator denial: purge server, wait 5 min for drain,
+#                    force-evict any remaining pods, then retry maintenance
 #
-# Use -e force_upgrade=true on either play if the validator denies maintenance
-# due to sole_survivor or other blocking deployments.
+# Recommended 2-play flow when combining host remediation with a guest image upgrade:
+#   1. remediate-host.yml -e auto_drain_vm=true [-e force_upgrade=true]
+#   2. upgrade-guest.yml  (update image if needed + relaunch VM)
 
 - name: Remediate TDX host
   hosts: td_hosts
@@ -40,6 +44,7 @@
     skip_cleanup: false
     auto_drain_vm: false
     force_upgrade: false
+    chutes_kubeconfig_path: "{{ lookup('env', 'HOME') }}/.kube/chutes.config"
 
   tasks:
     # ── VM guard ────────────────────────────────────────────────────────────

@@ -130,14 +130,11 @@
   ansible.builtin.command:
     argv:
       - chutes-miner
-      - tee
       - purge-server
       - --name
       - "{{ chutes_tee_server_name }}"
       - --hotkey
       - "{{ chutes_hotkey_path }}"
-      - --validator-api
-      - "{{ chutes_validator_api }}"
       - --miner-api
       - "{{ chutes_miner_api }}"
   delegate_to: localhost
