@@ -1,6 +1,6 @@
 ---
 # Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
-# Controller: chutes-miner, kubectl. chutes-miner --name defaults to inventory_hostname; set tee_server_name to override.
+# Controller: chutes-miner, kubectl. chutes-miner --name comes from chutes_tee_server_name (group_vars/all.yml; override via tee_server_name in host_vars).
 #
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
 
@@ -12,8 +12,6 @@
   vars:
     chutes_config_remote_path: "{{ sek8s_remote_host_tools }}/scripts/config.yaml"
     staged_image_path: "/var/lib/chutes/base-images/{{ upgrade_staged_basename }}"
-    # chutes-miner tee * --name: use inventory host key by default; set tee_server_name if it differs (e.g. SSH alias).
-    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
   pre_tasks:
     - name: Require chutes_hotkey_path
       ansible.builtin.assert:

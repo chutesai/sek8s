@@ -11,8 +11,6 @@
   hosts: td_hosts
   gather_facts: true
   become: true
-  vars:
-    chutes_tee_server_name: "{{ tee_server_name | default(inventory_hostname) }}"
   pre_tasks:
     - name: Require chutes_hotkey_path
       ansible.builtin.assert:
