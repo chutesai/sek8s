@@ -20,6 +20,7 @@ from chutes.guest.vfio import (
     ensure_sriov_vfs,
     has_stale_vfio_devices,
     install_udev_rules,
+    unbind_non_vfio_drivers,
     unbind_stale_vfio_devices,
 )
 
@@ -158,6 +159,13 @@ def _prepare_devices(
                 )
             print('  Retrying unbind after SBR...')
             unbind_stale_vfio_devices(all_devices)
+
+    # Unbind from host GPU drivers (nouveau, nvidia) if present.
+    # These must not hold the device during CC/PPCIe mode configuration.
+    freed = unbind_non_vfio_drivers(all_devices)
+    if freed:
+        print(f'  Unbound {len(freed)} device(s) from host GPU driver '
+              '(nouveau/nvidia blacklist may be missing — run host-setup)')
 
     if not _wait_devices_ready(all_devices, timeout_secs=10):
         raise RuntimeError(

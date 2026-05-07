@@ -115,6 +115,31 @@ def has_stale_vfio_devices(devices: list[str]) -> bool:
     return any(_get_bound_driver(bdf) == 'vfio-pci' for bdf in devices)
 
 
+def unbind_non_vfio_drivers(devices: list[str]) -> list[str]:
+    """Unbind devices from any non-vfio driver (e.g. nouveau, nvidia).
+
+    GPU passthrough hosts should not have host GPU drivers loaded, but if
+    nouveau or nvidia is bound (missing blacklist), the device must be freed
+    before nvidia-gpu-tools can safely access config space.
+
+    Returns list of BDFs that were unbound.
+    """
+    unbound = []
+    for bdf in devices:
+        driver = _get_bound_driver(bdf)
+        if driver is None or driver == 'vfio-pci':
+            continue
+        print(f'    {bdf} bound to {driver} — unbinding...')
+        unbind_path = f'/sys/bus/pci/drivers/{driver}/unbind'
+        ok = _sysfs_write(unbind_path, bdf, timeout=10.0)
+        if ok:
+            unbound.append(bdf)
+            print(f'    {bdf} unbound from {driver}')
+        else:
+            print(f'    Warning: could not unbind {bdf} from {driver} (timeout)')
+    return unbound
+
+
 def unbind_stale_vfio_devices(
     devices: list[str],
     per_device_timeout: float = 45.0,

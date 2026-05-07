@@ -271,6 +271,48 @@ def _grub_update_cmdline(additions: list[str]):
         _run(["sudo", "grub-install", "--no-nvram"])
 
 
+def _blacklist_gpu_drivers():
+    """Blacklist nouveau and nvidia kernel modules on the host.
+
+    GPUs on passthrough hosts must not be claimed by any driver — they are
+    bound to vfio-pci at VM launch time.  nouveau auto-loading is the most
+    common cause of GPU hangs during CC/PPCIe mode configuration.
+    """
+    blacklist_path = "/etc/modprobe.d/blacklist-gpu-host.conf"
+    blacklist_content = (
+        "# GPU drivers must not load on VFIO passthrough hosts.\n"
+        "# GPUs are configured via nvidia-gpu-tools and bound to vfio-pci at launch.\n"
+        "blacklist nouveau\n"
+        "blacklist nvidia\n"
+        "blacklist nvidia_drm\n"
+        "blacklist nvidia_modeset\n"
+        "blacklist nvidia_uvm\n"
+        "options nouveau modeset=0\n"
+    )
+    already_current = False
+    if os.path.exists(blacklist_path):
+        with open(blacklist_path, 'r') as f:
+            if f.read() == blacklist_content:
+                print(f"  {blacklist_path} already up to date")
+                already_current = True
+
+    if not already_current:
+        _write_system_file(blacklist_path, blacklist_content)
+        _run(["sudo", "update-initramfs", "-u"])
+        print(f"  ✓ GPU driver blacklist installed ({blacklist_path})")
+
+    # Unload nouveau immediately if currently loaded (no reboot required)
+    result = subprocess.run(
+        ["lsmod"],
+        capture_output=True,
+        text=True,
+    )
+    if any(line.split()[0] == "nouveau" for line in result.stdout.splitlines()[1:]):
+        print("  Unloading nouveau module (currently loaded)...")
+        subprocess.run(["sudo", "rmmod", "nouveau"], check=False)
+        print("  ✓ nouveau unloaded")
+
+
 def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
     """Ensure QCNL accepts PCCS's self-signed TLS certificate.
 
@@ -409,6 +451,10 @@ def setup_host(profile: HostProfile):
     # 5. GRUB cmdline
     print("\nStep 5: Updating GRUB cmdline...")
     _grub_update_cmdline(profile.grub_cmdline_additions)
+
+    # 5b. Blacklist GPU drivers on host (GPUs are for VFIO passthrough only)
+    print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
+    _blacklist_gpu_drivers()
 
     # 6. QGS vsock mode
     print("\nStep 6: Configuring QGS for vsock (port 4050)...")
