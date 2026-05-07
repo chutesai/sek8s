@@ -1,0 +1,39 @@
+---
+# Set up the host-side infrastructure for a running benchmark TDX VM.
+#
+# This playbook is idempotent and safe to re-run at any time — including while
+# the benchmark VM is running. It does NOT build, download, or launch the VM.
+# The benchmark image is built locally and launched manually via quick-launch.sh.
+#
+# What this playbook does:
+#   1. Syncs the latest host-tools from the sek8s repo to the host
+#   2. Installs conntrack (required by the benchmark-netlog service)
+#   3. Deploys benchmark-netlog.sh, the systemd unit, and logrotate config
+#   4. Writes /etc/chutes/benchmark-netlog.env with the correct bridge subnet
+#   5. Enables and starts the benchmark-netlog service
+#
+# Bridge subnet source (in priority order):
+#   a. benchmark_vm_bridge_subnet variable (explicit override)
+#   b. network.bridge_ip read from the existing config.yaml on the host
+#      (the same file used when launching the VM manually)
+#
+# Usage:
+#   cd ansible/host
+#   ansible-playbook -i <inventory> playbooks/benchmark-setup.yml
+#
+#   # Override bridge subnet explicitly (when config.yaml is not yet present):
+#   ansible-playbook -i <inventory> playbooks/benchmark-setup.yml \
+#     -e benchmark_vm_bridge_subnet=192.168.100.0/24
+#
+#   # Use a non-default log directory:
+#   ansible-playbook -i <inventory> playbooks/benchmark-setup.yml \
+#     -e benchmark_vm_log_dir=/mnt/data/benchmark-netlog
+
+- name: Set up host for benchmark TDX VM
+  hosts: td_hosts
+  gather_facts: false
+  become: true
+
+  roles:
+    - role: host_tools
+    - role: benchmark_vm

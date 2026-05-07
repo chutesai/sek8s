@@ -1,0 +1,16 @@
+---
+# Bridge subnet CIDR to filter conntrack events for.
+# By default this is read from the existing config.yaml on the host (the same
+# file used to launch the VM manually). Override here when the config.yaml is
+# absent or you want to target a different subnet:
+#   -e benchmark_vm_bridge_subnet=192.168.100.0/24
+#
+# Leave unset to auto-read from config.yaml.
+# benchmark_vm_bridge_subnet: ""
+
+# Path to the config.yaml on the host that was used to launch the benchmark VM.
+# Used to auto-derive the bridge subnet when benchmark_vm_bridge_subnet is unset.
+benchmark_vm_config_path: "{{ sek8s_remote_host_tools }}/scripts/config.benchmark.yaml"
+
+# Directory where daily netlog files are written.
+benchmark_vm_log_dir: "/var/log/chutes/benchmark-netlog"

@@ -1,0 +1,125 @@
+---
+# Host-side setup for a benchmark TDX VM.
+#
+# Installs conntrack, deploys the benchmark-netlog systemd service from the
+# synced host-tools checkout, and ensures it is running and logging to the
+# correct subnet.
+#
+# Bridge subnet source (in priority order):
+#   1. benchmark_vm_bridge_subnet variable (explicit override)
+#   2. network.bridge_ip read from the existing config.yaml on the host
+#   3. Error — one of the above must be available
+
+# ── Derive bridge subnet ──────────────────────────────────────────────────────
+
+- name: Check for existing config.yaml on host
+  ansible.builtin.stat:
+    path: "{{ benchmark_vm_config_path }}"
+  register: _bvm_config_stat
+  when: benchmark_vm_bridge_subnet is not defined
+
+- name: Fail when neither benchmark_vm_bridge_subnet nor config.yaml is available
+  ansible.builtin.fail:
+    msg: >-
+      Cannot determine bridge subnet for benchmark-netlog.
+      Either set benchmark_vm_bridge_subnet (e.g. -e benchmark_vm_bridge_subnet=192.168.100.0/24)
+      or ensure a config.yaml exists at {{ benchmark_vm_config_path }}.
+  when:
+    - benchmark_vm_bridge_subnet is not defined
+    - not _bvm_config_stat.stat.exists
+
+- name: Read bridge_ip from existing config.yaml
+  ansible.builtin.slurp:
+    src: "{{ benchmark_vm_config_path }}"
+  register: _bvm_config_raw
+  when:
+    - benchmark_vm_bridge_subnet is not defined
+    - _bvm_config_stat.stat.exists
+
+- name: Derive subnet CIDR from config.yaml bridge_ip
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import ipaddress, sys
+        print(str(ipaddress.ip_interface(sys.argv[1]).network))
+      - "{{ (_bvm_config_raw.content | b64decode | from_yaml).network.bridge_ip }}"
+  register: _bvm_derived_subnet
+  changed_when: false
+  when:
+    - benchmark_vm_bridge_subnet is not defined
+    - _bvm_config_stat.stat.exists
+
+- name: Set effective bridge subnet fact
+  ansible.builtin.set_fact:
+    _bvm_bridge_subnet: >-
+      {{ benchmark_vm_bridge_subnet
+         | default(_bvm_derived_subnet.stdout | trim) }}
+
+# ── Install conntrack ─────────────────────────────────────────────────────────
+
+- name: Install conntrack package
+  ansible.builtin.apt:
+    name: conntrack
+    state: present
+    update_cache: false
+
+# ── Deploy service files from host-tools checkout ────────────────────────────
+
+- name: Install benchmark-netlog.sh to /usr/local/bin
+  ansible.builtin.copy:
+    src: "{{ sek8s_remote_host_tools }}/scripts/network/benchmark-netlog.sh"
+    dest: /usr/local/bin/benchmark-netlog.sh
+    mode: "0755"
+    remote_src: true
+  notify: Reload systemd daemon and restart benchmark-netlog
+
+- name: Install benchmark-netlog systemd unit
+  ansible.builtin.copy:
+    src: "{{ sek8s_remote_host_tools }}/scripts/network/benchmark-netlog.service"
+    dest: /etc/systemd/system/benchmark-netlog.service
+    mode: "0644"
+    remote_src: true
+  notify: Reload systemd daemon and restart benchmark-netlog
+
+- name: Install benchmark-netlog logrotate config
+  ansible.builtin.copy:
+    src: "{{ sek8s_remote_host_tools }}/scripts/network/benchmark-netlog.logrotate"
+    dest: /etc/logrotate.d/benchmark-netlog
+    mode: "0644"
+    remote_src: true
+
+# ── Configure ─────────────────────────────────────────────────────────────────
+
+- name: Ensure /etc/chutes config directory exists
+  ansible.builtin.file:
+    path: /etc/chutes
+    state: directory
+    mode: "0755"
+
+- name: Write benchmark-netlog env file
+  ansible.builtin.copy:
+    dest: /etc/chutes/benchmark-netlog.env
+    content: |
+      BRIDGE_SUBNET={{ _bvm_bridge_subnet }}
+      NETLOG_DIR={{ benchmark_vm_log_dir }}
+    mode: "0644"
+  notify: Reload systemd daemon and restart benchmark-netlog
+
+- name: Ensure benchmark-netlog log directory exists
+  ansible.builtin.file:
+    path: "{{ benchmark_vm_log_dir }}"
+    state: directory
+    mode: "0750"
+    owner: root
+    group: root
+
+# ── Enable and start ──────────────────────────────────────────────────────────
+
+- name: Enable and start benchmark-netlog service
+  ansible.builtin.systemd:
+    name: benchmark-netlog
+    enabled: true
+    state: started
+    daemon_reload: true
