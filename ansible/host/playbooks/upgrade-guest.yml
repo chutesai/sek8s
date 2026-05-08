@@ -50,6 +50,7 @@
     - name: Stat current default base image
       ansible.builtin.stat:
         path: "{{ upgrade_default_base_image }}"
+        get_checksum: false
       register: cur_base_stat
 
     - name: SHA256 of current default base image
@@ -68,6 +69,7 @@
     - name: Stat staged image
       ansible.builtin.stat:
         path: "{{ staged_image_path }}"
+        get_checksum: false
       register: staged_stat
 
     - name: SHA256 of staged image when present
@@ -132,6 +134,7 @@
     - name: Re-stat staged image
       ansible.builtin.stat:
         path: "{{ staged_image_path }}"
+        get_checksum: false
       register: staged_stat
 
     - name: SHA256 staged image after download
@@ -178,4 +181,7 @@
       ansible.builtin.include_role:
         name: chutes_tee_vm
         tasks_from: launch_and_verify.yml
+      vars:
+        # Image was just verified above — pass SHA so launch_and_verify skips recompute.
+        _prevalidated_base_sha: "{{ upgrade_expected_sha }}"
       when: relaunch_vm | bool
