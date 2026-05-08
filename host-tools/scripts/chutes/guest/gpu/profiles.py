@@ -46,9 +46,26 @@ class GpuProfile(ABC):
         ...
 
     @property
+    def host_sockets(self) -> int:
+        """Physical socket count for this server type. Override per profile."""
+        return 1
+
+    @property
     def vcpus(self) -> int:
         """vCPUs allocated to the VM (host CPUs minus reserve)."""
         return self.host_cpus - HOST_RESERVED_CPUS
+
+    @property
+    def smp_topology(self) -> str:
+        """Full QEMU -smp topology string.
+
+        Mirrors the physical socket layout so QEMU synthesizes CPUID topology
+        leaves that match the host structure. threads=1 disables SMT in the
+        guest — each vCPU appears as an independent core, which produces a
+        clean scheduler topology without requiring guest HT awareness.
+        """
+        cores_per_socket = self.vcpus // self.host_sockets
+        return f"{self.vcpus},sockets={self.host_sockets},cores={cores_per_socket},threads=1"
 
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -165,6 +182,10 @@ class RTXPro6000Profile(GpuProfile):
     @property
     def host_cpus(self) -> int:
         return 128
+
+    @property
+    def host_sockets(self) -> int:
+        return 2
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]

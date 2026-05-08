@@ -126,6 +126,50 @@ def test_vcpus_reserves_cores_for_host(model_key):
 
 
 # ---------------------------------------------------------------------------
+# SMP topology: sockets, core divisibility, format
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
+def test_smp_topology_vcpu_count_matches_vcpus(model_key):
+    """First field of smp_topology must equal vcpus."""
+    profile = GPU_PROFILES[model_key]
+    count = int(profile.smp_topology.split(",")[0])
+    assert count == profile.vcpus
+
+
+@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
+def test_smp_topology_vcpus_divisible_by_sockets(model_key):
+    """vcpus must divide evenly across sockets so each socket has equal cores."""
+    profile = GPU_PROFILES[model_key]
+    assert profile.vcpus % profile.host_sockets == 0, (
+        f"{model_key}: vcpus={profile.vcpus} not divisible by "
+        f"host_sockets={profile.host_sockets}"
+    )
+
+
+@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
+def test_smp_topology_threads_is_one(model_key):
+    """threads=1 must always be set (no guest SMT)."""
+    profile = GPU_PROFILES[model_key]
+    assert "threads=1" in profile.smp_topology
+
+
+def test_rtx_pro_6000_uses_two_sockets():
+    """RTX Pro 6000 servers have 2 physical sockets; topology must reflect this."""
+    profile = GPU_PROFILES["RTX_PRO_6000"]
+    assert profile.host_sockets == 2
+    assert "sockets=2" in profile.smp_topology
+
+
+def test_rtx_pro_6000_smp_topology_preserves_full_vcpu_count():
+    """Switching to sockets=2 must not reduce the vCPU count."""
+    profile = GPU_PROFILES["RTX_PRO_6000"]
+    count = int(profile.smp_topology.split(",")[0])
+    assert count == profile.vcpus
+
+
+# ---------------------------------------------------------------------------
 # resolve_profile: resolution logic
 # ---------------------------------------------------------------------------
 
