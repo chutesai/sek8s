@@ -2,8 +2,10 @@
 # Pre-upgrade tasks for hosts currently on Ubuntu 25.10 (Questing).
 # Handles hosts that were provisioned with the old Ubuntu2510Profile which used
 # the kobuk-team tdx-attestation-release PPA (suite: oracular) for attestation.
-# Hosts provisioned after that profile was migrated to Intel DCAP will not have
-# any of these files — all removals are graceful.
+# Hosts provisioned after that profile was migrated to Intel DCAP (or already
+# remediated via remediate-host.yml) will have no kobuk sources — the package
+# purge and PCCS directory removal are gated on kobuk sources being present so
+# correctly-installed Intel DCAP packages are not torn down unnecessarily.
 
 - name: "Pre 25.10: stop tdx-qgs service if running"
   ansible.builtin.service:
@@ -16,6 +18,35 @@
     name: sgx-dcap-pccs
     state: stopped
   failed_when: false
+
+# ── Detect kobuk presence (idempotent across retries) ────────────────────────
+# Search all directories that can carry kobuk evidence:
+#   sources.list.d   — PPA source files (removed below)
+#   preferences.d    — kobuk pin files (removed below)
+#   apt.conf.d       — kobuk unattended-upgrades drop-in (removed below)
+#   /var/lib/apt/lists — downloaded package-index cache; filenames are derived
+#                        from the source URL so kobuk cache files contain
+#                        "kobuk" in the name and survive until `apt update`
+#                        runs — which hop.yml does only AFTER this file
+#                        completes. This means the flag stays correct even if
+#                        a previous run failed after the source files were
+#                        removed but before the package purge finished.
+
+- name: "Pre 25.10: find all kobuk indicators"
+  ansible.builtin.find:
+    paths:
+      - /etc/apt/sources.list.d
+      - /etc/apt/preferences.d
+      - /etc/apt/apt.conf.d
+      - /var/lib/apt/lists
+    patterns:
+      - "*kobuk*"
+    recurse: false
+  register: _kobuk_indicators
+
+- name: "Pre 25.10: set kobuk-present flag"
+  ansible.builtin.set_fact:
+    _kobuk_was_present: "{{ _kobuk_indicators.files | length > 0 }}"
 
 - name: "Pre 25.10: remove kobuk attestation PPA source files"
   ansible.builtin.file:
@@ -47,24 +78,30 @@
     loop_var: _kobuk_file
     label: "{{ _kobuk_file.path }}"
 
+# ── Package purge — kobuk hosts only ─────────────────────────────────────────
+
 - name: "Pre 25.10: find all installed SGX/attestation packages"
   ansible.builtin.shell:
     cmd: dpkg --list | grep -iE 'sgx|libmpa' | awk '{print $2}' || true
     executable: /bin/bash
   register: _sgx_packages
   changed_when: false
+  when: _kobuk_was_present | bool
 
 - name: "Pre 25.10: purge all SGX/attestation packages"
   ansible.builtin.apt:
     name: "{{ _sgx_packages.stdout_lines }}"
     state: absent
     purge: true
-  when: _sgx_packages.stdout_lines | length > 0
+  when:
+    - _kobuk_was_present | bool
+    - _sgx_packages.stdout_lines | length > 0
   failed_when: false
 
 - name: "Pre 25.10: autoremove orphaned dependencies"
   ansible.builtin.apt:
     autoremove: true
+  when: _kobuk_was_present | bool
   failed_when: false
 
 - name: "Pre 25.10: remove stale PCCS directory left by apt purge"
@@ -75,3 +112,4 @@
   ansible.builtin.file:
     path: /opt/intel/sgx-dcap-pccs
     state: absent
+  when: _kobuk_was_present | bool
