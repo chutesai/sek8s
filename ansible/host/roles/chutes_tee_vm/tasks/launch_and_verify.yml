@@ -17,6 +17,7 @@
 - name: Check if base image exists
   ansible.builtin.stat:
     path: "{{ upgrade_default_base_image }}"
+    get_checksum: false
   register: _base_img_stat
 
 - name: Download base image when missing
@@ -52,6 +53,15 @@
       - "{{ upgrade_default_base_image }}"
   register: _launch_actual_sha
   changed_when: false
+  # Skip when the caller already verified this image (e.g. upgrade-guest.yml just
+  # promoted a freshly checksummed staged image). Nothing touched the file between
+  # verification and launch, so recomputing is pure waste (~111s on a large qcow2).
+  when: (_prevalidated_base_sha | default('')) != (_launch_expected_sha.stdout | trim)
+
+- name: Use pre-validated SHA when available
+  ansible.builtin.set_fact:
+    _launch_actual_sha: "{{ _launch_actual_sha | combine({'stdout': (_prevalidated_base_sha | default('')) + '  ' + upgrade_default_base_image}) }}"
+  when: (_prevalidated_base_sha | default('')) == (_launch_expected_sha.stdout | trim)
 
 - name: Fail with clear message when base image SHA does not match
   ansible.builtin.fail:
