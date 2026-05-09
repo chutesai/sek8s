@@ -69,6 +69,16 @@
     path: /sys/firmware/efi
   register: _efi_present
 
+- name: "Pre 25.04: ensure grub-efi-amd64 and grub-common are installed before removing grub-pc"
+  ansible.builtin.apt:
+    name:
+      - grub-common
+      - grub-efi-amd64
+    state: present
+  when: _efi_present.stat.exists
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
 - name: "Pre 25.04: purge grub-pc on EFI systems before upgrade"
   ansible.builtin.apt:
     name:
