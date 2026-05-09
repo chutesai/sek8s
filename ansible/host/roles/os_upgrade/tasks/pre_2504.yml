@@ -49,6 +49,37 @@
     purge: true
   failed_when: false
 
+# ── Remove grub-pc on EFI systems before upgrade ─────────────────────────────
+# On EFI systems whose root is on LVM, grub-pc's post-install script fails
+# because it tries to run grub-install for i386-pc and cannot find a BIOS
+# drive for /dev/mapper/vg0-lv--. do-release-upgrade unpacks the new grub-pc
+# package but leaves it half-configured. After rebooting into 25.10, the next
+# apt run (e.g. host_prerequisites installing aria2) triggers dpkg to finish
+# configuring the pending packages — grub-pc fails again, blocking all further
+# apt/dpkg calls with "sub-process dpkg returned an error code (1)".
+#
+# Purging grub-pc before the upgrade means do-release-upgrade never unpacks it.
+# grub-efi-amd64 owns the bootloader on these hosts; grub-pc should not be
+# present. DEBIAN_FRONTEND=noninteractive suppresses the debconf prompt asking
+# whether to remove all GRUB 2 files from /boot/grub (answer: no — that
+# directory is still needed by grub-efi-amd64).
+
+- name: "Pre 25.04: check if system booted via EFI"
+  ansible.builtin.stat:
+    path: /sys/firmware/efi
+  register: _efi_present
+
+- name: "Pre 25.04: purge grub-pc on EFI systems before upgrade"
+  ansible.builtin.apt:
+    name:
+      - grub-pc
+      - grub-pc-bin
+    state: absent
+    purge: true
+  when: _efi_present.stat.exists
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
 # ── Ensure systemd-networkd is persistently enabled ─────────────────────────
 # On 25.04 cloud images, systemd-networkd is typically enabled only via
 # netplan's runtime generator (/run/systemd/), not by persistent symlinks in
