@@ -121,18 +121,25 @@
 # reset list values inherited from the base unit file.  DKMS modules still
 # build normally, they just no longer block networking startup.
 
+- name: "Pre 25.04: check if dkms.service exists"
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/dkms.service
+  register: _dkms_unit
+
 - name: "Pre 25.04: copy dkms.service to /etc override location"
   ansible.builtin.copy:
     src: /usr/lib/systemd/system/dkms.service
     dest: /etc/systemd/system/dkms.service
     remote_src: true
     mode: '0644'
+  when: _dkms_unit.stat.exists
 
 - name: "Pre 25.04: remove network-pre.target from dkms Before="
   ansible.builtin.replace:
     path: /etc/systemd/system/dkms.service
     regexp: 'Before=network-pre\.target\s*'
     replace: 'Before='
+  when: _dkms_unit.stat.exists
 
 # ── Pin netplan interface names across naming-scheme change ──────────────────
 # Ubuntu 25.04 used netplan 0.x which generated udev rename rules so that the
@@ -154,10 +161,8 @@
 # before networkd configures it, restoring the 0.x behaviour in 1.x.
 
 - name: "Pre 25.04: pin netplan interface names with set-name (netplan 0.x → 1.x compat)"
-  ansible.builtin.script:
-    executable: /usr/bin/python3
-    cmd: /dev/stdin
-  args:
+  ansible.builtin.shell:
+    cmd: /usr/bin/python3 /dev/stdin
     stdin: |
       import sys, yaml, pathlib
 

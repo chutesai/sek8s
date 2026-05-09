@@ -2,11 +2,14 @@
 # Common OS upgrade hop skeleton. Called by upgrade-host.yml for each entry in
 # _upgrade_hops with _next_version set by the loop.
 #
-# Version-specific hooks run before and after each hop. Hook files follow the
-# naming convention:
-#   roles/os_upgrade/tasks/pre_<major><minor>.yml   — before upgrading FROM that version
-#   roles/os_upgrade/tasks/post_<major><minor>.yml  — after upgrading FROM that version
+# Version-specific hooks follow the naming convention:
+#   roles/os_upgrade/tasks/pre_<major><minor>.yml   — before do-release-upgrade
+#   roles/os_upgrade/tasks/post_<major><minor>.yml  — after do-release-upgrade, BEFORE reboot
+#
 # Both are silently skipped when no file exists for the current version.
+# post_ hooks are the right place for fixes that must be in place before the
+# first boot into the new OS (e.g. systemd unit overrides). After reboot,
+# setup-tdx-host (via host_prerequisites + tdx_bootstrap) owns full OS state.
 
 - name: "-> {{ _next_version }}: check free disk space on /"
   ansible.builtin.shell: |
@@ -87,6 +90,17 @@
   async: 7200
   poll: 30
 
+# ── Version-specific post-upgrade hook (runs BEFORE reboot) ────────────────
+# Use post_<version>.yml for anything that must be in place before the first
+# boot into the new OS — e.g. systemd unit overrides, udev rules, netplan fixes.
+
+- name: "-> {{ _next_version }}: run post-upgrade tasks for {{ _source_version }}"
+  ansible.builtin.include_tasks: "{{ item }}"
+  with_first_found:
+    - files:
+        - "post_{{ _source_version | replace('.', '') }}.yml"
+      skip: true
+
 - name: "-> {{ _next_version }}: reboot after OS upgrade"
   ansible.builtin.reboot:
     reboot_timeout: 3600
@@ -103,17 +117,6 @@
       Expected Ubuntu {{ _next_version }} after upgrade but found
       {{ ansible_facts['distribution_version'] }}.
       do-release-upgrade output: {{ _upgrade_result.stdout | default('') }}
-
-# ── Version-specific post-upgrade hook ─────────────────────────────────────
-# Runs after the new OS is confirmed. Use for cleanup of transitional state
-# introduced by the corresponding pre_ hook.
-
-- name: "-> {{ _next_version }}: run post-upgrade tasks for {{ _source_version }}"
-  ansible.builtin.include_tasks: "{{ item }}"
-  with_first_found:
-    - files:
-        - "post_{{ _source_version | replace('.', '') }}.yml"
-      skip: true
 
 # ── Re-provision for new OS (final hop only) ──────────────────────────────
 # Run setup-tdx-host via the same roles used by setup.yml so the host lands
