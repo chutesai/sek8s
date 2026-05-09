@@ -1,0 +1,34 @@
+---
+# Post-upgrade tasks for hosts upgraded FROM Ubuntu 25.04 (Plucky).
+# Runs after do-release-upgrade completes but BEFORE the first reboot into
+# the new OS. Fixes must be in place before boot — setup-tdx-host handles
+# full OS state after the reboot.
+
+# ── Fix dkms.service / cloud-init-network deadlock ──────────────────────────
+# dkms.service may not have existed on the 25.04 system (e.g. no NVIDIA DKMS
+# packages installed), so the pre_2504 fix was skipped. do-release-upgrade
+# installs dkms as part of 25.10 packages, creating the unit for the first
+# time. Without an /etc override, the dkms → network-pre.target → cloud-init
+# circular dependency deadlocks the first boot into 25.10.
+#
+# Idempotent: if pre_2504 already applied the override this is a safe no-op.
+
+- name: "Post 25.04: check if dkms.service exists"
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/dkms.service
+  register: _dkms_unit_post
+
+- name: "Post 25.04: copy dkms.service to /etc override location"
+  ansible.builtin.copy:
+    src: /usr/lib/systemd/system/dkms.service
+    dest: /etc/systemd/system/dkms.service
+    remote_src: true
+    mode: '0644'
+  when: _dkms_unit_post.stat.exists
+
+- name: "Post 25.04: remove network-pre.target from dkms Before="
+  ansible.builtin.replace:
+    path: /etc/systemd/system/dkms.service
+    regexp: 'Before=network-pre\.target\s*'
+    replace: 'Before='
+  when: _dkms_unit_post.stat.exists
