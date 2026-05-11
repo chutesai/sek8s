@@ -12,10 +12,9 @@
 # config, hash error, or extend error) powers off the VM rather than allowing
 # it to boot with an incomplete or unverifiable RTMR3 measurement chain.
 #
-# Prerequisites:
-#   - build-essential and libtdx-attest-dev must be present for the
-#     tdx-rtmr-extend compile step.  Both are installed by the
-#     attestation-service role (install-tdx-quote-generator tasks_from).
+# tdx-rtmr-extend uses the tsm-mr sysfs interface (merged Linux 6.16):
+#   /sys/class/misc/tdx_guest/measurements/rtmrN:sha384
+# No external libraries required — only build-essential for gcc.
 #
 # This role notifies the global "update initramfs" handler so the hook is
 # included in the initramfs image.  For LUKS builds, the LUKS role also
@@ -38,11 +37,7 @@
     mode: '0644'
 
 - name: Compile tdx-rtmr-extend
-  ansible.builtin.shell: |
-    gcc -O2 -o /tmp/tdx-rtmr-extend /tmp/tdx-rtmr-extend.c \
-        -I/usr/include \
-        -L/usr/lib/x86_64-linux-gnu \
-        -ltdx_attest
+  ansible.builtin.shell: gcc -O2 -o /tmp/tdx-rtmr-extend /tmp/tdx-rtmr-extend.c
   args:
     chdir: /tmp
 

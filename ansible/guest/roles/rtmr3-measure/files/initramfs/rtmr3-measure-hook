@@ -2,9 +2,9 @@
 # /etc/initramfs-tools/hooks/rtmr3-measure
 #
 # Initramfs-tools hook for the RTMR3 measurement feature.
-# Copies the tdx-rtmr-extend binary, sha384sum, the tdx_guest kernel module,
-# and /etc/tdx-measure.conf into the initramfs image so the init-bottom
-# script can measure configured paths into RTMR3 at boot.
+# Copies tdx-rtmr-extend (sysfs-based, no external libs), sha384sum,
+# the tdx_guest kernel module, and /etc/tdx-measure.conf into the
+# initramfs image so the init-bottom script can extend RTMR3 at boot.
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
