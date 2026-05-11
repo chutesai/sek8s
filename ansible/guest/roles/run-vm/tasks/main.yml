@@ -281,7 +281,7 @@
       --vcpus {{ build_vm_vcpus }} \
       --disk path="{{ build_img_path }}",format=qcow2 \
       --disk path=/var/lib/libvirt/boot/tdx-cloudinit.iso,device=cdrom \
-      --os-variant ubuntu{{ ubuntu_version }} \
+      --os-variant detect=on,require=off \
       --virt-type "{{ virt_type }}" \
       --network network=default,mac={{ build_vm_mac }} \
       --graphics vnc,listen=0.0.0.0,port="{{ vnc_port }}" \
