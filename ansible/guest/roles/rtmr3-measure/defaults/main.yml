@@ -10,6 +10,7 @@ rtmr3_measure_paths:
   - /etc/shadow
   - /etc/sudoers
   - /etc/sudoers.d
+  - /etc/default/grub
   - /root/.ssh
   - /usr/local/bin/verify-access-config
 
@@ -34,4 +35,5 @@ rtmr3_canonical_paths:
   - /etc/shadow
   - /etc/sudoers
   - /etc/sudoers.d
+  - /etc/default/grub
   - /usr/local/bin/verify-access-config

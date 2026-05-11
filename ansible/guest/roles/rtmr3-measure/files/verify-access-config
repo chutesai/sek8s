@@ -208,6 +208,71 @@ def display_sshd_config() -> None:
                 "session setup only, not authentication")
 
 
+def display_console_access() -> bool:
+    """
+    Display console service state and GRUB cmdline.
+    Returns False (hard failure) if any interactive console service is active.
+    """
+    _heading("Console Access Configuration")
+
+    # ── GRUB kernel cmdline ────────────────────────────────────────────────
+    grub = Path("/etc/default/grub")
+    if grub.exists():
+        cmdline = ""
+        for line in grub.read_text().splitlines():
+            if line.startswith("GRUB_CMDLINE_LINUX="):
+                cmdline = line.split("=", 1)[1].strip().strip('"\'')
+                break
+        if cmdline:
+            print(f"  GRUB_CMDLINE_LINUX: {cmdline}")
+            masks = [p for p in cmdline.split() if p.startswith("systemd.mask=")]
+            if masks:
+                for m in masks:
+                    _ok(f"kernel cmdline: {m}")
+            else:
+                _warn("GRUB_CMDLINE_LINUX does not contain any systemd.mask= entries — "
+                      "console services are NOT masked at kernel level")
+        else:
+            _warn("GRUB_CMDLINE_LINUX not set in /etc/default/grub")
+    else:
+        _warn("/etc/default/grub not found — console masking cannot be verified")
+
+    print()
+
+    # ── Service state ─────────────────────────────────────────────────────
+    CONSOLE_SERVICES = [
+        "getty@tty1.service",
+        "serial-getty@ttyS0.service",
+        "console-getty.service",
+    ]
+
+    hard_fail = False
+    for svc in CONSOLE_SERVICES:
+        try:
+            enabled = subprocess.run(
+                ["systemctl", "is-enabled", svc],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+            active = subprocess.run(
+                ["systemctl", "is-active", svc],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except Exception as exc:
+            _warn(f"{svc}: could not query systemctl ({exc})")
+            continue
+
+        if active == "active":
+            print(f"  {_color(RED, '✗')} {svc}: {enabled} / {_color(RED, 'ACTIVE')} — "
+                  f"{_color(RED, 'CONSOLE IS OPEN')}")
+            hard_fail = True
+        elif enabled == "masked":
+            _ok(f"{svc}: masked")
+        else:
+            _warn(f"{svc}: {enabled} / {active} — expected 'masked'")
+
+    return not hard_fail
+
+
 def display_pam_sshd() -> None:
     _heading("PAM SSH Authentication Stack (/etc/pam.d/sshd)")
     pam_sshd = Path("/etc/pam.d/sshd")
@@ -377,6 +442,7 @@ def main() -> int:
     display_ssh_keys()
     display_sshd_config()
     display_pam_sshd()
+    console_ok = display_console_access()
     display_users()
     display_shadow_status()
     display_sudoers()
@@ -419,20 +485,22 @@ def main() -> int:
 
     # ── Compare ───────────────────────────────────────────────────────────
     print()
-    if expected == live:
+    rtmr3_ok = (expected == live)
+
+    if rtmr3_ok and console_ok:
         print(_color(GREEN, _color(BOLD,
             "  ✓ PASS — Filesystem state matches boot-time RTMR3 measurement.\n"
-            "           No offline tampering detected."
+            "           No offline tampering detected. Console access is closed."
         )))
         return 0
-    else:
+
+    if not rtmr3_ok:
         print(_color(RED, _color(BOLD,
             "  ✗ FAIL — RTMR3 mismatch detected!\n"
             "           The current filesystem does NOT match what was measured\n"
             "           at boot. The image may have been tampered with offline."
         )))
         print()
-        # Show per-file hashes to help identify which file changed
         print("  Per-file SHA-384 hashes (current filesystem):")
         for f in measured_files:
             p = Path(f)
@@ -442,7 +510,15 @@ def main() -> int:
                     print(f"    {h}  {f}")
                 except OSError as exc:
                     print(f"    (error: {exc})  {f}")
-        return 1
+
+    if not console_ok:
+        print(_color(RED, _color(BOLD,
+            "  ✗ FAIL — An interactive console service is actively running!\n"
+            "           A getty or serial console is open on this VM.\n"
+            "           The image should have been built with the disable-console role."
+        )))
+
+    return 1
 
 
 if __name__ == "__main__":

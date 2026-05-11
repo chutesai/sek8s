@@ -49,6 +49,12 @@
   args:
     chdir: /tmp
 
+- name: Remove immutable flag from tdx-rtmr-extend (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/tdx-rtmr-extend 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
 - name: Install tdx-rtmr-extend binary
   ansible.builtin.copy:
     src: /tmp/tdx-rtmr-extend
@@ -57,6 +63,10 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: Set tdx-rtmr-extend immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/tdx-rtmr-extend
+  changed_when: false
 
 - name: Remove temporary tdx-rtmr-extend build artefacts
   ansible.builtin.file:
@@ -67,6 +77,16 @@
     - /tmp/tdx-rtmr-extend
 
 # ── Install verification script ──────────────────────────────────────────────
+# The script is made immutable after install.  Even root cannot modify it
+# without first running `chattr -i`.  This prevents accidents — any change
+# would cause a boot-time hash mismatch and power off the VM.
+# The chattr -i before the copy makes the role idempotent on re-runs.
+
+- name: Remove immutable flag from verify-access-config (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/verify-access-config 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
 
 - name: Install verify-access-config
   ansible.builtin.copy:
@@ -75,6 +95,10 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: Set verify-access-config immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/verify-access-config
+  changed_when: false
 
 # ── Write measurement config ─────────────────────────────────────────────────
 
@@ -91,6 +115,12 @@
 # /etc/tdx-rtmr3-expected-hashes.  The hook copies that file into the
 # initramfs, so the constants are covered by RTMR1.  At boot the initramfs
 # verifies each canonical file's actual hash matches before extending RTMR3.
+
+- name: Remove immutable flag from /etc/tdx-rtmr3-expected-hashes (idempotency)
+  ansible.builtin.shell: chattr -i /etc/tdx-rtmr3-expected-hashes 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
 
 - name: Compute and write /etc/tdx-rtmr3-expected-hashes
   ansible.builtin.shell: |
@@ -115,6 +145,10 @@
   args:
     executable: /bin/bash
   notify: update initramfs
+
+- name: Set /etc/tdx-rtmr3-expected-hashes immutable
+  ansible.builtin.command: chattr +i /etc/tdx-rtmr3-expected-hashes
+  changed_when: false
 
 # ── Install initramfs hook and init-bottom script ────────────────────────────
 
