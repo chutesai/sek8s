@@ -1,0 +1,43 @@
+---
+# remove-ssh — Disable and remove the SSH service and sudo.
+#
+# Use for production/standard builds where no SSH access should exist in
+# the shipped image.  For benchmark builds where SSH must remain available,
+# use harden-ssh instead and do not include this role.
+#
+# Console access is handled separately by the disable-console role.
+# Miner directory setup is handled by the system-manager role.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Disable and mask SSH service
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - ssh
+    - sshd
+    - ssh.socket
+    - sshd.socket
+  failed_when: false
+
+- name: Remove SSH packages
+  ansible.builtin.package:
+    name:
+      - openssh-server
+      - ssh
+      - dropbear
+      - dropbear-bin
+    state: absent
+  failed_when: false
+
+- name: Remove sudo to prevent privilege escalation
+  ansible.builtin.package:
+    name:
+      - sudo
+      - sudo-ldap
+    state: absent
+  failed_when: false

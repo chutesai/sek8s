@@ -214,6 +214,16 @@
         name: lock-accounts
       when: not (debug_build | default(false))
 
+- name: Disable console access
+  hosts: vm
+  become: true
+  tags:
+    - disable-console
+  tasks:
+    - name: Disable console access
+      ansible.builtin.include_role:
+        name: disable-console
+
 - name: Security Hardening
   hosts: vm
   become: true
@@ -268,18 +278,18 @@
       ansible.builtin.include_role:
         name: cleanup-build-vm
 
-- name: Remove all access
+- name: Remove SSH
   hosts: vm
   become: true
   tags:
-    - remove-access
+    - remove-ssh
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Remove all access
+    - name: Remove SSH
       ansible.builtin.include_role:
-        name: remove-access
+        name: remove-ssh
       when: not (debug_build | default(false))
 
 - name: Finalize VM image

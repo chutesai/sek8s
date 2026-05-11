@@ -1,4 +1,17 @@
 ---
+- name: Create miner directory structure
+  ansible.builtin.file:
+    path: "/opt/miner/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - bin
+    - config
+    - logs
+    - data
+
 - name: Ensure supplemental groups exist for system manager
   ansible.builtin.group:
     name: "{{ item }}"
