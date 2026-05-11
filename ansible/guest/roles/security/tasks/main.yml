@@ -31,3 +31,8 @@
       tags:
         - chroot-hardening
         - init-hardening
+
+    - name: SSH and password hardening
+      ansible.builtin.include_tasks: access-hardening.yml
+      tags:
+        - access-hardening

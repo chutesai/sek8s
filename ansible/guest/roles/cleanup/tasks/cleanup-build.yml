@@ -10,33 +10,6 @@
   loop:
     - /root/charts
 
-- name: Harden sshd_config (no password or keyboard-interactive auth)
-  ansible.builtin.lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: "{{ item.regexp }}"
-    line: "{{ item.line }}"
-    state: present
-  loop:
-    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
-    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' }
-    - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
-    - { regexp: '^#?KbdInteractiveAuthentication', line: 'KbdInteractiveAuthentication no' }
-  when: not (debug_build | default(false))
-
-- name: Lock passwords for all non-system accounts (uid >= 1000)
-  ansible.builtin.shell: |
-    awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | \
-      xargs -r passwd --lock
-  changed_when: true
-  when: not (debug_build | default(false))
-
-- name: Lock root password
-  ansible.builtin.user:
-    name: root
-    password_lock: true
-  when: not (debug_build | default(false))
-
 - name: Trim filesystem to reduce disk size
   ansible.builtin.command: fstrim -av
   register: fstrim_result
