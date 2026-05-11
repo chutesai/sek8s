@@ -151,6 +151,15 @@
         path: /usr/bin/vim
         priority: 1
 
+    - name: Install HWE kernel and headers
+      ansible.builtin.apt:
+        name:
+          - linux-image-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+          - linux-headers-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+        state: present
+        update_cache: false
+      when: ubuntu_major | int <= 24
+
 - name: Check Lambda packages
   block:
     - name: Get list of installed lambda packages

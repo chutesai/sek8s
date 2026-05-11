@@ -90,7 +90,7 @@
         archive.ubuntu.com; do
       speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
         -w "%{speed_download}" \
-        "http://${mirror}/ubuntu/dists/resolute/Release" 2>/dev/null \
+        "http://${mirror}/ubuntu/dists/noble/Release" 2>/dev/null \
         | awk '{print int($1)}')
       speed=${speed:-0}
       if [ "$speed" -gt "$best_speed" ]; then
