@@ -1,0 +1,104 @@
+---
+# rtmr3-measure — Extend TDX RTMR3 with SHA-384 hashes of configured paths.
+#
+# Installs an initramfs hook that extends RTMR3 with SHA-384 hashes of
+# configured files on the real root filesystem at every boot, before
+# pivot_root.  Because the hook script and its config are baked into the
+# initramfs (covered by RTMR1), neither can be tampered with without
+# changing RTMR1.  Any offline modification to a measured file (e.g. SSH
+# key injection) produces a different RTMR3 that verifiers can detect.
+#
+# The initramfs script is fatal: any failure (TDX device unavailable, missing
+# config, hash error, or extend error) powers off the VM rather than allowing
+# it to boot with an incomplete or unverifiable RTMR3 measurement chain.
+#
+# Prerequisites:
+#   - build-essential and libtdx-attest-dev must be present for the
+#     tdx-rtmr-extend compile step.  Both are installed by the
+#     attestation-service role (install-tdx-quote-generator tasks_from).
+#
+# This role notifies the global "update initramfs" handler so the hook is
+# included in the initramfs image.  For LUKS builds, the LUKS role also
+# rebuilds the initramfs in a chroot — our hook files on disk will be
+# picked up at that point as well.
+
+# ── Build tdx-rtmr-extend binary ────────────────────────────────────────────
+
+- name: Ensure build tools are present
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - gcc
+    state: present
+
+- name: Copy tdx-rtmr-extend source
+  ansible.builtin.copy:
+    src: tdx-rtmr-extend.c
+    dest: /tmp/tdx-rtmr-extend.c
+    mode: '0644'
+
+- name: Compile tdx-rtmr-extend
+  ansible.builtin.shell: |
+    gcc -O2 -o /tmp/tdx-rtmr-extend /tmp/tdx-rtmr-extend.c \
+        -I/usr/include \
+        -L/usr/lib/x86_64-linux-gnu \
+        -ltdx_attest
+  args:
+    chdir: /tmp
+
+- name: Install tdx-rtmr-extend binary
+  ansible.builtin.copy:
+    src: /tmp/tdx-rtmr-extend
+    dest: /usr/local/bin/tdx-rtmr-extend
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Remove temporary tdx-rtmr-extend build artefacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tdx-rtmr-extend.c
+    - /tmp/tdx-rtmr-extend
+
+# ── Install verification script ──────────────────────────────────────────────
+
+- name: Install verify-access-config
+  ansible.builtin.copy:
+    src: verify-access-config
+    dest: /usr/local/bin/verify-access-config
+    owner: root
+    group: root
+    mode: '0755'
+
+# ── Write measurement config ─────────────────────────────────────────────────
+
+- name: Write /etc/tdx-measure.conf
+  ansible.builtin.template:
+    src: tdx-measure.conf.j2
+    dest: /etc/tdx-measure.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── Install initramfs hook and init-bottom script ────────────────────────────
+
+- name: Install initramfs hook (rtmr3-measure)
+  ansible.builtin.copy:
+    src: initramfs/rtmr3-measure-hook
+    dest: /etc/initramfs-tools/hooks/rtmr3-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+- name: Install initramfs init-bottom script (rtmr3-measure)
+  ansible.builtin.copy:
+    src: initramfs/rtmr3-measure
+    dest: /etc/initramfs-tools/scripts/init-bottom/rtmr3-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs

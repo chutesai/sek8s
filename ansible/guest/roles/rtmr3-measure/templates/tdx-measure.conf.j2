@@ -1,0 +1,20 @@
+# /etc/tdx-measure.conf — RTMR3 access config measurement list
+#
+# This file is baked into the initramfs (covered by RTMR1) so the list of
+# measured paths cannot be tampered with without changing RTMR1.
+#
+# Each non-blank, non-comment line names a file or directory to measure
+# into TDX RTMR3 at boot.  Directories are walked recursively; all entries
+# are sorted lexicographically before hashing to guarantee a deterministic
+# extend chain regardless of filesystem ordering.
+#
+# Only regular files are measured.  Symlinks, sockets, pipes, and device
+# nodes are skipped.  Missing paths are silently ignored — they contribute
+# nothing to RTMR3, so the value remains deterministic for a given image.
+#
+# To add new paths: extend rtmr3_measure_paths in the role's defaults or
+# override it in your inventory/group_vars, then rebuild the image.
+
+{% for path in rtmr3_measure_paths %}
+{{ path }}
+{% endfor %}

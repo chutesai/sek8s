@@ -1,0 +1,31 @@
+#!/bin/sh
+# /etc/initramfs-tools/hooks/rtmr3-measure
+#
+# Initramfs-tools hook for the RTMR3 measurement feature.
+# Copies the tdx-rtmr-extend binary, sha384sum, the tdx_guest kernel module,
+# and /etc/tdx-measure.conf into the initramfs image so the init-bottom
+# script can measure configured paths into RTMR3 at boot.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# Binary that extends a TDX RTMR via /dev/tdx_guest ioctl
+copy_exec /usr/local/bin/tdx-rtmr-extend
+
+# sha384sum for hashing measured files (from coreutils — always present)
+copy_exec /usr/bin/sha384sum
+
+# TDX guest kernel module — needed so /dev/tdx_guest is available
+manual_add_modules tdx_guest
+force_load tdx_guest
+
+# Measurement config: the list of paths to measure into RTMR3.
+# Baking this into the initramfs (covered by RTMR1) ensures the list
+# of measured paths cannot be tampered with without changing RTMR1.
+if [ -f /etc/tdx-measure.conf ]; then
+    mkdir -p "$DESTDIR/etc"
+    cp /etc/tdx-measure.conf "$DESTDIR/etc/tdx-measure.conf"
+fi

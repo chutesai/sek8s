@@ -1,4 +1,24 @@
 ### Added
+- `roles/rtmr3-measure`: new standalone role that extends TDX RTMR3 at boot
+  with SHA-384 hashes of a configurable list of paths (defaults: SSH keys,
+  passwd, shadow, sudoers).  An `initramfs-tools` hook bakes the measurement
+  script and path config into the initramfs (covered by RTMR1) so neither can
+  be tampered with without changing RTMR1.  Any offline modification to a
+  measured path — e.g. SSH key injection into an unencrypted image — produces
+  a different RTMR3 that verifiers can detect at session start.
+- `tdx-rtmr-extend`: small C binary installed to `/usr/local/bin/` that
+  extends a TDX RTMR via `/dev/tdx_guest` ioctl (V2 and V3 ABIs) with a
+  sysfs fallback for kernels ≥ 6.16.  Does not require libtdx-attest at
+  runtime.
+- `verify-access-config`: Python script installed to `/usr/local/bin/`
+  for use by the partner inside the VM.  Displays SSH keys (fingerprints +
+  comments), sshd config, user accounts, password status, and sudo rules.
+  Replays the SHA-384 extend chain to compute the expected RTMR3, reads the
+  live value from a TDX quote, and reports PASS/FAIL.  The script itself is
+  in the measurement list so any tampering changes RTMR3.
+- `site.yml` and `site-benchmark.yml`: added `rtmr3-measure` play after
+  security hardening and before cleanup so the final on-disk state (including
+  partner SSH keys written by cleanup) is what gets measured at boot.
 - `playbooks/site-benchmark.yml`: dedicated benchmark VM build playbook. Fully
   independent of `site.yml` — includes only the roles a benchmark VM needs (`run-vm`,
   `common`, `gpu`, `benchmark`, `harden-access`, `security`, `cleanup`). No k3s,

@@ -1,0 +1,16 @@
+---
+# Files and directories whose contents are measured into TDX RTMR3 at boot.
+# Each entry is a path on the real root filesystem (no leading ${rootmnt}).
+# Directories are walked recursively; all collected paths are sorted
+# lexicographically before hashing to ensure a deterministic extend chain.
+#
+# The verification script itself is included so any tampering with it
+# produces a different RTMR3, making its own output untrustworthy.
+rtmr3_measure_paths:
+  - /etc/ssh
+  - /etc/passwd
+  - /etc/shadow
+  - /etc/sudoers
+  - /etc/sudoers.d
+  - /root/.ssh
+  - /usr/local/bin/verify-access-config

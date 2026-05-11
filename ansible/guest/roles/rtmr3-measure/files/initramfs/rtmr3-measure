@@ -1,0 +1,124 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-bottom/rtmr3-measure
+#
+# Extends TDX RTMR3 with SHA-384 hashes of configured paths on the real
+# root filesystem before pivot_root.
+#
+# Reads /etc/tdx-measure.conf (baked into the initramfs, covered by RTMR1)
+# for the list of paths to measure.  For each path, all regular files are
+# collected and sorted lexicographically to guarantee a deterministic extend
+# chain.  Any offline modification to a measured file will produce a
+# different RTMR3 value that verifiers can detect.
+#
+# Design notes:
+#   - init-bottom scripts run after ${rootmnt} is mounted and populated.
+#   - Files are read from ${rootmnt}<path>, not from the initramfs itself.
+#   - Any failure is fatal: the VM powers off rather than boot with an
+#     incomplete or unverifiable RTMR3 measurement chain.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+# ── Fatal failure handler ────────────────────────────────────────────────────
+
+handle_failure() {
+    local reason="$1"
+    log_failure_msg "RTMR3 measurement failed: ${reason}"
+    echo "RTMR3-MEASURE-FAILED: ${reason}" > /dev/kmsg
+    log_failure_msg "VM will shut down in 10 seconds..."
+    sleep 10
+    poweroff -f
+}
+
+log_begin_msg "RTMR3: measuring configured paths"
+
+# ── Ensure TDX device is available ──────────────────────────────────────────
+
+if [ ! -c /dev/tdx_guest ]; then
+    modprobe tdx_guest 2>/dev/null || true
+    sleep 1
+fi
+
+if [ ! -c /dev/tdx_guest ]; then
+    handle_failure "TDX device (/dev/tdx_guest) not available — not running in a TDX guest"
+fi
+
+# ── Read measurement config ──────────────────────────────────────────────────
+
+if [ ! -f /etc/tdx-measure.conf ]; then
+    handle_failure "tdx-measure.conf not found in initramfs"
+fi
+
+# ── Collect and sort all files to measure ───────────────────────────────────
+# Paths in the config are relative to the real root (e.g. /etc/ssh).
+# We read them from ${rootmnt}/etc/ssh, etc.
+# Only regular files are measured; symlinks, pipes, and device nodes are skipped.
+
+filelist=$(mktemp)
+
+while IFS= read -r cfg_path || [ -n "$cfg_path" ]; do
+    # Strip inline comments and leading/trailing whitespace
+    cfg_path="${cfg_path%%#*}"
+    cfg_path="${cfg_path#"${cfg_path%%[! ]*}"}"
+    cfg_path="${cfg_path%"${cfg_path##*[! ]}"}"
+    [ -z "$cfg_path" ] && continue
+
+    realpath="${rootmnt}${cfg_path}"
+
+    if [ -d "$realpath" ]; then
+        # Collect all regular files under the directory, record their
+        # root-relative paths for deterministic cross-machine sorting.
+        find "$realpath" -type f | while IFS= read -r f; do
+            # Strip the rootmnt prefix so paths sort consistently
+            printf '%s\n' "${f#"${rootmnt}"}"
+        done >> "$filelist"
+    elif [ -f "$realpath" ]; then
+        printf '%s\n' "$cfg_path" >> "$filelist"
+    fi
+done < /etc/tdx-measure.conf
+
+# Sort lexicographically to guarantee a deterministic extend chain, writing
+# result to a temp file so the extend loop runs in the same shell (not a
+# pipe subshell) and can call handle_failure directly.
+sorted_list=$(mktemp)
+sort "$filelist" > "$sorted_list"
+rm -f "$filelist"
+
+if [ ! -s "$sorted_list" ]; then
+    rm -f "$sorted_list"
+    handle_failure "no files found to measure — check tdx-measure.conf paths"
+fi
+
+# ── Hash each file and extend RTMR3 ─────────────────────────────────────────
+
+count=0
+
+while IFS= read -r relpath; do
+    [ -z "$relpath" ] && continue
+
+    fullpath="${rootmnt}${relpath}"
+    [ -f "$fullpath" ] || continue
+
+    # sha384sum outputs "<hash>  <filename>" — extract just the hash
+    hash=$(sha384sum "$fullpath" 2>/dev/null | awk '{print $1}')
+    if [ -z "$hash" ]; then
+        rm -f "$sorted_list"
+        handle_failure "could not hash ${relpath}"
+    fi
+
+    if ! tdx-rtmr-extend --index 3 --data "$hash" 2>/dev/null; then
+        rm -f "$sorted_list"
+        handle_failure "failed to extend RTMR3 for ${relpath}"
+    fi
+
+    count=$((count + 1))
+done < "$sorted_list"
+
+rm -f "$sorted_list"
+
+log_success_msg "RTMR3: extended with ${count} file measurement(s)"
+
+exit 0

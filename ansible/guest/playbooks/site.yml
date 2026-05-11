@@ -232,6 +232,19 @@
       ansible.builtin.include_role:
         name: security
 
+- name: Extend RTMR3 with guest software stack
+  hosts: vm
+  become: true
+  tags:
+    - rtmr3-measure
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Extend RTMR3 with guest software stack
+      ansible.builtin.include_role:
+        name: rtmr3-measure
+
 - name: Cleanup to ensure fresh state for cloud init and k3s
   hosts: all
   become: true

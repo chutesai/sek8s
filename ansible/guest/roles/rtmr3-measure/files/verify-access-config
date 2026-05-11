@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""
+verify-access-config — Display and verify the access configuration
+that was measured into TDX RTMR3 at boot.
+
+Shows all SSH authorized keys, user accounts, and sudo configuration
+present on the filesystem.  Replays the same SHA-384 extend chain used
+by the initramfs script to compute the expected RTMR3 value, then
+compares it against the live value read from a TDX report.
+
+Exit codes:
+  0  PASS — filesystem state matches the boot-time RTMR3 measurement
+  1  FAIL — mismatch detected or measurement could not be verified
+  2  ERROR — tool or environment failure (non-TDX environment, missing
+             config, etc.)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Optional
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+MEASURE_CONF = Path("/etc/tdx-measure.conf")
+TDX_QUOTE_GENERATOR = Path("/usr/bin/tdx-quote-generator")
+
+# TDX quote v4 binary layout offsets (td_report_body_t starts at byte 48)
+# rtmr3 occupies bytes 520–568 (48 bytes, SHA-384)
+QUOTE_RTMR3_OFFSET = 520
+QUOTE_RTMR3_LEN    = 48
+
+BOLD   = "\033[1m"
+GREEN  = "\033[32m"
+RED    = "\033[31m"
+YELLOW = "\033[33m"
+RESET  = "\033[0m"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _color(code: str, text: str) -> str:
+    if sys.stdout.isatty():
+        return f"{code}{text}{RESET}"
+    return text
+
+
+def _heading(title: str) -> None:
+    bar = "─" * (len(title) + 4)
+    print(f"\n{_color(BOLD, f'┌{bar}┐')}")
+    print(f"{_color(BOLD, f'│  {title}  │')}")
+    print(f"{_color(BOLD, f'└{bar}┘')}")
+
+
+def _ok(msg: str) -> None:
+    print(f"  {_color(GREEN, '✓')} {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"  {_color(YELLOW, '!')} {msg}")
+
+
+def _err(msg: str) -> None:
+    print(f"  {_color(RED, '✗')} {msg}", file=sys.stderr)
+
+
+# ── Config parsing ───────────────────────────────────────────────────────────
+
+def load_measure_paths(conf: Path) -> list[str]:
+    """Return the list of paths from tdx-measure.conf (comments stripped)."""
+    paths: list[str] = []
+    if not conf.exists():
+        return paths
+    for line in conf.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            paths.append(line)
+    return paths
+
+
+def collect_files(paths: list[str]) -> list[str]:
+    """Walk each configured path and collect regular files, sorted."""
+    files: list[str] = []
+    for p in paths:
+        rp = Path(p)
+        if rp.is_dir():
+            for f in rp.rglob("*"):
+                if f.is_file() and not f.is_symlink():
+                    files.append(str(f))
+        elif rp.is_file() and not rp.is_symlink():
+            files.append(str(rp))
+    return sorted(files)
+
+
+# ── Display helpers ──────────────────────────────────────────────────────────
+
+def _ssh_fingerprint(key_line: str) -> Optional[str]:
+    """Return 'ssh-keygen -l' fingerprint for a single public key line."""
+    key_line = key_line.strip()
+    if not key_line or key_line.startswith("#"):
+        return None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".pub", delete=False) as tf:
+            tf.write(key_line + "\n")
+            tf_path = tf.name
+        result = subprocess.run(
+            ["ssh-keygen", "-l", "-f", tf_path],
+            capture_output=True, text=True, timeout=5,
+        )
+        os.unlink(tf_path)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def display_ssh_keys() -> None:
+    _heading("SSH Authorized Keys")
+    auth_keys = Path("/root/.ssh/authorized_keys")
+    if not auth_keys.exists():
+        _warn("/root/.ssh/authorized_keys not found")
+        return
+    lines = [l.strip() for l in auth_keys.read_text().splitlines() if l.strip()]
+    key_lines = [l for l in lines if not l.startswith("#")]
+    if not key_lines:
+        _warn("No SSH keys installed")
+        return
+    print(f"  {len(key_lines)} key(s) found:\n")
+    for key in key_lines:
+        # Show key type + comment (last field)
+        parts = key.split()
+        key_type = parts[0] if parts else "unknown"
+        comment = parts[2] if len(parts) >= 3 else "(no comment)"
+        fp = _ssh_fingerprint(key)
+        if fp:
+            print(f"    {fp}  [{comment}]")
+        else:
+            print(f"    {key_type} ...  [{comment}]")
+
+
+def display_sshd_config() -> None:
+    _heading("SSH Daemon Configuration (/etc/ssh)")
+    sshd_conf = Path("/etc/ssh/sshd_config")
+    if not sshd_conf.exists():
+        _warn("sshd_config not found")
+        return
+    relevant = [
+        "PermitRootLogin", "PasswordAuthentication", "PubkeyAuthentication",
+        "AuthorizedKeysFile", "PermitEmptyPasswords", "ChallengeResponseAuthentication",
+        "UsePAM", "Port", "ListenAddress",
+    ]
+    found: dict[str, str] = {}
+    for line in sshd_conf.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line and " " not in line:
+            continue
+        key = line.split()[0] if line.split() else ""
+        if key in relevant and key not in found:
+            found[key] = line
+    for k in relevant:
+        if k in found:
+            print(f"  {found[k]}")
+
+
+def display_users() -> None:
+    _heading("User Accounts (/etc/passwd — interactive shells)")
+    passwd = Path("/etc/passwd")
+    if not passwd.exists():
+        _warn("/etc/passwd not found")
+        return
+    shells = {"/bin/sh", "/bin/bash", "/bin/zsh", "/usr/bin/zsh",
+              "/bin/dash", "/bin/fish", "/usr/bin/fish", "/bin/ksh"}
+    rows = []
+    for line in passwd.read_text().splitlines():
+        parts = line.split(":")
+        if len(parts) < 7:
+            continue
+        username, _, uid, gid, gecos, home, shell = parts[:7]
+        if shell in shells or username == "root":
+            rows.append((username, uid, home, shell))
+    if not rows:
+        _warn("No interactive-shell users found")
+        return
+    print(f"  {'Username':<20} {'UID':<8} {'Home':<25} Shell")
+    print("  " + "-" * 70)
+    for username, uid, home, shell in rows:
+        print(f"  {username:<20} {uid:<8} {home:<25} {shell}")
+
+
+def display_shadow_status() -> None:
+    _heading("Password Status (/etc/shadow)")
+    shadow = Path("/etc/shadow")
+    if not shadow.exists():
+        _warn("/etc/shadow not found")
+        return
+    print(f"  {'Account':<20} Status")
+    print("  " + "-" * 40)
+    for line in shadow.read_text().splitlines():
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        user, hashed = parts[0], parts[1]
+        if hashed == "!!" or hashed == "":
+            status = _color(YELLOW, "no password (locked/disabled)")
+        elif hashed.startswith("!"):
+            status = _color(YELLOW, f"locked ({hashed[:6]}...)")
+        elif hashed == "*":
+            status = "system account (no login)"
+        else:
+            status = _color(GREEN, "password set")
+        print(f"  {user:<20} {status}")
+
+
+def display_sudoers() -> None:
+    _heading("Sudo Configuration")
+    files_to_show: list[Path] = []
+    sudoers = Path("/etc/sudoers")
+    if sudoers.exists():
+        files_to_show.append(sudoers)
+    drop_d = Path("/etc/sudoers.d")
+    if drop_d.is_dir():
+        files_to_show.extend(sorted(drop_d.iterdir()))
+
+    if not files_to_show:
+        _warn("No sudoers files found")
+        return
+
+    for f in files_to_show:
+        if not f.is_file():
+            continue
+        print(f"\n  {_color(BOLD, str(f))}")
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                print(f"    {line}")
+
+
+# ── RTMR3 computation ────────────────────────────────────────────────────────
+
+def compute_expected_rtmr3(files: list[str]) -> bytes:
+    """
+    Replay the initramfs extend chain to compute the expected RTMR3.
+
+    The chain mirrors what the init-bottom script does:
+      for each file (sorted lexicographically):
+        extend_data = SHA-384(file_contents)
+        rtmr3       = SHA-384(rtmr3 || extend_data)
+    """
+    rtmr3 = bytes(QUOTE_RTMR3_LEN)  # all-zeros initial state
+    for path_str in files:
+        p = Path(path_str)
+        if not p.is_file() or p.is_symlink():
+            continue
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        extend_data = hashlib.sha384(data).digest()  # 48 bytes
+        rtmr3 = hashlib.sha384(rtmr3 + extend_data).digest()
+    return rtmr3
+
+
+def get_live_rtmr3() -> Optional[bytes]:
+    """
+    Obtain the live RTMR3 value from a freshly generated TDX quote.
+    Returns 48 bytes, or None on failure.
+    """
+    if not TDX_QUOTE_GENERATOR.exists():
+        _err(f"tdx-quote-generator not found at {TDX_QUOTE_GENERATOR}")
+        return None
+
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+        quote_path = tf.name
+
+    try:
+        result = subprocess.run(
+            [str(TDX_QUOTE_GENERATOR), "--output", quote_path],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            _err(f"tdx-quote-generator failed: {result.stderr.strip()}")
+            return None
+
+        quote_bytes = Path(quote_path).read_bytes()
+        if len(quote_bytes) < QUOTE_RTMR3_OFFSET + QUOTE_RTMR3_LEN:
+            _err(f"Quote too short ({len(quote_bytes)} bytes)")
+            return None
+
+        return quote_bytes[QUOTE_RTMR3_OFFSET: QUOTE_RTMR3_OFFSET + QUOTE_RTMR3_LEN]
+    finally:
+        try:
+            os.unlink(quote_path)
+        except OSError:
+            pass
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    print(_color(BOLD, "\n╔══════════════════════════════════════════╗"))
+    print(_color(BOLD,   "║   TDX Access Config Verification Tool   ║"))
+    print(_color(BOLD,   "╚══════════════════════════════════════════╝"))
+
+    # ── Display human-readable config ─────────────────────────────────────
+    display_ssh_keys()
+    display_sshd_config()
+    display_users()
+    display_shadow_status()
+    display_sudoers()
+
+    # ── Collect measured files ─────────────────────────────────────────────
+    _heading("RTMR3 Measurement Verification")
+
+    if not MEASURE_CONF.exists():
+        _err(f"Measurement config not found: {MEASURE_CONF}")
+        _err("This image may not have been built with the rtmr3-measure role.")
+        return 2
+
+    cfg_paths = load_measure_paths(MEASURE_CONF)
+    if not cfg_paths:
+        _warn("No paths configured in tdx-measure.conf — RTMR3 is all-zeros")
+        return 2
+
+    print(f"\n  Configured measurement paths ({len(cfg_paths)}):")
+    for p in cfg_paths:
+        print(f"    {p}")
+
+    measured_files = collect_files(cfg_paths)
+    print(f"\n  Files to measure ({len(measured_files)}):")
+    for f in measured_files:
+        print(f"    {f}")
+
+    # ── Compute expected RTMR3 ────────────────────────────────────────────
+    print("\n  Computing expected RTMR3 from current filesystem ...")
+    expected = compute_expected_rtmr3(measured_files)
+    print(f"  Expected RTMR3: {expected.hex()}")
+
+    # ── Read live RTMR3 ───────────────────────────────────────────────────
+    print("\n  Reading live RTMR3 from TDX quote ...")
+    live = get_live_rtmr3()
+    if live is None:
+        _err("Could not obtain live RTMR3 — verification incomplete")
+        return 2
+
+    print(f"  Live     RTMR3: {live.hex()}")
+
+    # ── Compare ───────────────────────────────────────────────────────────
+    print()
+    if expected == live:
+        print(_color(GREEN, _color(BOLD,
+            "  ✓ PASS — Filesystem state matches boot-time RTMR3 measurement.\n"
+            "           No offline tampering detected."
+        )))
+        return 0
+    else:
+        print(_color(RED, _color(BOLD,
+            "  ✗ FAIL — RTMR3 mismatch detected!\n"
+            "           The current filesystem does NOT match what was measured\n"
+            "           at boot. The image may have been tampered with offline."
+        )))
+        print()
+        # Show per-file hashes to help identify which file changed
+        print("  Per-file SHA-384 hashes (current filesystem):")
+        for f in measured_files:
+            p = Path(f)
+            if p.is_file() and not p.is_symlink():
+                try:
+                    h = hashlib.sha384(p.read_bytes()).hexdigest()
+                    print(f"    {h}  {f}")
+                except OSError as exc:
+                    print(f"    (error: {exc})  {f}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
