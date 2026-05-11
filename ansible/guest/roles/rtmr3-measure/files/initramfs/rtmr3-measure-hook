@@ -3,8 +3,12 @@
 #
 # Initramfs-tools hook for the RTMR3 measurement feature.
 # Copies tdx-rtmr-extend (sysfs-based, no external libs), sha384sum,
-# the tdx_guest kernel module, and /etc/tdx-measure.conf into the
-# initramfs image so the init-bottom script can extend RTMR3 at boot.
+# the tdx_guest kernel module, /etc/tdx-measure.conf, and
+# /etc/tdx-rtmr3-expected-hashes into the initramfs image so the
+# init-bottom script can verify canonical files and extend RTMR3 at boot.
+#
+# Both config files are baked into the initramfs and covered by RTMR1.
+# Tampering with either requires changing the initramfs, which changes RTMR1.
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }
@@ -12,7 +16,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /usr/share/initramfs-tools/hook-functions
 
-# Binary that extends a TDX RTMR via /dev/tdx_guest ioctl
+# Binary that extends a TDX RTMR via the tsm-mr sysfs interface (kernel 6.16+)
 copy_exec /usr/local/bin/tdx-rtmr-extend
 
 # sha384sum for hashing measured files (from coreutils — always present)
@@ -28,4 +32,14 @@ force_load tdx_guest
 if [ -f /etc/tdx-measure.conf ]; then
     mkdir -p "$DESTDIR/etc"
     cp /etc/tdx-measure.conf "$DESTDIR/etc/tdx-measure.conf"
+fi
+
+# Expected hashes for canonical files: build-time SHA-384 constants that the
+# init-bottom script verifies before extending RTMR3.  A mismatch powers off
+# the VM.  Baking this file into the initramfs (covered by RTMR1) means any
+# attacker who changes a canonical file (e.g. verify-access-config) must also
+# update this constant, which changes RTMR1 — detectable by the partner.
+if [ -f /etc/tdx-rtmr3-expected-hashes ]; then
+    mkdir -p "$DESTDIR/etc"
+    cp /etc/tdx-rtmr3-expected-hashes "$DESTDIR/etc/tdx-rtmr3-expected-hashes"
 fi

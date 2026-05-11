@@ -10,6 +10,13 @@
 # chain.  Any offline modification to a measured file will produce a
 # different RTMR3 value that verifiers can detect.
 #
+# For canonical files (e.g. verify-access-config) the build-time SHA-384
+# hash is embedded in /etc/tdx-rtmr3-expected-hashes (also covered by RTMR1).
+# Each such file is verified against its expected hash before RTMR3 is
+# extended.  A mismatch is fatal: the VM powers off.  This means an attacker
+# cannot swap the runtime verification tool without either changing RTMR1
+# (detectable) or preventing the VM from booting.
+#
 # Design notes:
 #   - init-bottom scripts run after ${rootmnt} is mounted and populated.
 #   - Files are read from ${rootmnt}<path>, not from the initramfs itself.
@@ -51,6 +58,21 @@ fi
 if [ ! -f /etc/tdx-measure.conf ]; then
     handle_failure "tdx-measure.conf not found in initramfs"
 fi
+
+# ── Helper: look up expected hash for a canonical file ───────────────────────
+# Returns the expected SHA-384 hex string for $1, or empty string if the path
+# has no entry in /etc/tdx-rtmr3-expected-hashes (meaning it is not canonical
+# and is measured without pre-verification).
+
+EXPECTED_HASHES_FILE=/etc/tdx-rtmr3-expected-hashes
+
+expected_hash_for() {
+    [ -f "$EXPECTED_HASHES_FILE" ] || return 0
+    # Skip comment lines; match path in field 1; print hash from field 2.
+    awk -v path="$1" \
+        'substr($0,1,1)=="#" { next } $1 == path { print $2; exit }' \
+        "$EXPECTED_HASHES_FILE" 2>/dev/null
+}
 
 # ── Collect and sort all files to measure ───────────────────────────────────
 # Paths in the config are relative to the real root (e.g. /etc/ssh).
@@ -107,6 +129,15 @@ while IFS= read -r relpath; do
     if [ -z "$hash" ]; then
         rm -f "$sorted_list"
         handle_failure "could not hash ${relpath}"
+    fi
+
+    # For canonical files: verify the actual hash matches the build-time
+    # constant embedded in the initramfs.  A mismatch means the file was
+    # tampered with offline; power off rather than boot with broken tools.
+    expected=$(expected_hash_for "$relpath")
+    if [ -n "$expected" ] && [ "$hash" != "$expected" ]; then
+        rm -f "$sorted_list"
+        handle_failure "canonical file tampered: ${relpath}"
     fi
 
     if ! tdx-rtmr-extend --index 3 --data "$hash" 2>/dev/null; then

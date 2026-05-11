@@ -69,10 +69,16 @@ MRTD              a3f2c1d8e5b7...   # VM firmware measurement
 RTMR[0]           4c8b2e9f1a3d...   # Boot environment
 RTMR[1]           f19d7a4c3b8e...   # OS kernel + initrd
 RTMR[2]           0000000000...     # Runtime (typically zero at rest)
+RTMR[3]           a7c3f2d1e8b9...   # Access config: SSH keys, passwd, sudoers
 MRSEAM            d82f1c4a7e9b...   # Intel TDX module measurement
 MRSIGNERSEAM      c3a7f2d1e8b9...   # Intel TDX module signing key
 TEE TCB SVN       0400000000...     # TDX security version number
 ```
+
+RTMR3 is particularly significant: it contains the boot-time measurement of the VM's
+access configuration (SSH keys, user accounts, sudo rules). Use `verify-access-config`
+to interpret this value in human-readable form and confirm a PASS (see
+[Access configuration verification](#access-configuration-verification)).
 
 These values can be compared against expected reference values to confirm the VM
 has not been tampered with. Use `--json` for machine-readable output:
@@ -108,6 +114,99 @@ attest verify --json | tee attestation-results.json
 
 The JSON includes the parsed TDX measurements, GPU attestation result, and the TDX
 remote verification JWT (if performed).
+
+## Access configuration verification
+
+### Why this matters
+
+The benchmark VM image is built by the host operator and delivered to you with your
+SSH public key already installed. Because the VM's root disk is not encrypted at rest,
+a malicious operator could theoretically modify the disk image offline — for example,
+adding an additional SSH key — without your knowledge, giving them a backdoor into your
+session.
+
+To prevent this, every file that controls access to the VM is measured into **RTMR3**
+— a hardware-protected TDX Runtime Measurement Register — during initramfs at every
+boot, before any userspace process can run. These measurements are reflected in the TDX
+attestation quote, which is signed by the CPU and cannot be forged.
+
+The files measured at boot include:
+
+| Path | What it controls |
+|---|---|
+| `/etc/ssh/` | SSH host keys and daemon configuration |
+| `/etc/pam.d/` | PAM authentication stack for all services including SSH |
+| `/root/.ssh/authorized_keys` | SSH public keys granted root access |
+| `/etc/passwd` | User account definitions |
+| `/etc/shadow` | Password hashes |
+| `/etc/sudoers`, `/etc/sudoers.d/` | Privilege escalation rules |
+| `/usr/local/bin/verify-access-config` | This verification script itself |
+
+The script itself is measured, so any tampering with the verification tool also changes
+RTMR3 — the tool cannot be silently replaced.
+
+### Running the verification
+
+```bash
+verify-access-config
+```
+
+The tool does five things in order:
+
+1. **Displays session info** — current time, last boot time, and a reminder to note
+   this value (see [boot time](#boot-time-and-session-continuity) below)
+2. **Displays SSH keys** — fingerprint and comment for every authorized key
+3. **Displays sshd configuration** — authentication settings, permitted login methods
+4. **Displays user accounts and sudo rules** — all accounts with interactive shells
+   and all sudo privilege grants
+5. **Replays the RTMR3 extend chain** — computes the expected RTMR3 from the current
+   on-disk state using the same deterministic SHA-384 extend sequence the initramfs
+   used at boot, then reads the live RTMR3 from a fresh TDX quote and compares
+
+### Interpreting the result
+
+**`✓ PASS`** — The files on disk today are byte-for-byte identical to what was present
+when the VM booted. The SSH keys displayed are the only keys with access. No offline
+modification has occurred.
+
+**`✗ FAIL`** — The current filesystem does not match what was measured at boot. This
+means a file in the measured set was modified after the image was built. The output
+includes per-file SHA-384 hashes to help identify which file changed. **Treat the
+VM as compromised and do not continue the session.**
+
+**`ERROR`** — The tool could not complete the comparison (e.g. missing TDX quote
+generator, non-TDX environment). This is a configuration issue, not a security alert.
+
+### Recommendation
+
+Run `verify-access-config` at the **start of every session** before conducting any
+sensitive work. RTMR3 is re-measured from scratch on every boot, so a fresh PASS
+after each reboot gives you a new hardware-backed guarantee that the access
+configuration is exactly what was built into the image.
+
+### Boot time and session continuity
+
+RTMR3 tells you **what** was measured (the access files were untampered) but not
+**when** the VM was booted. The boot time shown by `verify-access-config` is read
+from the kernel and is **not** cryptographically attested.
+
+Note the boot time when you first connect:
+
+```bash
+uptime -s        # e.g.  2026-05-11 10:30:45
+```
+
+If this value changes between checks, the VM was rebooted during your session. A
+reboot is not itself a security event — RTMR3 will be re-measured from the same
+image and a fresh `verify-access-config` PASS will confirm the access configuration
+is unchanged. However you should:
+
+1. Re-run `verify-access-config` after the reboot to get a fresh PASS
+2. Note whether the reboot was expected or announced by the operator
+3. Re-unlock your LUKS storage volume if one was set up (`luks-setup open`)
+
+A reboot with a **different** boot time followed by a `FAIL` from
+`verify-access-config` is the strongest signal of a potential tampering event.
 
 ## Storage encryption
 
