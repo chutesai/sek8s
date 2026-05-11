@@ -1,6 +1,0 @@
----
-# Maximum seconds to wait for the kernel-loaded log signal before giving up.
-prime_boot_timeout: 120
-# Log line that confirms GRUB committed its SAVEDEFAULT and the kernel is running.
-# "Linux version" is the first line the kernel prints — appears within ~10s of boot.
-prime_boot_signal: "Linux version"

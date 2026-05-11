@@ -62,3 +62,28 @@
     line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service"'
     backup: true
   notify: update grub
+
+# Set GRUB_DEFAULT=0 and disable GRUB_SAVEDEFAULT so every boot uses the
+# first (latest) kernel entry unconditionally.  Without this, grubenv may
+# have no saved_entry on first boot, causing GRUB to fall back to a recovery
+# or older kernel entry and producing different RTMR1/RTMR2 values.
+- name: Set GRUB default to entry 0 (latest kernel)
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_DEFAULT='
+    line: 'GRUB_DEFAULT=0'
+  notify: update grub
+
+- name: Disable GRUB savedefault
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_SAVEDEFAULT='
+    line: 'GRUB_SAVEDEFAULT=false'
+  notify: update grub
+
+# Pre-write the grubenv saved_entry so the very first boot of the sealed image
+# uses entry 0.  grub-set-default writes /boot/grub/grubenv directly — no boot
+# cycle needed.
+- name: Pre-set grubenv saved_entry to 0
+  ansible.builtin.command: grub-set-default 0
+  changed_when: true
