@@ -205,3 +205,15 @@
       ansible.builtin.include_role:
         name: finalize-vm-image
 
+- name: Prime VM for stable TDX measurements
+  hosts: host
+  become: true
+  tags:
+    - prime-vm
+  tasks:
+    - name: Prime VM EFI boot variable state
+      ansible.builtin.include_role:
+        name: prime-vm
+        apply:
+          tags: prime-vm
+
