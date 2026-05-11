@@ -2,7 +2,6 @@
 - name: Create attestation service group
   ansible.builtin.group:
     name: tdx-attest
-    gid: 987
     system: yes
     state: present
 
