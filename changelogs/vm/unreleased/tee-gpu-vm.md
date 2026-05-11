@@ -62,17 +62,57 @@
   here (alongside containerd) so benchmark images have Docker GPU support without k3s.
 - `roles/benchmark-attestation` consolidated and renamed to `roles/benchmark` — the
   single role for all benchmark-specific VM tooling.
-- `docs/benchmark-mode.md` renamed to `docs/benchmark-vm.md`.
 - `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
   in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
 - `chutes-miner-vm.yml` is now production-only — all `benchmark_build` conditions and the
   benchmark tools play have been removed. Benchmark builds use `tee-gpu-vm.yml`.
+- **Playbook renames:** `site.yml` → `chutes-miner-vm.yml`; `site-benchmark.yml` →
+  `tee-gpu-vm.yml`. Names now reflect the actual VM type rather than Ansible convention.
+- **Role refactor — single responsibility:** `harden-access` and `cleanup` were split
+  into focused single-purpose roles. New roles: `harden-ssh` (sshd key-only auth),
+  `lock-accounts` (password locking), `disable-console` (getty/serial masking + grub
+  cmdline), `remove-ssh` (SSH and sudo removal for production builds), `setup-ssh-access`
+  (partner key injection for TEE GPU VM), `cleanup-build-vm` (common build cleanup:
+  cloud-init, infiniband, fstrim), `cleanup-orchestration` (k3s/attestation/admission
+  teardown for production builds), `finalize-vm-image` (renamed from `seal-vm` —
+  shutdown, undefine, move image).
+- **`rtmr3-measure` role enhancements:**
+  - Added `/etc/default/grub` to `rtmr3_measure_paths` and `rtmr3_canonical_paths` —
+    any change to the GRUB kernel cmdline (e.g. re-enabling console) now changes RTMR3
+    and fails the boot-time hash check.
+  - `verify-access-config`, `tdx-rtmr-extend`, and `/etc/tdx-rtmr3-expected-hashes`
+    are now set `chattr +i` (immutable) after install — accidental modification by root
+    is blocked at the filesystem level.
+  - `verify-access-config` gains a **Console Access Configuration** section: displays
+    GRUB cmdline masking, checks live systemd state for all getty/serial services, and
+    returns exit 1 if any console service is `active`.
+- **`disable-console` role now sets GRUB default:** `GRUB_DEFAULT=0` and
+  `GRUB_SAVEDEFAULT=false` are written to `/etc/default/grub`; `grub-set-default 0`
+  pre-populates `/boot/grub/grubenv`. Together these ensure GRUB always selects the
+  latest kernel entry deterministically without requiring a prime boot at the GRUB level
+  (TDVF EFI variable priming still requires one actual boot cycle via `prime-vm`).
+- **`prime-vm` role simplified:** removed ephemeral config/cache/storage volumes and
+  dummy credentials. Now launches with `--image` + `--network-type user` only, polls
+  the serial console log for `Linux version` (kernel first line), then force-kills.
+  Works identically for both `chutes-miner-vm.yml` and `tee-gpu-vm.yml`.
+- **Docs renamed:** `benchmark-guide.md` → `tee-gpu-vm-guide.md`;
+  `benchmark-vm.md` → `tee-gpu-vm.md`. Content updated to reflect generic TEE GPU
+  VM framing, new console access section in `verify-access-config`, and updated
+  measured paths table.
 
 ### Fixed
 - `process-config.py`: `apply_docker_hub_and_registries` now returns early with success when the `admission` group is absent and no Docker Hub credentials are present, instead of hard-failing. This prevented `config-manager.service` from starting in benchmark VMs (which have no admission controller).
 - `attest verify`: GPU attestation now passes `options={"ppcie_mode": False}` to `get_evidence()`, matching how `chutes_nvevidence.NvClient.gather_evidence()` works — fixes evidence collection on H200s in Protected PCIe mode.
 - `attest verify`: TDX verification replaced `trustauthority-cli` with `dcap_qvl.get_collateral_and_verify()` — no API key or config file required, same library used in production validator. `dcap-qvl` is now installed in the nvevidence venv.
-- `docs/benchmark-guide.md`: corrected GPU verification command (`nvidia-smi conf-compute -q`, not `-s`), updated description for PPCIe mode, removed references to `trustauthority-cli` and Intel API key config.
+- `verify-access-config`: `masked-runtime` (services masked via kernel cmdline
+  `systemd.mask=`) is now accepted as a valid masked state alongside `masked`.
+- Removed stale `trustauthority-cli` install task from `benchmark` role — nothing
+  in the codebase calls it; remote attestation is handled by `attest.py` + `dcap_qvl`.
+- Console access regression: `disable-console` play was missing from `tee-gpu-vm.yml`
+  after role refactor, allowing getty to run. Now included unconditionally for both
+  build types.
 
 ### Removed
--
+- `roles/harden-access` — split into `harden-ssh`, `lock-accounts`, `remove-ssh`,
+  `disable-console`.
+- `roles/prime-tee-vm` — consolidated into the shared `prime-vm` role.

@@ -1,7 +1,7 @@
-# Benchmark VM Guide
+# TEE GPU VM Guide
 
-This guide walks through everything you can do inside a Chutes benchmark VM: verifying
-the hardware security posture, inspecting TDX measurements, attesting the GPU, and
+This guide covers everything you can do inside a Chutes TEE GPU VM: verifying the
+hardware security posture, inspecting TDX measurements, attesting the GPU, and
 setting up an encrypted storage disk.
 
 ## Connecting
@@ -69,16 +69,16 @@ MRTD              a3f2c1d8e5b7...   # VM firmware measurement
 RTMR[0]           4c8b2e9f1a3d...   # Boot environment
 RTMR[1]           f19d7a4c3b8e...   # OS kernel + initrd
 RTMR[2]           0000000000...     # Runtime (typically zero at rest)
-RTMR[3]           a7c3f2d1e8b9...   # Access config: SSH keys, passwd, sudoers
+RTMR[3]           a7c3f2d1e8b9...   # Access config: SSH keys, passwd, sudoers, grub
 MRSEAM            d82f1c4a7e9b...   # Intel TDX module measurement
 MRSIGNERSEAM      c3a7f2d1e8b9...   # Intel TDX module signing key
 TEE TCB SVN       0400000000...     # TDX security version number
 ```
 
 RTMR3 is particularly significant: it contains the boot-time measurement of the VM's
-access configuration (SSH keys, user accounts, sudo rules). Use `verify-access-config`
-to interpret this value in human-readable form and confirm a PASS (see
-[Access configuration verification](#access-configuration-verification)).
+access configuration (SSH keys, user accounts, sudo rules, console policy). Use
+`verify-access-config` to interpret this value in human-readable form and confirm a
+PASS (see [Access configuration verification](#access-configuration-verification)).
 
 These values can be compared against expected reference values to confirm the VM
 has not been tampered with. Use `--json` for machine-readable output:
@@ -119,16 +119,17 @@ remote verification JWT (if performed).
 
 ### Why this matters
 
-The benchmark VM image is built by the host operator and delivered to you with your
-SSH public key already installed. Because the VM's root disk is not encrypted at rest,
-a malicious operator could theoretically modify the disk image offline — for example,
-adding an additional SSH key — without your knowledge, giving them a backdoor into your
-session.
+The VM image is built by the host operator and delivered to you with your SSH public
+key already installed. Because the VM's root disk is not encrypted at rest, a
+malicious operator could theoretically modify the disk image offline — for example,
+adding an additional SSH key or re-enabling console access — without your knowledge,
+giving them a backdoor into your session.
 
-To prevent this, every file that controls access to the VM is measured into **RTMR3**
-— a hardware-protected TDX Runtime Measurement Register — during initramfs at every
-boot, before any userspace process can run. These measurements are reflected in the TDX
-attestation quote, which is signed by the CPU and cannot be forged.
+To prevent this, every file and setting that controls access to the VM is measured
+into **RTMR3** — a hardware-protected TDX Runtime Measurement Register — during
+initramfs at every boot, before any userspace process can run. These measurements
+are reflected in the TDX attestation quote, which is signed by the CPU and cannot
+be forged.
 
 The files measured at boot include:
 
@@ -140,10 +141,14 @@ The files measured at boot include:
 | `/etc/passwd` | User account definitions |
 | `/etc/shadow` | Password hashes |
 | `/etc/sudoers`, `/etc/sudoers.d/` | Privilege escalation rules |
+| `/etc/default/grub` | Boot cmdline — includes kernel-level console masking |
 | `/usr/local/bin/verify-access-config` | This verification script itself |
 
-The script itself is measured, so any tampering with the verification tool also changes
-RTMR3 — the tool cannot be silently replaced.
+The script itself is measured, so any tampering with the verification tool also
+changes RTMR3 — the tool cannot be silently replaced. Additionally, the expected
+SHA-384 hashes of canonical files are embedded in the initramfs at build time (covered
+by RTMR1). If any of these files are tampered with offline, the VM powers off rather
+than booting with a compromised state.
 
 ### Running the verification
 
@@ -151,28 +156,36 @@ RTMR3 — the tool cannot be silently replaced.
 verify-access-config
 ```
 
-The tool does five things in order:
+The tool does the following in order:
 
-1. **Displays session info** — current time, last boot time, and a reminder to note
-   this value (see [boot time](#boot-time-and-session-continuity) below)
-2. **Displays SSH keys** — fingerprint and comment for every authorized key
-3. **Displays sshd configuration** — authentication settings, permitted login methods
-4. **Displays user accounts and sudo rules** — all accounts with interactive shells
-   and all sudo privilege grants
-5. **Replays the RTMR3 extend chain** — computes the expected RTMR3 from the current
-   on-disk state using the same deterministic SHA-384 extend sequence the initramfs
-   used at boot, then reads the live RTMR3 from a fresh TDX quote and compares
+1. **Session info** — current time, last boot time, and a reminder to note this value
+   (see [Boot time and session continuity](#boot-time-and-session-continuity))
+2. **SSH authorized keys** — fingerprint and comment for every authorized key
+3. **SSH daemon configuration** — authentication settings, permitted login methods
+4. **PAM SSH authentication stack** — active PAM auth entries for the SSH service
+5. **Console access configuration** — GRUB cmdline masking and live systemd service
+   state for all getty/serial console services; fails if any console is actively running
+6. **User accounts and sudo rules** — all accounts with interactive shells and all
+   sudo privilege grants
+7. **Password status** — lock state for every account in `/etc/shadow`
+8. **RTMR3 replay** — computes the expected RTMR3 from the current on-disk state
+   using the same deterministic SHA-384 extend sequence the initramfs used at boot,
+   then reads the live RTMR3 from a fresh TDX quote and compares
 
 ### Interpreting the result
 
 **`✓ PASS`** — The files on disk today are byte-for-byte identical to what was present
-when the VM booted. The SSH keys displayed are the only keys with access. No offline
-modification has occurred.
+when the VM booted, and no interactive console service is running. The SSH keys
+displayed are the only keys with access. No offline modification has occurred.
 
-**`✗ FAIL`** — The current filesystem does not match what was measured at boot. This
-means a file in the measured set was modified after the image was built. The output
-includes per-file SHA-384 hashes to help identify which file changed. **Treat the
-VM as compromised and do not continue the session.**
+**`✗ FAIL (RTMR3 mismatch)`** — The current filesystem does not match what was
+measured at boot. A file in the measured set was modified after the image was built.
+The output includes per-file SHA-384 hashes to help identify which file changed.
+**Treat the VM as compromised and do not continue the session.**
+
+**`✗ FAIL (console active)`** — An interactive getty or serial console service is
+running. This should never happen on a correctly built image. **Treat the VM as
+compromised and do not continue the session.**
 
 **`ERROR`** — The tool could not complete the comparison (e.g. missing TDX quote
 generator, non-TDX environment). This is a configuration issue, not a security alert.
@@ -322,5 +335,5 @@ These logs record every connection event (source IP, destination IP, protocol, p
 and timestamp) for the VM's bridge network. They are retained for 90 days.
 
 You can request a copy of the logs from the session operator at any time. The logs
-exist to provide full transparency into what the VM connects to during your evaluation
-session — no connections are hidden.
+exist to provide full transparency into what the VM connects to during your session
+— no connections are hidden.

@@ -1,6 +1,6 @@
-# Feature Spec: Benchmark VM Build Profile
+# Feature Spec: TEE GPU VM Build Profile
 
-**Date**: 2025-07-22 (updated 2026-04-22)
+**Date**: 2025-07-22 (updated 2026-05-11)
 **Status**: ready
 
 ---

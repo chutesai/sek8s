@@ -1,30 +1,33 @@
-# Benchmark VM
+# TEE GPU VM
 
-Operator reference for building and launching the benchmark VM. For the partner-facing
-walkthrough, see [benchmark-guide.md](benchmark-guide.md). For the development debug
+Operator reference for building and launching the TEE GPU VM. For the partner-facing
+walkthrough, see [tee-gpu-vm-guide.md](tee-gpu-vm-guide.md). For the development debug
 build, see [debug-mode.md](debug-mode.md).
 
 ## Overview
 
-Benchmark mode builds a specialised guest image for NDA partner evaluation sessions.
-The image runs the full Chutes GPU stack without Kubernetes orchestration, provides
-SSH access for the partner, and ships the `attest` and `luks-setup` tools along with
-a host-side network logger that records all external connections for transparency.
+The TEE GPU VM builds a standalone guest image for partner access — NDA evaluation
+sessions, training runs, or any GPU workload where the partner requires a hardware-
+attested, tamper-evident environment. The image runs the full GPU stack without
+Kubernetes orchestration and provides SSH access via partner-supplied keys measured
+into RTMR3 at boot.
 
 ## What changes vs. a production image
 
-| Behaviour | Production | Benchmark |
-|-----------|-----------|-----------|
+| Behaviour | Production | TEE GPU VM |
+|-----------|-----------|------------|
 | LUKS encryption | yes | no |
 | SSH access | no | partner keys only |
 | K3s / Kubernetes | yes | no |
 | Chutes orchestration services | yes | no |
+| SSH hardening (`sshd_config`) | no | yes (key-only auth) |
+| Account password lock | yes | yes |
+| Console access disabled | yes | yes |
+| RTMR3 access config measurement | yes | yes |
 | `attest` tool | no | yes |
+| `verify-access-config` tool | no | yes |
 | Host network logging | no | yes (`benchmark-netlog`) |
 | Image suffix | `.qcow2` | `-benchmark.qcow2` |
-
-Benchmark mode implicitly applies all debug-mode skips (no LUKS, no access hardening)
-so `debug_build` does not need to be set separately.
 
 ## Building the image
 
@@ -59,8 +62,7 @@ The resulting image is written to:
 
 ### 3. Reset inventory after building
 
-Set `benchmark_build: false` and clear `benchmark_ssh_keys` before any subsequent
-non-benchmark builds.
+Clear `benchmark_build` and `benchmark_ssh_keys` before any subsequent non-TEE builds.
 
 ## Launching the VM
 
@@ -84,10 +86,44 @@ The `--benchmark` flag:
 See [`host-tools/scripts/config/config.benchmark.example.yaml`](../host-tools/scripts/config/config.benchmark.example.yaml)
 for a ready-to-use template.
 
+## Security model
+
+### Access hardening
+
+Unlike production builds, the TEE GPU VM ships SSH as the only access path. The
+build process unconditionally applies:
+
+- **`harden-ssh`** — key-only authentication (`PasswordAuthentication no`,
+  `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`)
+- **`lock-accounts`** — root and all non-system accounts are password-locked
+- **`disable-console`** — getty/serial console services masked; kernel cmdline
+  includes `systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service`
+
+### RTMR3 access configuration measurement
+
+Every file controlling access to the VM is measured into RTMR3 in the initramfs at
+every boot, before any userspace process runs:
+
+- `/etc/ssh/` — SSH host keys and daemon configuration
+- `/etc/pam.d/` — PAM authentication stack
+- `/root/.ssh/authorized_keys` — partner's authorised keys
+- `/etc/passwd`, `/etc/shadow` — user accounts and password state
+- `/etc/sudoers`, `/etc/sudoers.d/` — privilege escalation rules
+- `/etc/default/grub` — boot cmdline (includes console masking)
+- `/usr/local/bin/verify-access-config` — the verification script itself
+
+Additionally, the initramfs contains expected SHA-384 hashes for canonical files
+(all of the above except `authorized_keys`). If any canonical file is tampered with
+offline, the VM powers off at boot rather than starting with a compromised state.
+
+The partner uses `verify-access-config` to replay the RTMR3 measurement chain and
+confirm a PASS against the live TDX quote. See
+[tee-gpu-vm-guide.md](tee-gpu-vm-guide.md#access-configuration-verification).
+
 ## In-VM attestation: `attest`
 
-The `attest` tool is installed at `/usr/local/bin/attest` and runs inside the benchmark
-VM. It requires membership of the `tdx-attest` group (the root user qualifies by default).
+The `attest` tool is installed at `/usr/local/bin/attest` and runs inside the VM.
+It requires membership of the `tdx-attest` group (the root user qualifies by default).
 
 ### Commands
 
@@ -104,6 +140,7 @@ MRTD             a3f2...
 RTMR[0]          00000...
 RTMR[1]          4c8b...
 RTMR[2]          f19d...
+RTMR[3]          a7c3...   # access config measurement
 ...
 ```
 
@@ -136,9 +173,8 @@ attest verify --json
 ### Intel TDX config
 
 `/etc/tdx-attest-config.json` is partner-provided and is not baked into the image.
-The file format is defined by Intel's `trustauthority-cli`. If absent, `attest verify`
-still completes GPU attestation and prints a clear message explaining that TDX remote
-verification was skipped.
+If absent, `attest verify` still completes GPU attestation and prints a clear message
+explaining that TDX remote verification was skipped.
 
 ## Storage encryption: `luks-setup`
 
@@ -202,10 +238,12 @@ BRIDGE_SUBNET=192.168.100.0/24
 
 ## Security notes
 
-- Benchmark images contain the partner's SSH public keys as the **only** authorised
-  keys. The builder's cloud-init keys are removed during the cleanup phase.
-- The build asserts that `authorized_keys` contains exactly the keys in
-  `benchmark_ssh_keys` — count and content — and halts if the assertion fails.
-- Benchmark images have no LUKS encryption. Treat the image file as sensitive; delete
-  it after the evaluation session.
+- TEE GPU VM images contain the partner's SSH public keys as the **only** authorised
+  keys. The builder's cloud-init keys are removed during the cleanup phase. The build
+  asserts that `authorized_keys` contains exactly the keys in `benchmark_ssh_keys`
+  — count and content — and halts if the assertion fails.
+- TEE GPU VM images have no LUKS encryption on the root volume. Treat the image file
+  as sensitive; delete it after the session ends.
 - `benchmark_build: true` should never be set when building production or miner images.
+- The partner should run `verify-access-config` at the start of every session to
+  confirm the access configuration matches what was built into the image.
