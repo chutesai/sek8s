@@ -265,8 +265,8 @@ def display_console_access() -> bool:
             print(f"  {_color(RED, '✗')} {svc}: {enabled} / {_color(RED, 'ACTIVE')} — "
                   f"{_color(RED, 'CONSOLE IS OPEN')}")
             hard_fail = True
-        elif enabled == "masked":
-            _ok(f"{svc}: masked")
+        elif enabled in ("masked", "masked-runtime"):
+            _ok(f"{svc}: {enabled}")
         else:
             _warn(f"{svc}: {enabled} / {active} — expected 'masked'")
 
