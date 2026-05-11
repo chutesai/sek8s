@@ -1,17 +1,16 @@
 ---
-# site-benchmark.yml — Benchmark VM guest image build playbook.
+# tee-gpu-vm.yml — TEE GPU VM guest image build playbook.
 #
-# Builds a standalone benchmark image for NDA partner evaluation sessions.
-# This playbook is completely independent of site.yml and includes only the
-# roles that a benchmark VM requires. There is no k3s, no admission controller,
-# no system-manager, and no cache volume.
+# Builds a standalone GPU TEE VM image for partner access — benchmark
+# evaluation sessions, training runs, or other GPU workloads.  Completely
+# independent of chutes-miner-vm.yml: no k3s, no admission controller,
+# no system-manager, no cache volume.
 #
-# Config setup (hostname + network) is owned entirely by the benchmark role,
-# which installs a stripped-down process-config.py and config-manager.service
-# that contain no k3s or miner credential logic.
+# The partner provides their SSH public key via benchmark_ssh_keys in the
+# inventory; it is measured into RTMR3 and is the only authorised access path.
 #
 # Usage:
-#   ansible-playbook -i local/inventory.benchmark.yml playbooks/site-benchmark.yml
+#   ansible-playbook -i local/inventory.benchmark.yml playbooks/tee-gpu-vm.yml
 
 - name: Confirm benchmark guest image build configuration
   hosts: host
@@ -30,7 +29,7 @@
     - name: Assert benchmark_build is true
       ansible.builtin.assert:
         that: benchmark_build | default(false)
-        msg: "benchmark_build must be true when using site-benchmark.yml"
+        msg: "benchmark_build must be true when using tee-gpu-vm.yml"
 
     - name: Assert benchmark_ssh_keys is non-empty
       ansible.builtin.fail:

@@ -48,7 +48,7 @@ image with no partner access is never shipped.
 
 ```bash
 cd ansible/guest
-ansible-playbook -i inventory.yml playbooks/site-benchmark.yml
+ansible-playbook -i inventory.yml playbooks/tee-gpu-vm.yml
 ```
 
 The resulting image is written to:

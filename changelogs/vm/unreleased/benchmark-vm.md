@@ -16,11 +16,11 @@
   Replays the SHA-384 extend chain to compute the expected RTMR3, reads the
   live value from a TDX quote, and reports PASS/FAIL.  The script itself is
   in the measurement list so any tampering changes RTMR3.
-- `site.yml` and `site-benchmark.yml`: added `rtmr3-measure` play after
+- `chutes-miner-vm.yml` and `tee-gpu-vm.yml`: added `rtmr3-measure` play after
   security hardening and before cleanup so the final on-disk state (including
   partner SSH keys written by cleanup) is what gets measured at boot.
-- `playbooks/site-benchmark.yml`: dedicated benchmark VM build playbook. Fully
-  independent of `site.yml` — includes only the roles a benchmark VM needs (`run-vm`,
+- `playbooks/tee-gpu-vm.yml`: dedicated benchmark VM build playbook. Fully
+  independent of `chutes-miner-vm.yml` — includes only the roles a benchmark VM needs (`run-vm`,
   `common`, `gpu`, `benchmark`, `harden-access`, `security`, `cleanup`). No k3s,
   admission controller, system-manager, cache-volume, luks, or prime-vm plays.
 - `benchmark` Ansible role: self-contained benchmark image setup. Now owns the full
@@ -65,8 +65,8 @@
 - `docs/benchmark-mode.md` renamed to `docs/benchmark-vm.md`.
 - `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
   in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
-- `site.yml` is now production-only — all `benchmark_build` conditions and the
-  benchmark tools play have been removed. Benchmark builds use `site-benchmark.yml`.
+- `chutes-miner-vm.yml` is now production-only — all `benchmark_build` conditions and the
+  benchmark tools play have been removed. Benchmark builds use `tee-gpu-vm.yml`.
 
 ### Fixed
 - `process-config.py`: `apply_docker_hub_and_registries` now returns early with success when the `admission` group is absent and no Docker Hub credentials are present, instead of hard-failing. This prevented `config-manager.service` from starting in benchmark VMs (which have no admission controller).

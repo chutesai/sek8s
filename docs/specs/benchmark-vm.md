@@ -27,7 +27,7 @@ connection-level metadata records for NDA compliance (no TLS payloads).
 - **Packages affected**: `ansible/guest/` (image build), `host-tools/scripts/` (quick-launch, network logging), new attestation verification tooling
 - **Key files**:
   - `ansible/guest/inventory.yml` — build flags
-  - `ansible/guest/playbooks/site.yml` — role orchestration
+  - `ansible/guest/playbooks/chutes-miner-vm.yml` — role orchestration
   - `ansible/guest/playbooks/group_vars/host.yml` — output image path
   - `ansible/guest/roles/common/tasks/main.yml` — k3s/k8s/helm prereqs
   - `ansible/guest/roles/gpu/tasks/main.yml` — GPU device + k3s setup split
@@ -148,7 +148,7 @@ Success =
 - `benchmark_build: false`
 - `benchmark_ssh_keys: []` (list of public key strings)
 
-**1.2** Update `ansible/guest/playbooks/site.yml`:
+**1.2** Update `ansible/guest/playbooks/chutes-miner-vm.yml`:
 - Add `benchmark_build` to confirmation output block.
 - Add early validation: fail if `benchmark_build: true` and `debug_build` is not true.
 - Add early validation: fail if `benchmark_build: true` and `benchmark_ssh_keys` is empty.
@@ -305,7 +305,7 @@ nvevidence).
 | File | Change |
 |------|--------|
 | `ansible/guest/inventory.yml` | Add `benchmark_build`, `benchmark_ssh_keys` |
-| `ansible/guest/playbooks/site.yml` | Validation + conditionals on ~10 plays + new benchmark attestation play |
+| `ansible/guest/playbooks/chutes-miner-vm.yml` | Validation + conditionals on ~10 plays + new benchmark attestation play |
 | `ansible/guest/playbooks/group_vars/host.yml` | Extend `final_img_path` for `-benchmark` suffix |
 | `ansible/guest/roles/common/tasks/main.yml` | Skip k3s/k8s/helm for benchmark |
 | `ansible/guest/roles/gpu/tasks/main.yml` | Skip k3s-setup for benchmark |

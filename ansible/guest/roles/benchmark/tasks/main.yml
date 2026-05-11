@@ -1,6 +1,6 @@
 ---
 # Benchmark role: all benchmark-specific guest image setup.
-# Used exclusively by site-benchmark.yml — not site.yml.
+# Used exclusively by tee-gpu-vm.yml — not chutes-miner-vm.yml.
 #
 # This role owns:
 #   - Config volume services (simplified process-config.py, config-manager.service,
