@@ -203,20 +203,15 @@
         apply:
           tags: config
 
-- name: Remove remote access
+- name: Lock accounts
   hosts: vm
   become: true
   tags:
-    - harden-access
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+    - lock-accounts
   tasks:
-    - name: Remove remote access
+    - name: Lock accounts
       ansible.builtin.include_role:
-        name: harden-access
-        apply:
-          tags: harden-access
+        name: lock-accounts
       when: not (debug_build | default(false))
 
 - name: Security Hardening
@@ -245,21 +240,60 @@
       ansible.builtin.include_role:
         name: rtmr3-measure
 
-- name: Cleanup to ensure fresh state for cloud init and k3s
-  hosts: all
+- name: Cleanup orchestration state
+  hosts: vm
   become: true
   any_errors_fatal: false
   tags:
-    - cleanup
+    - cleanup-orchestration
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Cleanup
+    - name: Cleanup orchestration state
       ansible.builtin.include_role:
-        name: cleanup
-        apply:
-          tags: cleanup
+        name: cleanup-orchestration
+
+- name: Cleanup VM state
+  hosts: vm
+  become: true
+  any_errors_fatal: false
+  tags:
+    - cleanup-build-vm
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup VM state
+      ansible.builtin.include_role:
+        name: cleanup-build-vm
+
+- name: Remove all access
+  hosts: vm
+  become: true
+  tags:
+    - remove-access
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Remove all access
+      ansible.builtin.include_role:
+        name: remove-access
+      when: not (debug_build | default(false))
+
+- name: Finalize VM image
+  hosts: host
+  become: true
+  tags:
+    - finalize-vm-image
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Finalize VM image
+      ansible.builtin.include_role:
+        name: finalize-vm-image
 
 - name: Encrypt disk
   hosts: host

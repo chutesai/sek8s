@@ -1,4 +1,17 @@
 ---
+# setup-ssh-access — Configure authorised SSH keys for the final image.
+#
+# Removes the builder's authorized_keys (installed by cloud-init during the
+# image build) and writes only the intended access key(s) so that only the
+# authorised recipient can connect.  Also verifies the final key set exactly
+# matches benchmark_ssh_keys.
+#
+# Only included by benchmark builds — the playbook decides whether to include
+# this role.  Must run after rtmr3-measure (session-specific keys are measured
+# but not pre-verified) and before seal-vm.
+#
+# Idempotent: safe to re-run. No flags or conditionals.
+
 - name: Remove builder authorized_keys (cloud-init residual)
   ansible.builtin.file:
     path: /root/.ssh/authorized_keys

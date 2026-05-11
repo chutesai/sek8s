@@ -1,0 +1,32 @@
+---
+# cleanup-orchestration — Tear down orchestration state on the guest VM.
+#
+# Finalises k3s, attestation, admission controller, system manager, and
+# related services before the image is sealed.  Only included by standard
+# (non-benchmark) builds — the playbook decides whether to include this role.
+#
+# Idempotent: safe to re-run. No flags or conditionals.
+
+- name: Cleanup k3s
+  ansible.builtin.include_tasks: cleanup-k3s.yml
+
+- name: Apply k3s service drop-ins
+  ansible.builtin.include_tasks: k3s-drop-ins.yml
+
+- name: Apply system-manager service drop-ins
+  ansible.builtin.include_tasks: system-manager-drop-ins.yml
+
+- name: Apply admission-controller service drop-ins
+  ansible.builtin.include_tasks: admission-controller-drop-ins.yml
+
+- name: Deploy admission webhook manifest
+  ansible.builtin.include_tasks: deploy-admission-webhook.yml
+
+- name: Cleanup attestation service
+  ansible.builtin.include_tasks: cleanup-attestation-service.yml
+
+- name: Cleanup GPU verification service
+  ansible.builtin.include_tasks: cleanup-gpu-verify-service.yml
+
+- name: Cleanup verify storage service
+  ansible.builtin.include_tasks: cleanup-verify-storage-service.yml

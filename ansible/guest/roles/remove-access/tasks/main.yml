@@ -1,0 +1,109 @@
+---
+# remove-access — Completely remove all remote and interactive access.
+#
+# Use for production/standard builds where no SSH or console access
+# should exist in the shipped image.  For benchmark builds where SSH
+# must remain available for partners, use harden-ssh + lock-accounts
+# instead and do not include this role.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Disable and mask SSH service
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - ssh
+    - sshd
+    - ssh.socket
+    - sshd.socket
+  failed_when: false
+
+- name: Remove SSH packages
+  ansible.builtin.package:
+    name:
+      - openssh-server
+      - ssh
+      - dropbear
+      - dropbear-bin
+    state: absent
+  failed_when: false
+
+- name: Disable and mask console access services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - getty@tty1
+    - getty@tty2
+    - getty@tty3
+    - getty@tty4
+    - getty@tty5
+    - getty@tty6
+    - serial-getty@ttyS0
+    - console-getty
+  failed_when: false
+
+- name: Disable and mask legacy remote access services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - telnet
+    - rsh
+    - rlogin
+    - vsftpd
+    - ftpd
+    - xinetd
+    - inetd
+  failed_when: false
+
+- name: Remove legacy remote access packages
+  ansible.builtin.package:
+    name:
+      - telnet-server
+      - rsh-server
+      - vsftpd
+      - proftpd
+      - xinetd
+      - inetd
+      - nis
+      - rpcbind
+    state: absent
+  failed_when: false
+
+- name: Disable kernel console access
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service"'
+    backup: true
+  notify: update grub
+
+- name: Remove sudo to prevent privilege escalation
+  ansible.builtin.package:
+    name:
+      - sudo
+      - sudo-ldap
+    state: absent
+  failed_when: false
+
+- name: Create secure miner directory structure
+  ansible.builtin.file:
+    path: "/opt/miner/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - bin
+    - config
+    - logs
+    - data

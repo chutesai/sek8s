@@ -205,6 +205,19 @@
         replace: "# \\1"
       when: swap_disable
 
+- name: Remove default cloud image user accounts
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: absent
+    remove: true
+  loop:
+    - ubuntu
+    - debian
+    - centos
+    - ec2-user
+    - cloud-user
+  failed_when: false
+
 - name: Configure and ensure time synchronization
   block:
     - name: Set timezone

@@ -110,20 +110,25 @@
         apply:
           tags: benchmark
 
-- name: Remove remote access
+- name: Harden SSH access
   hosts: vm
   become: true
   tags:
-    - harden-access
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+    - harden-ssh
   tasks:
-    - name: Remove remote access
+    - name: Harden SSH access
       ansible.builtin.include_role:
-        name: harden-access
-        apply:
-          tags: harden-access
+        name: harden-ssh
+
+- name: Lock accounts
+  hosts: vm
+  become: true
+  tags:
+    - lock-accounts
+  tasks:
+    - name: Lock accounts
+      ansible.builtin.include_role:
+        name: lock-accounts
 
 - name: Security Hardening
   hosts: vm
@@ -151,18 +156,39 @@
       ansible.builtin.include_role:
         name: rtmr3-measure
 
-- name: Cleanup to ensure fresh state
-  hosts: all
+- name: Setup SSH access
+  hosts: vm
+  become: true
+  tags:
+    - setup-ssh-access
+  tasks:
+    - name: Setup SSH access
+      ansible.builtin.include_role:
+        name: setup-ssh-access
+
+- name: Cleanup VM state
+  hosts: vm
   become: true
   any_errors_fatal: false
   tags:
-    - cleanup
+    - cleanup-build-vm
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Cleanup
+    - name: Cleanup VM state
       ansible.builtin.include_role:
-        name: cleanup
-        apply:
-          tags: cleanup
+        name: cleanup-build-vm
+
+- name: Finalize VM image
+  hosts: host
+  become: true
+  tags:
+    - finalize-vm-image
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Finalize VM image
+      ansible.builtin.include_role:
+        name: finalize-vm-image

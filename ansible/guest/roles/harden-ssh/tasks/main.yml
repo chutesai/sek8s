@@ -1,0 +1,21 @@
+---
+# harden-ssh — Enforce key-only authentication in sshd_config.
+#
+# Does not start, stop, or remove the SSH service — that is out of scope.
+# Use the remove-access role for builds where SSH must be absent entirely.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Harden sshd_config (key-only, no password or keyboard-interactive auth)
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+  loop:
+    - { regexp: '^#?PasswordAuthentication',          line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication',            line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?PermitRootLogin',                 line: 'PermitRootLogin prohibit-password' }
+    - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+    - { regexp: '^#?KbdInteractiveAuthentication',    line: 'KbdInteractiveAuthentication no' }

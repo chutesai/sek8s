@@ -1,0 +1,17 @@
+---
+# cleanup-build-vm — Common VM cleanup run for every build type.
+#
+# Cleans up cloud-init state, infiniband config service, and trims the
+# filesystem.  Runs in both benchmark and standard builds.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Cleanup infiniband-config service
+  ansible.builtin.include_tasks: cleanup-infiniband-config-service.yml
+
+- name: Cleanup cloud-init
+  ansible.builtin.include_tasks: cleanup-cloud-init.yml
+
+- name: Cleanup build artefacts and trim filesystem
+  ansible.builtin.include_tasks: cleanup-build.yml

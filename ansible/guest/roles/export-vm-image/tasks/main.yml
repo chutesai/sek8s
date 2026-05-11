@@ -1,3 +1,10 @@
+---
+# seal-vm — Shut down the build VM and move the image to its final path.
+#
+# Runs on the host (hosts: host) after all VM-side work is complete.
+# The VM must already be in its final state before this role runs:
+# all measured files committed, access hardened, build artefacts removed.
+
 - name: Shutdown VM
   ansible.builtin.command: virsh shutdown "{{ vm_name }}"
   register: shutdown_result
@@ -27,7 +34,7 @@
     owner: root
     group: libvirt-qemu
 
-- name: Move sek8s image to final image
+- name: Move image to final path
   ansible.builtin.command: mv "{{ build_img_path }}" "{{ final_img_path }}"
   register: move_result
   changed_when: move_result.rc == 0
