@@ -151,21 +151,6 @@
     name: attestation-service
     tasks_from: install-tdx-quote-generator
 
-- name: Install trustauthority-cli
-  ansible.builtin.apt:
-    name: trustauthority-cli
-    state: present
-  ignore_errors: true
-  register: trustauthority_cli_install
-
-- name: Warn if trustauthority-cli is unavailable
-  ansible.builtin.debug:
-    msg: >-
-      trustauthority-cli could not be installed from Intel SGX repo (may not be available
-      for this Ubuntu version). TDX remote verification will not be available, but
-      measurement dump and GPU verification still work.
-  when: trustauthority_cli_install is failed
-
 - name: Create temporary build directory for nvevidence
   ansible.builtin.tempfile:
     state: directory
