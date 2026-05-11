@@ -8,6 +8,7 @@
 # produces a different RTMR3, making its own output untrustworthy.
 rtmr3_measure_paths:
   - /etc/ssh
+  - /etc/pam.d
   - /etc/passwd
   - /etc/shadow
   - /etc/sudoers

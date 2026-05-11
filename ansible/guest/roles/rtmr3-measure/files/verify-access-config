@@ -24,6 +24,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -98,6 +100,30 @@ def collect_files(paths: list[str]) -> list[str]:
     return sorted(files)
 
 
+# ── Session info ─────────────────────────────────────────────────────────────
+
+def display_session_info() -> None:
+    _heading("Session Info")
+    now = datetime.now(timezone.utc)
+    print(f"  Current time (UTC): {now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    try:
+        uptime_secs = float(Path("/proc/uptime").read_text().split()[0])
+        boot_ts = time.time() - uptime_secs
+        boot_dt = datetime.fromtimestamp(boot_ts, tz=timezone.utc)
+        uptime_h = int(uptime_secs // 3600)
+        uptime_m = int((uptime_secs % 3600) // 60)
+        print(f"  Last boot   (UTC): {boot_dt.strftime('%Y-%m-%d %H:%M:%S')}  "
+              f"(up {uptime_h}h {uptime_m}m)")
+    except Exception:
+        print("  Last boot   (UTC): (unavailable)")
+
+    print()
+    _warn("Boot time is informational only — it is NOT cryptographically attested.")
+    _warn("Note this value at session start. A change indicates the VM was rebooted.")
+    _warn("Re-run verify-access-config after any reboot to re-confirm the RTMR3 PASS.")
+
+
 # ── Display helpers ──────────────────────────────────────────────────────────
 
 def _ssh_fingerprint(key_line: str) -> Optional[str]:
@@ -154,7 +180,7 @@ def display_sshd_config() -> None:
     relevant = [
         "PermitRootLogin", "PasswordAuthentication", "PubkeyAuthentication",
         "AuthorizedKeysFile", "PermitEmptyPasswords", "ChallengeResponseAuthentication",
-        "UsePAM", "Port", "ListenAddress",
+        "KbdInteractiveAuthentication", "UsePAM", "Port", "ListenAddress",
     ]
     found: dict[str, str] = {}
     for line in sshd_conf.read_text().splitlines():
@@ -167,6 +193,44 @@ def display_sshd_config() -> None:
     for k in relevant:
         if k in found:
             print(f"  {found[k]}")
+
+    # Warn if UsePAM is yes without explicit kbd-interactive disable
+    use_pam = found.get("UsePAM", "").lower()
+    kbd = found.get("KbdInteractiveAuthentication",
+                    found.get("ChallengeResponseAuthentication", "")).lower()
+    pwd = found.get("PasswordAuthentication", "").lower()
+    if "yes" in use_pam:
+        if "no" not in kbd and "no" not in pwd:
+            _warn("UsePAM yes — ensure PasswordAuthentication and "
+                  "KbdInteractiveAuthentication are both 'no' to prevent PAM auth bypass")
+        else:
+            _ok("UsePAM yes with password/kbd-interactive disabled — PAM used for "
+                "session setup only, not authentication")
+
+
+def display_pam_sshd() -> None:
+    _heading("PAM SSH Authentication Stack (/etc/pam.d/sshd)")
+    pam_sshd = Path("/etc/pam.d/sshd")
+    if not pam_sshd.exists():
+        _warn("/etc/pam.d/sshd not found")
+        return
+    auth_lines = []
+    for line in pam_sshd.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.split()[0] in ("auth", "@include", "@include"):
+            auth_lines.append(stripped)
+    if not auth_lines:
+        _ok("No active auth lines in /etc/pam.d/sshd")
+        return
+    print("  Active auth entries (could affect authentication if kbd-interactive is on):\n")
+    for line in auth_lines:
+        # Flag any permissive modules
+        if any(m in line for m in ("pam_permit", "pam_rootok", "sufficient")):
+            print(f"  {_color(RED, '⚠')}  {line}")
+        else:
+            print(f"     {line}")
 
 
 def display_users() -> None:
@@ -309,8 +373,10 @@ def main() -> int:
     print(_color(BOLD,   "╚══════════════════════════════════════════╝"))
 
     # ── Display human-readable config ─────────────────────────────────────
+    display_session_info()
     display_ssh_keys()
     display_sshd_config()
+    display_pam_sshd()
     display_users()
     display_shadow_status()
     display_sudoers()
