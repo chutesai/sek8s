@@ -81,9 +81,3 @@
     line: 'GRUB_SAVEDEFAULT=false'
   notify: update grub
 
-# Pre-write the grubenv saved_entry so the very first boot of the sealed image
-# uses entry 0.  grub-set-default writes /boot/grub/grubenv directly — no boot
-# cycle needed.
-- name: Pre-set grubenv saved_entry to 0
-  ansible.builtin.command: grub-set-default 0
-  changed_when: true
