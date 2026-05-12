@@ -142,6 +142,10 @@ class H200Profile(GpuProfile):
     def host_cpus(self) -> int:
         return 128
 
+    @property
+    def host_sockets(self) -> int:
+        return 2
+
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         if total_gpus == 8:
             return [

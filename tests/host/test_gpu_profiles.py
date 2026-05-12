@@ -155,16 +155,23 @@ def test_smp_topology_threads_is_one(model_key):
     assert "threads=1" in profile.smp_topology
 
 
-def test_rtx_pro_6000_uses_two_sockets():
-    """RTX Pro 6000 servers have 2 physical sockets; topology must reflect this."""
-    profile = GPU_PROFILES["RTX_PRO_6000"]
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200"])
+def test_two_socket_profiles_use_two_sockets(model_key):
+    """128-CPU 2-socket servers must reflect physical socket count in smp_topology.
+
+    A flat sockets=1 topology causes QEMU to emit a degenerate CPUID with only a
+    thread level and 0-bit shift — no core or package levels — which triggers the
+    kernel 'arch topology borken' warning on every vCPU at boot.
+    """
+    profile = GPU_PROFILES[model_key]
     assert profile.host_sockets == 2
     assert "sockets=2" in profile.smp_topology
 
 
-def test_rtx_pro_6000_smp_topology_preserves_full_vcpu_count():
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200"])
+def test_two_socket_profiles_preserve_full_vcpu_count(model_key):
     """Switching to sockets=2 must not reduce the vCPU count."""
-    profile = GPU_PROFILES["RTX_PRO_6000"]
+    profile = GPU_PROFILES[model_key]
     count = int(profile.smp_topology.split(",")[0])
     assert count == profile.vcpus
 
