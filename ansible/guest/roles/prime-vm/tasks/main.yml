@@ -15,9 +15,9 @@
 # reachable) and force-killed as soon as the kernel boot signal appears in the
 # serial console log.  No credentials or secrets are required.
 #
-# grub-set-default 0 (written to /boot/grub/grubenv by the disable-console
-# role) ensures GRUB also selects entry 0 deterministically, complementing
-# the EFI variable priming done here.
+# grub-set-default 0 (written to the EFI partition's grubenv by the
+# disable-console role) ensures GRUB also selects entry 0 deterministically,
+# complementing the EFI variable priming done here.
 
 - name: Set host tools scripts path
   ansible.builtin.set_fact:

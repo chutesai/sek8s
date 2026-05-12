@@ -32,7 +32,9 @@
   failed_when: false
 
 - name: update grub
-  command: update-grub
+  ansible.builtin.shell: mkdir -p /boot/grub && update-grub
+  args:
+    executable: /bin/bash
 
 - name: update initramfs
   ansible.builtin.command:
