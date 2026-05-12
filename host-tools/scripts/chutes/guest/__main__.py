@@ -63,6 +63,7 @@ def stop_existing_vm():
 def launch_vm(args) -> int:
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
+    smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
 
     if args.pass_gpus:
         gpus = get_gpu_bdfs()
@@ -74,6 +75,7 @@ def launch_vm(args) -> int:
             total_gpus = len(gpus)
             mem = f"{total_gpus * profile.vram_gb}G"
             vcpus = str(profile.vcpus)
+            smp_topology = profile.smp_topology
             print(
                 f"  GPU passthrough: {total_gpus}x {profile.name}"
                 f" ({profile.vram_gb}GB VRAM each)"
@@ -88,7 +90,7 @@ def launch_vm(args) -> int:
 
     qemu_cmds = build_base_cmd(
         mem=mem,
-        vcpus=vcpus,
+        smp_topology=smp_topology,
         process_name=PROCESS_NAME,
         cpu_args=cpu_args,
         firmware=_firmware_path(),
