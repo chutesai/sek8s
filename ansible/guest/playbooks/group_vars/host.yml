@@ -4,7 +4,7 @@ img_dir: "{{ repo_root }}/guest-tools/image"
 # VM image release version from repo root (distinct from Python package version)
 vm_version: "{{ lookup('file', playbook_dir + '/../VERSION') | trim }}"
 # build_env is set in inventory or role defaults (not here — playbook group_vars would override inventory)
-final_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}{{ '-debug' if (debug_build | default(false)) and not (benchmark_build | default(false)) else '' }}.qcow2"
+final_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}{{ '-debug' if debug_build | default(false) else '' }}.qcow2"
 base_img_path: "{{ img_dir }}/tdx-guest-ubuntu-{{ ubuntu_version }}.qcow2"
 prepared_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-prepared.qcow2"
 gpu_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-gpu.qcow2"
