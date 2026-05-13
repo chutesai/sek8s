@@ -3,6 +3,32 @@
 Each supported GPU model is a GpuProfile subclass that encodes BAR sizes,
 CC/PPCIe mode configuration, NVSwitch policy, and InfiniBand policy.
 Adding a new GPU type requires one subclass and one GPU_PROFILES entry.
+
+## Adding a new GPU profile
+
+Before writing a subclass, run the following on the bare-metal host to
+determine the correct CPU topology values:
+
+    lscpu | grep -E "Socket|Core\\(s\\) per|Thread|NUMA node\\(s\\)|CPU\\(s\\):"
+
+Example output for a 2-socket Xeon system:
+
+    CPU(s):                    128
+    Thread(s) per core:        2
+    Core(s) per socket:        32
+    Socket(s):                 2
+    NUMA node(s):              2
+
+Map these to the profile properties:
+
+    host_cpus    = CPU(s)                            → 128
+    host_sockets = Socket(s)                         → 2
+    vcpus        = host_cpus - HOST_RESERVED_CPUS    → 124  (derived, no override needed)
+    smp_topology = derived automatically from the above (no override needed)
+
+HOST_RESERVED_CPUS (currently 4) is the number of logical CPUs kept for the
+host OS. vcpus and smp_topology are computed from host_cpus and host_sockets
+automatically — only override them if the server has a non-standard layout.
 """
 
 from abc import ABC, abstractmethod
@@ -42,12 +68,12 @@ class GpuProfile(ABC):
     @property
     @abstractmethod
     def host_cpus(self) -> int:
-        """Total physical CPU count for this server type."""
+        """Total physical CPU count (CPU(s) from lscpu). See module docstring."""
         ...
 
     @property
     def host_sockets(self) -> int:
-        """Physical socket count for this server type. Override per profile."""
+        """Physical socket count (Socket(s) from lscpu). Override per profile."""
         return 1
 
     @property
