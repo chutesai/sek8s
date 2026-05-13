@@ -77,7 +77,7 @@ class PciTopologyState:
 def build_base_cmd(
     *,
     mem: str,
-    vcpus: str,
+    smp_topology: str,
     process_name: str,
     cpu_args: str,
     firmware: str,
@@ -91,7 +91,7 @@ def build_base_cmd(
         'qemu-system-x86_64',
         '-accel', 'kvm',
         '-m', mem,
-        '-smp', f'{vcpus},sockets=1,cores={vcpus},threads=1',
+        '-smp', smp_topology,
         '-name', f'{process_name},process={process_name},debug-threads=on',
         '-cpu', cpu_args,
         '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
