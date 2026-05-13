@@ -6,8 +6,9 @@
 #   ansible-playbook -i inventory/hosts.yml playbooks/build-setup.yml
 #
 # What this does:
-#   - Benchmarks Ubuntu apt mirrors and updates /etc/apt/sources.list.d/ubuntu.sources
-#     to use the fastest one for this host's location.
+#   - Benchmarks Ubuntu apt mirrors and selects the fastest one
+#   - Installs host script dependencies (git, aria2, python3-yaml, python3-venv)
+#   - Installs Ansible for running the guest image build locally
 
 - name: Build host setup
   hosts: td_hosts
@@ -15,3 +16,10 @@
   become: true
   roles:
     - role: host_mirror
+    - role: host_prerequisites
+  tasks:
+    - name: Install Ansible
+      ansible.builtin.apt:
+        name: ansible
+        state: present
+        update_cache: true

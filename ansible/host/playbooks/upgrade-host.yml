@@ -29,7 +29,8 @@
   become: true
   roles:
     - role: host_tools
-
+  vars:
+    auto_drain_vm: false
   tasks:
     # ── Compute the hop sequence ────────────────────────────────────────────
     # Walk os_upgrade_path from the current version to build an ordered list
