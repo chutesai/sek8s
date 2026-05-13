@@ -8,14 +8,19 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
 ### Added
 - `ansible.cfg`: `profile_tasks` callback enabled so every Ansible task now emits timing data — makes it easier to spot slow steps in long playbooks
 - `build-setup.yml`: installs Ansible and its Python/system prerequisites on the build host before subsequent plays run, replacing the assumption that Ansible is pre-installed
+- `GpuProfile.host_sockets` property (default `1`) and `GpuProfile.smp_topology` property that derives the full QEMU `-smp` string from the physical socket layout, so the guest CPU topology mirrors the host's CPUID structure
+- `H200Profile` and `RTXPro6000Profile` override `host_sockets = 2` to reflect their 128-CPU / 2-socket servers
+- `profiles.py` module docstring documents how to derive `host_cpus` and `host_sockets` from `lscpu` output when adding a new GPU profile
 
 ### Changed
 - `upgrade-guest.yml` / `launch_and_verify`: checksum validation now runs as a pre-flight step before the VM is launched and again after guest image promotion, catching stale images earlier and surfacing a clear failure message
 - `pre_2510.yml`: adds explicit gating so SGX/DCAP packages that were updated via `unattended-upgrades` are preserved rather than purged during the 25.04 → 25.10 hop; only packages that were not updated get removed
+- `build_base_cmd` (`qemu.py`) accepts `smp_topology: str` instead of `vcpus: str`; the caller in `__main__.py` passes the topology string from the active `GpuProfile` (or a flat single-socket default for non-GPU VMs)
 
 ### Fixed
 - `pre_2504.yml`: `grub-common` is now pinned/held before the OS upgrade begins to prevent apt from purging it during dependency resolution — loss of `grub-common` left hosts unbootable
 - `pre_2504.yml` / `hop.yml` / `post_2504.yml`: corrected task ordering so DKMS kernel module rebuilds and `grub-pc` reconfiguration occur in the right sequence for both fresh 25.04 installs and the 25.04 → 25.10 hop, eliminating boot failures caused by stale module state
+- QEMU was always launched with `sockets=1` regardless of the physical host topology. On 2-socket servers (H200, RTX PRO 6000) this caused QEMU to emit a degenerate CPUID with no core or package topology levels, triggering the kernel `arch topology borken` warning on every vCPU at boot and presenting a misleading scheduler topology to workloads inside the VM
 
 ## [2026-05-07]
 
