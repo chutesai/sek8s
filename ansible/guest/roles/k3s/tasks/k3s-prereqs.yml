@@ -1,4 +1,9 @@
 ---
+# k3s-prereqs.yml — k3s directory, manifest, and registry configuration.
+#
+# Sets up the Rancher/k3s directory layout, copies any extra manifests,
+# and writes the containerd registry mirror config.
+
 # Setup alternative K3s directory if specified
 - name: Setup alternative K3s directory
   when:

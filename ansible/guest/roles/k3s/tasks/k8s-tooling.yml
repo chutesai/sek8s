@@ -1,4 +1,6 @@
 ---
+# k8s-tooling.yml — Python kubernetes client and containerd configuration.
+
 - name: Install python3-kubernetes package
   ansible.builtin.apt:
     name: python3-kubernetes

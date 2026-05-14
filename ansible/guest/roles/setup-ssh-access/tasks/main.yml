@@ -4,9 +4,9 @@
 # Removes the builder's authorized_keys (installed by cloud-init during the
 # image build) and writes only the intended access key(s) so that only the
 # authorised recipient can connect.  Also verifies the final key set exactly
-# matches benchmark_ssh_keys.
+# matches guest_ssh_keys.
 #
-# Only included by benchmark builds — the playbook decides whether to include
+# Only included by tee-gpu-vm.yml — the playbook decides whether to include
 # this role.  Must run after rtmr3-measure (session-specific keys are measured
 # but not pre-verified) and before seal-vm.
 #
@@ -25,10 +25,10 @@
     group: root
     mode: '0700'
 
-- name: Write partner SSH keys to authorized_keys
+- name: Write guest SSH keys to authorized_keys
   ansible.builtin.copy:
     dest: /root/.ssh/authorized_keys
-    content: "{{ benchmark_ssh_keys | join('\n') }}\n"
+    content: "{{ guest_ssh_keys | join('\n') }}\n"
     owner: root
     group: root
     mode: '0600'
@@ -48,13 +48,13 @@
       SSH key verification failed: expected key not found in /root/.ssh/authorized_keys.
       Build halted to prevent shipping image with incorrect keys.
     success_msg: "SSH key verified: {{ item[:40] }}..."
-  loop: "{{ benchmark_ssh_keys }}"
+  loop: "{{ guest_ssh_keys }}"
 
 - name: Verify no unexpected keys in authorized_keys
   ansible.builtin.assert:
     that:
-      - (authorized_keys_content.content | b64decode).split('\n') | select('match', '^ssh-') | list | length == benchmark_ssh_keys | length
+      - (authorized_keys_content.content | b64decode).split('\n') | select('match', '^ssh-') | list | length == guest_ssh_keys | length
     fail_msg: >-
       SSH key count mismatch: authorized_keys contains a different number of keys than
-      benchmark_ssh_keys. Build halted — image may contain unexpected keys.
-    success_msg: "authorized_keys key count matches benchmark_ssh_keys ({{ benchmark_ssh_keys | length }} key(s))"
+      guest_ssh_keys. Build halted — image may contain unexpected keys.
+    success_msg: "authorized_keys key count matches guest_ssh_keys ({{ guest_ssh_keys | length }} key(s))"

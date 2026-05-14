@@ -1,0 +1,98 @@
+---
+# k3s-networking.yml — k3s-specific firewall rules and compatibility checks.
+#
+# Opens the ports and network ranges required by the k3s control plane,
+# monitoring stack, and pod/service networks.  Also validates iptables
+# version compatibility with k3s.
+#
+# Only included by the k3s role — not needed by builds without k3s.
+# Idempotent: safe to re-run. No flags or conditionals.
+
+- name: Populate service facts
+  ansible.builtin.service_facts:
+
+- name: Allow UFW Exceptions for Standalone K3s
+  when:
+    - ansible_facts.services['ufw'] is defined
+    - ansible_facts.services['ufw'].state == 'running'
+  block:
+    - name: Get ufw status
+      ansible.builtin.command:
+        cmd: ufw status
+      changed_when: false
+      register: ufw_status
+
+    - name: If ufw enabled, ensure SSH is allowed
+      when:
+        - ufw_status['stdout'] == "Status':' active"
+      community.general.ufw:
+        rule: allow
+        port: "{{ ansible_port | default('22') }}"
+        proto: tcp
+        comment: SSH for Ansible
+
+    - name: If ufw enabled, open Kubernetes API port
+      when:
+        - ufw_status['stdout'] == "Status':' active"
+      community.general.ufw:
+        rule: allow
+        port: "{{ k3s_api_port | default('6443') }}"
+        proto: tcp
+        comment: Kubernetes API Server
+
+    - name: Allow for control plane
+      when:
+        - ufw_status['stdout'] == "Status':' active"
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop:
+        - { port: "2379", proto: tcp, comment: etcd client }
+        - { port: "30080", proto: tcp, comment: Grafana UI }
+
+    - name: Allow Prometheus and Node Exporter on all hosts
+      when:
+        - ufw_status['stdout'] == "Status':' active"
+      community.general.ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop:
+        - { port: "30090", proto: tcp, comment: Prometheus UI }
+        - { port: "9100", proto: tcp, comment: Node Exporter metrics }
+        - { port: "10250", proto: tcp, comment: Metrics server }
+
+    - name: If ufw enabled, allow pod and service networks
+      when:
+        - ufw_status['stdout'] == "Status':' active"
+      community.general.ufw:
+        rule: allow
+        src: "{{ item }}"
+        comment: Kubernetes networks
+      loop: "{{ ((cluster_cidr | default('10.42.0.0/16')) + ',' + (service_cidr | default('10.43.0.0/16'))) | split(',') }}"
+
+# Iptables check for K3s compatibility
+- name: Gather the package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Check iptables version for K3s compatibility
+  ansible.builtin.set_fact:
+    iptables_version: "{{ ansible_facts.packages['iptables'][0]['version'] }}"
+  when: ansible_facts.packages['iptables'] is defined
+  register: iptables_version_result
+
+- name: Warn about incompatible iptables version
+  when:
+    - ansible_facts.packages['iptables'] is defined
+    - ansible_facts.packages['iptables'][0]['version'] is version('1.8.5', '<')
+    - ansible_facts.packages['iptables'][0]['version'] is version('1.7.9', '>')
+    - iptables_version_result is defined
+  ansible.builtin.fail:
+    msg:
+      - "Warning: Iptables {{ ansible_facts.packages['iptables'][0]['version'] }} found."
+      - Add '--prefer-bundled-bin' to extra_server_args variable to use the bundled iptables binary.
+  failed_when: false

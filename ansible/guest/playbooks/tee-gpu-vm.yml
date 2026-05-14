@@ -6,13 +6,13 @@
 # independent of chutes-miner-vm.yml: no k3s, no admission controller,
 # no system-manager, no cache volume.
 #
-# The partner provides their SSH public key via benchmark_ssh_keys in the
+# The partner provides their SSH public key via guest_ssh_keys in the
 # inventory; it is measured into RTMR3 and is the only authorised access path.
 #
 # Usage:
-#   ansible-playbook -i local/inventory.benchmark.yml playbooks/tee-gpu-vm.yml
+#   ansible-playbook -i local/inventory.tee-gpu-vm.yml playbooks/tee-gpu-vm.yml
 
-- name: Confirm benchmark guest image build configuration
+- name: Confirm TEE GPU VM guest image build configuration
   hosts: host
   become: false
   tags:
@@ -23,23 +23,17 @@
         msg:
           - "Build env: {{ build_env }}"
           - "VM version: {{ vm_version }}"
-          - "Benchmark build: {{ benchmark_build | default(false) }}"
           - "Final image: {{ final_img_path }}"
 
-    - name: Assert benchmark_build is true
-      ansible.builtin.assert:
-        that: benchmark_build | default(false)
-        msg: "benchmark_build must be true when using tee-gpu-vm.yml"
-
-    - name: Assert benchmark_ssh_keys is non-empty
+    - name: Assert guest_ssh_keys is non-empty
       ansible.builtin.fail:
-        msg: "benchmark_ssh_keys must be a non-empty list — add partner public key(s) to inventory"
-      when: benchmark_ssh_keys | default([]) | length == 0
+        msg: "guest_ssh_keys must be a non-empty list — add partner public key(s) to inventory"
+      when: guest_ssh_keys | default([]) | length == 0
 
     - name: Confirm intended build before starting VM
       ansible.builtin.pause:
         prompt: >-
-          Is this the intended benchmark build? The next step launches the TDX guest VM
+          Is this the intended TEE GPU VM build? The next step launches the TDX guest VM
           toward {{ final_img_path }}. Press Enter to continue, or Ctrl+C to abort.
 
 - name: Run TDX guest image

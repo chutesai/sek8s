@@ -1,4 +1,20 @@
 ---
+- name: Setup k3s networking
+  ansible.builtin.include_tasks: k3s-networking.yml
+  tags: k3s-networking
+
+- name: Setup k3s prerequisites
+  ansible.builtin.include_tasks: k3s-prereqs.yml
+  tags: k3s-prereqs
+
+- name: Setup k8s tooling
+  ansible.builtin.include_tasks: k8s-tooling.yml
+  tags: k8s-tooling
+
+- name: Install helm
+  ansible.builtin.include_tasks: helm.yml
+  tags: helm
+
 - name: Install k3s
   ansible.builtin.include_tasks: install.yml
   tags: k3s-install
@@ -6,7 +22,7 @@
 - name: Setup node
   ansible.builtin.include_tasks: setup_node.yml
   tags: k3s-node
-  
+
 - name: Setup config init service
   ansible.builtin.include_tasks: setup_config_init.yml
   tags: k3s-config-init
@@ -19,3 +35,7 @@
   ansible.builtin.include_tasks: nvidia-runtime.yml
   tags: k3s-nvidia-runtime
   when: ansible_facts.packages['nvidia-container-toolkit'] is defined
+
+- name: Setup seccomp profiles
+  ansible.builtin.include_tasks: seccomp-profiles.yml
+  tags: seccomp-profiles

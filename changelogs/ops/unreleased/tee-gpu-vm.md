@@ -8,6 +8,11 @@
 
 ### Changed
 - `create-config.sh`: miner SS58/seed arguments are now optional — both must be provided together or both left empty, so benchmark config volumes can be created without miner credentials using the same script.
+- `ansible/guest/roles/k3s`: absorbed all k3s/k8s prerequisite tasks previously scattered across the `common` and `security` roles — k3s networking (UFW rules, iptables compatibility), k3s directory/registry config, k8s tooling, helm install, and seccomp profiles now live entirely within the `k3s` role. Playbooks compose roles without build-type flags.
+- `ansible/guest/roles/common`: slimmed to base system setup only (`system.yml`, `mirror.yml`, `container-networking.yml`). Container networking tasks (br_netfilter, overlay, bridge sysctl, AppArmor) kept here as they support Docker in all builds; renamed `kubernetes.conf` module persistence file to `container-modules.conf`.
+- `ansible/guest/roles/security`: removed `seccomp-profiles` tasks and files; role now only performs chroot/init hardening and cloud-init disabling, unconditionally.
+- `ansible/guest/inventory.yml`: removed `benchmark_build` flag — build type is now determined entirely by playbook selection.
+- `ansible/guest/inventory.yml`, `ansible/guest/playbooks/tee-gpu-vm.yml`, `ansible/guest/roles/setup-ssh-access/`: renamed `benchmark_ssh_keys` to `guest_ssh_keys`.
 
 ### Fixed
 - `passthrough.py` (`_run_gpu_tools`): GPU tools commands now run with a 120-second timeout and gracefully handle `TimeoutExpired`/`CalledProcessError` on reset failure, preventing indefinite hangs when a GPU is wedged at the PCIe level during VM teardown or reboot.
