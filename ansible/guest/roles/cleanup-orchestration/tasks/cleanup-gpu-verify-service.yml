@@ -1,7 +1,7 @@
 ---
 - name: Enable gpu-verify service
   systemd:
-    name: "{{ gpu_verify_service_name }}"
+    name: gpu-verify.service
     enabled: yes
     state: stopped
   tags: service
