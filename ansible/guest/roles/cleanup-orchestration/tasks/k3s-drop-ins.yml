@@ -67,6 +67,14 @@
         group: root
         mode: "0644"
 
+    - name: Copy no-restart drop-in (k3s crash requires full reboot)
+      ansible.builtin.copy:
+        src: files/k3s.service.d/no-restart.conf
+        dest: /etc/systemd/system/k3s.service.d/no-restart.conf
+        owner: root
+        group: root
+        mode: "0644"
+
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
         name: "{{ item.name }}"
