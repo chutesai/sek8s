@@ -197,10 +197,19 @@ post_sync_keys() {
         return 1
     fi
 
-    # Generate a fresh TDX quote with the nonce as REPORTDATA.
+    # Read the cert hash saved by fetch_key_and_unlock so the quote REPORTDATA binds
+    # this call to the same mTLS certificate used during boot attestation (nonce + cert_hash).
+    local cert_hash
+    cert_hash=$(cat /run/chutes/cert-hash 2>/dev/null | tr -d '\n')
+    if [ -z "$cert_hash" ]; then
+        log_failure_msg "cert-hash not found in /run/chutes — boot attestation did not save it"
+        return 1
+    fi
+
+    # Generate a fresh TDX quote with nonce + cert_hash as REPORTDATA (mirrors boot attestation).
     # RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
     local report_data
-    report_data=$(echo -n "$quote_nonce" | cut -c1-128)
+    report_data=$(echo -n "${quote_nonce}${cert_hash}" | cut -c1-128)
     log_begin_msg "Generating TDX quote for LUKS attest"
     if ! /usr/bin/tdx-quote-generator --report-data "$report_data" --hex \
             -o "$quote_file" 2>/dev/null; then
@@ -233,6 +242,9 @@ post_sync_keys() {
         -d "{\"quote\":\"${quote_b64}\",\"volumes\":[${volumes_json}]}" \
         -o "$response_file" \
         "$endpoint_url")
+
+    # mTLS cert is no longer needed; delete it now that the API call is complete.
+    rm -f "$client_cert" "$client_key" /run/chutes/cert-hash
 
     if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
         rm -f "$response_file"

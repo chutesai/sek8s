@@ -57,8 +57,13 @@ clear_luks_key() {
         unset BOOT_TOKEN
     fi
     
-    # Clear any temporary files that might contain sensitive data
-    rm -f "$CLIENT_CERT" "$CLIENT_KEY" /tmp/api_response /tmp/nonce_response
+    # Clear any temporary files that might contain sensitive data.
+    # On success the cert must survive until setup_storage (init-bottom) completes
+    # its /luks/attest call; setup_storage is responsible for deleting them.
+    if [ "$SUCCESS_FLAG" -ne 1 ]; then
+        rm -f "$CLIENT_CERT" "$CLIENT_KEY"
+    fi
+    rm -f /tmp/api_response /tmp/nonce_response
     
     # If script exits without success flag, shutdown the VM
     if [ "$SUCCESS_FLAG" -ne 1 ]; then
@@ -507,7 +512,13 @@ main() {
             printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
             chmod 600 /run/chutes/luks-quote-nonce
         fi
-        
+        # Save cert hash so setup_storage can bind it into the luks/attest REPORTDATA.
+        # The cert files themselves stay in /tmp/ (cleared by setup_storage after use).
+        if [ -n "$CERT_HASH" ]; then
+            printf '%s' "$CERT_HASH" > /run/chutes/cert-hash
+            chmod 600 /run/chutes/cert-hash
+        fi
+
         # Mark as successful before cleanup
         SUCCESS_FLAG=1
         
