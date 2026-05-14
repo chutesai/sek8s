@@ -226,6 +226,19 @@
     - name: Disable console access
       ansible.builtin.include_role:
         name: disable-console
+      when: not (debug_build | default(false))
+
+- name: Set debug root password
+  hosts: vm
+  become: true
+  tags:
+    - debug-credentials
+  tasks:
+    - name: Set known root password for console access (debug builds only)
+      ansible.builtin.user:
+        name: root
+        password: "{{ 'debug' | password_hash('sha512') }}"
+      when: debug_build | default(false)
 
 - name: Security Hardening
   hosts: vm
