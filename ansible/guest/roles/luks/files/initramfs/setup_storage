@@ -28,14 +28,13 @@ CONFIRM_NONCE=""     # one-time token returned by API for confirming rotation
 K3S_ENCRYPTION_KEY="" # base64-encoded secretbox key for k3s EncryptionConfiguration
 VM_NAME=""
 HOTKEY=""
-BOOT_TOKEN=""
 SUCCESS_FLAG=0
 
 # Function to securely clear sensitive data
 clear_sensitive_data() {
     for var in STORAGE_KEY STORAGE_KEY_NEXT \
                CACHE_KEY CACHE_KEY_NEXT \
-               BOOT_TOKEN CONFIRM_NONCE K3S_ENCRYPTION_KEY; do
+               CONFIRM_NONCE K3S_ENCRYPTION_KEY; do
         eval "if [ -n \"\${${var}}\" ]; then
             ${var}=\"\$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\\n' | head -c 1000)\"
             ${var}=\"\"
@@ -59,7 +58,7 @@ trap clear_sensitive_data EXIT INT TERM
 
 log_begin_msg "Starting storage setup"
 
-# Function to load VM name, hotkey, and boot token
+# Function to load VM name and hotkey
 load_vm_data() {
     if [ ! -f /run/chutes/vm-name ]; then
         log_failure_msg "VM name not found in /run/chutes/vm-name"
@@ -74,13 +73,6 @@ load_vm_data() {
     fi
 
     HOTKEY=$(cat /run/chutes/hotkey)
-
-    if [ ! -f /run/chutes/boot-token ]; then
-        log_failure_msg "Boot token not found in /run/chutes/boot-token"
-        return 1
-    fi
-
-    BOOT_TOKEN=$(cat /run/chutes/boot-token)
 
     log_success_msg "Loaded VM name: $VM_NAME, hotkey loaded from config"
     return 0
@@ -474,11 +466,6 @@ setup_storage() {
         log_begin_msg "Storage device is LUKS encrypted"
     else
         log_begin_msg "Storage device is NOT encrypted (first boot)"
-    fi
-
-    if [ -z "$BOOT_TOKEN" ]; then
-        log_failure_msg "No boot token available"
-        return 1
     fi
 
     if [ "$is_encrypted" = "true" ]; then
