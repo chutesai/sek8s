@@ -55,7 +55,8 @@ always_sync_manifests() {
     local dest="${STORAGE_BASE}/k3s/server/manifests"
     if [[ -d "$src" ]]; then
         mkdir -p "$dest"
-        if rsync -a --delete "$src/" "$dest/"; then
+        # --checksum (-c) forces content-based comparison rather than mtime/size
+        if rsync -ac --delete "$src/" "$dest/"; then
             log "Synced manifests: $src -> $dest"
         else
             log "ERROR: Failed to sync manifests"

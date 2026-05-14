@@ -76,19 +76,29 @@
     - /tmp/tdx-rtmr-extend.c
     - /tmp/tdx-rtmr-extend
 
-# ── Install verification script ──────────────────────────────────────────────
-# The script is made immutable after install.  Even root cannot modify it
-# without first running `chattr -i`.  This prevents accidents — any change
-# would cause a boot-time hash mismatch and power off the VM.
-# The chattr -i before the copy makes the role idempotent on re-runs.
+# ── Detect VM type from installed components ─────────────────────────────────
+# Rather than requiring an explicit flag, we detect the VM type from what other
+# roles have already installed.  setup-storage-bind-mounts.sh is only present
+# on chutes-miner-vm (installed by the cache-volume role).  Its presence drives
+# every subsequent conditional in this role.
+
+- name: Check for storage bind-mount script (present on chutes-miner-vm only)
+  ansible.builtin.stat:
+    path: /usr/local/bin/setup-storage-bind-mounts.sh
+  register: _bind_mounts_script
+
+# ── Install verify-access-config (tee-gpu-vm only) ───────────────────────────
+# Not installed on chutes-miner-vm — that image has no interactive access.
 
 - name: Remove immutable flag from verify-access-config (idempotency)
+  when: not _bind_mounts_script.stat.exists
   ansible.builtin.shell: chattr -i /usr/local/bin/verify-access-config 2>/dev/null || true
   args:
     executable: /bin/bash
   changed_when: false
 
 - name: Install verify-access-config
+  when: not _bind_mounts_script.stat.exists
   ansible.builtin.copy:
     src: verify-access-config
     dest: /usr/local/bin/verify-access-config
@@ -97,14 +107,16 @@
     mode: '0755'
 
 - name: Set verify-access-config immutable
+  when: not _bind_mounts_script.stat.exists
   ansible.builtin.command: chattr +i /usr/local/bin/verify-access-config
   changed_when: false
 
 # ── Write measurement config ─────────────────────────────────────────────────
+# Selects the correct static path list based on detected VM type.
 
 - name: Write /etc/tdx-measure.conf
-  ansible.builtin.template:
-    src: tdx-measure.conf.j2
+  ansible.builtin.copy:
+    src: "{{ 'tdx-measure-miner.conf' if _bind_mounts_script.stat.exists else 'tdx-measure-gpu.conf' }}"
     dest: /etc/tdx-measure.conf
     owner: root
     group: root
@@ -130,17 +142,22 @@
       printf '# Any mismatch at boot causes the VM to power off rather than boot\n'
       printf '# with a potentially tampered verification tool.\n'
       printf '# Format: <absolute-path> <sha384hex>\n'
-      printf '# The only session-specific content (/root/.ssh/authorized_keys) is\n'
-      printf '# intentionally absent — it is measured but not pre-verified.\n'
-      {% for path in rtmr3_canonical_paths %}
-      if [ -f "{{ path }}" ]; then
-        sha384sum "{{ path }}" | awk '{ print $2 " " $1 }'
-      elif [ -d "{{ path }}" ]; then
-        find "{{ path }}" -type f | sort | while IFS= read -r f; do
-          sha384sum "$f" | awk '{ print $2 " " $1 }'
-        done
-      fi
-      {% endfor %}
+      printf '# /root/.ssh is intentionally absent: the partner SSH key is injected\n'
+      printf '# after this file is generated, so no build-time hash is available.\n'
+      printf '# It is measured into RTMR3 but not pre-verified here.\n'
+      # Read all paths from the installed conf, skipping comments and blank lines.
+      # /root/.ssh is excluded: its content is set by setup-ssh-access AFTER this
+      # task runs, so no stable build-time hash exists for it.
+      grep -v '^\s*#' /etc/tdx-measure.conf | grep -v '^\s*$' | grep -v '^/root/\.ssh$' | \
+      while IFS= read -r path; do
+        if [ -f "$path" ]; then
+          sha384sum "$path" | awk '{ print $2 " " $1 }'
+        elif [ -d "$path" ]; then
+          find "$path" -type f | sort | while IFS= read -r f; do
+            sha384sum "$f" | awk '{ print $2 " " $1 }'
+          done
+        fi
+      done
     } > /etc/tdx-rtmr3-expected-hashes
   args:
     executable: /bin/bash
@@ -169,3 +186,70 @@
     group: root
     mode: '0755'
   notify: update initramfs
+
+# ── Install rtmr3-verify (chutes-miner-vm only) ───────────────────────────────
+# One-time boot check: runs after setup-storage-bind-mounts, recomputes the
+# full RTMR3 chain from tdx-measure.conf and compares to hardware RTMR3.
+# Powers off on any mismatch.  Not needed on tee-gpu-vm (no storage bind-mounts).
+
+- name: Remove immutable flag from rtmr3-verify (idempotency)
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.shell: chattr -i /usr/local/bin/rtmr3-verify 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install rtmr3-verify script
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: rtmr3-verify
+    dest: /usr/local/bin/rtmr3-verify
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set rtmr3-verify immutable
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.command: chattr +i /usr/local/bin/rtmr3-verify
+  changed_when: false
+
+- name: Install rtmr3-verify systemd service
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: rtmr3-verify.service
+    dest: /etc/systemd/system/rtmr3-verify.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Enable rtmr3-verify service
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.systemd:
+    name: rtmr3-verify
+    enabled: yes
+    daemon_reload: yes
+
+# ── Hard k3s dependency on rtmr3-verify (chutes-miner-vm only) ───────────────
+# Drop-in ensures k3s is structurally blocked until rtmr3-verify confirms
+# RTMR3 integrity.  rtmr3-verify powers off on any failure, so this is
+# defence-in-depth for the case where poweroff somehow doesn't execute.
+
+- name: Create k3s.service.d directory
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/k3s.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install k3s rtmr3-verify dependency drop-in
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: k3s.service.d/rtmr3-verify.conf
+    dest: /etc/systemd/system/k3s.service.d/rtmr3-verify.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd

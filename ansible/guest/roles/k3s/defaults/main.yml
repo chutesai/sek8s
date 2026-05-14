@@ -13,6 +13,7 @@ user_kubectl: true # noqa var-naming[no-role-prefix]
 k3s_extra_server_args: ""
 k3s_server_config_yaml: |-
   write-kubeconfig-mode: "0600"
+  encryption-provider-config: /run/chutes/k3s-encryption-config.yaml
   disable:
     - traefik
     - servicelb

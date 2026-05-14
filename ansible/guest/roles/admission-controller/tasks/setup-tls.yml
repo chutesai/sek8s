@@ -1,67 +1,100 @@
 ---
 - name: Setup TLS certificates for admission webhook
   block:
-    - name: Check if certificates already exist
+    - name: Ensure certs directory exists
+      ansible.builtin.file:
+        path: /etc/admission-controller/certs
+        state: directory
+        owner: root
+        group: admission
+        mode: '0750'
+
+    - name: Check if CA certificate already exists
       ansible.builtin.stat:
-        path: /etc/admission-controller/certs/server.crt
-      register: cert_exists
+        path: /etc/admission-controller/certs/ca.crt
+      register: ca_cert_exists
 
-    - name: Generate self-signed certificates
-      when: not cert_exists.stat.exists
-      block:
-        - name: Generate private key
-          ansible.builtin.command:
-            cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 4096
-            creates: /etc/admission-controller/certs/server.key
+    - name: Generate CA private key
+      ansible.builtin.command:
+        cmd: >-
+          openssl genrsa -out /etc/admission-controller/certs/ca.key 4096
+        creates: /etc/admission-controller/certs/ca.key
 
-        - name: Create OpenSSL config for certificate with SANs
-          ansible.builtin.copy:
-            content: |
-              [req]
-              distinguished_name = req_distinguished_name
-              req_extensions = v3_req
-              prompt = no
-              
-              [req_distinguished_name]
-              CN = admission-controller
-              
-              [v3_req]
-              keyUsage = keyEncipherment, dataEncipherment
-              extendedKeyUsage = serverAuth
-              subjectAltName = @alt_names
-              
-              [alt_names]
-              DNS.1 = admission-controller
-              DNS.2 = admission-controller.kube-system.svc
-              DNS.3 = admission-controller.kube-system.svc.cluster.local
-              DNS.4 = localhost
-              IP.1 = 127.0.0.1
-              IP.2 = ::1
-              IP.3 = {{ ansible_default_ipv4.address | default('127.0.0.1') }}
-            dest: /etc/admission-controller/certs/openssl.cnf
-            owner: root
-            group: root
-            mode: '0644'
+    - name: Generate CA certificate (self-signed, long-lived)
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -new -x509
+          -key /etc/admission-controller/certs/ca.key
+          -out /etc/admission-controller/certs/ca.crt
+          -days 3650
+          -subj "/CN=admission-controller-ca"
+        creates: /etc/admission-controller/certs/ca.crt
 
-        - name: Generate certificate signing request with SANs
-          ansible.builtin.command:
-            cmd: >-
-              openssl req -new
-              -key /etc/admission-controller/certs/server.key
-              -out /etc/admission-controller/certs/server.csr
-              -config /etc/admission-controller/certs/openssl.cnf
-            creates: /etc/admission-controller/certs/server.csr
+    # ── Initial server certificate (replaced each boot by generate-admission-cert)
+    # This build-time cert is only used if generate-admission-cert.service has
+    # not yet run (i.e. first boot before the service starts).  On every boot the
+    # service generates a fresh per-VM server cert signed by the CA above, so
+    # only the CA key/cert needs to be stable across reboots.
 
-        - name: Generate self-signed certificate with SANs
-          ansible.builtin.command:
-            cmd: >-
-              openssl x509 -req -days 365
-              -in /etc/admission-controller/certs/server.csr
-              -signkey /etc/admission-controller/certs/server.key
-              -out /etc/admission-controller/certs/server.crt
-              -extensions v3_req
-              -extfile /etc/admission-controller/certs/openssl.cnf
-            creates: /etc/admission-controller/certs/server.crt
+    - name: Create OpenSSL config for server certificate with SANs
+      ansible.builtin.copy:
+        content: |
+          [req]
+          distinguished_name = req_distinguished_name
+          req_extensions = v3_req
+          prompt = no
+
+          [req_distinguished_name]
+          CN = admission-controller
+
+          [v3_req]
+          keyUsage = keyEncipherment, dataEncipherment
+          extendedKeyUsage = serverAuth
+          subjectAltName = @alt_names
+
+          [alt_names]
+          DNS.1 = admission-controller
+          DNS.2 = admission-controller.kube-system.svc
+          DNS.3 = admission-controller.kube-system.svc.cluster.local
+          DNS.4 = localhost
+          IP.1 = 127.0.0.1
+          IP.2 = ::1
+        dest: /etc/admission-controller/certs/openssl.cnf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Generate initial server private key
+      ansible.builtin.command:
+        cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 4096
+        creates: /etc/admission-controller/certs/server.key
+
+    - name: Generate initial server CSR
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -new
+          -key /etc/admission-controller/certs/server.key
+          -out /etc/admission-controller/certs/server.csr
+          -config /etc/admission-controller/certs/openssl.cnf
+        creates: /etc/admission-controller/certs/server.csr
+
+    - name: Generate initial server certificate (CA-signed)
+      ansible.builtin.command:
+        cmd: >-
+          openssl x509 -req -days 365
+          -in /etc/admission-controller/certs/server.csr
+          -CA /etc/admission-controller/certs/ca.crt
+          -CAkey /etc/admission-controller/certs/ca.key
+          -CAcreateserial
+          -out /etc/admission-controller/certs/server.crt
+          -extensions v3_req
+          -extfile /etc/admission-controller/certs/openssl.cnf
+        creates: /etc/admission-controller/certs/server.crt
+
+    - name: Remove CSR (not needed at runtime)
+      ansible.builtin.file:
+        path: /etc/admission-controller/certs/server.csr
+        state: absent
 
     - name: Set certificate permissions
       ansible.builtin.file:
@@ -70,14 +103,20 @@
         group: admission
         mode: '0640'
       loop:
+        - /etc/admission-controller/certs/ca.key
+        - /etc/admission-controller/certs/ca.crt
         - /etc/admission-controller/certs/server.key
         - /etc/admission-controller/certs/server.crt
 
-    - name: Read certificate for webhook configuration
-      ansible.builtin.slurp:
-        src: /etc/admission-controller/certs/server.crt
-      register: webhook_cert
+    # ── Export CA cert as caBundle for webhook manifests ─────────────────────
+    # The CA cert (not the server cert) is embedded in webhook manifests so the
+    # k8s API server can verify the per-VM server cert generated at boot.
 
-    - name: Store certificate in fact for webhook configuration
+    - name: Read CA certificate for webhook caBundle
+      ansible.builtin.slurp:
+        src: /etc/admission-controller/certs/ca.crt
+      register: webhook_ca_cert
+
+    - name: Store CA certificate fact for webhook manifest rendering
       ansible.builtin.set_fact:
-        admission_webhook_ca_bundle: "{{ webhook_cert.content }}"
+        admission_webhook_ca_bundle: "{{ webhook_ca_cert.content }}"

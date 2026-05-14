@@ -15,9 +15,7 @@ all:
     # Helm chart signing PGP public key (required)
     helm_chart_public_key_path: "~/.chutes/helm-pubkey.gpg"
     luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"
-    tdx_api_endpoint: "https://api.example.com/servers/boot/attestation"
-    tdx_nonce_endpoint: "https://api.example.com/servers/nonce"
-    tdx_luks_endpoint: "https://api.example.com/servers/vm_name/luks"
+    tdx_base_url: "https://tdx-attestation.example.com:8443"
     build_env: "prod"
     prime_wait_timeout: 300
     gpu_verify_debug_mode: false

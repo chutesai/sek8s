@@ -16,13 +16,15 @@ log_msg() {
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
 # Validate required configuration
-if [ -z "$TDX_API_ENDPOINT" ] || [ -z "$TDX_NONCE_ENDPOINT" ]; then
+if [ -z "$TDX_BASE_URL" ] || [ -z "$VALIDATOR_BASE_URL" ]; then
     echo "ERROR: Missing required TDX configuration. Check /etc/tdx-luks.conf" >&2
     exit 1
 fi
 
-API_ENDPOINT="$TDX_API_ENDPOINT"
-NONCE_ENDPOINT="$TDX_NONCE_ENDPOINT"
+# Endpoints are derived from the two base URLs; paths are stable and not configurable.
+# TDX_BASE_URL is the mTLS proxy; VALIDATOR_BASE_URL is the regular TLS API.
+API_ENDPOINT="${TDX_BASE_URL}/servers/boot/attestation"
+NONCE_ENDPOINT="${VALIDATOR_BASE_URL}/servers/nonce"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
@@ -34,6 +36,7 @@ API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 # Global variables
 LUKS_KEY=""
 BOOT_TOKEN=""
+LUKS_QUOTE_NONCE=""  # single-use nonce for the init-bottom POST /luks quote
 VM_NAME=""
 HOTKEY=""
 SUCCESS_FLAG=0
@@ -71,7 +74,7 @@ trap clear_luks_key EXIT INT TERM
 
 echo ""
 log_msg "Starting TDX-based disk unlock"
-log_msg "Endpoints: nonce=${NONCE_ENDPOINT}, attest=${API_ENDPOINT}"
+log_msg "TDX base: ${TDX_BASE_URL}, validator base: ${VALIDATOR_BASE_URL}"
 
 # Function to generate self-signed client certificate
 generate_client_cert() {
@@ -365,11 +368,12 @@ fetch_luks_key() {
             200)
                 LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
                 BOOT_TOKEN=$(jq -r '.boot_token // empty' "$response_file" 2>/dev/null)
-                if [ -n "$LUKS_KEY" ]; then
+                LUKS_QUOTE_NONCE=$(jq -r '.luks_quote_nonce // empty' "$response_file" 2>/dev/null)
+                if [ -n "$LUKS_KEY" ] && [ -n "$LUKS_QUOTE_NONCE" ]; then
                     rm -f "$response_file"
                     send_result=0
                 else
-                    send_error="API response missing key field"
+                    send_error="API response missing key or luks_quote_nonce field"
                 fi
                 ;;
             401|403) send_error="Authentication failed (HTTP $http_code)" ;;
@@ -490,13 +494,18 @@ main() {
     
     # Unlock the device
     if unlock_device; then
-        # Save vm_name, hotkey, and boot token to /run for storage setup
+        # Save vm_name, hotkey, boot token, and luks quote nonce to /run for storage setup.
+        # luks-quote-nonce is the REPORTDATA nonce for the init-bottom POST /luks quote.
         mkdir -m 700 -p /run/chutes
         echo "$VM_NAME" > /run/chutes/vm-name
         echo "$HOTKEY" > /run/chutes/hotkey
         if [ -n "$BOOT_TOKEN" ]; then
-            echo "$BOOT_TOKEN" > /run/chutes/boot-token
+            printf '%s' "$BOOT_TOKEN" > /run/chutes/boot-token
             chmod 600 /run/chutes/boot-token
+        fi
+        if [ -n "$LUKS_QUOTE_NONCE" ]; then
+            printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
+            chmod 600 /run/chutes/luks-quote-nonce
         fi
         
         # Mark as successful before cleanup

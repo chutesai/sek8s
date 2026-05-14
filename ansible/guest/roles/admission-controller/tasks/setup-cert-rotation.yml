@@ -1,0 +1,26 @@
+---
+# Installs generate-admission-cert.service, which runs every boot to produce a
+# fresh per-VM TLS server certificate signed by the stable build-time CA.
+# Runs After=rtmr3-verify (RTMR3 must be verified) and Before=admission-controller.
+
+- name: Install generate-admission-cert script
+  ansible.builtin.copy:
+    src: generate-admission-cert.sh
+    dest: /usr/local/bin/generate-admission-cert
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install generate-admission-cert systemd service
+  ansible.builtin.copy:
+    src: generate-admission-cert.service
+    dest: /etc/systemd/system/generate-admission-cert.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable generate-admission-cert service
+  ansible.builtin.systemd:
+    name: generate-admission-cert
+    enabled: yes
+    daemon_reload: yes

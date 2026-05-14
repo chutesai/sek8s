@@ -23,6 +23,10 @@
   ansible.builtin.include_tasks: configure-opa-service.yml
   tags: opa-service
 
+- name: Install per-VM certificate generation service
+  ansible.builtin.include_tasks: setup-cert-rotation.yml
+  tags: cert-rotation
+
 - name: Configure admission controller service
   ansible.builtin.include_tasks: configure-admission-service.yml
   tags: admission-service

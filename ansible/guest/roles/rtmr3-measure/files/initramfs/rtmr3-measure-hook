@@ -26,9 +26,13 @@ copy_exec /usr/bin/sha384sum
 manual_add_modules tdx_guest
 force_load tdx_guest
 
-# Measurement config: the list of paths to measure into RTMR3.
-# Baking this into the initramfs (covered by RTMR1) ensures the list
-# of measured paths cannot be tampered with without changing RTMR1.
+# Measurement config: the static list of paths to measure into RTMR3.
+# The file is hardcoded in the role source (files/tdx-measure-miner.conf or
+# files/tdx-measure-gpu.conf, selected by rtmr3_vm_type in the calling playbook)
+# and is not driven by Ansible variables, ensuring the measured path list is
+# fixed and reproducible from the repository.  Baking it into the initramfs
+# (covered by RTMR1) additionally ensures the list cannot be tampered with
+# at runtime without changing RTMR1.
 if [ -f /etc/tdx-measure.conf ]; then
     mkdir -p "$DESTDIR/etc"
     cp /etc/tdx-measure.conf "$DESTDIR/etc/tdx-measure.conf"

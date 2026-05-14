@@ -1,0 +1,23 @@
+[Unit]
+Description=RTMR3 post-mount integrity check
+Documentation=file:/usr/local/bin/rtmr3-verify
+# Runs after the storage bind-mounts are active so storage-backed paths
+# (e.g. /var/lib/rancher/k3s/server/manifests) can be verified against the
+# root-filesystem measurements extended into RTMR3 at init-bottom.
+After=setup-storage-bind-mounts.service
+# Must succeed before k3s starts — ensuring k3s never reads manifests that
+# diverge from what RTMR3 attests.
+Before=k3s.service
+Before=k3s-agent.service
+Requires=setup-storage-bind-mounts.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rtmr3-verify
+RemainAfterExit=yes
+TimeoutStartSec=120
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+# /usr/local/bin/rtmr3-verify
+#
+# Post-mount RTMR3 integrity check.
+#
+# Runs once at boot after setup-storage-bind-mounts.service (and therefore
+# after rsync -ac has synced root manifests into the storage volume).
+# Recomputes the full RTMR3 SHA-384 extension chain from the paths listed in
+# /etc/tdx-measure.conf and compares the result to the live hardware RTMR3
+# obtained from a freshly generated TDX attestation quote.
+#
+# At this point bind-mounts are active, so any path that is backed by the
+# storage volume (e.g. /var/lib/rancher/k3s/server/manifests) is read from
+# storage.  The init-bottom script extended RTMR3 using the ROOT versions of
+# those paths.  Because rsync -ac always overwrites storage with root content,
+# the two hash chains should be identical.  Any divergence — whether from an
+# offline tamper that rsync missed, a sync regression, or a runtime
+# modification — produces a chain mismatch that powers off the VM.
+#
+# This script is measured in RTMR3 itself (see tdx-measure-miner.conf), so it
+# cannot be modified at runtime without the hardware RTMR3 reflecting that
+# change — making any tampered version self-defeating.
+#
+# RTMR3 extension chain (mirrors init-bottom rtmr3-measure):
+#   rtmr3_0 = 0x00...0  (48 zero bytes, TDX initial state)
+#   for each file F in sorted(all files under configured paths):
+#       rtmr3_{i+1} = SHA384(rtmr3_i || SHA384(F.contents))
+#
+# SYNC NOTE: this chain algorithm and the file-collection logic must stay
+# identical to verify-access-config (ansible/guest/roles/rtmr3-measure/files/).
+# If either changes, update both scripts.  Both files are intentionally standalone
+# (no sek8s dependency) so they work on tee-gpu-vm builds where /opt/sek8s is
+# not installed.
+#
+# Hardware RTMR3 is read from a fresh TDX attestation quote (primary) or the
+# tsm-mr sysfs attribute (fallback for kernels that expose it as readable).
+# Any unrecoverable error also triggers a forced poweroff.
+
+import hashlib
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CONF             = Path("/etc/tdx-measure.conf")
+SYSFS_RTMR3      = "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384"
+QUOTE_GENERATOR  = Path("/usr/bin/tdx-quote-generator")
+QUOTE_RTMR3_OFF  = 520
+QUOTE_RTMR3_LEN  = 48
+POWEROFF_DELAY   = 10
+
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+def _kmsg(msg: str) -> None:
+    try:
+        with open("/dev/kmsg", "w") as fh:
+            fh.write(f"rtmr3-verify: {msg}\n")
+    except OSError:
+        pass
+
+
+def fatal(msg: str) -> None:
+    print(f"rtmr3-verify: FATAL: {msg}", file=sys.stderr)
+    _kmsg(f"FATAL: {msg}")
+    print(
+        f"rtmr3-verify: powering off in {POWEROFF_DELAY} seconds",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+    import time
+    time.sleep(POWEROFF_DELAY)
+    os.system("systemctl poweroff --force")
+    sys.exit(1)
+
+
+# ── config & file collection ─────────────────────────────────────────────────
+
+def load_conf_paths() -> list[str]:
+    if not CONF.exists():
+        fatal(f"measure config not found: {CONF}")
+    paths: list[str] = []
+    for line in CONF.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            paths.append(line)
+    if not paths:
+        fatal(f"no paths configured in {CONF}")
+    return paths
+
+
+def collect_files(cfg_paths: list[str]) -> list[str]:
+    """Return sorted list of regular, non-symlink file paths to measure."""
+    files: list[str] = []
+    for p in cfg_paths:
+        rp = Path(p)
+        if rp.is_dir():
+            for f in rp.rglob("*"):
+                if f.is_file() and not f.is_symlink():
+                    files.append(str(f))
+        elif rp.is_file() and not rp.is_symlink():
+            files.append(str(rp))
+    return sorted(files)
+
+
+# ── RTMR3 chain computation ──────────────────────────────────────────────────
+
+def sha384_file(path: str) -> bytes:
+    h = hashlib.sha384()
+    try:
+        with open(path, "rb") as fh:
+            while chunk := fh.read(1 << 16):
+                h.update(chunk)
+    except OSError as exc:
+        fatal(f"cannot read file for hashing: {path}: {exc}")
+    return h.digest()
+
+
+def compute_expected_rtmr3(files: list[str]) -> bytes:
+    """
+    Simulate the RTMR3 extension chain from all-zeros initial state.
+    Mirrors the init-bottom rtmr3-measure script exactly:
+        for each file (sorted lexicographically):
+            extend_data = SHA384(file_contents)         # 48 bytes written to sysfs
+            rtmr3       = SHA384(rtmr3 || extend_data)  # hardware mixes in accumulated value
+    """
+    rtmr3 = bytes(QUOTE_RTMR3_LEN)  # TDX initial RTMR3 = all-zeros
+    for path in files:
+        extend_data = sha384_file(path)
+        rtmr3 = hashlib.sha384(rtmr3 + extend_data).digest()
+    return rtmr3
+
+
+# ── hardware RTMR3 read ──────────────────────────────────────────────────────
+
+def _read_rtmr3_sysfs() -> bytes | None:
+    """
+    Try reading RTMR3 directly from the tsm-mr sysfs attribute (Linux 6.16+).
+    Returns 48 bytes on success, None if the file is not readable.
+    """
+    try:
+        with open(SYSFS_RTMR3, "rb") as fh:
+            data = fh.read(QUOTE_RTMR3_LEN)
+        if len(data) == QUOTE_RTMR3_LEN:
+            return data
+    except OSError:
+        pass
+    return None
+
+
+def _read_rtmr3_quote() -> bytes | None:
+    """
+    Generate a fresh TDX attestation quote and parse RTMR3 from it.
+    Returns 48 bytes on success, None on failure.
+    """
+    if not QUOTE_GENERATOR.exists():
+        return None
+    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tf:
+        quote_path = tf.name
+    try:
+        result = subprocess.run(
+            [str(QUOTE_GENERATOR), "--output", quote_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            print(
+                f"rtmr3-verify: tdx-quote-generator error: "
+                f"{result.stderr.decode(errors='replace').strip()}",
+                file=sys.stderr,
+            )
+            return None
+        quote = Path(quote_path).read_bytes()
+        if len(quote) < QUOTE_RTMR3_OFF + QUOTE_RTMR3_LEN:
+            print(
+                f"rtmr3-verify: quote too short ({len(quote)} bytes)",
+                file=sys.stderr,
+            )
+            return None
+        return quote[QUOTE_RTMR3_OFF : QUOTE_RTMR3_OFF + QUOTE_RTMR3_LEN]
+    finally:
+        try:
+            os.unlink(quote_path)
+        except OSError:
+            pass
+
+
+def read_hardware_rtmr3() -> bytes:
+    """Return the live 48-byte RTMR3 value from the TDX hardware."""
+    val = _read_rtmr3_sysfs()
+    if val is not None:
+        return val
+    val = _read_rtmr3_quote()
+    if val is not None:
+        return val
+    fatal(
+        f"cannot read hardware RTMR3: sysfs unavailable and "
+        f"{QUOTE_GENERATOR} not found or failed"
+    )
+
+
+# ── main ─────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    cfg_paths = load_conf_paths()
+    files     = collect_files(cfg_paths)
+
+    if not files:
+        fatal("no files found to measure — check tdx-measure.conf paths")
+
+    print(f"rtmr3-verify: measuring {len(files)} files ...")
+    expected = compute_expected_rtmr3(files)
+
+    print("rtmr3-verify: reading hardware RTMR3 ...")
+    hardware = read_hardware_rtmr3()
+
+    if expected == hardware:
+        print(
+            f"rtmr3-verify: PASS — RTMR3 verified "
+            f"({len(files)} files, {expected.hex()[:16]}...)"
+        )
+        _kmsg(f"PASS — RTMR3 verified ({len(files)} files)")
+        sys.exit(0)
+
+    # Mismatch: log details and power off.
+    _kmsg(
+        f"RTMR3 MISMATCH: computed={expected.hex()} hardware={hardware.hex()}"
+    )
+    print("rtmr3-verify: FAIL — RTMR3 mismatch", file=sys.stderr)
+    print(f"  computed: {expected.hex()}", file=sys.stderr)
+    print(f"  hardware: {hardware.hex()}", file=sys.stderr)
+    print("\nrtmr3-verify: per-file hashes (current filesystem):", file=sys.stderr)
+    for f in files:
+        try:
+            h = hashlib.sha384(Path(f).read_bytes()).hexdigest()
+            print(f"  {h}  {f}", file=sys.stderr)
+        except OSError as exc:
+            print(f"  (error: {exc})  {f}", file=sys.stderr)
+    fatal("storage or runtime tampering detected — RTMR3 does not match expected value")
+
+
+if __name__ == "__main__":
+    main()
