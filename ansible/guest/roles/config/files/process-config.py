@@ -225,6 +225,10 @@ def apply_docker_hub_and_registries(username, token):
     try:
         admission_gid = grp.getgrnam("admission").gr_gid
     except KeyError:
+        if username is None and token is None:
+            # No admission controller and no Docker Hub creds — nothing to do.
+            log("Group 'admission' not found and no Docker Hub credentials present — skipping docker config")
+            return True
         log("Group 'admission' not found; cannot configure docker-config", "ERROR")
         return False
 
@@ -371,16 +375,21 @@ def validate_and_apply_config():
     if not clear_netplan_directory():
         return False
     
-    # Check all expected files exist
-    missing_files = []
-    for name, path in EXPECTED_FILES.items():
-        if not os.path.isfile(path):
-            missing_files.append(path)
-    
+    # Check required files exist (hostname and network config are always required;
+    # miner credentials are optional — absent in benchmark mode).
+    required_files = ["hostname", "network-config.yaml"]
+    missing_files = [EXPECTED_FILES[k] for k in required_files if not os.path.isfile(EXPECTED_FILES[k])]
     if missing_files:
         log(f"Missing required config files: {missing_files}", "ERROR")
         return False
-    
+
+    has_miner_creds = (
+        os.path.isfile(EXPECTED_FILES["miner-ss58"]) and
+        os.path.isfile(EXPECTED_FILES["miner-seed"])
+    )
+    if not has_miner_creds:
+        log("Miner credential files absent — running in benchmark mode (no k3s credential setup)")
+
     # Validate hostname
     hostname_content = read_config_file(EXPECTED_FILES["hostname"])
     if hostname_content is None:
@@ -391,28 +400,28 @@ def validate_and_apply_config():
         log(f"Invalid hostname: {msg}", "ERROR")
         return False
     log(f"Hostname validation passed: {hostname_content}")
-    
-    # Validate miner SS58
-    ss58_content = read_config_file(EXPECTED_FILES["miner-ss58"])
-    if ss58_content is None:
-        return False
-    
-    is_valid, msg = validate_ss58_address(ss58_content)
-    if not is_valid:
-        log(f"Invalid miner SS58: {msg}", "ERROR")
-        return False
-    log("Miner SS58 validation passed")
-    
-    # Validate miner seed
-    seed_content = read_config_file(EXPECTED_FILES["miner-seed"])
-    if seed_content is None:
-        return False
-    
-    is_valid, msg = validate_seed_content(seed_content)
-    if not is_valid:
-        log(f"Invalid miner seed: {msg}", "ERROR")
-        return False
-    log("Miner seed validation passed")
+
+    # Validate miner credentials (only when present)
+    ss58_content = None
+    seed_content = None
+    if has_miner_creds:
+        ss58_content = read_config_file(EXPECTED_FILES["miner-ss58"])
+        if ss58_content is None:
+            return False
+        is_valid, msg = validate_ss58_address(ss58_content)
+        if not is_valid:
+            log(f"Invalid miner SS58: {msg}", "ERROR")
+            return False
+        log("Miner SS58 validation passed")
+
+        seed_content = read_config_file(EXPECTED_FILES["miner-seed"])
+        if seed_content is None:
+            return False
+        is_valid, msg = validate_seed_content(seed_content)
+        if not is_valid:
+            log(f"Invalid miner seed: {msg}", "ERROR")
+            return False
+        log("Miner seed validation passed")
     
     # Validate network config
     network_content = read_config_file(EXPECTED_FILES["network-config.yaml"])
@@ -431,20 +440,17 @@ def validate_and_apply_config():
     # Apply hostname
     if not write_target_file(hostname_content + "\n", HOSTNAME_TARGET, 0o644):
         return False
-    
-    # Apply miner credentials (restrictive permissions)
-    if not write_target_file(ss58_content + "\n", MINER_SS58_TARGET, 0o600):
-        return False
-    
-    if not write_target_file(seed_content + "\n", MINER_SEED_TARGET, 0o600):
-        return False
 
-    # Write miner-only env file (separate from system-manager.env; does not overwrite build-time vars).
-    # Group system-manager (GID 10150) so system-manager service can read it.
-    SYSTEM_MANAGER_GID = 10150
-    miner_env_content = f"MINER_SS58={ss58_content}\nMINER_SEED={seed_content}\n"
-    if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID):
-        return False
+    # Apply miner credentials and system-manager env (production only)
+    if has_miner_creds:
+        if not write_target_file(ss58_content + "\n", MINER_SS58_TARGET, 0o600):
+            return False
+        if not write_target_file(seed_content + "\n", MINER_SEED_TARGET, 0o600):
+            return False
+        SYSTEM_MANAGER_GID = 10150
+        miner_env_content = f"MINER_SS58={ss58_content}\nMINER_SEED={seed_content}\n"
+        if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID):
+            return False
 
     # Apply network config
     if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o600):

@@ -1,0 +1,121 @@
+---
+# container-networking.yml — Container infrastructure networking setup.
+#
+# Sets up the kernel modules, sysctl, and userspace packages needed for
+# Docker (installed by system.yml) and any container runtime.  Runs for
+# all build types.
+#
+# Idempotent: safe to re-run. No flags or conditionals.
+
+# Configure sysctl for container networking
+- name: Configure sysctl for container networking
+  block:
+    - name: Set sysctl for container networking
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: true
+      with_items:
+        - { name: net.bridge.bridge-nf-call-iptables, value: "1" }
+        - { name: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+        - { name: net.ipv4.ip_forward, value: "1" }
+      register: sysctl_result
+      failed_when:
+        - sysctl_result.failed is defined
+        - sysctl_result.failed
+        - "'Cannot set net.bridge.bridge-nf-call' not in sysctl_result.msg | default('')"
+        - "'Module br_netfilter not loaded' not in sysctl_result.msg | default('')"
+        - "'sysctl: cannot stat' not in sysctl_result.msg | default('')"
+
+    - name: Disable IPv6
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-disable-ipv6.conf
+        reload: true
+      with_items:
+        - { key: "net.ipv6.conf.all.disable_ipv6", value: "1" }
+        - { key: "net.ipv6.conf.default.disable_ipv6", value: "1" }
+        - { key: "net.ipv6.conf.lo.disable_ipv6", value: "1" }
+      register: ipv6_disabled
+      when: not ipv6_enabled | bool
+
+# br_netfilter — required for bridge traffic to be visible to iptables
+# (needed by Docker bridge networking)
+- name: Add br_netfilter to /etc/modules-load.d/
+  ansible.builtin.copy:
+    content: br_netfilter
+    dest: /etc/modules-load.d/br_netfilter.conf
+    mode: u=rw,g=,o=
+
+- name: Load br_netfilter module - first attempt
+  community.general.modprobe:
+    name: br_netfilter
+    state: present
+  ignore_errors: true
+  register: br_module_load
+
+- name: Force load br_netfilter with fallback method
+  when: br_module_load is failed
+  block:
+    - name: Attempt to load module using modprobe directly
+      ansible.builtin.command: modprobe br_netfilter
+      register: modprobe_result
+      failed_when:
+        - modprobe_result.rc != 0
+        - "'Module br_netfilter not found' not in modprobe_result.stderr"
+        - "'Module already loaded' not in modprobe_result.stderr"
+      changed_when: modprobe_result.rc == 0
+
+    - name: Verify br_netfilter status
+      ansible.builtin.command: lsmod | grep br_netfilter
+      register: br_module_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Display warning if module still not loaded
+      when: br_module_check is failed
+      ansible.builtin.debug:
+        msg: "WARNING: Could not load br_netfilter module. May need to enable bridge netfilter in kernel."
+
+# overlay — overlayfs driver used by Docker and containerd for image layers
+- name: Load overlay module
+  community.general.modprobe:
+    name: overlay
+    state: present
+  register: overlay_result
+  failed_when:
+    - overlay_result.failed is defined
+    - overlay_result.failed
+    - "'Not found in directory' not in overlay_result.msg"
+    - "'Dependency failed' not in overlay_result.msg"
+
+- name: Ensure container modules load at boot
+  ansible.builtin.copy:
+    content: |
+      br_netfilter
+      overlay
+    dest: /etc/modules-load.d/container-modules.conf
+    mode: "0644"
+
+# AppArmor — used by Docker and containerd for container confinement on Ubuntu
+- name: Check for Apparmor existence
+  ansible.builtin.stat:
+    path: /sys/module/apparmor/parameters/enabled
+  register: apparmor_enabled
+
+- name: Check if Apparmor is enabled
+  when: apparmor_enabled.stat.exists
+  ansible.builtin.command: cat /sys/module/apparmor/parameters/enabled
+  register: apparmor_status
+  changed_when: false
+
+- name: Install Apparmor for Ubuntu
+  when:
+    - apparmor_status is defined
+    - apparmor_status.stdout == "Y"
+  ansible.builtin.package:
+    name: apparmor
+    state: present

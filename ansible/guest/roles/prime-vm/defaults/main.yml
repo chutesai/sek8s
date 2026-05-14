@@ -1,13 +1,9 @@
 ---
-prime_dir: /tmp/prime-vm
-prime_wait_timeout: 300
-# Dummy credentials for initramfs attestation request (never accepted by API)
-prime_dummy_hostname: build-prime
-prime_dummy_ss58: "5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ"
-# Intentionally invalid (22 chars, expected 64 hex): triggers config-manager failure and
-# quick shutdown for debug builds; avoids wasting time on attestation API for LUKS builds
-prime_dummy_seed: "prime-build-dummy-seed"
-# User-mode networking: VM gets 10.0.2.15, gateway 10.0.2.2
-prime_vm_ip: "10.0.2.15"
-prime_vm_gateway: "10.0.2.2"
-prime_vm_dns: "8.8.8.8"
+# Maximum seconds to wait for the kernel-loaded log signal before giving up.
+prime_boot_timeout: 120
+# Log line that confirms GRUB committed its SAVEDEFAULT and the kernel is running.
+# "Linux version" is the first line the kernel prints — appears within ~10s of boot.
+# By this point TDVF has written the Ubuntu EFI boot entry (Boot000N "Ubuntu")
+# into its NVRAM, so all future boots will use that stable path and produce
+# consistent RTMRs.
+prime_boot_signal: "Linux version"

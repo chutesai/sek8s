@@ -36,14 +36,14 @@ def _firmware_path() -> str:
     return os.path.join(scripts_dir, _FIRMWARE_REL)
 
 
-def print_vm_status(ssh_port: int):
+def print_vm_status(ssh_port: int, show_ssh: bool = False):
     try:
         with open(PIDFILE) as pid_file:
             pid = int(pid_file.read())
             print(f"TDX VM running with PID: {pid}")
-            print(f"Login:")
-            print(f"   ssh -p {ssh_port} tdx@localhost   (default: tdx/123456)")
-            print(f"   ssh -p {ssh_port} root@localhost  (password: 123456)")
+            if show_ssh:
+                print(f"Login:")
+                print(f"   ssh -p {ssh_port} root@<host-ip>")
     except Exception:
         pass
 
@@ -131,7 +131,7 @@ def launch_vm(args) -> int:
 
     if not args.foreground:
         print(f"Log file: {LOGFILE}")
-    print_vm_status(args.ssh_port)
+    print_vm_status(args.ssh_port, show_ssh=args.ssh)
     return 0
 
 
@@ -142,6 +142,7 @@ def main() -> int:
     parser.add_argument("--pass-gpus", action="store_true")
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--clean", action="store_true")
+    parser.add_argument("--ssh", action="store_true", help="Show SSH login hint after launch (benchmark and debug modes)")
 
     parser.add_argument("--config-volume", type=str)
     parser.add_argument("--cache-volume", type=str)

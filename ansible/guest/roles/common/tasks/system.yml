@@ -151,6 +151,15 @@
         path: /usr/bin/vim
         priority: 1
 
+    - name: Install HWE kernel and headers
+      ansible.builtin.apt:
+        name:
+          - linux-image-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+          - linux-headers-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+        state: present
+        update_cache: false
+      when: ubuntu_major | int <= 24
+
 - name: Check Lambda packages
   block:
     - name: Get list of installed lambda packages
@@ -195,6 +204,19 @@
         regexp: ^([^#].*\sswap\s+.*)$
         replace: "# \\1"
       when: swap_disable
+
+- name: Remove default cloud image user accounts
+  ansible.builtin.user:
+    name: "{{ item }}"
+    state: absent
+    remove: true
+  loop:
+    - ubuntu
+    - debian
+    - centos
+    - ec2-user
+    - cloud-user
+  failed_when: false
 
 - name: Configure and ensure time synchronization
   block:

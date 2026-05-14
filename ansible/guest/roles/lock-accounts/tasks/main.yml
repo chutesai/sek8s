@@ -1,0 +1,20 @@
+---
+# lock-accounts — Lock all password-based login credentials.
+#
+# Disables password authentication for root and all non-system accounts
+# (uid >= 1000).  Does not affect SSH key authentication — partners can
+# still connect via their authorised key after this runs.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Lock root password
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
+- name: Lock passwords for all non-system accounts (uid >= 1000)
+  ansible.builtin.shell: |
+    awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | \
+      xargs -r passwd --lock
+  changed_when: true

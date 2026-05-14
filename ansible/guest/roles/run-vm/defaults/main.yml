@@ -5,8 +5,8 @@ cloud_init_dir: "{{ repo_root }}/local"
 user_data_file: "{{ cloud_init_dir }}/user-data"
 no_cache: "{{ lookup('env', 'NO_CACHE') | default('false', true) | lower }}"
 debug: "{{ lookup('env', 'DEBUG') | default('false', true) | lower }}"
-ssh_public_key_path: "~/.ssh/id_rsa.pub"
-ssh_private_key_path: "~/.ssh/id_rsa"
+ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+ssh_private_key_path: "~/.ssh/id_ed25519"
 build_vm_ram: 8192
 build_vm_vcpus: 4
 build_vm_mac: "52:54:00:60:a6:0a"

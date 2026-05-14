@@ -57,7 +57,7 @@ export TDX_NONCE_ENDPOINT="https://api.example.com/nonce"
 
 ```bash
 cd ansible/guest
-ansible-playbook playbooks/site.yml
+ansible-playbook playbooks/chutes-miner-vm.yml
 ```
 
 The build process:
@@ -68,7 +68,7 @@ The build process:
 5. Configures initramfs for TDX-based boot unlock
 6. Outputs final encrypted image under `guest-tools/image/<build_env>/<vm_version>.qcow2` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; append `-debug` when `debug_build` is true)
 
-At the **start** of `site.yml` (before the build VM is launched), the playbook prints the build configuration and **pauses for confirmation** (press Enter to continue, Ctrl+C to abort).
+At the **start** of `chutes-miner-vm.yml` (before the build VM is launched), the playbook prints the build configuration and **pauses for confirmation** (press Enter to continue, Ctrl+C to abort).
 
 ## Deployment
 

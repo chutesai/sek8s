@@ -1,0 +1,83 @@
+---
+# disable-console — Mask all interactive console and legacy remote access.
+#
+# Disables getty/serial console services and removes legacy network access
+# daemons (telnet, rsh, etc.) so the VM has no interactive login surface
+# other than SSH.  Applies to all build types including benchmark.
+#
+# Idempotent: safe to re-run. No flags or conditionals — the playbook
+# decides whether to include this role.
+
+- name: Disable and mask console access services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - getty@tty1
+    - getty@tty2
+    - getty@tty3
+    - getty@tty4
+    - getty@tty5
+    - getty@tty6
+    - serial-getty@ttyS0
+    - console-getty
+  failed_when: false
+
+- name: Disable and mask legacy remote access services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - telnet
+    - rsh
+    - rlogin
+    - vsftpd
+    - ftpd
+    - xinetd
+    - inetd
+  failed_when: false
+
+- name: Remove legacy remote access packages
+  ansible.builtin.package:
+    name:
+      - telnet-server
+      - rsh-server
+      - vsftpd
+      - proftpd
+      - xinetd
+      - inetd
+      - nis
+      - rpcbind
+    state: absent
+  failed_when: false
+
+- name: Disable kernel console access via GRUB cmdline
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX='
+    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service"'
+    backup: true
+  notify: update grub
+
+# Set GRUB_DEFAULT=0 and disable GRUB_SAVEDEFAULT so every boot uses the
+# first (latest) kernel entry unconditionally.  Without this, grubenv may
+# have no saved_entry on first boot, causing GRUB to fall back to a recovery
+# or older kernel entry and producing different RTMR1/RTMR2 values.
+- name: Set GRUB default to entry 0 (latest kernel)
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_DEFAULT='
+    line: 'GRUB_DEFAULT=0'
+  notify: update grub
+
+- name: Disable GRUB savedefault
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^#?GRUB_SAVEDEFAULT='
+    line: 'GRUB_SAVEDEFAULT=false'
+  notify: update grub
+

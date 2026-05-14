@@ -1,0 +1,22 @@
+---
+# k8s-tooling.yml — Python kubernetes client and containerd configuration.
+
+- name: Install python3-kubernetes package
+  ansible.builtin.apt:
+    name: python3-kubernetes
+    state: present
+
+- name: Check if containerd config file exists
+  ansible.builtin.stat:
+    path: /etc/containerd/config.toml
+  register: containerd_config_file
+
+- name: Ensure containerd disabled_plugins is properly configured
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: "^\\s*disabled_plugins\\s*="
+    line: "disabled_plugins = []"
+    backrefs: true
+  register: containerd_config
+  notify: Restart containerd
+  when: containerd_config_file.stat.exists

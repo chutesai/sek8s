@@ -1,0 +1,296 @@
+---
+# Benchmark role: all benchmark-specific guest image setup.
+# Used exclusively by tee-gpu-vm.yml — not chutes-miner-vm.yml.
+#
+# This role owns:
+#   - Config volume services (simplified process-config.py, config-manager.service,
+#     var-config.mount, config-volume-validator.service, netplan-apply.service)
+#   - Storage setup service (setup-storage-bind-mounts.service, benchmark-storage-setup.sh)
+#   - Attestation tools (attest, chutes-nvevidence, TDX quote generator)
+#   - LUKS helper (luks-setup)
+
+# ------------------------------------------------------------------
+# Config volume services
+# ------------------------------------------------------------------
+
+- name: Ensure /usr/local/bin exists
+  ansible.builtin.file:
+    path: /usr/local/bin
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy config volume verification script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/verify-config-volume.sh"
+    dest: /usr/local/bin/verify-config-volume.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy benchmark process-config script
+  ansible.builtin.copy:
+    src: process-config.py
+    dest: /usr/local/bin/process-config.py
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy config volume validator service
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/config-volume-validator.service"
+    dest: /etc/systemd/system/config-volume-validator.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy benchmark config-manager service
+  ansible.builtin.copy:
+    src: config-manager.service
+    dest: /etc/systemd/system/config-manager.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy var-config mount unit
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/var-config.mount"
+    dest: /etc/systemd/system/var-config.mount
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Copy netplan-apply service
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../roles/config/files/netplan-apply.service"
+    dest: /etc/systemd/system/netplan-apply.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Reload systemd daemon after config units
+  ansible.builtin.systemd:
+    daemon_reload: yes
+
+- name: Create /var/config mount point
+  ansible.builtin.file:
+    path: /var/config
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Enable config-volume-validator.service
+  ansible.builtin.systemd:
+    name: config-volume-validator.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable var-config.mount
+  ansible.builtin.systemd:
+    name: var-config.mount
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable config-manager.service
+  ansible.builtin.systemd:
+    name: config-manager.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Enable netplan-apply.service
+  ansible.builtin.systemd:
+    name: netplan-apply.service
+    enabled: yes
+    state: stopped
+    daemon_reload: yes
+  failed_when: false
+
+- name: Verify config-volume-validator.service is enabled
+  ansible.builtin.command: systemctl is-enabled config-volume-validator.service
+  register: _cv_status
+  changed_when: false
+  failed_when: _cv_status.stdout != "enabled"
+
+- name: Verify var-config.mount is enabled
+  ansible.builtin.command: systemctl is-enabled var-config.mount
+  register: _mount_status
+  changed_when: false
+  failed_when: _mount_status.stdout != "enabled"
+
+- name: Verify config-manager.service is enabled
+  ansible.builtin.command: systemctl is-enabled config-manager.service
+  register: _cm_status
+  changed_when: false
+  failed_when: _cm_status.stdout != "enabled"
+
+- name: Verify netplan-apply.service is enabled
+  ansible.builtin.command: systemctl is-enabled netplan-apply.service
+  register: _np_status
+  changed_when: false
+  failed_when: _np_status.stdout != "enabled"
+
+# ------------------------------------------------------------------
+# Attestation tools
+# ------------------------------------------------------------------
+
+- name: Attestation common setup (tdx-attest group/user/directories)
+  ansible.builtin.include_role:
+    name: attestation-service
+    tasks_from: common-setup
+
+- name: Install TDX quote generator
+  ansible.builtin.include_role:
+    name: attestation-service
+    tasks_from: install-tdx-quote-generator
+
+- name: Create temporary build directory for nvevidence
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: nvevidence-benchmark
+  register: build_dir
+
+- name: Copy nvevidence build artifacts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../nvevidence/{{ item }}"
+    dest: "{{ build_dir.path }}"
+  loop:
+    - pyproject.toml
+    - poetry.lock
+    - README.md
+
+- name: Copy nvevidence source to temp directory
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../../nvevidence/chutes_nvevidence"
+    dest: "{{ build_dir.path }}"
+
+- name: Create nvevidence application directory
+  ansible.builtin.file:
+    path: /opt/chutes-nvevidence
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy nvevidence Python package files
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/{{ item }}"
+    dest: /opt/chutes-nvevidence/{{ item }}
+    remote_src: yes
+    owner: root
+    group: root
+    mode: preserve
+  loop:
+    - chutes_nvevidence/
+    - pyproject.toml
+  ignore_errors: yes
+
+- name: Fix nvevidence directory permissions
+  ansible.builtin.shell: |
+    find /opt/chutes-nvevidence -type d -exec chmod 755 {} \;
+    find /opt/chutes-nvevidence -type f -name "*.py" -exec chmod 644 {} \;
+  changed_when: false
+
+- name: Copy nvevidence README
+  ansible.builtin.copy:
+    src: "{{ build_dir.path }}/README.md"
+    dest: /opt/chutes-nvevidence/README.md
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0644'
+  ignore_errors: yes
+
+- name: Create nvevidence Python virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv /opt/chutes-nvevidence/venv
+    creates: /opt/chutes-nvevidence/venv
+
+- name: Upgrade pip in nvevidence virtual environment
+  ansible.builtin.pip:
+    name:
+      - pip
+      - setuptools
+      - wheel
+    state: latest
+    virtualenv: /opt/chutes-nvevidence/venv
+
+- name: Install chutes-nvevidence package
+  ansible.builtin.pip:
+    name: /opt/chutes-nvevidence/
+    virtualenv: /opt/chutes-nvevidence/venv
+    state: present
+    extra_args: "-e"
+
+- name: Install dcap-qvl for TDX quote verification
+  ansible.builtin.pip:
+    name: dcap-qvl
+    virtualenv: /opt/chutes-nvevidence/venv
+    state: present
+
+- name: Clean up nvevidence temporary build directory
+  ansible.builtin.file:
+    path: "{{ build_dir.path }}"
+    state: absent
+
+- name: Set nvevidence ownership to root:tdx-attest
+  ansible.builtin.file:
+    path: /opt/chutes-nvevidence
+    state: directory
+    owner: root
+    group: tdx-attest
+    mode: '0750'
+    recurse: yes
+
+- name: Create chutes-nvevidence system-wide symlink
+  ansible.builtin.file:
+    src: /opt/chutes-nvevidence/venv/bin/chutes-nvevidence
+    dest: /usr/local/bin/chutes-nvevidence
+    state: link
+    owner: root
+    group: tdx-attest
+
+- name: Install attest verification script
+  ansible.builtin.copy:
+    src: attest.py
+    dest: /usr/local/bin/attest
+    owner: root
+    group: tdx-attest
+    mode: '0750'
+
+- name: Install luks-setup helper script
+  ansible.builtin.copy:
+    src: luks-setup.py
+    dest: /usr/local/bin/luks-setup
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install benchmark storage setup script
+  ansible.builtin.copy:
+    src: benchmark-storage-setup.sh
+    dest: /usr/local/bin/benchmark-storage-setup.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install benchmark setup-storage-bind-mounts service
+  ansible.builtin.copy:
+    src: setup-storage-bind-mounts.service
+    dest: /etc/systemd/system/setup-storage-bind-mounts.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable benchmark storage setup service
+  ansible.builtin.systemd:
+    name: setup-storage-bind-mounts.service
+    enabled: yes
+    daemon_reload: yes

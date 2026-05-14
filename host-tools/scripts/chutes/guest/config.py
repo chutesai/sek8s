@@ -3,7 +3,9 @@
 Parses a YAML config file, validates it against the JSON schema, and outputs
 shell variable assignments to stdout for consumption by quick-launch.sh.
 
-Can be invoked as: python3 -m chutes.guest.config <config.yaml>
+Can be invoked as:
+  python3 -m chutes.guest.config <config.yaml>
+  python3 -m chutes.guest.config --benchmark <config.yaml>
 """
 
 import json
@@ -48,11 +50,18 @@ def validate_config(config, schema_path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 -m chutes.guest.config <config.yaml>", file=sys.stderr)
+    args = sys.argv[1:]
+    benchmark_mode = False
+
+    if args and args[0] == '--benchmark':
+        benchmark_mode = True
+        args = args[1:]
+
+    if len(args) != 1:
+        print("Usage: python3 -m chutes.guest.config [--benchmark] <config.yaml>", file=sys.stderr)
         sys.exit(1)
 
-    config_file = sys.argv[1]
+    config_file = args[0]
 
     if not os.path.exists(config_file):
         print(f"Error: Config file not found: {config_file}", file=sys.stderr)
@@ -68,7 +77,8 @@ def main():
         print(f"Error reading config file: {e}", file=sys.stderr)
         sys.exit(1)
 
-    schema_path = os.path.join(_scripts_dir(), 'config', 'config-schema.json')
+    schema_name = 'config-schema.benchmark.json' if benchmark_mode else 'config-schema.json'
+    schema_path = os.path.join(_scripts_dir(), 'config', schema_name)
 
     if not validate_config(config, schema_path):
         print("\nConfig validation failed. Please fix the errors above.", file=sys.stderr)

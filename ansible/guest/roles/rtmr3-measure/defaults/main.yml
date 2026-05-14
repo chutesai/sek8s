@@ -1,0 +1,39 @@
+---
+# Files and directories whose contents are measured into TDX RTMR3 at boot.
+# Each entry is a path on the real root filesystem (no leading ${rootmnt}).
+# Directories are walked recursively; all collected paths are sorted
+# lexicographically before hashing to ensure a deterministic extend chain.
+rtmr3_measure_paths:
+  - /etc/ssh
+  - /etc/pam.d
+  - /etc/passwd
+  - /etc/shadow
+  - /etc/sudoers
+  - /etc/sudoers.d
+  - /etc/default/grub
+  - /root/.ssh
+  - /usr/local/bin/verify-access-config
+
+# Canonical paths whose SHA-384 hashes are computed at image build time and
+# embedded in /etc/tdx-rtmr3-expected-hashes, which is baked into the
+# initramfs (covered by RTMR1).  At boot the initramfs verifies each file's
+# actual hash matches the embedded constant before extending RTMR3; a mismatch
+# powers off the VM.
+#
+# Include every path whose content is fully determined at build time and is
+# identical across all sessions.  The only session-specific content is
+# /root/.ssh/authorized_keys (the partner's SSH public key), which is in
+# rtmr3_measure_paths but intentionally absent here.
+#
+# NOTE: /etc/ssh includes SSH host keys generated during the image build.
+# If those keys are ever regenerated at runtime (e.g. by cloud-init), boot
+# will fail.  That is the intended behaviour — any unexpected change is caught.
+rtmr3_canonical_paths:
+  - /etc/ssh
+  - /etc/pam.d
+  - /etc/passwd
+  - /etc/shadow
+  - /etc/sudoers
+  - /etc/sudoers.d
+  - /etc/default/grub
+  - /usr/local/bin/verify-access-config

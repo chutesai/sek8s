@@ -1,0 +1,7 @@
+---
+- name: Reload systemd daemon and restart benchmark-netlog
+  ansible.builtin.systemd:
+    name: benchmark-netlog
+    state: restarted
+    daemon_reload: true
+    enabled: true

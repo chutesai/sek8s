@@ -1,0 +1,213 @@
+---
+# tee-gpu-vm.yml — TEE GPU VM guest image build playbook.
+#
+# Builds a standalone GPU TEE VM image for partner access — benchmark
+# evaluation sessions, training runs, or other GPU workloads.  Completely
+# independent of chutes-miner-vm.yml: no k3s, no admission controller,
+# no system-manager, no cache volume.
+#
+# The partner provides their SSH public key via guest_ssh_keys in the
+# inventory; it is measured into RTMR3 and is the only authorised access path.
+#
+# Usage:
+#   ansible-playbook -i local/inventory.tee-gpu-vm.yml playbooks/tee-gpu-vm.yml
+
+- name: Confirm TEE GPU VM guest image build configuration
+  hosts: host
+  become: false
+  tags:
+    - always
+  tasks:
+    - name: Output build configuration
+      ansible.builtin.debug:
+        msg:
+          - "Build env: {{ build_env }}"
+          - "VM version: {{ vm_version }}"
+          - "Final image: {{ final_img_path }}"
+
+    - name: Assert guest_ssh_keys is non-empty
+      ansible.builtin.fail:
+        msg: "guest_ssh_keys must be a non-empty list — add partner public key(s) to inventory"
+      when: guest_ssh_keys | default([]) | length == 0
+
+    - name: Confirm intended build before starting VM
+      ansible.builtin.pause:
+        prompt: >-
+          Is this the intended TEE GPU VM build? The next step launches the TDX guest VM
+          toward {{ final_img_path }}. Press Enter to continue, or Ctrl+C to abort.
+
+- name: Run TDX guest image
+  hosts: host
+  become: true
+  tags:
+    - run-vm
+    - always
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include run TDX vm role
+      ansible.builtin.include_role:
+        name: run-vm
+
+- name: Common Setup
+  hosts: vm
+  become: true
+  tags:
+    - common
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include common role
+      ansible.builtin.include_role:
+        name: common
+
+- name: GPU Setup
+  hosts: vm
+  become: true
+  tags:
+    - gpu
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include gpu role
+      ansible.builtin.include_role:
+        name: gpu
+
+- name: Save GPU checkpoint
+  hosts: host
+  become: true
+  tags:
+    - checkpoint-gpu
+  tasks:
+    - name: Save GPU checkpoint
+      ansible.builtin.include_role:
+        name: save-checkpoint
+      vars:
+        checkpoint_img_path: "{{ gpu_img_path }}"
+
+- name: Install benchmark tools
+  hosts: vm
+  become: true
+  tags:
+    - benchmark
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Install benchmark tools
+      ansible.builtin.include_role:
+        name: benchmark
+        apply:
+          tags: benchmark
+
+- name: Harden SSH access
+  hosts: vm
+  become: true
+  tags:
+    - harden-ssh
+  tasks:
+    - name: Harden SSH access
+      ansible.builtin.include_role:
+        name: harden-ssh
+
+- name: Lock accounts
+  hosts: vm
+  become: true
+  tags:
+    - lock-accounts
+  tasks:
+    - name: Lock accounts
+      ansible.builtin.include_role:
+        name: lock-accounts
+
+- name: Disable console access
+  hosts: vm
+  become: true
+  tags:
+    - disable-console
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Disable console access
+      ansible.builtin.include_role:
+        name: disable-console
+
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
+
+- name: Extend RTMR3 with guest software stack
+  hosts: vm
+  become: true
+  tags:
+    - rtmr3-measure
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Extend RTMR3 with guest software stack
+      ansible.builtin.include_role:
+        name: rtmr3-measure
+
+- name: Setup SSH access
+  hosts: vm
+  become: true
+  tags:
+    - setup-ssh-access
+  tasks:
+    - name: Setup SSH access
+      ansible.builtin.include_role:
+        name: setup-ssh-access
+
+- name: Cleanup VM state
+  hosts: vm
+  become: true
+  any_errors_fatal: false
+  tags:
+    - cleanup-build-vm
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup VM state
+      ansible.builtin.include_role:
+        name: cleanup-build-vm
+
+- name: Finalize VM image
+  hosts: host
+  become: true
+  tags:
+    - finalize-vm-image
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Finalize VM image
+      ansible.builtin.include_role:
+        name: finalize-vm-image
+
+- name: Prime VM for stable TDX measurements
+  hosts: host
+  become: true
+  tags:
+    - prime-vm
+  tasks:
+    - name: Prime VM EFI boot variable state
+      ansible.builtin.include_role:
+        name: prime-vm
+        apply:
+          tags: prime-vm
+

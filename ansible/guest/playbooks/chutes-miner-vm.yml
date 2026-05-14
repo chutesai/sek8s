@@ -1,0 +1,339 @@
+---
+- name: Confirm guest image build configuration
+  hosts: host
+  become: false
+  tags:
+    - always
+  tasks:
+    - name: Output build configuration
+      ansible.builtin.debug:
+        msg:
+          - "Build env: {{ build_env }}"
+          - "VM version: {{ vm_version }}"
+          - "Debug build: {{ debug_build | default(false) }}"
+          - "Final image: {{ final_img_path }}"
+
+    - name: Confirm intended build before starting VM
+      ansible.builtin.pause:
+        prompt: >-
+          Is this the intended build? The next step launches the TDX guest VM toward this output path.
+          Press Enter to continue, or Ctrl+C to abort.
+
+- name: Run TDX guest image
+  hosts: host
+  become: true
+  tags:
+    - run-vm
+    - always
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include run TDX vm role
+      ansible.builtin.include_role:
+        name: run-vm
+
+- name: Common Setup
+  hosts: vm
+  become: true
+  tags:
+    - common
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include common role
+      ansible.builtin.include_role:
+        name: common
+
+- name: GPU Setup
+  hosts: vm
+  become: true
+  tags:
+    - gpu
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include gpu role
+      ansible.builtin.include_role:
+        name: gpu
+
+- name: Save GPU checkpoint
+  hosts: host
+  become: true
+  tags:
+    - checkpoint-gpu
+  tasks:
+    - name: Save GPU checkpoint
+      ansible.builtin.include_role:
+        name: save-checkpoint
+      vars:
+        checkpoint_img_path: "{{ gpu_img_path }}"
+
+- name: Setup K3S clusters
+  hosts: vm
+  become: true
+  tags:
+    - k3s
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include k3s role
+      ansible.builtin.include_role:
+        name: k3s
+
+- name: GPU verification service
+  hosts: vm
+  become: true
+  tags:
+    - gpu-verify
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: GPU verification service
+      ansible.builtin.include_role:
+        name: gpu-verify
+
+- name: Setup Chutes GPU Clusters
+  hosts: vm
+  become: true
+  tags:
+    - chutes-gpu
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Setup GPU Node
+      ansible.builtin.include_role:
+        name: chutes-gpu
+        apply:
+          tags: chutes-gpu
+
+- name: Install sek8s
+  hosts: vm
+  become: true
+  tags:
+    - sek8s
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: sek8s
+      ansible.builtin.include_role:
+        name: sek8s
+        apply:
+          tags: sek8s
+
+- name: Setup attestation-service
+  hosts: vm
+  become: true
+  tags:
+    - attestation-service
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Attestation service
+      ansible.builtin.include_role:
+        name: attestation-service
+        apply:
+          tags: attestation-service
+
+- name: Setup admission controller
+  hosts: vm
+  become: true
+  tags:
+    - admission-controller
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Admission controller
+      ansible.builtin.include_role:
+        name: admission-controller
+        apply:
+          tags: admission-controller
+
+- name: Setup system manager service (status + cache)
+  hosts: vm
+  become: true
+  tags:
+    - system-manager
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: System manager
+      ansible.builtin.include_role:
+        name: system-manager
+        apply:
+          tags: system-manager
+
+- name: Setup cache volume service
+  hosts: vm
+  become: true
+  tags:
+    - cache-volume
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cache volume setup
+      ansible.builtin.include_role:
+        name: cache-volume
+        apply:
+          tags: cache-volume
+
+- name: Add dyanmic config services
+  hosts: vm
+  become: true
+  any_errors_fatal: false
+  tags:
+    - config
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Config
+      ansible.builtin.include_role:
+        name: config
+        apply:
+          tags: config
+
+- name: Lock accounts
+  hosts: vm
+  become: true
+  tags:
+    - lock-accounts
+  tasks:
+    - name: Lock accounts
+      ansible.builtin.include_role:
+        name: lock-accounts
+      when: not (debug_build | default(false))
+
+- name: Disable console access
+  hosts: vm
+  become: true
+  tags:
+    - disable-console
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Disable console access
+      ansible.builtin.include_role:
+        name: disable-console
+
+- name: Security Hardening
+  hosts: vm
+  become: true
+  tags:
+    - security
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include security role
+      ansible.builtin.include_role:
+        name: security
+
+- name: Extend RTMR3 with guest software stack
+  hosts: vm
+  become: true
+  tags:
+    - rtmr3-measure
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Extend RTMR3 with guest software stack
+      ansible.builtin.include_role:
+        name: rtmr3-measure
+
+- name: Cleanup orchestration state
+  hosts: vm
+  become: true
+  any_errors_fatal: false
+  tags:
+    - cleanup-orchestration
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup orchestration state
+      ansible.builtin.include_role:
+        name: cleanup-orchestration
+
+- name: Cleanup VM state
+  hosts: vm
+  become: true
+  any_errors_fatal: false
+  tags:
+    - cleanup-build-vm
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Cleanup VM state
+      ansible.builtin.include_role:
+        name: cleanup-build-vm
+
+- name: Remove SSH
+  hosts: vm
+  become: true
+  tags:
+    - remove-ssh
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Remove SSH
+      ansible.builtin.include_role:
+        name: remove-ssh
+      when: not (debug_build | default(false))
+
+- name: Finalize VM image
+  hosts: host
+  become: true
+  tags:
+    - finalize-vm-image
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Finalize VM image
+      ansible.builtin.include_role:
+        name: finalize-vm-image
+
+- name: Encrypt disk
+  hosts: host
+  become: true
+  tags:
+    - luks
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Encrypt disk
+      ansible.builtin.include_role:
+        name: luks
+        apply:
+          tags: luks
+      when: not (debug_build | default(false))
+
+- name: Prime VM for stable TDX measurements
+  hosts: host
+  become: true
+  tags:
+    - prime-vm
+  tasks:
+    - name: Prime VM EFI boot variable state
+      ansible.builtin.include_role:
+        name: prime-vm
+        apply:
+          tags: prime-vm
+      when: not (debug_build | default(false))
+

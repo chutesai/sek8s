@@ -18,22 +18,7 @@
   tags:
     - system
 
-- name: Setup network
-  ansible.builtin.include_tasks: network.yml
+- name: Setup container networking
+  ansible.builtin.include_tasks: container-networking.yml
   tags:
-    - network
-
-- name: Setup k3s pre-reqs
-  ansible.builtin.include_tasks: k3s.yml
-  tags:
-    - k3s-prereqs
-
-- name: Setup k8s tooling
-  ansible.builtin.include_tasks: k8s.yml
-  tags:
-    - k8s-tools
-
-- name: Install helm
-  ansible.builtin.include_tasks: helm.yml
-  tags:
-    - helm
+    - container-networking

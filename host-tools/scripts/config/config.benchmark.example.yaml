@@ -1,0 +1,31 @@
+# Benchmark TEE VM Configuration
+# Partner SSH access only — no miner credentials, no cache/config volume.
+# Pass --benchmark to quick-launch.sh when using this config.
+
+vm:
+  hostname: chutes-benchmark-0
+  base_image: "/var/lib/chutes/base-images/tdx-guest-benchmark.qcow2"
+  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
+
+# miner block is not used in benchmark mode — omit entirely
+# (standard mode requires miner.ss58 and miner.seed)
+
+network:
+  vm_ip: "192.168.100.2"
+  bridge_ip: "192.168.100.1/24"
+  dns: "8.8.8.8"
+  public_interface: "ens9f0np0"
+  type: "tap"
+  ssh_port: 2222  # Partner SSHes via: ssh -p 2222 root@<host-public-ip>
+
+volumes:
+  # cache and config volumes are not used in benchmark mode
+  storage:
+    size: "2000G"  # Raw block device — partner partitions, LUKS-encrypts, and mounts inside guest
+    path: ""  # Auto-generate: storage-chutes-benchmark-0.raw
+
+devices:
+  bind_devices: true
+
+runtime:
+  foreground: false

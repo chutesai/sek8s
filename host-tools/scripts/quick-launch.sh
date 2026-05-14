@@ -45,6 +45,7 @@ SKIP_CHECKSUM="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
 EPHEMERAL="false"
+BENCHMARK="false"
 DOCKER_HUB_USERNAME=""
 DOCKER_HUB_TOKEN=""
 
@@ -71,6 +72,7 @@ CLI_SKIP_CHECKSUM=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 CLI_EPHEMERAL=""
+CLI_BENCHMARK=""
 CLI_DOWNLOAD=""
 CLI_DOCKER_HUB_USERNAME=""
 CLI_DOCKER_HUB_TOKEN=""
@@ -134,6 +136,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
+    --benchmark) CLI_BENCHMARK="true"; shift ;;
     --docker-hub-username) CLI_DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
     --force) CLI_FORCE="true"; shift ;;
@@ -226,8 +229,12 @@ Runtime:
 
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
+Benchmark Mode:
+  --benchmark               Launch in benchmark mode (no miner creds, no cache/config volume,
+                            auto-installs and starts benchmark-netlog service)
+
 Management:
-  --clean                   Stop VM and remove bridge/iptables rules (pass config for correct interface)
+  --clean                   Clean up VM, bridge, and benchmark-netlog service (if running)
   --download                Download VM base image (production) to /var/lib/chutes/base-images/
   --download-debug          Download VM debug image to /var/lib/chutes/base-images/
   --force                   Allow launch even if a chutes-td QEMU instance appears running (unsafe)
@@ -245,6 +252,9 @@ Examples:
   # Download VM base image (before first run)
   $0 --download
   $0 --download-debug        # Debug image (SSH, no encryption)
+
+  # Benchmark launch (image is built on-server via Ansible, not downloaded)
+  $0 --benchmark config.benchmark.yaml
 
   # Command line only
   $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
@@ -280,8 +290,14 @@ if [[ -n "$CONFIG_FILE" ]]; then
     exit 1
   fi
 
+  # Pre-scan for --benchmark so the correct schema is used during validation.
+  # CLI_BENCHMARK is not yet applied to BENCHMARK at this point in the script,
+  # so we check the raw CLI variable directly.
+  CONFIG_SCHEMA_FLAG=""
+  [[ "$CLI_BENCHMARK" == "true" ]] && CONFIG_SCHEMA_FLAG="--benchmark"
+
   set +e
-  CONFIG_OUTPUT=$(python3 -m chutes.guest.config "$CONFIG_FILE" 2>&1)
+  CONFIG_OUTPUT=$(python3 -m chutes.guest.config $CONFIG_SCHEMA_FLAG "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
   set -e
 
@@ -323,6 +339,7 @@ fi
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
 [[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
 [[ -n "$CLI_EPHEMERAL" ]] && EPHEMERAL="$CLI_EPHEMERAL"
+[[ -n "$CLI_BENCHMARK" ]] && BENCHMARK="$CLI_BENCHMARK"
 
 if [[ -n "$CLI_DOCKER_HUB_USERNAME" || -n "$CLI_DOCKER_HUB_TOKEN" ]]; then
   if [[ -z "$CLI_DOCKER_HUB_USERNAME" || -z "$CLI_DOCKER_HUB_TOKEN" ]]; then
@@ -382,7 +399,24 @@ if [[ "$CLI_CLEAN" == "true" ]]; then
     --bridge-ip "$BRIDGE_IP" \
     --vm-ip "${VM_IP}/24" \
     --public-iface "$PUBLIC_IFACE" 2>/dev/null || true
+
+
+  if systemctl is-active --quiet benchmark-netlog 2>/dev/null; then
+    echo "Stopping benchmark network logging service..."
+    sudo systemctl stop benchmark-netlog
+    echo "✓ benchmark-netlog stopped"
+  fi
+
   exit 0
+fi
+
+# Benchmark mode: set defaults before the general defaults below
+if [[ "$BENCHMARK" == "true" ]]; then
+  [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest-benchmark.qcow2"
+  SKIP_CHECKSUM="true"
+  # Miner credentials are not used in benchmark mode; set placeholders to satisfy any downstream checks
+  [[ -z "$MINER_SS58" ]] && MINER_SS58="benchmark"
+  [[ -z "$MINER_SEED" ]] && MINER_SEED="benchmark"
 fi
 
 # Default base image and overlay directory when not specified
@@ -402,18 +436,29 @@ fi
 # --------------------------------------------------------------------
 # Validate required parameters (must come from YAML or CLI)
 # --------------------------------------------------------------------
-if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" ]]; then
-  echo "Error: Missing required configuration:"
-  [[ -z "$HOSTNAME" ]] && echo "  - hostname (vm.hostname or --hostname)"
-  [[ -z "$MINER_SS58" ]] && echo "  - miner.ss58 (miner.ss58 or --miner-ss58)"
-  [[ -z "$MINER_SEED" ]] && echo "  - miner.seed (miner.seed or --miner-seed)"
-  echo ""
-  echo "Provide via config file or command line, for example:"
-  echo "  $0 --template        # create config.yaml template"
-  echo "  $0 config.yaml       # and edit it"
-  echo "or"
-  echo "  $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'"
-  exit 1
+if [[ "$BENCHMARK" == "true" ]]; then
+  if [[ -z "$HOSTNAME" ]]; then
+    echo "Error: Missing required configuration:"
+    echo "  - hostname (vm.hostname or --hostname)"
+    echo ""
+    echo "Provide via config file or command line, for example:"
+    echo "  $0 --benchmark config.benchmark.yaml"
+    exit 1
+  fi
+else
+  if [[ -z "$HOSTNAME" || -z "$MINER_SS58" || -z "$MINER_SEED" ]]; then
+    echo "Error: Missing required configuration:"
+    [[ -z "$HOSTNAME" ]] && echo "  - hostname (vm.hostname or --hostname)"
+    [[ -z "$MINER_SS58" ]] && echo "  - miner.ss58 (miner.ss58 or --miner-ss58)"
+    [[ -z "$MINER_SEED" ]] && echo "  - miner.seed (miner.seed or --miner-seed)"
+    echo ""
+    echo "Provide via config file or command line, for example:"
+    echo "  $0 --template        # create config.yaml template"
+    echo "  $0 config.yaml       # and edit it"
+    echo "or"
+    echo "  $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'"
+    exit 1
+  fi
 fi
 
 if [[ -z "$CACHE_VOLUME" ]]; then
@@ -427,12 +472,15 @@ fi
 echo ""
 echo "=== TEE VM Orchestration ==="
 echo "Config source: ${CONFIG_FILE:-command line only}"
+echo "Mode: $([[ "$BENCHMARK" == "true" ]] && echo "benchmark" || echo "standard")"
 echo "Hostname: $HOSTNAME"
 echo "Base image: $BASE_IMAGE"
 echo "Overlay dir: $OVERLAY_DIR"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
-echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
+if [[ "$BENCHMARK" != "true" ]]; then
+  echo "Cache volume: $CACHE_VOLUME ($CACHE_SIZE)"
+fi
 echo "Storage volume: $STORAGE_VOLUME ($STORAGE_SIZE)"
 echo "Binding: $([[ "$SKIP_BIND" == "true" ]] && echo "Skipped" || echo "Enabled")"
 echo "Network: $NETWORK_TYPE"
@@ -519,31 +567,33 @@ echo ""
 
 
 # --------------------------------------------------------------------
-# Cache volume (required)
+# Cache volume (not used in benchmark mode — partner manages storage directly)
 # --------------------------------------------------------------------
-echo "Step 2: Preparing cache volume..."
-if [[ -z "$CACHE_VOLUME" ]]; then
-  echo "✗ Error: CACHE_VOLUME is unset"
-  exit 1
-fi
+if [[ "$BENCHMARK" != "true" ]]; then
+  echo "Step 2: Preparing cache volume..."
+  if [[ -z "$CACHE_VOLUME" ]]; then
+    echo "✗ Error: CACHE_VOLUME is unset"
+    exit 1
+  fi
 
-if [[ -f "$CACHE_VOLUME" ]] || [[ -b "$CACHE_VOLUME" ]]; then
-  echo "✓ Using existing cache volume: $CACHE_VOLUME"
-else
-  if [[ "$CACHE_VOLUME" == *.qcow2 ]]; then
-    echo "✗ Error: qcow2 volumes cannot be created. Use .raw for new volumes (e.g. cache-${HOSTNAME}.raw)"
-    echo "  Existing qcow2 volumes can still be used if they already exist."
-    exit 1
-  fi
-  echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
-  if sudo ./volumes/create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" "tdx-cache"; then
-    echo "✓ Cache volume created"
+  if [[ -f "$CACHE_VOLUME" ]] || [[ -b "$CACHE_VOLUME" ]]; then
+    echo "✓ Using existing cache volume: $CACHE_VOLUME"
   else
-    echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
-    exit 1
+    if [[ "$CACHE_VOLUME" == *.qcow2 ]]; then
+      echo "✗ Error: qcow2 volumes cannot be created. Use .raw for new volumes (e.g. cache-${HOSTNAME}.raw)"
+      echo "  Existing qcow2 volumes can still be used if they already exist."
+      exit 1
+    fi
+    echo "Creating cache volume at: $CACHE_VOLUME ($CACHE_SIZE)"
+    if sudo ./volumes/create-cache.sh "$CACHE_VOLUME" "$CACHE_SIZE" "tdx-cache"; then
+      echo "✓ Cache volume created"
+    else
+      echo "✗ Error: Failed to create cache volume at $CACHE_VOLUME"
+      exit 1
+    fi
   fi
+  echo ""
 fi
-echo ""
 
 # --------------------------------------------------------------------
 # Storage volume (required for VM storage - used for containerd and kubelet-pods)
@@ -574,7 +624,7 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Config volume
+# Config volume (hostname + network for all modes; miner creds for production only)
 # --------------------------------------------------------------------
 echo "Step 4: Setting up config volume..."
 if [[ -z "$CONFIG_VOLUME" ]]; then
@@ -585,11 +635,22 @@ if [[ -f "$CONFIG_VOLUME" ]]; then
 else
   echo "Creating config volume: $CONFIG_VOLUME"
 fi
-if run_create_config "$CONFIG_VOLUME"; then
-  echo "✓ Config volume ready"
+if [[ "$BENCHMARK" == "true" ]]; then
+  # Benchmark: config volume carries hostname + network config only.
+  # Pass empty miner credentials so create-config.sh skips writing those files.
+  if sudo ./volumes/create-config.sh "$CONFIG_VOLUME" "$HOSTNAME" "" "" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"; then
+    echo "✓ Config volume ready (benchmark: no miner credentials)"
+  else
+    echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
+    exit 1
+  fi
 else
-  echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
-  exit 1
+  if run_create_config "$CONFIG_VOLUME"; then
+    echo "✓ Config volume ready"
+  else
+    echo "✗ Error: Failed to set up config volume at $CONFIG_VOLUME"
+    exit 1
+  fi
 fi
 echo ""
 
@@ -634,6 +695,52 @@ else
 fi
 
 # --------------------------------------------------------------------
+# Benchmark network logging (install + start if in benchmark mode)
+# Installs from repo-relative ./network/ to ensure the running version
+# is always in sync with the checked-out scripts.
+# --------------------------------------------------------------------
+if [[ "$BENCHMARK" == "true" && "$NETWORK_TYPE" == "tap" ]]; then
+  echo "Step 5b: Installing and starting benchmark network logging service..."
+
+  NETLOG_SCRIPT_SRC="./network/benchmark-netlog.sh"
+  NETLOG_SERVICE_SRC="./network/benchmark-netlog.service"
+  NETLOG_LOGRORATE_SRC="./network/benchmark-netlog.logrotate"
+  NETLOG_SCRIPT_DST="/usr/local/bin/benchmark-netlog.sh"
+  NETLOG_SERVICE_DST="/etc/systemd/system/benchmark-netlog.service"
+  NETLOG_LOGROTATE_DST="/etc/logrotate.d/benchmark-netlog"
+  NETLOG_ENV_DIR="/etc/chutes"
+  NETLOG_ENV_FILE="$NETLOG_ENV_DIR/benchmark-netlog.env"
+
+  for src in "$NETLOG_SCRIPT_SRC" "$NETLOG_SERVICE_SRC" "$NETLOG_LOGRORATE_SRC"; do
+    if [[ ! -f "$src" ]]; then
+      echo "✗ Error: $src not found. Run from the host-tools/scripts/ directory."
+      exit 1
+    fi
+  done
+
+  sudo install -m 0755 "$NETLOG_SCRIPT_SRC" "$NETLOG_SCRIPT_DST"
+  sudo install -m 0644 "$NETLOG_SERVICE_SRC" "$NETLOG_SERVICE_DST"
+  sudo install -m 0644 "$NETLOG_LOGRORATE_SRC" "$NETLOG_LOGROTATE_DST"
+
+  # Create env file with bridge subnet if not already present (operator can customise)
+  if [[ ! -f "$NETLOG_ENV_FILE" ]]; then
+    sudo mkdir -p "$NETLOG_ENV_DIR"
+    sudo tee "$NETLOG_ENV_FILE" > /dev/null <<EOF
+BRIDGE_SUBNET=${BRIDGE_IP}
+NETLOG_DIR=/var/log/chutes/benchmark-netlog
+EOF
+    echo "  Created $NETLOG_ENV_FILE (customise BRIDGE_SUBNET / NETLOG_DIR as needed)"
+  fi
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable benchmark-netlog 2>/dev/null || true
+  sudo systemctl restart benchmark-netlog
+  echo "✓ benchmark-netlog service installed and running"
+  echo "  Logs: /var/log/chutes/benchmark-netlog/"
+  echo ""
+fi
+
+# --------------------------------------------------------------------
 # Launch VM
 # --------------------------------------------------------------------
 echo "Launching Chutes VM..."
@@ -641,7 +748,6 @@ echo "Launching Chutes VM..."
 LAUNCH_ARGS=(
   --pass-gpus
   --image "$OVERLAY_IMAGE"
-  --config-volume "$CONFIG_VOLUME"
   --network-type "$NETWORK_TYPE"
 )
 
@@ -649,9 +755,17 @@ if [[ "$NETWORK_TYPE" == "tap" ]]; then
   LAUNCH_ARGS+=(--net-iface "$NET_IFACE")
 fi
 
-# Additional args
-LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
-LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
+if [[ "$BENCHMARK" == "true" ]]; then
+  # Benchmark: no cache volume (partner manages storage directly via luks-setup).
+  # Config volume IS created (hostname + network config only, no miner creds).
+  LAUNCH_ARGS+=(--ssh)
+  LAUNCH_ARGS+=(--config-volume "$CONFIG_VOLUME")
+  LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
+else
+  LAUNCH_ARGS+=(--config-volume "$CONFIG_VOLUME")
+  LAUNCH_ARGS+=(--cache-volume "$CACHE_VOLUME")
+  LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
+fi
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner

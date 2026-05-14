@@ -1,0 +1,171 @@
+---
+# rtmr3-measure — Extend TDX RTMR3 with SHA-384 hashes of configured paths.
+#
+# Installs an initramfs hook that extends RTMR3 with SHA-384 hashes of
+# configured files on the real root filesystem at every boot, before
+# pivot_root.  Because the hook script and its config are baked into the
+# initramfs (covered by RTMR1), neither can be tampered with without
+# changing RTMR1.  Any offline modification to a measured file (e.g. SSH
+# key injection) produces a different RTMR3 that verifiers can detect.
+#
+# Canonical files (e.g. verify-access-config) have their SHA-384 hashes
+# computed at build time and embedded in /etc/tdx-rtmr3-expected-hashes,
+# which is also baked into the initramfs.  At boot the initramfs verifies
+# each canonical file's hash matches the embedded constant before extending
+# RTMR3.  A mismatch powers off the VM.  This roots the integrity of the
+# runtime verification tool in RTMR1: to tamper with verify-access-config
+# AND still boot, an attacker must change the initramfs, which changes RTMR1.
+#
+# The initramfs script is fatal: any failure (TDX device unavailable, missing
+# config, hash mismatch, hash error, or extend error) powers off the VM rather
+# than allowing it to boot with an incomplete or unverifiable RTMR3.
+#
+# tdx-rtmr-extend uses the tsm-mr sysfs interface (merged Linux 6.16):
+#   /sys/class/misc/tdx_guest/measurements/rtmrN:sha384
+# No external libraries required — only build-essential for gcc.
+#
+# This role notifies the global "update initramfs" handler so the hook is
+# included in the initramfs image.  For LUKS builds, the LUKS role also
+# rebuilds the initramfs in a chroot — our hook files on disk will be
+# picked up at that point as well.
+
+# ── Build tdx-rtmr-extend binary ────────────────────────────────────────────
+
+- name: Ensure build tools are present
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - gcc
+    state: present
+
+- name: Copy tdx-rtmr-extend source
+  ansible.builtin.copy:
+    src: tdx-rtmr-extend.c
+    dest: /tmp/tdx-rtmr-extend.c
+    mode: '0644'
+
+- name: Compile tdx-rtmr-extend
+  ansible.builtin.shell: gcc -O2 -o /tmp/tdx-rtmr-extend /tmp/tdx-rtmr-extend.c
+  args:
+    chdir: /tmp
+
+- name: Remove immutable flag from tdx-rtmr-extend (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/tdx-rtmr-extend 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install tdx-rtmr-extend binary
+  ansible.builtin.copy:
+    src: /tmp/tdx-rtmr-extend
+    dest: /usr/local/bin/tdx-rtmr-extend
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set tdx-rtmr-extend immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/tdx-rtmr-extend
+  changed_when: false
+
+- name: Remove temporary tdx-rtmr-extend build artefacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tdx-rtmr-extend.c
+    - /tmp/tdx-rtmr-extend
+
+# ── Install verification script ──────────────────────────────────────────────
+# The script is made immutable after install.  Even root cannot modify it
+# without first running `chattr -i`.  This prevents accidents — any change
+# would cause a boot-time hash mismatch and power off the VM.
+# The chattr -i before the copy makes the role idempotent on re-runs.
+
+- name: Remove immutable flag from verify-access-config (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/verify-access-config 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install verify-access-config
+  ansible.builtin.copy:
+    src: verify-access-config
+    dest: /usr/local/bin/verify-access-config
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set verify-access-config immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/verify-access-config
+  changed_when: false
+
+# ── Write measurement config ─────────────────────────────────────────────────
+
+- name: Write /etc/tdx-measure.conf
+  ansible.builtin.template:
+    src: tdx-measure.conf.j2
+    dest: /etc/tdx-measure.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── Compute and embed expected hashes for canonical files ────────────────────
+# Hashes are computed here (at build time) and written to
+# /etc/tdx-rtmr3-expected-hashes.  The hook copies that file into the
+# initramfs, so the constants are covered by RTMR1.  At boot the initramfs
+# verifies each canonical file's actual hash matches before extending RTMR3.
+
+- name: Remove immutable flag from /etc/tdx-rtmr3-expected-hashes (idempotency)
+  ansible.builtin.shell: chattr -i /etc/tdx-rtmr3-expected-hashes 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Compute and write /etc/tdx-rtmr3-expected-hashes
+  ansible.builtin.shell: |
+    {
+      printf '# Expected SHA-384 hashes for canonical files verified at boot.\n'
+      printf '# Generated at image build time — baked into the initramfs (covered by RTMR1).\n'
+      printf '# Any mismatch at boot causes the VM to power off rather than boot\n'
+      printf '# with a potentially tampered verification tool.\n'
+      printf '# Format: <absolute-path> <sha384hex>\n'
+      printf '# The only session-specific content (/root/.ssh/authorized_keys) is\n'
+      printf '# intentionally absent — it is measured but not pre-verified.\n'
+      {% for path in rtmr3_canonical_paths %}
+      if [ -f "{{ path }}" ]; then
+        sha384sum "{{ path }}" | awk '{ print $2 " " $1 }'
+      elif [ -d "{{ path }}" ]; then
+        find "{{ path }}" -type f | sort | while IFS= read -r f; do
+          sha384sum "$f" | awk '{ print $2 " " $1 }'
+        done
+      fi
+      {% endfor %}
+    } > /etc/tdx-rtmr3-expected-hashes
+  args:
+    executable: /bin/bash
+  notify: update initramfs
+
+- name: Set /etc/tdx-rtmr3-expected-hashes immutable
+  ansible.builtin.command: chattr +i /etc/tdx-rtmr3-expected-hashes
+  changed_when: false
+
+# ── Install initramfs hook and init-bottom script ────────────────────────────
+
+- name: Install initramfs hook (rtmr3-measure)
+  ansible.builtin.copy:
+    src: initramfs/rtmr3-measure-hook
+    dest: /etc/initramfs-tools/hooks/rtmr3-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+- name: Install initramfs init-bottom script (rtmr3-measure)
+  ansible.builtin.copy:
+    src: initramfs/rtmr3-measure
+    dest: /etc/initramfs-tools/scripts/init-bottom/rtmr3-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
