@@ -223,6 +223,15 @@
     mode: '0644'
   notify: reload systemd
 
+- name: Write rtmr3-verify environment file (debug builds — warn only)
+  when: _bind_mounts_script.stat.exists and (debug_build | default(false))
+  ansible.builtin.copy:
+    dest: /etc/default/rtmr3-verify
+    content: "RTMR3_VERIFY_DEBUG_MODE=true\n"
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Enable rtmr3-verify service
   when: _bind_mounts_script.stat.exists
   ansible.builtin.systemd:

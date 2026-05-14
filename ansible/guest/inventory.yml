@@ -18,7 +18,7 @@ all:
     tdx_base_url: "https://tdx-attestation.example.com:8443"
     build_env: "prod"
     prime_wait_timeout: 300
-    gpu_verify_debug_mode: false
+
     debug_build: false
     # List of SSH public key strings for guest access (required when using tee-gpu-vm.yml)
     guest_ssh_keys: []

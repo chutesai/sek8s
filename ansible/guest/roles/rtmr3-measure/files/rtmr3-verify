@@ -50,6 +50,10 @@ QUOTE_RTMR3_OFF  = 520
 QUOTE_RTMR3_LEN  = 48
 POWEROFF_DELAY   = 10
 
+# When true: log warnings instead of powering off on any failure or mismatch.
+# Set via RTMR3_VERIFY_DEBUG_MODE=true in /etc/default/rtmr3-verify (debug builds only).
+DEBUG_MODE = os.environ.get("RTMR3_VERIFY_DEBUG_MODE", "false").lower() == "true"
+
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -62,6 +66,10 @@ def _kmsg(msg: str) -> None:
 
 
 def fatal(msg: str) -> None:
+    if DEBUG_MODE:
+        print(f"rtmr3-verify: WARNING (debug mode — would poweroff): {msg}", file=sys.stderr)
+        _kmsg(f"WARNING (debug mode): {msg}")
+        return
     print(f"rtmr3-verify: FATAL: {msg}", file=sys.stderr)
     _kmsg(f"FATAL: {msg}")
     print(
@@ -223,11 +231,12 @@ def main() -> None:
         _kmsg(f"PASS — RTMR3 verified ({len(files)} files)")
         sys.exit(0)
 
-    # Mismatch: log details and power off.
+    # Mismatch: log details then fatal (poweroff in production, warn in debug).
     _kmsg(
         f"RTMR3 MISMATCH: computed={expected.hex()} hardware={hardware.hex()}"
     )
-    print("rtmr3-verify: FAIL — RTMR3 mismatch", file=sys.stderr)
+    label = "WARNING (debug mode)" if DEBUG_MODE else "FAIL"
+    print(f"rtmr3-verify: {label} — RTMR3 mismatch", file=sys.stderr)
     print(f"  computed: {expected.hex()}", file=sys.stderr)
     print(f"  hardware: {hardware.hex()}", file=sys.stderr)
     print("\nrtmr3-verify: per-file hashes (current filesystem):", file=sys.stderr)

@@ -13,6 +13,7 @@ Requires=setup-storage-bind-mounts.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/default/rtmr3-verify
 ExecStart=/usr/local/bin/rtmr3-verify
 RemainAfterExit=yes
 TimeoutStartSec=120
