@@ -1,0 +1,50 @@
+---
+# Install a persistent k3s encryption key for debug builds.
+#
+# In production the encryption key is fetched from the attestation API during
+# initramfs and written to /run/chutes/k3s-encryption-config.yaml (ephemeral
+# tmpfs).  Debug VMs skip initramfs, so nothing ever writes that file and k3s
+# starts without encryption.
+#
+# This task bakes a random key into /etc/chutes/k3s-encryption-config.yaml at
+# image build time.  A k3s drop-in (installed by cleanup-orchestration) then
+# copies it to /run/chutes/ as ExecStartPre on every boot, keeping the path
+# that k3s-config-init.sh checks identical for both environments.
+#
+# Security note: the key is static and embedded in the debug image — not
+# secret.  Debug builds are not production-hardened; the goal is code-path
+# parity, not key secrecy.
+
+- name: Generate debug k3s encryption key
+  ansible.builtin.shell:
+    cmd: openssl rand -base64 32
+  register: _debug_k3s_key
+  changed_when: false
+
+- name: Create /etc/chutes directory
+  ansible.builtin.file:
+    path: /etc/chutes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Write debug k3s encryption config
+  ansible.builtin.copy:
+    content: |
+      apiVersion: apiserver.config.k8s.io/v1
+      kind: EncryptionConfiguration
+      resources:
+        - resources:
+            - secrets
+            - configmaps
+          providers:
+            - secretbox:
+                keys:
+                  - name: key1
+                    secret: {{ _debug_k3s_key.stdout }}
+            - identity: {}
+    dest: /etc/chutes/k3s-encryption-config.yaml
+    owner: root
+    group: root
+    mode: '0600'

@@ -124,19 +124,37 @@ cluster-cidr: 10.42.0.0/16
 service-cidr: 10.43.0.0/16
 EOF
 
-# Enable authorization webhook if config file exists (deployed by cleanup role at build time)
+# Build kube-apiserver-arg list.  Both encryption and the authorization webhook
+# are kube-apiserver flags; they must be passed via kube-apiserver-arg, not as
+# top-level k3s config keys (unknown top-level keys are silently ignored by k3s).
+ENCRYPTION_CONFIG="/run/chutes/k3s-encryption-config.yaml"
+KUBE_API_ARGS=()
+
+if [ -f "$ENCRYPTION_CONFIG" ]; then
+    KUBE_API_ARGS+=("encryption-provider-config=${ENCRYPTION_CONFIG}")
+    log "Secrets encryption enabled: $ENCRYPTION_CONFIG"
+else
+    log "WARNING: $ENCRYPTION_CONFIG not found — k3s will start without secrets encryption"
+fi
+
 if [ -f "$AUTHZ_WEBHOOK_CONFIG" ]; then
-    cat >> /etc/rancher/k3s/config.yaml << EOF
-kube-apiserver-arg:
-  - "authorization-mode=Node,Webhook,RBAC"
-  - "authorization-webhook-config-file=${AUTHZ_WEBHOOK_CONFIG}"
-  - "authorization-webhook-version=v1"
-  - "authorization-webhook-cache-authorized-ttl=5m"
-  - "authorization-webhook-cache-unauthorized-ttl=2m"
-EOF
+    KUBE_API_ARGS+=(
+        "authorization-mode=Node,Webhook,RBAC"
+        "authorization-webhook-config-file=${AUTHZ_WEBHOOK_CONFIG}"
+        "authorization-webhook-version=v1"
+        "authorization-webhook-cache-authorized-ttl=5m"
+        "authorization-webhook-cache-unauthorized-ttl=2m"
+    )
     log "Authorization webhook enabled: $AUTHZ_WEBHOOK_CONFIG"
 else
     log "Authorization webhook config not found, using default authorization (Node,RBAC)"
+fi
+
+if [ ${#KUBE_API_ARGS[@]} -gt 0 ]; then
+    echo "kube-apiserver-arg:" >> /etc/rancher/k3s/config.yaml
+    for arg in "${KUBE_API_ARGS[@]}"; do
+        echo "  - \"${arg}\"" >> /etc/rancher/k3s/config.yaml
+    done
 fi
 
 # Log the configuration for debugging
