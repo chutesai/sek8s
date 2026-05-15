@@ -397,9 +397,7 @@ def test_mutate_pod_update_skips_sa_token_patch(client):
             "operation": "UPDATE",
             "namespace": "chutes",
             "kind": {"kind": "Pod"},
-            "object": {
-                "spec": {"containers": [{"name": "app", "image": "busybox"}]}
-            },
+            "object": {"spec": {"containers": [{"name": "app", "image": "busybox"}]}},
         },
     }
     resp = client.post("/mutate", json=review)

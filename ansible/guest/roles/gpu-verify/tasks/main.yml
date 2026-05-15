@@ -37,7 +37,7 @@
 - name: Create systemd service unit file for GPU verification
   ansible.builtin.template:
     src: gpu-verify.service.j2
-    dest: /etc/systemd/system/{{ gpu_verify_service_name }}
+    dest: /etc/systemd/system/gpu-verify.service
     mode: '0644'
   register: service_created
   tags: service
@@ -51,7 +51,7 @@
 # Don't enable by default during multi-phase builds. Let cleanup/enable step enable it.
 - name: Set GPU verify service state
   systemd:
-    name: "{{ gpu_verify_service_name }}"
+    name: gpu-verify.service
     enabled: no
     state: stopped
   tags: service

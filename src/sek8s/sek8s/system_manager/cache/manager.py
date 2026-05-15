@@ -798,5 +798,7 @@ class CacheManager:
 
         results = await asyncio.gather(*(c.purge_stale_revisions() for c in chutes))
         total = sum(results)
-        logger.info("Purged stale HF revisions: {}B freed across {} chutes", total, len(chutes))
+        logger.info(
+            "Purged stale HF revisions: {}B freed across {} chutes", total, len(chutes)
+        )
         return total

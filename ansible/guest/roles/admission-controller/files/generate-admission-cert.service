@@ -1,0 +1,22 @@
+[Unit]
+Description=Generate per-VM admission controller TLS server certificate
+Documentation=file:/usr/local/bin/generate-admission-cert
+# Certs live on the storage bind-mount; must run after mounts are active and
+# after rtmr3-verify confirms RTMR3 integrity.
+After=setup-storage-bind-mounts.service
+After=rtmr3-verify.service
+Requires=setup-storage-bind-mounts.service
+Requires=rtmr3-verify.service
+# Must complete before the admission controller starts using the cert.
+Before=admission-controller.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/generate-admission-cert
+RemainAfterExit=yes
+TimeoutStartSec=120
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
