@@ -24,7 +24,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -37,7 +37,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -50,7 +50,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     

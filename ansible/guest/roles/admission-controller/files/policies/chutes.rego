@@ -305,6 +305,7 @@ chutes_agent_sa_token_exempt if {
 
 chutes_agent_sa_token_exempt if {
 	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_system_or_controller_user
 	input.request.object.spec.template.metadata.labels["app.kubernetes.io/name"] == "agent"
 	has_agent_image(input.request.object.spec.template.spec)
 }
@@ -377,11 +378,31 @@ deny contains msg if {
 deny contains msg if {
 	chutes_apply_pod_spec_rules
 	input.request.namespace == "chutes"
+	input.request.kind.kind == "Pod"
+	helpers.is_pod_resource
+	container := input.request.object.spec.ephemeralContainers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: ephemeral container '%s' must not use envFrom", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
 	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
 	helpers.is_pod_resource
 	container := input.request.object.spec.template.spec.containers[_]
 	container.envFrom
 	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
+	helpers.is_pod_resource
+	container := input.request.object.spec.template.spec.initContainers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: init container '%s' must not use envFrom", [container.name])
 }
 
 deny contains msg if {
@@ -412,6 +433,16 @@ deny contains msg if {
 	container := input.request.object.spec.jobTemplate.spec.template.spec.containers[_]
 	container.envFrom
 	msg := sprintf("Chutes namespace: container '%s' must not use envFrom (use explicit env[] entries)", [container.name])
+}
+
+deny contains msg if {
+	chutes_apply_pod_spec_rules
+	input.request.namespace == "chutes"
+	input.request.kind.kind == "CronJob"
+	helpers.is_pod_resource
+	container := input.request.object.spec.jobTemplate.spec.template.spec.initContainers[_]
+	container.envFrom
+	msg := sprintf("Chutes namespace: init container '%s' must not use envFrom", [container.name])
 }
 
 # =============================================================================
@@ -533,7 +564,7 @@ deny contains msg if {
 deny contains msg if {
 	chutes_apply_pod_spec_rules
 	input.request.namespace == "chutes"
-	input.request.kind.kind in ["Deployment", "StatefulSet", "ReplicaSet"]
+	input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
 	helpers.is_pod_resource
 	volume := input.request.object.spec.template.spec.volumes[_]
 	not chutes_is_allowed_volume_type(volume)

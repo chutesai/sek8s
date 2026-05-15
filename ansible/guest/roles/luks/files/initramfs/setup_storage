@@ -455,7 +455,12 @@ purge_admin_kubeconfig() {
         umount "$mnt" 2>/dev/null || true
         rmdir "$mnt" 2>/dev/null || true
         if [ -n "$kubeconfig_hash" ]; then
-            tdx-rtmr-extend --index 3 --data "$kubeconfig_hash" 2>/dev/null || true
+            if ! tdx-rtmr-extend --index 3 --data "$kubeconfig_hash" 2>/dev/null; then
+                log_failure_msg "FATAL: tdx-rtmr-extend failed — powering off"
+                echo "SETUP-STORAGE: tdx-rtmr-extend failed" > /dev/kmsg 2>/dev/null || true
+                sleep 5
+                poweroff -f
+            fi
         fi
         return 1
     fi
@@ -532,7 +537,10 @@ setup_storage() {
     # Rotate passphrase: add next slot while current is still valid.
     # luksRemoveKey for the old slot is deferred until the API confirms, so a
     # crash between here and confirm always leaves the volume openable.
-    if [ -n "$STORAGE_KEY_NEXT" ]; then
+    # Skip rotation entirely if the API did not provide a confirm_nonce — without
+    # it we cannot finalize, and adding a slot we can never confirm would leave
+    # the volume in a permanently dual-slot state.
+    if [ -n "$STORAGE_KEY_NEXT" ] && [ -n "$CONFIRM_NONCE" ]; then
         log_begin_msg "Adding next storage key slot (rotation)"
         if luks_add_key "$STORAGE_DEVICE" "$STORAGE_KEY" "$STORAGE_KEY_NEXT"; then
             STORAGE_KEY_ADDED=1
@@ -540,6 +548,8 @@ setup_storage() {
         else
             log_failure_msg "luksAddKey failed for storage (non-fatal, current slot unchanged)"
         fi
+    elif [ -n "$STORAGE_KEY_NEXT" ]; then
+        log_failure_msg "Storage rotation key present but no confirm_nonce — skipping rotation"
     fi
 
     return 0
@@ -595,11 +605,10 @@ setup_cache() {
             log_failure_msg "Failed to format cache"
             return 1
         fi
-        CACHE_OPENED_WITH="initial"
         log_success_msg "Cache encrypted and formatted"
     fi
 
-    if [ -n "$CACHE_KEY_NEXT" ]; then
+    if [ -n "$CACHE_KEY_NEXT" ] && [ -n "$CONFIRM_NONCE" ]; then
         log_begin_msg "Adding next cache key slot (rotation)"
         if luks_add_key "$CACHE_DEVICE" "$CACHE_KEY" "$CACHE_KEY_NEXT"; then
             CACHE_KEY_ADDED=1
@@ -607,6 +616,8 @@ setup_cache() {
         else
             log_failure_msg "luksAddKey failed for cache (non-fatal, current slot unchanged)"
         fi
+    elif [ -n "$CACHE_KEY_NEXT" ]; then
+        log_failure_msg "Cache rotation key present but no confirm_nonce — skipping rotation"
     fi
 
     return 0

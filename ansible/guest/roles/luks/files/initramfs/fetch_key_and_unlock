@@ -35,7 +35,6 @@ API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 
 # Global variables
 LUKS_KEY=""
-BOOT_TOKEN=""
 LUKS_QUOTE_NONCE=""  # single-use nonce for the init-bottom POST /luks quote
 VM_NAME=""
 HOTKEY=""
@@ -49,12 +48,6 @@ clear_luks_key() {
         LUKS_KEY="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
         LUKS_KEY=""
         unset LUKS_KEY
-    fi
-    
-    if [ -n "$BOOT_TOKEN" ]; then
-        BOOT_TOKEN="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
-        BOOT_TOKEN=""
-        unset BOOT_TOKEN
     fi
     
     # Clear any temporary files that might contain sensitive data.
@@ -372,7 +365,6 @@ fetch_luks_key() {
         case "$http_code" in
             200)
                 LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
-                BOOT_TOKEN=$(jq -r '.boot_token // empty' "$response_file" 2>/dev/null)
                 LUKS_QUOTE_NONCE=$(jq -r '.luks_quote_nonce // empty' "$response_file" 2>/dev/null)
                 if [ -n "$LUKS_KEY" ] && [ -n "$LUKS_QUOTE_NONCE" ]; then
                     rm -f "$response_file"
@@ -504,10 +496,6 @@ main() {
         mkdir -m 700 -p /run/chutes
         echo "$VM_NAME" > /run/chutes/vm-name
         echo "$HOTKEY" > /run/chutes/hotkey
-        if [ -n "$BOOT_TOKEN" ]; then
-            printf '%s' "$BOOT_TOKEN" > /run/chutes/boot-token
-            chmod 600 /run/chutes/boot-token
-        fi
         if [ -n "$LUKS_QUOTE_NONCE" ]; then
             printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
             chmod 600 /run/chutes/luks-quote-nonce

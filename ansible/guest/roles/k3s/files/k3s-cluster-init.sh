@@ -10,6 +10,19 @@ LOG_FILE="${LOG_FILE:-/var/log/k3s-cluster-init.log}"
 MAX_SCRIPT_TIMEOUT="${MAX_SCRIPT_TIMEOUT:-300}"  # 5 minutes per script
 export MARKER_DIR  # Scripts may use this for run-once behavior
 
+# Security-critical scripts that must succeed or the VM powers off.
+# Failure of these scripts leaves the cluster in an unsafe state (e.g.
+# admin credentials on disk, plaintext secrets in the DB).
+SECURITY_CRITICAL_SCRIPTS="00-reencrypt-secrets.sh 99-purge-kubeconfig.sh"
+
+is_security_critical() {
+    local name="$1"
+    for sc in $SECURITY_CRITICAL_SCRIPTS; do
+        [ "$name" = "$sc" ] && return 0
+    done
+    return 1
+}
+
 # Ensure directories exist
 mkdir -p "$MARKER_DIR"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -215,6 +228,12 @@ main() {
             log "✓ Script $script_name completed successfully"
         else
             failed_scripts=$((failed_scripts + 1))
+            if is_security_critical "$script_name"; then
+                log "FATAL: script $script_name failed — powering off VM"
+                echo "CLUSTER-INIT-FAILURE: $script_name" > /dev/kmsg 2>/dev/null || true
+                sleep 5
+                poweroff -f
+            fi
             log "✗ Script $script_name failed (continuing with remaining scripts)"
         fi
         
@@ -237,11 +256,11 @@ main() {
         systemd-notify --ready
         exit 0
     else
-        log "Some scripts failed, but initialization completed"
-        notify_systemd "Completed with $failed_scripts failures"
-        systemd-notify --ready
-        # Exit 0 because we want the service to stay running even if some scripts failed
-        exit 0
+        log "FATAL: $failed_scripts script(s) failed during cluster init — powering off VM"
+        notify_systemd "FATAL: $failed_scripts failures"
+        echo "CLUSTER-INIT-FAILED: $failed_scripts script(s)" > /dev/kmsg 2>/dev/null || true
+        sleep 5
+        poweroff -f
     fi
 }
 

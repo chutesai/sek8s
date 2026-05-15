@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from pydantic import AliasChoices, BaseModel, Field
-
 
 class PullStatusEnum(str, Enum):
     """Status for an image pull operation."""
@@ -16,16 +14,6 @@ class PullStatusEnum(str, Enum):
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
     FAILED = "failed"
-
-
-class PullRequest(BaseModel):
-    """Request body for starting an image pull."""
-
-    image: str = Field(
-        ...,
-        validation_alias=AliasChoices("image", "image_ref"),
-        description="Image: short form (sglang:tag or chutes/sglang:tag) or full (registry/org/repo:tag)",
-    )
 
 
 @dataclass

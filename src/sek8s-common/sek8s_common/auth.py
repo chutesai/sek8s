@@ -174,7 +174,14 @@ def authorize(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
             )
-        if int(time.time()) - int(nonce) >= 30:
+        now = int(time.time())
+        try:
+            nonce_int = int(nonce)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
+            )
+        if now - nonce_int >= 30 or nonce_int > now + 5:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="go away (missing)"
             )

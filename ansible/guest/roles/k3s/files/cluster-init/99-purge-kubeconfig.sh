@@ -52,7 +52,13 @@ fi
 if [ -f "$KUBECONFIG_PATH" ]; then
     log "ERROR: admin kubeconfig still present after deletion attempt"
     kubeconfig_hash=$(sha384sum "$KUBECONFIG_PATH" | awk '{print $1}')
-    "$TDX_RTMR_EXTEND" --index 3 --data "$kubeconfig_hash" 2>/dev/null || true
+    "$TDX_RTMR_EXTEND" --index 3 --data "$kubeconfig_hash" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        log "FATAL: tdx-rtmr-extend failed — cannot record kubeconfig presence in RTMR3"
+        echo "99-purge-kubeconfig: FATAL: tdx-rtmr-extend failed" > /dev/kmsg 2>/dev/null || true
+        sleep 5
+        systemctl poweroff --force
+    fi
     log "RTMR3 extended with kubeconfig hash — attestation will fail"
     exit 1
 fi
