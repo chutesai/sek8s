@@ -19,11 +19,12 @@ import time
 import pytest
 from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
-
 from sek8s_common.auth import authorize
 from sek8s_common.constants import HOTKEY_HEADER, NONCE_HEADER, SIGNATURE_HEADER
 
-MINER_SS58 = os.environ.get("MINER_SS58", "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ")
+MINER_SS58 = os.environ.get(
+    "MINER_SS58", "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ"
+)
 DUMMY_SIG = "deadbeef" * 16  # 64 hex chars — invalid but reaches nonce check first
 
 
@@ -36,7 +37,10 @@ def _make_app() -> FastAPI:
         request.state.body_sha256 = "test-payload-hash"
         return await call_next(request)
 
-    @app.get("/protected", dependencies=[Depends(authorize(allow_miner=True, purpose="test"))])
+    @app.get(
+        "/protected",
+        dependencies=[Depends(authorize(allow_miner=True, purpose="test"))],
+    )
     async def protected():
         return {"ok": True}
 
@@ -85,7 +89,9 @@ async def test_float_string_nonce_rejected(auth_client):
 
 @pytest.mark.asyncio
 async def test_nonce_with_leading_text_rejected(auth_client):
-    resp = await auth_client.get("/protected", headers=_headers(f"abc{int(time.time())}"))
+    resp = await auth_client.get(
+        "/protected", headers=_headers(f"abc{int(time.time())}")
+    )
     assert resp.status_code == 401
 
 
@@ -164,7 +170,9 @@ async def test_wrong_hotkey_rejected(auth_client):
     now = str(int(time.time()))
     resp = await auth_client.get(
         "/protected",
-        headers=_headers(now, hotkey="5FakeHotkeyThatIsNotTheMiner111111111111111111111"),
+        headers=_headers(
+            now, hotkey="5FakeHotkeyThatIsNotTheMiner111111111111111111111"
+        ),
     )
     assert resp.status_code == 401
 
