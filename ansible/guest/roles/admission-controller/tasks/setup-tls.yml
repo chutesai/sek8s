@@ -98,15 +98,15 @@
 
     - name: Set certificate permissions
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ item.path }}"
         owner: root
-        group: admission
-        mode: '0640'
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
       loop:
-        - /etc/admission-controller/certs/ca.key
-        - /etc/admission-controller/certs/ca.crt
-        - /etc/admission-controller/certs/server.key
-        - /etc/admission-controller/certs/server.crt
+        - { path: /etc/admission-controller/certs/ca.key, mode: '0600', group: 'root' }
+        - { path: /etc/admission-controller/certs/ca.crt, mode: '0644', group: 'root' }
+        - { path: /etc/admission-controller/certs/server.key, mode: '0640', group: 'admission' }
+        - { path: /etc/admission-controller/certs/server.crt, mode: '0644', group: 'root' }
 
     # ── Export CA cert as caBundle for webhook manifests ─────────────────────
     # The CA cert (not the server cert) is embedded in webhook manifests so the

@@ -10,6 +10,29 @@
   loop:
     - /root/charts
 
+- name: Remove orphaned SSH host keys (sshd already removed, keys are inert)
+  ansible.builtin.shell: rm -f /etc/ssh/ssh_host_*
+  args:
+    removes: /etc/ssh/ssh_host_rsa_key
+
+- name: Truncate log files
+  ansible.builtin.shell: find /var/log -type f -exec truncate -s 0 {} +
+  changed_when: true
+
+- name: Remove Ansible build-time facts cache
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/.ansible
+    - /root/.ansible
+
+- name: Clear shell history for all users
+  ansible.builtin.shell: |
+    find /home /root -maxdepth 2 -name '.*_history' -delete 2>/dev/null || true
+    > /root/.bash_history
+  changed_when: true
+
 - name: Trim filesystem to reduce disk size
   ansible.builtin.command: fstrim -av
   register: fstrim_result

@@ -22,6 +22,7 @@
     - getty@tty5
     - getty@tty6
     - serial-getty@ttyS0
+    - serial-getty@hvc0
     - console-getty
   failed_when: false
 

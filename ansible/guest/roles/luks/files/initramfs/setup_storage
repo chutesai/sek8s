@@ -1,6 +1,6 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-bottom/setup_storage
-PREREQ=""
+PREREQ="rtmr3-measure"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
@@ -696,6 +696,7 @@ resources:
               secret: ${K3S_ENCRYPTION_KEY}
       - identity: {}
 EOF
+        chmod 600 "$config_path"
         log_success_msg "k3s encryption config written (secretbox)"
     else
         log_failure_msg "k3s encryption key not returned by API — VM cannot run securely"

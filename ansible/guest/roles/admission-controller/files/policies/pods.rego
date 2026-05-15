@@ -11,7 +11,7 @@ import data.helpers
 # =============================================================================
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -22,7 +22,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -33,7 +33,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -131,11 +131,10 @@ has_dangerous_capability(container) if {
 # =============================================================================
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
-    # Check for privileged containers
     input.request.kind.kind == "Pod"
     container := input.request.object.spec.containers[_]
     container.securityContext.privileged == true
@@ -143,7 +142,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -173,7 +172,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -203,7 +202,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -233,7 +232,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -244,7 +243,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -255,7 +254,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -427,7 +426,7 @@ deny contains msg if {
 # =============================================================================
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -438,7 +437,7 @@ deny contains msg if {
 }
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -500,7 +499,7 @@ deny contains msg if {
 # =============================================================================
 
 deny contains msg if {
-    input.request.operation == "CREATE"
+    input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
