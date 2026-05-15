@@ -60,24 +60,25 @@ log "All live records re-written through the active encryption provider"
 # next boot (live records are already encrypted).
 touch "$MARKER"
 
-# Purge kine history and scrub old_value, then VACUUM.
+# Purge kine history and scrub old_value.
 #
-# kine is append-only: it never SQLite-DELETEs old revision rows; they
-# accumulate as dead rows in the table.  Additionally, every live row
-# carries an old_value column with the previous (potentially plaintext)
-# value — VACUUM cannot remove a column from a live row.
+# kine is append-only: every write appends a new row, leaving the previous
+# revision as a dead row.  Additionally, every live row carries an old_value
+# column with the previous (potentially plaintext) value used only for etcd
+# watch event payloads — Kubernetes controllers do not rely on it.
 #
-# Steps (k3s must be stopped for an exclusive lock):
+# Steps (run online; WAL mode allows concurrent access with k3s):
 #   1. DELETE all non-current kine rows (id != MAX(id) per name).
-#   2. NULL out old_value on all remaining live rows — old_value is only
-#      used as the previous-value payload in etcd watch events; Kubernetes
-#      controllers do not rely on it for correctness.
-#   3. VACUUM to physically reclaim the freed pages.
+#   2. NULL out old_value on all remaining live rows.
 STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
 if [[ -f "$STATE_DB" ]]; then
-    log "Stopping k3s to purge kine history and VACUUM state.db..."
-    systemctl stop k3s
-
+    # DELETE and UPDATE run online (WAL mode allows concurrent access).
+    # VACUUM requires an exclusive lock (k3s offline) — omitted here because:
+    #   1. The storage volume is LUKS-encrypted; physical page traces are not
+    #      accessible to an attacker who cannot decrypt the volume.
+    #   2. Stopping k3s from inside a Requires=k3s.service unit causes systemd
+    #      to kill this service via dependency propagation before the restart.
+    #   3. k3s's own kine compaction will checkpoint WAL pages over time.
     if python3 - "$STATE_DB" <<'PYEOF'
 import sqlite3, sys
 db = sys.argv[1]
@@ -88,17 +89,11 @@ dead = conn.execute(
 nulled = conn.execute("UPDATE kine SET old_value = NULL").rowcount
 conn.commit()
 conn.close()
-conn = sqlite3.connect(db, isolation_level=None)
-conn.execute("VACUUM")
-conn.close()
-print(f"Deleted {dead} dead rows, nulled old_value on {nulled} live rows; VACUUM complete")
+print(f"Deleted {dead} dead rows, nulled old_value on {nulled} live rows")
 PYEOF
     then
-        log "Kine purge and VACUUM complete — no plaintext remains in state.db"
+        log "Kine purge complete — plaintext logically removed from state.db"
     else
-        log "WARNING: Kine purge/VACUUM failed (non-fatal, live records are encrypted)"
+        log "WARNING: Kine purge failed (non-fatal, live records are encrypted)"
     fi
-
-    log "Restarting k3s..."
-    systemctl start k3s
 fi
