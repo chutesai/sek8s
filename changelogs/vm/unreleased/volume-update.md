@@ -46,3 +46,24 @@
 
 - **k3s server config**: Added `encryption-provider-config` pointing to the
   ephemeral key path described above.
+
+- **k3s cluster-init**: `k3s-cluster-init.service` keeps `Requires=k3s.service`
+  as the correct dependency. The secrets re-encryption script no longer stops and
+  restarts k3s to perform the kine purge — DELETE and UPDATE operations now run
+  online (SQLite WAL mode allows concurrent access), removing a systemd dependency
+  cascade that was previously killing the service mid-run.
+
+- **k3s secrets re-encryption marker**: The completion marker is now written only
+  after both the kubectl re-encryption pass and the kine history purge succeed. A
+  failed purge previously left plaintext dead rows and `old_value` data permanently;
+  it now causes a full retry on the next boot.
+
+### Fixed
+
+- **LUKS attestation mTLS cert binding**: The ephemeral mTLS client certificate
+  generated during `fetch_key_and_unlock` (init-premount) is now preserved across
+  init stages so init-bottom (`setup_storage`) uses the same certificate for the
+  `/luks/attest` call. The TDX quote REPORTDATA for `/luks/attest` now includes
+  `nonce + cert_hash`, binding the quote cryptographically to the certificate
+  presented in the mTLS handshake and matching the boot attestation pattern the
+  API expects. Previously only the nonce was included, causing a 403 from the API.
