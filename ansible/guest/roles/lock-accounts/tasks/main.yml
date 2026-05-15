@@ -1,9 +1,9 @@
 ---
-# lock-accounts — Lock all password-based login credentials.
+# lock-accounts — Remove non-system accounts and lock root.
 #
-# Disables password authentication for root and all non-system accounts
-# (uid >= 1000).  Does not affect SSH key authentication — partners can
-# still connect via their authorised key after this runs.
+# Removes all accounts with uid >= 1000 (except nobody) along with their
+# home directories.  Locks root password and sets nologin shell on any
+# system account that still has an interactive shell.
 #
 # Idempotent: safe to re-run. No flags or conditionals — the playbook
 # decides whether to include this role.
@@ -12,9 +12,26 @@
   ansible.builtin.user:
     name: root
     password_lock: true
+    shell: /usr/sbin/nologin
 
-- name: Lock passwords for all non-system accounts (uid >= 1000)
+- name: Remove all non-system accounts (uid >= 1000)
   ansible.builtin.shell: |
     awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | \
+      while read -r user; do
+        userdel --remove --force "$user" 2>/dev/null || true
+      done
+  changed_when: true
+
+- name: Set nologin shell on system accounts with interactive shells
+  ansible.builtin.shell: |
+    awk -F: '$3 < 1000 && $7 != "/usr/sbin/nologin" && $7 != "/bin/false" && $7 != "/nonexistent" && $1 != "root" {print $1}' /etc/passwd | \
+      while read -r user; do
+        usermod --shell /usr/sbin/nologin "$user" 2>/dev/null || true
+      done
+  changed_when: true
+
+- name: Lock passwords for all remaining accounts
+  ansible.builtin.shell: |
+    awk -F: '$1 != "root" && $2 != "!" && $2 != "!!" && $2 != "*" {print $1}' /etc/shadow | \
       xargs -r passwd --lock
   changed_when: true
