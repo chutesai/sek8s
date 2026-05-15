@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.3.0] - 2026-05-04
+## [0.3.0] - 2026-05-15
 
 ### Added
 - `POST /cache/{chute_id}/cancel` endpoint to cancel an in-progress HuggingFace model download, with an optional `cleanup` query parameter to delete partial files from disk after cancelling.
@@ -27,6 +27,11 @@ Version source of truth: `src/sek8s/VERSION`
 ### Fixed
 - Mutating webhook no longer applies `automountServiceAccountToken: false` on Pod UPDATE operations, preventing the API server from rejecting immutable-field mutations (e.g. Job controller finalizer sync on completed CronJob pods).
 - OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations; pod specs are immutable after creation, so spec checks on UPDATE blocked finalizer removal and pod cleanup for pods created before the SA token policy was deployed.
+
+### Removed
+- **Image pull endpoints**: Removed `POST /images/pull` and `GET /images/pull/status`
+  from the system manager images API. These endpoints are no longer part of the
+  supported image management interface.
 
 ## [0.2.6] - 2026-04-07
 
