@@ -240,6 +240,17 @@
         password: "{{ 'debug' | password_hash('sha512') }}"
       when: debug_build | default(false)
 
+    - name: Allow root password SSH login (debug builds only)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^#?PermitRootLogin',       line: 'PermitRootLogin yes' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+      when: debug_build | default(false)
+
 - name: Security Hardening
   hosts: vm
   become: true
