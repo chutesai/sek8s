@@ -89,7 +89,9 @@ class CacheOverviewResponse(BaseModel):
 
 class CachePurgeResponse(BaseModel):
     status: str = Field(..., description="Purge status", examples=["completed"])
-    purged_bytes: int = Field(0, description="Bytes freed by pruning stale HF revisions")
+    purged_bytes: int = Field(
+        0, description="Bytes freed by pruning stale HF revisions"
+    )
 
 
 class CacheCleanupResponse(BaseModel):

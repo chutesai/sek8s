@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Query, Request
 
 from sek8s.services.util import authorize
 
 from .manager import ImageManager
-from .responses import (
-    ImageListEntry,
-    ImageListResponse,
-    PruneResponse,
-)
+from .responses import ImageListEntry, ImageListResponse, PruneResponse
 
 router = APIRouter()
 
