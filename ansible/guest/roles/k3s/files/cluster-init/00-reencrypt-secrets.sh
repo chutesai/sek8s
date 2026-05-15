@@ -56,10 +56,6 @@ if ! kubectl get configmaps --all-namespaces -o json | kubectl replace -f -; the
 fi
 log "All live records re-written through the active encryption provider"
 
-# Mark done before the purge so a restart failure doesn't re-run this on
-# next boot (live records are already encrypted).
-touch "$MARKER"
-
 # Purge kine history and scrub old_value.
 #
 # kine is append-only: every write appends a new row, leaving the previous
@@ -67,18 +63,15 @@ touch "$MARKER"
 # column with the previous (potentially plaintext) value used only for etcd
 # watch event payloads — Kubernetes controllers do not rely on it.
 #
-# Steps (run online; WAL mode allows concurrent access with k3s):
-#   1. DELETE all non-current kine rows (id != MAX(id) per name).
-#   2. NULL out old_value on all remaining live rows.
+# Both steps run online; SQLite WAL mode allows concurrent access with k3s.
+#
+# The marker is written only after this purge succeeds.  A failed purge causes
+# a full retry on the next boot — plaintext left in dead rows or old_value
+# is a security issue and must not be silently skipped.  The kubectl replace
+# retry is safe: already-encrypted values are decrypted and re-encrypted
+# idempotently, producing only additional dead rows for the next purge to clean.
 STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
 if [[ -f "$STATE_DB" ]]; then
-    # DELETE and UPDATE run online (WAL mode allows concurrent access).
-    # VACUUM requires an exclusive lock (k3s offline) — omitted here because:
-    #   1. The storage volume is LUKS-encrypted; physical page traces are not
-    #      accessible to an attacker who cannot decrypt the volume.
-    #   2. Stopping k3s from inside a Requires=k3s.service unit causes systemd
-    #      to kill this service via dependency propagation before the restart.
-    #   3. k3s's own kine compaction will checkpoint WAL pages over time.
     if python3 - "$STATE_DB" <<'PYEOF'
 import sqlite3, sys
 db = sys.argv[1]
@@ -94,6 +87,9 @@ PYEOF
     then
         log "Kine purge complete — plaintext logically removed from state.db"
     else
-        log "WARNING: Kine purge failed (non-fatal, live records are encrypted)"
+        log "ERROR: Kine purge failed — not marking complete, will retry on next boot"
+        exit 1
     fi
 fi
+
+touch "$MARKER"
