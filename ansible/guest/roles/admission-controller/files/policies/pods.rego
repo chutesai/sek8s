@@ -12,6 +12,7 @@ import data.helpers
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -23,6 +24,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -34,6 +36,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -45,9 +48,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     has_dangerous_capability(container)
@@ -56,9 +61,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.initContainers[_]
     has_dangerous_capability(container)
@@ -67,9 +74,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.ephemeralContainers[_]
     has_dangerous_capability(container)
@@ -78,6 +87,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -89,6 +99,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -100,6 +111,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -132,6 +144,7 @@ has_dangerous_capability(container) if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -143,6 +156,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -153,9 +167,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     input.request.object.spec.template.spec.hostNetwork == true
     msg := "Template uses host network which is not allowed"
@@ -163,6 +179,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -173,6 +190,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -183,9 +201,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     input.request.object.spec.template.spec.hostPID == true
     msg := "Template uses host PID namespace which is not allowed"
@@ -193,6 +213,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -203,6 +224,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -213,9 +235,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     input.request.object.spec.template.spec.hostIPC == true
     msg := "Template uses host IPC namespace which is not allowed"
@@ -223,6 +247,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -233,6 +258,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -244,6 +270,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -255,6 +282,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -266,9 +294,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     container.securityContext.allowPrivilegeEscalation == true
@@ -277,9 +307,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.initContainers[_]
     container.securityContext.allowPrivilegeEscalation == true
@@ -288,9 +320,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.ephemeralContainers[_]
     container.securityContext.allowPrivilegeEscalation == true
@@ -299,6 +333,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -310,6 +345,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -321,6 +357,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -333,6 +370,7 @@ deny contains msg if {
 # Deny pods with privileged containers
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check containers in pod spec
     not helpers.is_system_or_controller_user
     container := input.request.object.spec.containers[_]
@@ -343,6 +381,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check init containers in pod spec
     not helpers.is_system_or_controller_user
     container := input.request.object.spec.initContainers[_]
@@ -353,6 +392,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check ephemeral containers in pod spec
     not helpers.is_system_or_controller_user
     container := input.request.object.spec.ephemeralContainers[_]
@@ -363,36 +403,40 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check containers in deployment/replicaset/etc template
     not helpers.is_system_or_controller_user
+    not only_restartedAt_change
     container := input.request.object.spec.template.spec.containers[_]
     container.securityContext.privileged == true
-    
     msg := sprintf("Container '%s' has privileged security context which is not allowed", [container.name])
 }
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check init containers in deployment/replicaset/etc template
     not helpers.is_system_or_controller_user
+    not only_restartedAt_change
     container := input.request.object.spec.template.spec.initContainers[_]
     container.securityContext.privileged == true
-    
     msg := sprintf("Init container '%s' has privileged security context which is not allowed", [container.name])
 }
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     # Check ephemeral containers in deployment/replicaset/etc template
     not helpers.is_system_or_controller_user
+    not only_restartedAt_change
     container := input.request.object.spec.template.spec.ephemeralContainers[_]
     container.securityContext.privileged == true
-    
     msg := sprintf("Ephemeral container '%s' has privileged security context which is not allowed", [container.name])
 }
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     not helpers.is_system_or_controller_user
     input.request.kind.kind == "CronJob"
     container := input.request.object.spec.jobTemplate.spec.template.spec.containers[_]
@@ -403,6 +447,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     not helpers.is_system_or_controller_user
     input.request.kind.kind == "CronJob"
     container := input.request.object.spec.jobTemplate.spec.template.spec.initContainers[_]
@@ -413,6 +458,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     not helpers.is_system_or_controller_user
     input.request.kind.kind == "CronJob"
     container := input.request.object.spec.jobTemplate.spec.template.spec.ephemeralContainers[_]
@@ -427,6 +473,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -438,6 +485,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -450,9 +498,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     not container.resources.limits
@@ -461,9 +511,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     container.resources.limits
@@ -473,6 +525,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -484,6 +537,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -500,6 +554,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     
@@ -512,9 +567,11 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not only_restartedAt_change
+
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job"]
     container := input.request.object.spec.template.spec.containers[_]
     env := container.env[_]
@@ -524,6 +581,7 @@ deny contains msg if {
 
 deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
+    not helpers.is_rollout_restart
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
     

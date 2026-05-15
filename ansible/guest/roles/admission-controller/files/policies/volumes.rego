@@ -27,7 +27,8 @@ deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not helpers.is_rollout_restart
+
     # Check Deployment/StatefulSet/DaemonSet templates
     input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"]
     volume := input.request.object.spec.template.spec.volumes[_]
@@ -40,7 +41,8 @@ deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not helpers.is_rollout_restart
+
     # Check Job templates
     input.request.kind.kind == "Job"
     volume := input.request.object.spec.template.spec.volumes[_]
@@ -53,7 +55,8 @@ deny contains msg if {
     input.request.operation in ["CREATE", "UPDATE"]
     helpers.is_pod_resource
     not helpers.is_system_or_controller_user
-    
+    not helpers.is_rollout_restart
+
     # Check CronJob templates
     input.request.kind.kind == "CronJob"
     volume := input.request.object.spec.jobTemplate.spec.template.spec.volumes[_]
