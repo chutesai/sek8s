@@ -47,6 +47,8 @@ Version source of truth: `ansible/guest/VERSION`
   verified image.
 - **`fetch_key` initramfs hook**: Added `sha384sum` to the set of binaries
   included in the initramfs image.
+- `guest-tools/scripts/compute-rtmr3.sh`: compute the expected RTMR3 at build time by mounting the final qcow2 read-only with `guestmount` and simulating the exact SHA-384 extension chain from `rtmr3-measure`. Eliminates the need to boot twice just to capture RTMR3 — the Ansible build runs this automatically and writes `<image>.rtmr3` alongside the qcow2 before the LUKS step.
+- `ansible/guest/playbooks/chutes-miner-vm.yml`, `tee-gpu-vm.yml`: add `compute-rtmr3` play that runs `compute-rtmr3.sh` automatically after `finalize-vm-image` and before `luks`/`prime-vm`, writing the expected RTMR3 to `<final_img_path>.rtmr3`.
 
 ### Changed
 - **k3s server config**: Added `encryption-provider-config` pointing to the
@@ -69,6 +71,7 @@ Version source of truth: `ansible/guest/VERSION`
   `nonce + cert_hash`, binding the quote cryptographically to the certificate
   presented in the mTLS handshake and matching the boot attestation pattern the
   API expects. Previously only the nonce was included, causing a 403 from the API.
+- `setup_storage`: add `udevadm settle` before each `cryptsetup luksOpen` call and pass `--disable-locks` to prevent an indefinite hang on hosts with many passthrough PCI devices (8x H200 + NVSwitches). libdevmapper internally calls `udevadm settle` after creating a dm-crypt mapping; pre-draining the udev queue and disabling LUKS2 advisory file locking avoids blocking on the large backlog of GPU device-enumeration events that accumulate by init-bottom time.
 - `setup_storage`: add `udevadm settle` before each `cryptsetup luksOpen` call and pass `--disable-locks` to prevent an indefinite hang on hosts with many passthrough PCI devices (8x H200 + NVSwitches). libdevmapper internally calls `udevadm settle` after creating a dm-crypt mapping; pre-draining the udev queue and disabling LUKS2 advisory file locking avoids blocking on the large backlog of GPU device-enumeration events that accumulate by init-bottom time.
 
 ## [1.2.0] - 2026-05-14
