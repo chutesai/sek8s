@@ -205,26 +205,9 @@
   tags:
     - compute-rtmr3
   tasks:
-    - name: Check guestmount is available
-      ansible.builtin.command: which guestmount
-      changed_when: false
-      register: guestmount_check
-      failed_when: guestmount_check.rc != 0
-      ignore_errors: false
-
-    - name: Run compute-rtmr3.sh against final image
-      ansible.builtin.command: >-
-        {{ repo_root }}/guest-tools/scripts/compute-rtmr3.sh {{ final_img_path }}
-      register: rtmr3_compute
-      changed_when: false
-
-    - name: Show RTMR3 computation output
-      ansible.builtin.debug:
-        msg: "{{ rtmr3_compute.stderr_lines }}"
-
-    - name: Show RTMR3 output file location
-      ansible.builtin.debug:
-        msg: "RTMR3 written to {{ final_img_path | splitext | first }}.rtmr3"
+    - name: Compute RTMR3
+      ansible.builtin.include_role:
+        name: compute-rtmr3
 
 - name: Prime VM for stable TDX measurements
   hosts: host
