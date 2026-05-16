@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.0] - 2026-05-15
+## [1.3.0] - 2026-05-16
 
 ### Added
 - **Ephemeral k3s admin credentials**: The k3s cluster admin kubeconfig is now
@@ -69,6 +69,7 @@ Version source of truth: `ansible/guest/VERSION`
   `nonce + cert_hash`, binding the quote cryptographically to the certificate
   presented in the mTLS handshake and matching the boot attestation pattern the
   API expects. Previously only the nonce was included, causing a 403 from the API.
+- `setup_storage`: add `udevadm settle` before each `cryptsetup luksOpen` call and pass `--disable-locks` to prevent an indefinite hang on hosts with many passthrough PCI devices (8x H200 + NVSwitches). libdevmapper internally calls `udevadm settle` after creating a dm-crypt mapping; pre-draining the udev queue and disabling LUKS2 advisory file locking avoids blocking on the large backlog of GPU device-enumeration events that accumulate by init-bottom time.
 
 ## [1.2.0] - 2026-05-14
 
