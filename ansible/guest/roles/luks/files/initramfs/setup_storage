@@ -416,15 +416,17 @@ confirm_rotation() {
 # verifiers can detect any boot that skips the purge.
 
 purge_admin_kubeconfig() {
-    local mnt="/tmp/storage-kubeconfig-purge"
+    local mnt="/run/storage-kubeconfig-purge"
     local kubeconfig_subpath="rancher-config/k3s.yaml"
 
     log_begin_msg "Purging admin kubeconfig from storage volume"
 
     mkdir -p "$mnt"
 
-    if ! mount -t xfs "/dev/mapper/${STORAGE_LUKS_NAME}" "$mnt" 2>/dev/null; then
-        log_failure_msg "Failed to mount storage volume for kubeconfig purge"
+    local mount_err
+    mount_err=$(mount -t xfs "/dev/mapper/${STORAGE_LUKS_NAME}" "$mnt" 2>&1)
+    if [ $? -ne 0 ]; then
+        log_failure_msg "Failed to mount storage volume for kubeconfig purge: $mount_err"
         umount "$mnt" 2>/dev/null || true
         rmdir "$mnt" 2>/dev/null || true
         return 1
