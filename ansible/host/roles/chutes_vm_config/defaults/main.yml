@@ -1,6 +1,12 @@
 ---
 # Rendered into host config.yaml (override in group_vars / host_vars / Vault).
 
+# Set to a non-empty path to override the default base image location used by host-tools.
+chutes_vm_base_image: ""
+
+# Set to a non-empty path to override the default overlay directory used by host-tools.
+chutes_vm_overlay_directory: ""
+
 chutes_network_dns: "8.8.8.8"
 chutes_volume_cache_size: "10000G"
 chutes_volume_cache_path: "/data/prod/cache.raw"
