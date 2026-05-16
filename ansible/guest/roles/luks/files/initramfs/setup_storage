@@ -492,8 +492,10 @@ setup_storage() {
         fi
 
         log_begin_msg "Unlocking storage"
+        udevadm settle --timeout=30 2>/dev/null || true
         if ! printf '%s' "$STORAGE_KEY" | \
-               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=- \
+               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
+               --key-file=- --disable-locks \
                2>/dev/null; then
             log_failure_msg "Failed to unlock storage"
             return 1
@@ -515,8 +517,10 @@ setup_storage() {
             log_failure_msg "Failed to create LUKS container"
             return 1
         fi
+        udevadm settle --timeout=30 2>/dev/null || true
         if ! printf '%s' "$STORAGE_KEY" | \
-               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" --key-file=-; then
+               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
+               --key-file=- --disable-locks; then
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
@@ -572,8 +576,10 @@ setup_cache() {
         fi
 
         log_begin_msg "Unlocking cache"
+        udevadm settle --timeout=30 2>/dev/null || true
         if ! printf '%s' "$CACHE_KEY" | \
-               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" --key-file=- \
+               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
+               --key-file=- --disable-locks \
                2>/dev/null; then
             log_failure_msg "Failed to unlock cache"
             return 1
@@ -595,8 +601,10 @@ setup_cache() {
             log_failure_msg "Failed to create LUKS cache container"
             return 1
         fi
+        udevadm settle --timeout=30 2>/dev/null || true
         if ! printf '%s' "$CACHE_KEY" | \
-               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" --key-file=-; then
+               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
+               --key-file=- --disable-locks; then
             log_failure_msg "Failed to open LUKS cache container"
             return 1
         fi
