@@ -23,6 +23,7 @@ copy_exec /sbin/blkid
 copy_exec /usr/sbin/mkfs.xfs
 copy_exec /sbin/wipefs
 copy_exec /usr/bin/timeout
+copy_exec /sbin/dmsetup
 
 # Network configuration
 mkdir -p $DESTDIR/etc/network

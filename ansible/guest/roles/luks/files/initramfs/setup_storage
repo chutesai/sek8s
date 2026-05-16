@@ -6,6 +6,13 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
+# Bypass libdevmapper's dm_udev_wait() which blocks indefinitely on systems
+# with large udev event backlogs (e.g. 8x GPU + 4x NVSwitch passthrough at
+# boot). With this set, cryptsetup luksOpen completes immediately after the
+# kernel ioctl; dmsetup mknodes is called explicitly after each open to create
+# the /dev/mapper/* node that udev would otherwise have created.
+export DM_DISABLE_UDEV_SYNC=1
+
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
@@ -500,6 +507,7 @@ setup_storage() {
             log_failure_msg "Failed to unlock storage"
             return 1
         fi
+        dmsetup mknodes 2>/dev/null || true
         log_success_msg "Storage unlocked"
     else
         log_begin_msg "Encrypting storage (first boot)"
@@ -523,6 +531,7 @@ setup_storage() {
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
+        dmsetup mknodes 2>/dev/null || true
         log_begin_msg "Formatting storage..."
         if ! mkfs.xfs -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
             log_failure_msg "Failed to format storage"
@@ -581,6 +590,7 @@ setup_cache() {
             log_failure_msg "Failed to unlock cache"
             return 1
         fi
+        dmsetup mknodes 2>/dev/null || true
         log_success_msg "Cache unlocked"
     else
         log_begin_msg "Encrypting cache (first boot)"
@@ -604,6 +614,7 @@ setup_cache() {
             log_failure_msg "Failed to open LUKS cache container"
             return 1
         fi
+        dmsetup mknodes 2>/dev/null || true
         log_begin_msg "Formatting cache..."
         if ! mkfs.xfs -L "$CACHE_LABEL" "/dev/mapper/$CACHE_LUKS_NAME"; then
             log_failure_msg "Failed to format cache"
