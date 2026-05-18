@@ -24,6 +24,29 @@
     - serial-getty@ttyS0
     - serial-getty@hvc0
     - console-getty
+    # Mask the autovt@ template and getty.target so systemd cannot spawn
+    # new gettys on-demand for VTs beyond tty6 (e.g. tty7+).
+    # Masking instances alone leaves the template available for dynamic activation.
+    - autovt@
+    - getty.target
+  failed_when: false
+
+# Mask systemd emergency/rescue/debug targets.  CrashShell=no prevents the
+# crash shell, but emergency.target and rescue.target can still be activated
+# via kernel cmdline (systemd.unit=emergency.target) or early boot failures.
+# With root locked to nologin these are not directly exploitable, but masking
+# removes the surface entirely.
+- name: Mask systemd emergency, rescue, and debug-shell targets
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    masked: true
+  loop:
+    - emergency.service
+    - emergency.target
+    - rescue.service
+    - rescue.target
+    - debug-shell.service
   failed_when: false
 
 - name: Disable and mask legacy remote access services
@@ -42,7 +65,7 @@
     - inetd
   failed_when: false
 
-- name: Remove legacy remote access packages
+- name: Remove legacy remote access and unnecessary packages
   ansible.builtin.package:
     name:
       - telnet-server
@@ -53,6 +76,9 @@
       - inetd
       - nis
       - rpcbind
+      # x11-common has no purpose on a headless VM and pulls in X11 font/utility paths
+      - x11-common
+      - libx11-data
     state: absent
   failed_when: false
 
@@ -60,7 +86,7 @@
   ansible.builtin.lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX='
-    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service"'
+    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service systemd.mask=serial-getty@hvc0.service systemd.mask=emergency.service systemd.mask=rescue.service"'
     backup: true
   notify: update grub
 
