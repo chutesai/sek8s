@@ -46,11 +46,38 @@ fi
 log "Secrets encryption is active — re-encrypting all existing plaintext secrets and configmaps..."
 
 log "Replacing all secrets and configmaps so live kine rows have encrypted values..."
-if ! kubectl get secrets --all-namespaces -o json | kubectl replace -f -; then
+
+# Replace each object individually, fetching the latest resourceVersion right
+# before the replace to avoid Conflict errors caused by k3s-managed objects
+# (e.g. k3s-serving TLS certs) being updated between the bulk GET and replace.
+reencrypt_resources() {
+    local kind="$1"
+    local failed=0
+    local pairs
+    pairs=$(kubectl get "${kind}" --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}')
+    while IFS=' ' read -r ns name; do
+        [[ -z "$name" ]] && continue
+        local ok=false
+        for attempt in 1 2 3; do
+            if kubectl get "${kind}" -n "$ns" "$name" -o json | kubectl replace -f - 2>&1; then
+                ok=true
+                break
+            fi
+            sleep 0.5
+        done
+        if [[ "$ok" != true ]]; then
+            log "ERROR: Failed to re-encrypt ${kind} ${ns}/${name} after 3 attempts"
+            failed=1
+        fi
+    done <<< "$pairs"
+    return "$failed"
+}
+
+if ! reencrypt_resources secrets; then
     log "ERROR: Re-encryption of secrets failed"
     exit 1
 fi
-if ! kubectl get configmaps --all-namespaces -o json | kubectl replace -f -; then
+if ! reencrypt_resources configmaps; then
     log "ERROR: Re-encryption of configmaps failed"
     exit 1
 fi
