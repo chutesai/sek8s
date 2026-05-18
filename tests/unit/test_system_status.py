@@ -171,6 +171,103 @@ def test_overview_success(status_client, fake_runner):
     assert data["gpu"]["status"] == "ok"
 
 
+def test_overview_ok_with_exited_oneshot_services(status_client, fake_runner):
+    """Oneshot services report active/exited after success — overview must be ok."""
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=setup-storage-bind-mounts.service\n"
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=exited\n"
+                "MainPID=0\n"
+                "ExecMainStatus=0\n"
+                "ExecMainCode=1\n"
+                "UnitFileState=enabled\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+    fake_runner.set_response(
+        "nvidia-smi",
+        CommandResult(
+            exit_code=0,
+            stdout="gpu output",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/overview")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert all(entry["healthy"] for entry in data["services"])
+
+
+def test_oneshot_service_healthy_when_exited_zero(status_client, fake_runner):
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=setup-storage-bind-mounts.service\n"
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=exited\n"
+                "MainPID=0\n"
+                "ExecMainStatus=0\n"
+                "ExecMainCode=1\n"
+                "UnitFileState=enabled\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/services/storage-bind-mounts/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"]["sub_state"] == "exited"
+    assert data["status"]["exit_status"] == "0"
+    assert data["healthy"] is True
+
+
+def test_oneshot_service_unhealthy_when_exited_nonzero(status_client, fake_runner):
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=setup-storage-bind-mounts.service\n"
+                "LoadState=loaded\n"
+                "ActiveState=active\n"
+                "SubState=exited\n"
+                "MainPID=0\n"
+                "ExecMainStatus=1\n"
+                "ExecMainCode=1\n"
+                "UnitFileState=enabled\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/services/storage-bind-mounts/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"]["sub_state"] == "exited"
+    assert data["status"]["exit_status"] == "1"
+    assert data["healthy"] is False
+
+
 def test_overview_degraded_on_service_failure(status_client, fake_runner):
     fake_runner.set_response(
         "systemctl",
