@@ -6,12 +6,13 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
-# Bypass libdevmapper's dm_udev_wait() which blocks indefinitely on systems
-# with large udev event backlogs (e.g. 8x GPU + 4x NVSwitch passthrough at
-# boot). With this set, cryptsetup luksOpen completes immediately after the
-# kernel ioctl; dmsetup mknodes is called explicitly after each open to create
-# the /dev/mapper/* node that udev would otherwise have created.
-export DM_DISABLE_UDEV_SYNC=1
+# Disable libdevmapper udev synchronization.  At init-bottom, udevd's event
+# queue is backed up with GPU/NVSwitch PCI events, causing luksOpen to block
+# indefinitely on a SysV semaphore (semtimedop) waiting for udevd to signal
+# the DM cookie.  DM_DISABLE_UDEV tells libdevmapper to skip cookie creation
+# and semaphore waits entirely.  dmsetup mknodes is called after each open
+# to create /dev/mapper/* nodes explicitly.
+export DM_DISABLE_UDEV=1
 
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
@@ -441,9 +442,9 @@ purge_admin_kubeconfig() {
 
     if [ -f "${mnt}/${kubeconfig_subpath}" ]; then
         rm -f "${mnt}/${kubeconfig_subpath}"
-        log_msg "  Admin kubeconfig purged from storage volume"
+        log_success_msg "Admin kubeconfig purged from storage volume"
     else
-        log_msg "  Admin kubeconfig absent on storage (first boot or already purged)"
+        log_success_msg "Admin kubeconfig absent on storage (first boot or already purged)"
     fi
 
     # Check for the file AFTER the purge attempt, while the volume is still
@@ -502,7 +503,7 @@ setup_storage() {
 
         log_begin_msg "Unlocking storage"
         if ! printf '%s' "$STORAGE_KEY" | \
-               timeout 60 cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
+               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
                --key-file=- --batch-mode; then
             log_failure_msg "Failed to unlock storage"
             return 1
@@ -515,9 +516,10 @@ setup_storage() {
             log_failure_msg "No storage key available for encryption"
             return 1
         fi
-        wipefs -a "$STORAGE_DEVICE" 2>/dev/null || true
+        wipefs -a "$STORAGE_DEVICE" || true
         dd if=/dev/zero of="$STORAGE_DEVICE" bs=1M count=10 2>/dev/null || true
         cryptsetup erase "$STORAGE_DEVICE" 2>/dev/null || true
+
         log_begin_msg "Creating LUKS container with label..."
         if ! printf '%s' "$STORAGE_KEY" | \
                cryptsetup luksFormat --type luks2 --label "$STORAGE_LABEL" \
@@ -525,8 +527,9 @@ setup_storage() {
             log_failure_msg "Failed to create LUKS container"
             return 1
         fi
+
         if ! printf '%s' "$STORAGE_KEY" | \
-               timeout 60 cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
+               cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
                --key-file=- --batch-mode; then
             log_failure_msg "Failed to open LUKS container"
             return 1
@@ -585,7 +588,7 @@ setup_cache() {
 
         log_begin_msg "Unlocking cache"
         if ! printf '%s' "$CACHE_KEY" | \
-               timeout 60 cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
+               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
                --key-file=- --batch-mode; then
             log_failure_msg "Failed to unlock cache"
             return 1
@@ -609,7 +612,7 @@ setup_cache() {
             return 1
         fi
         if ! printf '%s' "$CACHE_KEY" | \
-               timeout 60 cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
+               cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
                --key-file=- --batch-mode; then
             log_failure_msg "Failed to open LUKS cache container"
             return 1
