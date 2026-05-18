@@ -117,11 +117,14 @@ def resolve_service(service_id: str) -> ServiceDefinition:
 
 
 def is_service_healthy(status: ServiceStatus) -> bool:
-    return (
-        status.load_state == "loaded"
-        and status.active_state == "active"
-        and status.sub_state in {"running", "listening", None}
-    )
+    if status.load_state != "loaded" or status.active_state != "active":
+        return False
+    if status.sub_state in {"running", "listening", None}:
+        return True
+    # Oneshot services report active/exited after successful completion.
+    if status.sub_state == "exited" and status.exit_status == "0":
+        return True
+    return False
 
 
 async def collect_service_status(
