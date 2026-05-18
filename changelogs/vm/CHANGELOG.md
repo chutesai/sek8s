@@ -96,12 +96,14 @@ Version source of truth: `ansible/guest/VERSION`
   live value from a TDX quote, and reports PASS/FAIL.  The script itself is
   in the measurement list so any tampering changes RTMR3.
 - `chutes-miner-vm.yml` and `tee-gpu-vm.yml`: added `rtmr3-measure` play after
-  security hardening and before cleanup so the final on-disk state (including
-  partner SSH keys written by cleanup) is what gets measured at boot.
-- `playbooks/tee-gpu-vm.yml`: dedicated benchmark VM build playbook. Fully
-  independent of `chutes-miner-vm.yml` — includes only the roles a benchmark VM needs (`run-vm`,
-  `common`, `gpu`, `benchmark`, `harden-access`, `security`, `cleanup`). No k3s,
-  admission controller, system-manager, cache-volume, luks, or prime-vm plays.
+  security hardening and SSH key injection so the final on-disk state (including
+  partner SSH keys) is what gets measured at boot.
+- `playbooks/tee-gpu-vm.yml`: new dedicated TEE GPU VM build playbook, fully
+  independent of `chutes-miner-vm.yml`. Includes `run-vm`, `common`, `gpu`,
+  `benchmark`, `harden-ssh`, `lock-accounts`, `disable-console`, `security`,
+  `rtmr3-measure`, `setup-ssh-access`, `cleanup-build-vm`, `finalize-vm-image`,
+  and `prime-vm`. No k3s, admission controller, system-manager, cache-volume, or
+  LUKS plays.
 - `benchmark` Ansible role: self-contained benchmark image setup. Now owns the full
   config volume stack (simplified `process-config.py`, `config-manager.service`,
   `var-config.mount`, `config-volume-validator.service`, `netplan-apply.service`) in
@@ -115,29 +117,16 @@ Version source of truth: `ansible/guest/VERSION`
   `/dev/chutes-storage` and `/data`, requiring no arguments in the common case.
   The volume is intentionally not persisted to crypttab/fstab — explicit unlock
   is required on every reboot.
-- `benchmark-netlog` host-side systemd service: streams `conntrack` events for the
-  VM bridge subnet to daily log files under `/var/log/chutes/benchmark-netlog/`,
-  auto-installed by `quick-launch.sh --benchmark`.
-- `quick-launch.sh --benchmark` flag: sets benchmark defaults, skips cache volume,
-  creates a network/hostname config volume, and manages the netlog service lifecycle.
-- `cleanup-benchmark-ssh.yml`: removes builder SSH keys, writes partner keys, and
-  asserts key count and content before finalising the image.
-- `config/config.benchmark.example.yaml`: ready-to-use launch config template.
-- `config/config-schema.benchmark.json`: dedicated JSON schema for benchmark configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` which are not applicable. `quick-launch.sh --benchmark` automatically uses this schema during config validation.
-- `ansible/host/playbooks/benchmark-setup.yml`: idempotent host setup playbook for benchmark VMs. Safe to run while the VM is running. Syncs host-tools, installs `conntrack`, deploys the `benchmark-netlog` service, and starts logging. The benchmark image is built and launched manually — this playbook only handles host-side infrastructure.
-- `ansible/host/roles/benchmark_vm`: single role covering all host-side benchmark VM setup. Derives the bridge subnet from the existing `config.yaml` on the host (or an explicit `benchmark_vm_bridge_subnet` override), installs `conntrack`, deploys `benchmark-netlog.sh` / `.service` / `.logrotate` from the synced host-tools checkout, writes `/etc/chutes/benchmark-netlog.env`, and enables + starts the service. Handlers trigger `daemon-reload` + restart on any file or config change.
-- Benchmark VMs receive a config volume (hostname + network config) on launch via a simplified `process-config.py` that contains no k3s, miner credential, or Docker Hub logic. `create-config.sh` accepts empty miner credential arguments so the host-side config volume creation step is identical whether miner creds are provided or not.
-- `serial-getty@ttyS0` and all virtual console getty services are now masked in benchmark images. `harden-access` now runs for benchmark builds; only the two SSH-related tasks (mask service, remove packages) are conditionally skipped via `when: not (benchmark_build ...)` since SSH is the only access path for partners.
+- Benchmark VMs use a simplified `process-config.py` (no k3s, miner credential, or
+  Docker Hub logic) so the config volume can be created without miner credentials.
 - `benchmark-storage-setup.sh` + `setup-storage-bind-mounts.service` (benchmark role): at boot, identifies the storage block device, creates a stable `/dev/chutes-storage` symlink and `/data` mount point. Auto-mounts the device if it already has a filesystem; logs `luks-setup` instructions otherwise. Service name matches the production service so existing systemd ordering constraints are satisfied without any changes to `config-manager.service`.
-- `docs/benchmark-vm.md`: operator reference for building and launching the benchmark VM.
-- `docs/benchmark-guide.md`: user-facing walkthrough covering SSH access, GPU
+- `docs/tee-gpu-vm.md`: operator reference for building and launching the TEE GPU VM.
+- `docs/tee-gpu-vm-guide.md`: user-facing walkthrough covering SSH access, GPU
   verification, attestation, storage encryption, and network transparency.
 
 ### Changed
 - Updated sek8s to 0.3.0: HuggingFace cache improvements including download cancellation, stale revision purging, and isolated download subprocess.
 - k3s upgraded from `v1.33.7+k3s1` to `v1.35.4+k3s1`
-- CUDA toolkit upgraded from `13-0` to `13-2`
-- NVIDIA driver package upgraded from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1`
 - GPU Operator Helm chart upgraded from `v24.9.2` to `v26.3.1`; build-time install now uses `operator.upgradeCRD=true`
 - Helm CLI upgraded from `v3.11.3` to `v3.20.2`
 - OPA upgraded from `0.68.0` to `1.15.2` (0.x to 1.x major bump; existing policy tests confirmed passing)
@@ -149,22 +138,19 @@ Version source of truth: `ansible/guest/VERSION`
 - CUDA toolkit bumped from `13-0` to `13-2` (`cuda-toolkit-13-2` metapackage).
 - `gpu/tasks/device-setup.yml`: Docker NVIDIA Container Runtime is now configured
   here (alongside containerd) so benchmark images have Docker GPU support without k3s.
-- `roles/benchmark-attestation` consolidated and renamed to `roles/benchmark` — the
-  single role for all benchmark-specific VM tooling.
 - `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
   in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
 - `chutes-miner-vm.yml` is now production-only — all `benchmark_build` conditions and the
   benchmark tools play have been removed. Benchmark builds use `tee-gpu-vm.yml`.
-- **Playbook renames:** `site.yml` → `chutes-miner-vm.yml`; `site-benchmark.yml` →
-  `tee-gpu-vm.yml`. Names now reflect the actual VM type rather than Ansible convention.
+- **Playbook rename:** `site.yml` → `chutes-miner-vm.yml`. `tee-gpu-vm.yml` is a new
+  dedicated TEE GPU VM build playbook (see Added).
 - **Role refactor — single responsibility:** `harden-access` and `cleanup` were split
   into focused single-purpose roles. New roles: `harden-ssh` (sshd key-only auth),
   `lock-accounts` (password locking), `disable-console` (getty/serial masking + grub
   cmdline), `remove-ssh` (SSH and sudo removal for production builds), `setup-ssh-access`
-  (partner key injection for TEE GPU VM), `cleanup-build-vm` (common build cleanup:
-  cloud-init, infiniband, fstrim), `cleanup-orchestration` (k3s/attestation/admission
-  teardown for production builds), `finalize-vm-image` (renamed from `seal-vm` —
-  shutdown, undefine, move image).
+  (partner key injection for TEE GPU VM),   `cleanup-build-vm` (common build cleanup: cloud-init, infiniband, fstrim),
+  `cleanup-orchestration` (k3s/attestation/admission teardown for production builds),
+  `finalize-vm-image` (shutdown, undefine, move image).
 - **`rtmr3-measure` role enhancements:**
   - Added `/etc/default/grub` to `rtmr3_measure_paths` and `rtmr3_canonical_paths` —
     any change to the GRUB kernel cmdline (e.g. re-enabling console) now changes RTMR3
@@ -184,10 +170,6 @@ Version source of truth: `ansible/guest/VERSION`
   dummy credentials. Now launches with `--image` + `--network-type user` only, polls
   the serial console log for `Linux version` (kernel first line), then force-kills.
   Works identically for both `chutes-miner-vm.yml` and `tee-gpu-vm.yml`.
-- **Docs renamed:** `benchmark-guide.md` → `tee-gpu-vm-guide.md`;
-  `benchmark-vm.md` → `tee-gpu-vm.md`. Content updated to reflect generic TEE GPU
-  VM framing, new console access section in `verify-access-config`, and updated
-  measured paths table.
 
 ### Fixed
 - OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations, preventing the Job controller from being permanently blocked when removing tracking finalizers from completed CronJob pods that predate the `automountServiceAccountToken` policy.
@@ -205,7 +187,8 @@ Version source of truth: `ansible/guest/VERSION`
 ### Removed
 - `roles/harden-access` — split into `harden-ssh`, `lock-accounts`, `remove-ssh`,
   `disable-console`.
-- `roles/prime-tee-vm` — consolidated into the shared `prime-vm` role.
+- `roles/cleanup` — split into `cleanup-build-vm` (common build cleanup) and
+  `cleanup-orchestration` (k3s/attestation/admission teardown for production builds).
 
 ## [1.1.0] - 2026-05-04
 

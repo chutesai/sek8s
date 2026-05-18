@@ -11,13 +11,6 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
 ## [2026-05-15]
 
 ### Added
-- **Benchmark VM host playbook**: New `ansible/host/playbooks/benchmark-setup.yml`
-  deploys the host-side infrastructure for a running benchmark TDX VM — installs
-  conntrack, deploys the `benchmark-netlog` service and logrotate config, and writes
-  the bridge subnet env file. Idempotent and safe to re-run while the VM is running.
-- **Benchmark netlog service**: Network logging service (`benchmark-netlog.sh`,
-  systemd unit, logrotate config) deployed via the new `benchmark_vm` Ansible role.
-  Tracks per-connection byte counts on the VM bridge interface.
 - **GPU profile SMP topology**: `GpuProfile` now derives an accurate `smp_topology`
   string from `host_cpus` and `host_sockets` and passes it to QEMU via `-smp`. This
   matches the physical NUMA topology of the host CPU, improving vCPU scheduling.
@@ -61,22 +54,10 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
 - `passthrough.py` (`_run_gpu_tools`): GPU tools commands now run with a 120-second timeout and gracefully handle `TimeoutExpired`/`CalledProcessError` on reset failure, preventing indefinite hangs when a GPU is wedged at the PCIe level during VM teardown or reboot.
 - `reset-gpus.sh`: aligned with updated `passthrough.py` error handling to avoid host lockups on stuck device resets.
 
-### Removed
--
-
 ## [2026-05-13]
 
-### Added
-- `ansible.cfg`: `profile_tasks` callback enabled so every Ansible task now emits timing data — makes it easier to spot slow steps in long playbooks
-- `build-setup.yml`: installs Ansible and its Python/system prerequisites on the build host before subsequent plays run, replacing the assumption that Ansible is pre-installed
-- `GpuProfile.host_sockets` property (default `1`) and `GpuProfile.smp_topology` property that derives the full QEMU `-smp` string from the physical socket layout, so the guest CPU topology mirrors the host's CPUID structure
-- `H200Profile` and `RTXPro6000Profile` override `host_sockets = 2` to reflect their 128-CPU / 2-socket servers
-- `profiles.py` module docstring documents how to derive `host_cpus` and `host_sockets` from `lscpu` output when adding a new GPU profile
-
 ### Changed
-- `upgrade-guest.yml` / `launch_and_verify`: checksum validation now runs as a pre-flight step before the VM is launched and again after guest image promotion, catching stale images earlier and surfacing a clear failure message
 - `pre_2510.yml`: adds explicit gating so SGX/DCAP packages that were updated via `unattended-upgrades` are preserved rather than purged during the 25.04 → 25.10 hop; only packages that were not updated get removed
-- `build_base_cmd` (`qemu.py`) accepts `smp_topology: str` instead of `vcpus: str`; the caller in `__main__.py` passes the topology string from the active `GpuProfile` (or a flat single-socket default for non-GPU VMs)
 
 ### Fixed
 - `pre_2504.yml`: `grub-common` is now pinned/held before the OS upgrade begins to prevent apt from purging it during dependency resolution — loss of `grub-common` left hosts unbootable
