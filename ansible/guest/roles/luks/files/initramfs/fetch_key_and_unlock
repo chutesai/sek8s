@@ -324,23 +324,23 @@ generate_quote() {
     return 0
 }
 
-# Function to fetch LUKS key from API with fresh nonce for each attempt
+# Function to fetch LUKS key from API with fresh nonce for each attempt.
+# Sets FETCH_ATTEMPTS to the number of attempts actually made.
 fetch_luks_key() {
-    local attempt=1
+    FETCH_ATTEMPTS=0
     local response_file="/tmp/api_response"
     
-    while [ $attempt -le $RETRY_COUNT ]; do
-        log_msg "LUKS key fetch attempt $attempt/$RETRY_COUNT"
+    while [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ]; do
+        FETCH_ATTEMPTS=$((FETCH_ATTEMPTS + 1))
+        log_msg "LUKS key fetch attempt $FETCH_ATTEMPTS/$RETRY_COUNT"
         
         if ! fetch_nonce; then
-            attempt=$((attempt + 1))
-            [ $attempt -le $RETRY_COUNT ] && sleep 2
+            [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ] && sleep 2
             continue
         fi
         
         if ! generate_quote; then
-            attempt=$((attempt + 1))
-            [ $attempt -le $RETRY_COUNT ] && sleep 2
+            [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ] && sleep 2
             continue
         fi
         
@@ -388,11 +388,10 @@ fetch_luks_key() {
         
         case "$http_code" in
             401|403|404) rm -f "$response_file"; return 1 ;;
-            429) sleep $((attempt * 2)) ;;
+            429) sleep $((FETCH_ATTEMPTS * 2)) ;;
         esac
         
-        attempt=$((attempt + 1))
-        [ $attempt -le $RETRY_COUNT ] && sleep 2
+        [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ] && sleep 2
     done
     
     rm -f "$response_file"
@@ -479,7 +478,7 @@ main() {
     
     # Fetch LUKS key from API (nonce and quote generated per attempt)
     if ! fetch_luks_key; then
-        handle_failure "Failed to retrieve LUKS key from API after $RETRY_COUNT attempts"
+        handle_failure "Failed to retrieve LUKS key from API after $FETCH_ATTEMPTS attempt(s)"
         return 1
     fi
     
