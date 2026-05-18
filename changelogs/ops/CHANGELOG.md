@@ -1,16 +1,17 @@
 # Ops Changelog
 
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
-Date-stamped entries, not paired with any VERSION file. Run `make promote-changelogs` to aggregate fragments.
+Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026-05-18]
-
-### Changed
-- `chutes_vm_config` role: `base_image` and `overlay_directory` in `config.yaml` are now driven by `chutes_vm_base_image` and `chutes_vm_overlay_directory` Ansible variables (both default to `""`, preserving the existing behaviour of letting host-tools use its built-in defaults).
-
-## [2026-05-15]
+## [2026.05.0] - 2026-05-18
 
 ### Added
+- `ansible/host/playbooks/benchmark-setup.yml`: idempotent host-side setup playbook for benchmark VMs — syncs host-tools, installs `conntrack`, deploys the `benchmark-netlog` service, and starts logging. Safe to run while the VM is running; image build and launch remain manual steps.
+- `ansible/host/roles/benchmark_vm`: single host role covering all benchmark VM host-side infrastructure. Derives the bridge subnet from `config.yaml` (or an explicit `benchmark_vm_bridge_subnet` override), installs `conntrack`, deploys `benchmark-netlog.sh` / `.service` / `.logrotate` from the synced host-tools checkout, writes `/etc/chutes/benchmark-netlog.env`, and enables + starts the service.
+- `host-tools/scripts/network/benchmark-netlog.sh` / `.service` / `.logrotate`: host-side systemd service that streams `conntrack` events for the VM bridge subnet to daily log files under `/var/log/chutes/benchmark-netlog/`.
+- `quick-launch.sh --benchmark` flag: sets benchmark defaults, skips cache volume, creates a network/hostname config volume, manages the `benchmark-netlog` service lifecycle, and validates config against `config-schema.benchmark.json`.
+- `host-tools/scripts/config/config-schema.benchmark.json`: dedicated JSON schema for benchmark VM launch configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` fields which are not applicable.
+- `host-tools/scripts/config/config.benchmark.example.yaml`: ready-to-use benchmark launch config template.
 - **GPU profile SMP topology**: `GpuProfile` now derives an accurate `smp_topology`
   string from `host_cpus` and `host_sockets` and passes it to QEMU via `-smp`. This
   matches the physical NUMA topology of the host CPU, improving vCPU scheduling.
@@ -26,40 +27,23 @@ Date-stamped entries, not paired with any VERSION file. Run `make promote-change
   per-task timing in playbook output.
 
 ### Changed
-- **build-setup playbook**: Installs `ansible` package via apt and adds the
-  `host_prerequisites` role, simplifying first-time host preparation.
-- **upgrade-guest playbook**: Passes the pre-validated image SHA to the
-  `launch_and_verify` task when upgrading from a freshly-downloaded image, avoiding
-  a redundant SHA recomputation.
-
-## [2026-05-14]
-
-### Added
-- `ansible/host/playbooks/benchmark-setup.yml`: idempotent host-side setup playbook for benchmark VMs — syncs host-tools, installs `conntrack`, deploys the `benchmark-netlog` service, and starts logging. Safe to run while the VM is running; image build and launch remain manual steps.
-- `ansible/host/roles/benchmark_vm`: single host role covering all benchmark VM host-side infrastructure. Derives the bridge subnet from `config.yaml` (or an explicit `benchmark_vm_bridge_subnet` override), installs `conntrack`, deploys `benchmark-netlog.sh` / `.service` / `.logrotate` from the synced host-tools checkout, writes `/etc/chutes/benchmark-netlog.env`, and enables + starts the service.
-- `host-tools/scripts/network/benchmark-netlog.sh` / `.service` / `.logrotate`: host-side systemd service that streams `conntrack` events for the VM bridge subnet to daily log files under `/var/log/chutes/benchmark-netlog/`.
-- `quick-launch.sh --benchmark` flag: sets benchmark defaults, skips cache volume, creates a network/hostname config volume, manages the `benchmark-netlog` service lifecycle, and validates config against `config-schema.benchmark.json`.
-- `host-tools/scripts/config/config-schema.benchmark.json`: dedicated JSON schema for benchmark VM launch configs — omits `miner`, `volumes.cache`, `volumes.config`, and `docker_hub` fields which are not applicable.
-- `host-tools/scripts/config/config.benchmark.example.yaml`: ready-to-use benchmark launch config template.
-
-### Changed
+- `chutes_vm_config` role: `base_image` and `overlay_directory` in `config.yaml` are now driven by `chutes_vm_base_image` and `chutes_vm_overlay_directory` Ansible variables (both default to `""`, preserving the existing behaviour of letting host-tools use its built-in defaults).
 - `create-config.sh`: miner SS58/seed arguments are now optional — both must be provided together or both left empty, so benchmark config volumes can be created without miner credentials using the same script.
 - `ansible/guest/roles/k3s`: absorbed all k3s/k8s prerequisite tasks previously scattered across the `common` and `security` roles — k3s networking (UFW rules, iptables compatibility), k3s directory/registry config, k8s tooling, helm install, and seccomp profiles now live entirely within the `k3s` role. Playbooks compose roles without build-type flags.
 - `ansible/guest/roles/common`: slimmed to base system setup only (`system.yml`, `mirror.yml`, `container-networking.yml`). Container networking tasks (br_netfilter, overlay, bridge sysctl, AppArmor) kept here as they support Docker in all builds; renamed `kubernetes.conf` module persistence file to `container-modules.conf`.
 - `ansible/guest/roles/security`: removed `seccomp-profiles` tasks and files; role now only performs chroot/init hardening and cloud-init disabling, unconditionally.
 - `ansible/guest/inventory.yml`: removed `benchmark_build` flag — build type is now determined entirely by playbook selection.
 - `ansible/guest/inventory.yml`, `ansible/guest/playbooks/tee-gpu-vm.yml`, `ansible/guest/roles/setup-ssh-access/`: renamed `benchmark_ssh_keys` to `guest_ssh_keys`.
+- **build-setup playbook**: Installs `ansible` package via apt and adds the
+  `host_prerequisites` role, simplifying first-time host preparation.
+- **upgrade-guest playbook**: Passes the pre-validated image SHA to the
+  `launch_and_verify` task when upgrading from a freshly-downloaded image, avoiding
+  a redundant SHA recomputation.
+- `pre_2510.yml`: adds explicit gating so SGX/DCAP packages that were updated via `unattended-upgrades` are preserved rather than purged during the 25.04 → 25.10 hop; only packages that were not updated get removed
 
 ### Fixed
 - `passthrough.py` (`_run_gpu_tools`): GPU tools commands now run with a 120-second timeout and gracefully handle `TimeoutExpired`/`CalledProcessError` on reset failure, preventing indefinite hangs when a GPU is wedged at the PCIe level during VM teardown or reboot.
 - `reset-gpus.sh`: aligned with updated `passthrough.py` error handling to avoid host lockups on stuck device resets.
-
-## [2026-05-13]
-
-### Changed
-- `pre_2510.yml`: adds explicit gating so SGX/DCAP packages that were updated via `unattended-upgrades` are preserved rather than purged during the 25.04 → 25.10 hop; only packages that were not updated get removed
-
-### Fixed
 - `pre_2504.yml`: `grub-common` is now pinned/held before the OS upgrade begins to prevent apt from purging it during dependency resolution — loss of `grub-common` left hosts unbootable
 - `pre_2504.yml` / `hop.yml` / `post_2504.yml`: corrected task ordering so DKMS kernel module rebuilds and `grub-pc` reconfiguration occur in the right sequence for both fresh 25.04 installs and the 25.04 → 25.10 hop, eliminating boot failures caused by stale module state
 - QEMU was always launched with `sockets=1` regardless of the physical host topology. On 2-socket servers (H200, RTX PRO 6000) this caused QEMU to emit a degenerate CPUID with no core or package topology levels, triggering the kernel `arch topology borken` warning on every vCPU at boot and presenting a misleading scheduler topology to workloads inside the VM

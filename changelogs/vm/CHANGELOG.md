@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.0] - 2026-05-16
+## [1.3.0] - 2026-05-18
 
 ### Added
 - **Ephemeral k3s admin credentials**: The k3s cluster admin kubeconfig is now
@@ -47,37 +47,6 @@ Version source of truth: `ansible/guest/VERSION`
   verified image.
 - **`fetch_key` initramfs hook**: Added `sha384sum` to the set of binaries
   included in the initramfs image.
-- `guest-tools/scripts/compute-rtmr3.sh`: compute the expected RTMR3 at build time by mounting the final qcow2 read-only with `guestmount` and simulating the exact SHA-384 extension chain from `rtmr3-measure`. Eliminates the need to boot twice just to capture RTMR3 — the Ansible build runs this automatically and writes `<image>.rtmr3` alongside the qcow2 before the LUKS step.
-- `ansible/guest/playbooks/chutes-miner-vm.yml`, `tee-gpu-vm.yml`: add `compute-rtmr3` play that runs `compute-rtmr3.sh` automatically after `finalize-vm-image` and before `luks`/`prime-vm`, writing the expected RTMR3 to `<final_img_path>.rtmr3`.
-
-### Changed
-- **k3s server config**: Added `encryption-provider-config` pointing to the
-  ephemeral key path described above.
-- **k3s cluster-init**: `k3s-cluster-init.service` keeps `Requires=k3s.service`
-  as the correct dependency. The secrets re-encryption script no longer stops and
-  restarts k3s to perform the kine purge — DELETE and UPDATE operations now run
-  online (SQLite WAL mode allows concurrent access), removing a systemd dependency
-  cascade that was previously killing the service mid-run.
-- **k3s secrets re-encryption marker**: The completion marker is now written only
-  after both the kubectl re-encryption pass and the kine history purge succeed. A
-  failed purge previously left plaintext dead rows and `old_value` data permanently;
-  it now causes a full retry on the next boot.
-
-### Fixed
-- **LUKS attestation mTLS cert binding**: The ephemeral mTLS client certificate
-  generated during `fetch_key_and_unlock` (init-premount) is now preserved across
-  init stages so init-bottom (`setup_storage`) uses the same certificate for the
-  `/luks/attest` call. The TDX quote REPORTDATA for `/luks/attest` now includes
-  `nonce + cert_hash`, binding the quote cryptographically to the certificate
-  presented in the mTLS handshake and matching the boot attestation pattern the
-  API expects. Previously only the nonce was included, causing a 403 from the API.
-- `setup_storage`: add `--batch-mode` and `timeout 60` to all `cryptsetup luksOpen` and `luksFormat` calls to prevent indefinite hangs in init-bottom; fix `purge_admin_kubeconfig` mount point from `/tmp` (not guaranteed in initramfs) to `/run`, and surface the mount error message instead of suppressing it.
-
-## [1.2.0] - 2026-05-14
-
-### Added
-- Boot-time Helm upgrade script (`04-helm-chart-upgrade.sh`) refactored into a generic multi-chart dispatcher; per-chart configs in `/etc/chutes/chart-configs/` and optional override scripts in `/etc/chutes/chart-upgrade-overrides/` support custom upgrade logic (e.g. GPU Operator CRD migration)
-- GPU Operator boot-time upgrade override script handles CRD migration with `--disable-openapi-validation` and `operator.upgradeCRD=true` for persistent clusters upgrading across major chart versions
 - `roles/rtmr3-measure`: new standalone role that extends TDX RTMR3 at boot
   with SHA-384 hashes of a configurable list of paths (defaults: SSH keys,
   passwd, shadow, sudoers).  An `initramfs-tools` hook bakes the measurement
@@ -98,16 +67,25 @@ Version source of truth: `ansible/guest/VERSION`
 - `chutes-miner-vm.yml` and `tee-gpu-vm.yml`: added `rtmr3-measure` play after
   security hardening and SSH key injection so the final on-disk state (including
   partner SSH keys) is what gets measured at boot.
+- `guest-tools/scripts/compute-rtmr3.sh`: compute the expected RTMR3 at build
+  time by mounting the final qcow2 read-only with `guestmount` and simulating
+  the exact SHA-384 extension chain from `rtmr3-measure`. Eliminates the need
+  to boot twice just to capture RTMR3 — the Ansible build runs this automatically
+  and writes `<image>.rtmr3` alongside the qcow2 before the LUKS step.
+- `ansible/guest/playbooks/chutes-miner-vm.yml`, `tee-gpu-vm.yml`: add
+  `compute-rtmr3` play that runs `compute-rtmr3.sh` automatically after
+  `finalize-vm-image` and before `luks`/`prime-vm`, writing the expected RTMR3
+  to `<final_img_path>.rtmr3`.
 - `playbooks/tee-gpu-vm.yml`: new dedicated TEE GPU VM build playbook, fully
   independent of `chutes-miner-vm.yml`. Includes `run-vm`, `common`, `gpu`,
   `benchmark`, `harden-ssh`, `lock-accounts`, `disable-console`, `security`,
   `rtmr3-measure`, `setup-ssh-access`, `cleanup-build-vm`, `finalize-vm-image`,
   and `prime-vm`. No k3s, admission controller, system-manager, cache-volume, or
   LUKS plays.
-- `benchmark` Ansible role: self-contained benchmark image setup. Now owns the full
+- `benchmark` Ansible role: self-contained TEE GPU VM image setup. Owns the full
   config volume stack (simplified `process-config.py`, `config-manager.service`,
-  `var-config.mount`, `config-volume-validator.service`, `netplan-apply.service`) in
-  addition to the TDX/GPU attestation tools, LUKS helper, and storage setup service.
+  `var-config.mount`, `config-volume-validator.service`, `netplan-apply.service`)
+  in addition to TDX/GPU attestation tools, LUKS helper, and storage setup service.
 - `attest` in-VM tool: `attest dump` prints TDX hardware measurements (MRTD, RTMRs,
   MRSEAM); `attest verify` adds NVIDIA NRAS GPU attestation (ES384-signed JWT) and
   optional Intel Tiber Trust Services TDX remote verification.
@@ -119,38 +97,46 @@ Version source of truth: `ansible/guest/VERSION`
   is required on every reboot.
 - Benchmark VMs use a simplified `process-config.py` (no k3s, miner credential, or
   Docker Hub logic) so the config volume can be created without miner credentials.
-- `benchmark-storage-setup.sh` + `setup-storage-bind-mounts.service` (benchmark role): at boot, identifies the storage block device, creates a stable `/dev/chutes-storage` symlink and `/data` mount point. Auto-mounts the device if it already has a filesystem; logs `luks-setup` instructions otherwise. Service name matches the production service so existing systemd ordering constraints are satisfied without any changes to `config-manager.service`.
+- `benchmark-storage-setup.sh` + `setup-storage-bind-mounts.service` (benchmark
+  role): at boot, identifies the storage block device, creates a stable
+  `/dev/chutes-storage` symlink and `/data` mount point. Auto-mounts the device
+  if it already has a filesystem; logs `luks-setup` instructions otherwise.
+  Service name matches the production service so existing systemd ordering
+  constraints are satisfied without changes to `config-manager.service`.
 - `docs/tee-gpu-vm.md`: operator reference for building and launching the TEE GPU VM.
 - `docs/tee-gpu-vm-guide.md`: user-facing walkthrough covering SSH access, GPU
   verification, attestation, storage encryption, and network transparency.
 
 ### Changed
-- Updated sek8s to 0.3.0: HuggingFace cache improvements including download cancellation, stale revision purging, and isolated download subprocess.
-- k3s upgraded from `v1.33.7+k3s1` to `v1.35.4+k3s1`
-- GPU Operator Helm chart upgraded from `v24.9.2` to `v26.3.1`; build-time install now uses `operator.upgradeCRD=true`
-- Helm CLI upgraded from `v3.11.3` to `v3.20.2`
-- OPA upgraded from `0.68.0` to `1.15.2` (0.x to 1.x major bump; existing policy tests confirmed passing)
-- cosign pinned to `v2.6.3` (previously fetched `latest` at build time, non-deterministic; fixes CVE-2026-39395)
-- `nv-attestation-sdk` constraint bumped from `^2.6.2` to `^2.7.0` in `nvevidence/`
-- Moved libvirt/VM lifecycle handlers from `roles/run-vm/handlers/main.yml` to the top-level `ansible/guest/handlers/main.yml` so they are available to all guest roles rather than scoped only to `run-vm`
-- NVIDIA driver pin bumped from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1` (bug-fix
-  release; resolves broken package state caused by base image advancing ahead of the pin).
-- CUDA toolkit bumped from `13-0` to `13-2` (`cuda-toolkit-13-2` metapackage).
+- **k3s server config**: Added `encryption-provider-config` pointing to the
+  ephemeral key path described above.
+- **k3s cluster-init**: `k3s-cluster-init.service` keeps `Requires=k3s.service`
+  as the correct dependency. The secrets re-encryption script no longer stops and
+  restarts k3s to perform the kine purge — DELETE and UPDATE operations now run
+  online (SQLite WAL mode allows concurrent access), removing a systemd dependency
+  cascade that was previously killing the service mid-run.
+- **k3s secrets re-encryption marker**: The completion marker is now written only
+  after both the kubectl re-encryption pass and the kine history purge succeed. A
+  failed purge previously left plaintext dead rows and `old_value` data permanently;
+  it now causes a full retry on the next boot.
+- Moved libvirt/VM lifecycle handlers from `roles/run-vm/handlers/main.yml` to the
+  top-level `ansible/guest/handlers/main.yml` so they are available to all guest
+  roles rather than scoped only to `run-vm`.
 - `gpu/tasks/device-setup.yml`: Docker NVIDIA Container Runtime is now configured
   here (alongside containerd) so benchmark images have Docker GPU support without k3s.
 - `final_img_path` no longer appends a `-benchmark` suffix; use `build_env: "benchmark"`
   in inventory to produce a dedicated `image/benchmark/<version>.qcow2` output path.
-- `chutes-miner-vm.yml` is now production-only — all `benchmark_build` conditions and the
-  benchmark tools play have been removed. Benchmark builds use `tee-gpu-vm.yml`.
+- `chutes-miner-vm.yml` is now production-only — all `benchmark_build` conditions and
+  the benchmark tools play have been removed. Benchmark builds use `tee-gpu-vm.yml`.
 - **Playbook rename:** `site.yml` → `chutes-miner-vm.yml`. `tee-gpu-vm.yml` is a new
   dedicated TEE GPU VM build playbook (see Added).
 - **Role refactor — single responsibility:** `harden-access` and `cleanup` were split
   into focused single-purpose roles. New roles: `harden-ssh` (sshd key-only auth),
   `lock-accounts` (password locking), `disable-console` (getty/serial masking + grub
   cmdline), `remove-ssh` (SSH and sudo removal for production builds), `setup-ssh-access`
-  (partner key injection for TEE GPU VM),   `cleanup-build-vm` (common build cleanup: cloud-init, infiniband, fstrim),
-  `cleanup-orchestration` (k3s/attestation/admission teardown for production builds),
-  `finalize-vm-image` (shutdown, undefine, move image).
+  (partner key injection for TEE GPU VM), `cleanup-build-vm` (common build cleanup:
+  cloud-init, infiniband, fstrim), `cleanup-orchestration` (k3s/attestation/admission
+  teardown for production builds), `finalize-vm-image` (shutdown, undefine, move image).
 - **`rtmr3-measure` role enhancements:**
   - Added `/etc/default/grub` to `rtmr3_measure_paths` and `rtmr3_canonical_paths` —
     any change to the GRUB kernel cmdline (e.g. re-enabling console) now changes RTMR3
@@ -172,10 +158,28 @@ Version source of truth: `ansible/guest/VERSION`
   Works identically for both `chutes-miner-vm.yml` and `tee-gpu-vm.yml`.
 
 ### Fixed
-- OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations, preventing the Job controller from being permanently blocked when removing tracking finalizers from completed CronJob pods that predate the `automountServiceAccountToken` policy.
-- `process-config.py`: `apply_docker_hub_and_registries` now returns early with success when the `admission` group is absent and no Docker Hub credentials are present, instead of hard-failing. This prevented `config-manager.service` from starting in benchmark VMs (which have no admission controller).
-- `attest verify`: GPU attestation now passes `options={"ppcie_mode": False}` to `get_evidence()`, matching how `chutes_nvevidence.NvClient.gather_evidence()` works — fixes evidence collection on H200s in Protected PCIe mode.
-- `attest verify`: TDX verification replaced `trustauthority-cli` with `dcap_qvl.get_collateral_and_verify()` — no API key or config file required, same library used in production validator. `dcap-qvl` is now installed in the nvevidence venv.
+- **LUKS attestation mTLS cert binding**: The ephemeral mTLS client certificate
+  generated during `fetch_key_and_unlock` (init-premount) is now preserved across
+  init stages so init-bottom (`setup_storage`) uses the same certificate for the
+  `/luks/attest` call. The TDX quote REPORTDATA for `/luks/attest` now includes
+  `nonce + cert_hash`, binding the quote cryptographically to the certificate
+  presented in the mTLS handshake and matching the boot attestation pattern the
+  API expects. Previously only the nonce was included, causing a 403 from the API.
+- `setup_storage`: add `--batch-mode` and `timeout 60` to all `cryptsetup luksOpen`
+  and `luksFormat` calls to prevent indefinite hangs in init-bottom; fix
+  `purge_admin_kubeconfig` mount point from `/tmp` (not guaranteed in initramfs) to
+  `/run`, and surface the mount error message instead of suppressing it.
+- `process-config.py`: `apply_docker_hub_and_registries` now returns early with
+  success when the `admission` group is absent and no Docker Hub credentials are
+  present, instead of hard-failing. This prevented `config-manager.service` from
+  starting in benchmark VMs (which have no admission controller).
+- `attest verify`: GPU attestation now passes `options={"ppcie_mode": False}` to
+  `get_evidence()`, matching how `chutes_nvevidence.NvClient.gather_evidence()`
+  works — fixes evidence collection on H200s in Protected PCIe mode.
+- `attest verify`: TDX verification replaced `trustauthority-cli` with
+  `dcap_qvl.get_collateral_and_verify()` — no API key or config file required,
+  same library used in production validator. `dcap-qvl` is now installed in the
+  nvevidence venv.
 - `verify-access-config`: `masked-runtime` (services masked via kernel cmdline
   `systemd.mask=`) is now accepted as a valid masked state alongside `masked`.
 - Removed stale `trustauthority-cli` install task from `benchmark` role — nothing
@@ -189,6 +193,26 @@ Version source of truth: `ansible/guest/VERSION`
   `disable-console`.
 - `roles/cleanup` — split into `cleanup-build-vm` (common build cleanup) and
   `cleanup-orchestration` (k3s/attestation/admission teardown for production builds).
+
+## [1.2.0] - 2026-05-05
+
+### Added
+- Boot-time Helm upgrade script (`04-helm-chart-upgrade.sh`) refactored into a generic multi-chart dispatcher; per-chart configs in `/etc/chutes/chart-configs/` and optional override scripts in `/etc/chutes/chart-upgrade-overrides/` support custom upgrade logic (e.g. GPU Operator CRD migration)
+- GPU Operator boot-time upgrade override script handles CRD migration with `--disable-openapi-validation` and `operator.upgradeCRD=true` for persistent clusters upgrading across major chart versions
+
+### Changed
+- Updated sek8s to 0.3.0: HuggingFace cache improvements including download cancellation, stale revision purging, and isolated download subprocess.
+- k3s upgraded from `v1.33.7+k3s1` to `v1.35.4+k3s1`
+- CUDA toolkit upgraded from `13-0` to `13-2`
+- NVIDIA driver package upgraded from `595.58.03-1ubuntu1` to `595.71.05-1ubuntu1`
+- GPU Operator Helm chart upgraded from `v24.9.2` to `v26.3.1`; build-time install now uses `operator.upgradeCRD=true`
+- Helm CLI upgraded from `v3.11.3` to `v3.20.2`
+- OPA upgraded from `0.68.0` to `1.15.2` (0.x to 1.x major bump; existing policy tests confirmed passing)
+- cosign pinned to `v2.6.3` (previously fetched `latest` at build time, non-deterministic; fixes CVE-2026-39395)
+- `nv-attestation-sdk` constraint bumped from `^2.6.2` to `^2.7.0` in `nvevidence/`
+
+### Fixed
+- OPA validating policy (`chutes.rego`) no longer enforces pod-spec rules on Pod UPDATE operations, preventing the Job controller from being permanently blocked when removing tracking finalizers from completed CronJob pods that predate the `automountServiceAccountToken` policy.
 
 ## [1.1.0] - 2026-05-04
 
