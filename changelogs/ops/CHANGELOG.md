@@ -3,6 +3,11 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Date-stamped entries, not paired with any VERSION file. Run `make promote-changelogs` to aggregate fragments.
 
+## [2026-05-18]
+
+### Changed
+- `chutes_vm_config` role: `base_image` and `overlay_directory` in `config.yaml` are now driven by `chutes_vm_base_image` and `chutes_vm_overlay_directory` Ansible variables (both default to `""`, preserving the existing behaviour of letting host-tools use its built-in defaults).
+
 ## [2026-05-15]
 
 ### Added
