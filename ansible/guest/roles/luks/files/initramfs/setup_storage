@@ -6,13 +6,13 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
-# Disable libdevmapper udev synchronization.  At init-bottom, udevd's event
-# queue is backed up with GPU/NVSwitch PCI events, causing luksOpen to block
-# indefinitely on a SysV semaphore (semtimedop) waiting for udevd to signal
-# the DM cookie.  DM_DISABLE_UDEV tells libdevmapper to skip cookie creation
-# and semaphore waits entirely.  dmsetup mknodes is called after each open
-# to create /dev/mapper/* nodes explicitly.
-export DM_DISABLE_UDEV=1
+# The initramfs stops udevd after mounting the root filesystem (local-bottom),
+# but leaves /run/udev/control behind.  libdevmapper sees this stale socket,
+# assumes udevd is alive, and creates SysV semaphore cookies on DM operations
+# — then deadlocks on semtimedop() waiting for a signal that never arrives.
+# Restart udevd so the cookie mechanism works and the udev database is properly
+# populated for systemd device discovery after pivot_root.
+/usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 
 # Configuration
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
@@ -508,7 +508,6 @@ setup_storage() {
             log_failure_msg "Failed to unlock storage"
             return 1
         fi
-        dmsetup mknodes 2>/dev/null || true
         log_success_msg "Storage unlocked"
     else
         log_begin_msg "Encrypting storage (first boot)"
@@ -534,7 +533,6 @@ setup_storage() {
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
-        dmsetup mknodes 2>/dev/null || true
         log_begin_msg "Formatting storage..."
         if ! mkfs.xfs -L "$STORAGE_LABEL" "/dev/mapper/$STORAGE_LUKS_NAME"; then
             log_failure_msg "Failed to format storage"
@@ -593,7 +591,6 @@ setup_cache() {
             log_failure_msg "Failed to unlock cache"
             return 1
         fi
-        dmsetup mknodes 2>/dev/null || true
         log_success_msg "Cache unlocked"
     else
         log_begin_msg "Encrypting cache (first boot)"
@@ -617,7 +614,6 @@ setup_cache() {
             log_failure_msg "Failed to open LUKS cache container"
             return 1
         fi
-        dmsetup mknodes 2>/dev/null || true
         log_begin_msg "Formatting cache..."
         if ! mkfs.xfs -L "$CACHE_LABEL" "/dev/mapper/$CACHE_LUKS_NAME"; then
             log_failure_msg "Failed to format cache"
@@ -795,6 +791,7 @@ main() {
 
     SUCCESS_FLAG=1
     clear_sensitive_data
+
     log_success_msg "Storage and cache setup completed successfully"
     return 0
 }
