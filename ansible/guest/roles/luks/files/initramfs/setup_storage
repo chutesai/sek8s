@@ -431,10 +431,8 @@ purge_admin_kubeconfig() {
 
     mkdir -p "$mnt"
 
-    local mount_err
-    mount_err=$(mount -t xfs "/dev/mapper/${STORAGE_LUKS_NAME}" "$mnt" 2>&1)
-    if [ $? -ne 0 ]; then
-        log_failure_msg "Failed to mount storage volume for kubeconfig purge: $mount_err"
+    if ! mount -t xfs "/dev/mapper/${STORAGE_LUKS_NAME}" "$mnt" 2>/dev/null; then
+        log_failure_msg "Failed to mount storage volume for kubeconfig purge"
         umount "$mnt" 2>/dev/null || true
         rmdir "$mnt" 2>/dev/null || true
         return 1
@@ -504,7 +502,7 @@ setup_storage() {
         log_begin_msg "Unlocking storage"
         if ! printf '%s' "$STORAGE_KEY" | \
                cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
-               --key-file=- --batch-mode; then
+               --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to unlock storage"
             return 1
         fi
@@ -522,14 +520,14 @@ setup_storage() {
         log_begin_msg "Creating LUKS container with label..."
         if ! printf '%s' "$STORAGE_KEY" | \
                cryptsetup luksFormat --type luks2 --label "$STORAGE_LABEL" \
-               "$STORAGE_DEVICE" --key-file=- --batch-mode; then
+               "$STORAGE_DEVICE" --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to create LUKS container"
             return 1
         fi
 
         if ! printf '%s' "$STORAGE_KEY" | \
                cryptsetup luksOpen "$STORAGE_DEVICE" "$STORAGE_LUKS_NAME" \
-               --key-file=- --batch-mode; then
+               --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to open LUKS container"
             return 1
         fi
@@ -587,7 +585,7 @@ setup_cache() {
         log_begin_msg "Unlocking cache"
         if ! printf '%s' "$CACHE_KEY" | \
                cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
-               --key-file=- --batch-mode; then
+               --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to unlock cache"
             return 1
         fi
@@ -604,13 +602,13 @@ setup_cache() {
         log_begin_msg "Creating LUKS cache container with label..."
         if ! printf '%s' "$CACHE_KEY" | \
                cryptsetup luksFormat --type luks2 --label "$CACHE_LABEL" \
-               "$CACHE_DEVICE" --key-file=- --batch-mode; then
+               "$CACHE_DEVICE" --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to create LUKS cache container"
             return 1
         fi
         if ! printf '%s' "$CACHE_KEY" | \
                cryptsetup luksOpen "$CACHE_DEVICE" "$CACHE_LUKS_NAME" \
-               --key-file=- --batch-mode; then
+               --key-file=- --batch-mode 2>/dev/null; then
             log_failure_msg "Failed to open LUKS cache container"
             return 1
         fi
