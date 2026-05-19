@@ -33,5 +33,7 @@
 - name: Lock passwords for all remaining accounts
   ansible.builtin.shell: |
     awk -F: '$1 != "root" && $2 != "!" && $2 != "!!" && $2 != "*" {print $1}' /etc/shadow | \
-      xargs -r passwd --lock
+      while read -r user; do
+        passwd --lock "$user" 2>/dev/null || true
+      done
   changed_when: true
