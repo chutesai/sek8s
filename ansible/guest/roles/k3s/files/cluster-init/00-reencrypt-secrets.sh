@@ -47,16 +47,75 @@ log "Secrets encryption is active — re-encrypting all existing plaintext secre
 
 log "Replacing all secrets and configmaps so live kine rows have encrypted values..."
 
-# Use `kubectl apply` (PATCH) rather than `kubectl replace` (PUT) to avoid
-# Conflict (409) errors on k3s-managed objects (e.g. k3s-serving, node-password
-# secrets) that k3s updates concurrently during cluster init.  apply sends a
-# strategic-merge PATCH which the API server applies to the current version,
-# so a stale resourceVersion in our snapshot never causes a conflict.
-if ! kubectl get secrets --all-namespaces -o json | kubectl apply -f -; then
+# Process each resource individually with a fresh fetch per attempt.
+#
+# A bulk `kubectl get --all-namespaces -o json | kubectl apply` has a race window:
+# k3s-managed objects (validator-auth, k3s-serving, node-password, etc.) are
+# updated by the addon controller concurrently during cluster init.  If the
+# controller updates one between our bulk get and the apply, kubectl apply uses
+# the stale resourceVersion from the snapshot and the API server rejects it with
+# a 409 Conflict.
+#
+# Fix: fetch each resource immediately before applying it — the resourceVersion is
+# always current at apply time.  On conflict, re-fetch and retry from scratch so
+# we never replay a stale snapshot.  Resources deleted between list and get are
+# skipped silently (gone = already re-encrypted or never needed).
+reencrypt_resource_type() {
+    local resource_type="$1"
+    local max_attempts=5
+
+    local items
+    items=$(kubectl get "$resource_type" --all-namespaces \
+        -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+        2>/dev/null) || true
+
+    local failed=0
+    while IFS=$'\t' read -r ns name; do
+        [[ -z "$ns" || -z "$name" ]] && continue
+
+        local attempt=1
+        local ok=0
+        while [[ $attempt -le $max_attempts ]]; do
+            # Fresh fetch every attempt — never reuse a snapshot from a previous attempt
+            local json
+            json=$(kubectl get "$resource_type" "$name" -n "$ns" -o json 2>/dev/null) || {
+                # Resource was deleted between list and get — skip it
+                ok=1
+                break
+            }
+
+            local err
+            err=$(echo "$json" \
+                | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+d['metadata'].pop('resourceVersion', None)
+print(json.dumps(d))
+" | kubectl apply -f - 2>&1) && { ok=1; break; }
+
+            if echo "$err" | grep -q "Conflict\|the object has been modified"; then
+                log "WARN: conflict on $resource_type $ns/$name (attempt $attempt/$max_attempts) — re-fetching"
+            else
+                log "WARN: error on $resource_type $ns/$name (attempt $attempt/$max_attempts): $err"
+            fi
+            attempt=$((attempt + 1))
+            [[ $attempt -le $max_attempts ]] && sleep 1
+        done
+
+        if [[ $ok -eq 0 ]]; then
+            log "ERROR: failed to re-encrypt $resource_type $ns/$name after $max_attempts attempts"
+            failed=$((failed + 1))
+        fi
+    done <<< "$items"
+
+    return "$failed"
+}
+
+if ! reencrypt_resource_type "secrets"; then
     log "ERROR: Re-encryption of secrets failed"
     exit 1
 fi
-if ! kubectl get configmaps --all-namespaces -o json | kubectl apply -f -; then
+if ! reencrypt_resource_type "configmaps"; then
     log "ERROR: Re-encryption of configmaps failed"
     exit 1
 fi
