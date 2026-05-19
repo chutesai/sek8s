@@ -1,9 +1,12 @@
 ---
 # lock-accounts — Remove non-system accounts and lock root.
 #
-# Removes all accounts with uid >= 1000 (except nobody) along with their
-# home directories.  Locks root password and sets nologin shell on any
-# system account that still has an interactive shell.
+# Removes all accounts with uid >= 1000 (except nobody and system-manager)
+# along with their home directories.  Locks root password and sets nologin
+# shell on any system account that still has an interactive shell.
+#
+# system-manager is excluded because it is a service account with uid 10150
+# (above the system range) that must survive into the running VM.
 #
 # Idempotent: safe to re-run. No flags or conditionals — the playbook
 # decides whether to include this role.
@@ -16,7 +19,7 @@
 
 - name: Remove all non-system accounts (uid >= 1000)
   ansible.builtin.shell: |
-    awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | \
+    awk -F: '$3 >= 1000 && $1 != "nobody" && $1 != "system-manager" {print $1}' /etc/passwd | \
       while read -r user; do
         userdel --remove --force "$user" 2>/dev/null || true
       done
@@ -29,6 +32,13 @@
         usermod --shell /usr/sbin/nologin "$user" 2>/dev/null || true
       done
   changed_when: true
+
+- name: Ensure system-manager service account is locked (nologin + locked password)
+  ansible.builtin.user:
+    name: system-manager
+    password_lock: true
+    shell: /usr/sbin/nologin
+  failed_when: false
 
 - name: Lock passwords for all remaining accounts
   ansible.builtin.shell: |
