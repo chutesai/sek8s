@@ -42,6 +42,7 @@ USER root
 ENV PATH="/app/src/${PROJECT_DIR}/.venv/bin:$PATH"
 ENV APP_USER=chutes
 ENV APP_GROUP=chutes
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN useradd ${APP_USER} -s /bin/bash -d /home/${APP_USER} && mkdir -p /home/${APP_USER} && chown ${APP_USER}:${APP_GROUP} /home/${APP_USER}
 
 WORKDIR /app
