@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `src/attestation-proxy/VERSION`
 
+## [0.3.0] - 2026-05-19
+
+### Fixed
+- Added `curl` to the production Docker image so Kubernetes startup, liveness, and readiness exec probes can execute successfully.
+
+> **Note:** The changes listed under [0.2.0] were not published due to a build issue caused by a version misalignment from the prior monorepo restructure. The 0.2.0 changes (X-Signature response header) are first published in this release.
+
 ## [0.2.0] - 2026-05-04
 
 ### Added
