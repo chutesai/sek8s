@@ -18,13 +18,14 @@
   delegate_to: localhost
   become: false
 
-- name: Wait for Power down in guest serial log
-  ansible.builtin.shell: |
-    set -euo pipefail
-    test -s /tmp/tdx-guest-td.log && grep -q 'Power down' /tmp/tdx-guest-td.log
-  args:
+- name: Wait for QEMU guest process to exit
+  ansible.builtin.script:
     executable: /bin/bash
+    cmd: is_live_chutes_td.sh
   register: power_wait
-  until: power_wait.rc == 0
+  # rc == 1 means no live guest — that's our success condition
+  failed_when: false
+  changed_when: false
+  until: power_wait.rc != 0
   retries: "{{ (upgrade_powerdown_timeout_seconds | int) // 5 }}"
   delay: 5

@@ -235,6 +235,7 @@
       - "{{ chutes_kubeconfig_path }}"
       - --miner-api
       - "{{ chutes_miner_api }}"
+    stdin: "y\n"
   delegate_to: localhost
   become: false
   when: _vm_live_check.rc == 0
