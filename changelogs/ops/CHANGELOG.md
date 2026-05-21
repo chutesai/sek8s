@@ -3,6 +3,12 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.05.1] - 2026-05-21
+
+### Fixed
+- `drain_and_shutdown.yml`: pass `stdin: "y\n"` to the CLI drain command to satisfy the confirmation prompt introduced in the latest CLI version.
+- `shutdown_via_miner.yml`: replace serial-log grep for "Power down" with `is_live_chutes_td.sh` script polling; loop now succeeds when the QEMU guest process exits (`rc != 0`) rather than waiting for a log message that may not appear.
+
 ## [2026.05.0] - 2026-05-18
 
 ### Added
