@@ -21,7 +21,9 @@ metadata:
   namespace: attestation-system
 
 ---
-# Role to allow checking for miner-credentials secret
+# Role to allow reading miner-credentials and validator-auth secrets.
+# validator-auth is created at runtime by 03-k3s-validator-auth.sh (cluster-init)
+# and contains the per-VM ephemeral ALLOWED_VALIDATORS SS58 for attestation-proxy.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -30,7 +32,7 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
-  resourceNames: ["miner-credentials"]
+  resourceNames: ["miner-credentials", "validator-auth"]
   verbs: ["get"]
 
 ---
@@ -109,19 +111,11 @@ subjects:
     apiGroup: rbac.authorization.k8s.io
 
 ---
-# Secret containing allowed validator hotkeys
-apiVersion: v1
-kind: Secret
-metadata:
-  name: validator-auth
-  namespace: attestation-system
-type: Opaque
-stringData:
-  # Comma-separated list of allowed validator SS58 addresses
-  allowed-validators: "{{ validator }}"
-
----
 # DaemonSet - runs on all control plane nodes
+# NOTE: The validator-auth Secret (ALLOWED_VALIDATORS) is NOT defined here.
+# It is created at runtime by cluster-init script 03-k3s-validator-auth.sh from
+# /run/chutes/validator-ss58 (per-VM ephemeral SS58 written by initramfs at boot).
+# This keeps the dynamic per-VM value out of the measured manifest directory.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -153,12 +147,16 @@ spec:
         - /bin/sh
         - -c
         - |
-          echo "Waiting for miner-credentials secret..."
+          echo "Waiting for miner-credentials and validator-auth secrets..."
           until kubectl get secret miner-credentials -n attestation-system >/dev/null 2>&1; do
-            echo "Secret not found, waiting 5s..."
+            echo "miner-credentials not found, waiting 5s..."
             sleep 5
           done
-          echo "Secret found, proceeding with startup"
+          until kubectl get secret validator-auth -n attestation-system >/dev/null 2>&1; do
+            echo "validator-auth not found, waiting 5s..."
+            sleep 5
+          done
+          echo "All secrets found, proceeding with startup"
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000

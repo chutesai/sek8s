@@ -46,8 +46,8 @@
     - name: Add proxy hostname to /etc/hosts
       lineinfile:
         path: /etc/hosts
-        line: "127.0.0.1 {{ validator }}.localregistry.chutes.ai"
-        regexp: "^127\\.0\\.0\\.1\\s+{{ (validator + '.localregistry.chutes.ai') | regex_escape() }}$"
+        line: "127.0.0.1 localregistry.chutes.ai"
+        regexp: "^127\\.0\\.0\\.1\\s+localregistry\\.chutes\\.ai$"
         state: present
         backup: yes
 
@@ -78,9 +78,7 @@
         docker_config: "{{ docker_config | combine({'insecure-registries': insecure_registries_list}) }}"
       vars:
         insecure_registries_list:
-          - "{{ validator }}.localregistry.chutes.ai:{{ registry_port | default('30500') }}"
-          - "localhost:{{ registry_port | default('30500')  }}"
-          - "127.0.0.1:{{ registry_port | default('30500')  }}"
+          - "localregistry.chutes.ai:{{ registry_port | default('30500') }}"
 
     - name: Write updated Docker daemon config
       copy:
