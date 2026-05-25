@@ -187,6 +187,21 @@
         apply:
           tags: cache-volume
 
+- name: AppArmor hardening
+  hosts: vm
+  become: true
+  tags:
+    - apparmor-hardening
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: AppArmor hardening
+      ansible.builtin.include_role:
+        name: apparmor-hardening
+        apply:
+          tags: apparmor-hardening
+
 - name: Add dyanmic config services
   hosts: vm
   become: true

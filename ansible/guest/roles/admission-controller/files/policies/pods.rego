@@ -129,6 +129,8 @@ dangerous_capabilities := {
     "SYS_RAWIO",
     "SYS_PTRACE",
     "SYS_BOOT",
+    "MAC_ADMIN",
+    "MAC_OVERRIDE",
 }
 
 has_dangerous_capability(container) if {
