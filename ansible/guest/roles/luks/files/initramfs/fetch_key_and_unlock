@@ -38,6 +38,7 @@ LUKS_KEY=""
 LUKS_QUOTE_NONCE=""  # single-use nonce for the init-bottom POST /luks quote
 VM_NAME=""
 HOTKEY=""
+VM_AUTH_SS58=""      # per-VM ephemeral SR25519 SS58 for validator auth (rotates every boot)
 SUCCESS_FLAG=0
 
 # Function to securely clear the LUKS key and temporary files
@@ -366,11 +367,12 @@ fetch_luks_key() {
             200)
                 LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
                 LUKS_QUOTE_NONCE=$(jq -r '.luks_quote_nonce // empty' "$response_file" 2>/dev/null)
-                if [ -n "$LUKS_KEY" ] && [ -n "$LUKS_QUOTE_NONCE" ]; then
+                VM_AUTH_SS58=$(jq -r '.vm_auth_ss58 // empty' "$response_file" 2>/dev/null)
+                if [ -n "$LUKS_KEY" ] && [ -n "$LUKS_QUOTE_NONCE" ] && [ -n "$VM_AUTH_SS58" ]; then
                     rm -f "$response_file"
                     send_result=0
                 else
-                    send_error="API response missing key or luks_quote_nonce field"
+                    send_error="API response missing key, luks_quote_nonce, or vm_auth_ss58 field"
                 fi
                 ;;
             401|403) send_error="Authentication failed (HTTP $http_code)" ;;
@@ -504,6 +506,12 @@ main() {
         if [ -n "$CERT_HASH" ]; then
             printf '%s' "$CERT_HASH" > /run/chutes/cert-hash
             chmod 600 /run/chutes/cert-hash
+        fi
+        # Save per-VM ephemeral validator auth SS58 for write-validator-auth (init-bottom)
+        # and 03-k3s-validator-auth.sh (cluster-init).  Rotates on every boot.
+        if [ -n "$VM_AUTH_SS58" ]; then
+            printf '%s' "$VM_AUTH_SS58" > /run/chutes/validator-ss58
+            chmod 600 /run/chutes/validator-ss58
         fi
 
         # Mark as successful before cleanup

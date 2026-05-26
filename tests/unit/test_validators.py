@@ -358,41 +358,41 @@ class TestCosignValidator:
         """Test resolve_to_full_ref for short form inputs."""
         from sek8s.system_manager.images.util import resolve_to_full_ref
 
-        allowed = ["5fgap.localregistry.chutes.ai:30500", "localhost:30500"]
+        allowed = ["localregistry.chutes.ai:30500"]
         assert (
             resolve_to_full_ref("sglang:nightly-123", allowed)
-            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:nightly-123"
+            == "localregistry.chutes.ai:30500/chutes/sglang:nightly-123"
         )
         assert (
             resolve_to_full_ref("chutes/sglang:tag", allowed)
-            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:tag"
+            == "localregistry.chutes.ai:30500/chutes/sglang:tag"
         )
         # Full ref returned as-is
-        full = "localhost:30500/chutes/sglang:tag"
+        full = "localregistry.chutes.ai:30500/chutes/sglang:tag"
         assert resolve_to_full_ref(full, allowed) == full
 
-    def test_resolve_to_full_ref_prefers_validator_over_localhost(self):
-        """When localhost is first, still prefer validator hostname so ref matches pods."""
+    def test_resolve_to_full_ref_prefers_localregistry_over_localhost(self):
+        """When localhost appears in allowed list, localregistry.chutes.ai is used for resolution."""
         from sek8s.system_manager.images.util import resolve_to_full_ref
 
-        # localhost first - we should still use validator so ref matches k8s deployments
-        allowed = ["localhost:30500", "5fgap.localregistry.chutes.ai:30500"]
+        # localhost should never be used for short-form resolution
+        allowed = ["localhost:30500", "localregistry.chutes.ai:30500"]
         assert (
             resolve_to_full_ref("sglang:tag", allowed)
-            == "5fgap.localregistry.chutes.ai:30500/chutes/sglang:tag"
+            == "localregistry.chutes.ai:30500/chutes/sglang:tag"
         )
 
-    def test_resolve_to_full_ref_requires_validator_hostname(self):
-        """Short form resolution fails when no validator hostname in allowed_registries."""
+    def test_resolve_to_full_ref_requires_localregistry_hostname(self):
+        """Short form resolution fails when localregistry.chutes.ai not in allowed_registries."""
         from fastapi import HTTPException
 
         from sek8s.system_manager.images.util import resolve_to_full_ref
 
-        # Only localhost - no validator hostname, must fail
+        # Only localhost — no localregistry hostname, must fail
         with pytest.raises(HTTPException) as exc:
-            resolve_to_full_ref("sglang:tag", ["localhost:30500", "127.0.0.1:30500"])
+            resolve_to_full_ref("sglang:tag", ["localhost:30500"])
         assert exc.value.status_code == 500
-        assert ".localregistry.chutes.ai" in exc.value.detail
+        assert "localregistry.chutes.ai" in exc.value.detail
 
         # Empty list
         with pytest.raises(HTTPException) as exc:

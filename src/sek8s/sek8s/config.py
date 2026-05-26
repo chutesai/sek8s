@@ -104,12 +104,9 @@ class ImageConfig(AuthConfig):
     """Configuration for the images router (k3s/containerd image management)."""
 
     image_pull_allowed_registries: List[str] = Field(
-        default_factory=lambda: [
-            "localhost:30500",
-            "127.0.0.1:30500",
-        ],
+        default_factory=lambda: ["localregistry.chutes.ai:30500"],
         alias="IMAGE_PULL_ALLOWED_REGISTRIES",
-        description="Comma-separated or JSON array of allowed registries for pull (validator registry only)",
+        description="JSON array or comma-separated list of allowed registries for image pull",
     )
     cosign_public_key_path: Path = Field(
         default=Path("/etc/admission-controller/cosign/cosign.pub"),
@@ -202,7 +199,7 @@ class AdmissionConfig(ServerConfig):
     # Authorization webhook: pod name prefixes the miner is allowed to read logs
     # from in the chutes namespace. All other pod logs are denied for the miner.
     authz_allowed_log_prefixes: List[str] = Field(
-        default=["agent-", "registry-", "failed-chute-cleanup-"],
+        default=["agent-", "chutes-registry-", "failed-chute-cleanup-"],
         alias="AUTHZ_ALLOWED_LOG_PREFIXES",
         description="Pod name prefixes the miner may read logs from in chutes namespace",
     )

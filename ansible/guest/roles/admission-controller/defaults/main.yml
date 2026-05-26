@@ -26,9 +26,6 @@ cache_enabled: true
 cache_ttl: 300
 debug_mode: false
 metrics_enabled: true
-# Chutes config
-validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
-
 # Registry allowlist
 allowed_registries:
   - docker.io
@@ -39,4 +36,4 @@ allowed_registries:
   - nvcr.io
   - parachutes
   - bitnami
-  - "{{ validator }}.localregistry.chutes.ai:30500"
+  - "localregistry.chutes.ai:30500"

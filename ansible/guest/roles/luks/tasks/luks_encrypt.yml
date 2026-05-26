@@ -246,6 +246,14 @@
     owner: root
     group: root
 
+- name: Copy write-validator-auth script (init-bottom)
+  ansible.builtin.copy:
+    src: files/initramfs/write-validator-auth
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/write-validator-auth"
+    mode: '0755'
+    owner: root
+    group: root
+
 - name: Create TDX environment configuration
   ansible.builtin.copy:
     content: |
