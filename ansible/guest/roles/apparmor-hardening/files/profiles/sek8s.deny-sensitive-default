@@ -1,0 +1,44 @@
+# vim: ft=apparmor
+# sek8s.deny-sensitive-default — confine common shells, interpreters, and
+# data-transfer tools on the host.  Blocks access to the model cache and
+# high-value runtime secrets while allowing everything else.
+#
+# Services that legitimately need cache or secrets access use their own
+# named profiles (applied via systemd AppArmorProfile=), which override
+# this auto-attachment.
+#
+# python3 is intentionally NOT in the attachment list: confining it would
+# require explicit overrides for every Python-based systemd service.
+# Python launched from a confined shell inherits this profile via ix.
+
+abi <abi/4.0>,
+
+@{confined_bins} = /usr/bin/{bash,dash,cat,cp,tar,rsync,scp,curl,wget,perl,dd,socat,nc,ncat} /bin/{sh,dash}
+
+profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/sek8s-cache-deny>
+  include <abstractions/sek8s-secrets-deny>
+
+  # Broad filesystem access (deny abstractions carve out protected paths)
+  / r,
+  /** rwlkm,
+
+  # Execute self and other system binaries — children inherit this profile
+  @{confined_bins} mrix,
+  /{,usr/}{bin,sbin}/** mrix,
+  /usr/local/{bin,sbin}/** mrix,
+
+  # Network (curl, wget, scp, socat, nc need it)
+  network,
+
+  # Signals and ptrace (debugging tools)
+  signal,
+  ptrace read,
+
+  # Proc and sys
+  @{PROC}/** r,
+  @{sys}/** r,
+  owner @{PROC}/@{pid}/fd/** rw,
+}
