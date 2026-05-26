@@ -7,6 +7,7 @@
 
 ### Changed
 
+- `chutes_chart_version` bumped from `0.2.7` to `0.3.0` (`chutes-miner-gpu` Helm chart). The new chart replaces the per-validator nginx `map` routing with a single static `set $upstream_host` directive and a single `chutes-registry` NodePort Service, required for the static `localregistry.chutes.ai` hostname. See [chutes-miner#134](https://github.com/chutesai/chutes-miner/pull/134).
 - Registry hostname decoupled from the validator hotkey: all `{{ validator | lower }}.localregistry.chutes.ai` references replaced with the static hostname `localregistry.chutes.ai` across k3s-prereqs.yml, registries.yaml.j2, configure-cosign.yml, opa-config-data.json.j2, cosign-registries.json.j2, admission-controller/defaults/main.yml, and system-manager.env.j2. Validator hotkey rotation no longer invalidates cosign signatures or requires a VM rebuild.
 - `fetch_key_and_unlock` (initramfs, init-premount): now parses `vm_auth_ss58` from the boot attestation API response and saves it to `/run/chutes/validator-ss58` (mode 600). Boot fails with poweroff if the field is absent from the response.
 - `proxy-manifests.yaml.j2`: removed the baked-in `validator-auth` Secret definition (it contained a hard-coded validator hotkey and is in the RTMR3-measured manifests directory). The Secret is now created at runtime by `03-k3s-validator-auth.sh`. The RBAC `secret-reader` Role updated to include `validator-auth` in `resourceNames`. The `wait-for-credentials` init container now also waits for the `validator-auth` Secret before the attestation-proxy pod starts.

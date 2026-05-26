@@ -199,7 +199,7 @@ class AdmissionConfig(ServerConfig):
     # Authorization webhook: pod name prefixes the miner is allowed to read logs
     # from in the chutes namespace. All other pod logs are denied for the miner.
     authz_allowed_log_prefixes: List[str] = Field(
-        default=["agent-", "registry-", "failed-chute-cleanup-"],
+        default=["agent-", "chutes-registry-", "failed-chute-cleanup-"],
         alias="AUTHZ_ALLOWED_LOG_PREFIXES",
         description="Pod name prefixes the miner may read logs from in chutes namespace",
     )
