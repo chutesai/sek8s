@@ -12,8 +12,9 @@ export MARKER_DIR  # Scripts may use this for run-once behavior
 
 # Security-critical scripts that must succeed or the VM powers off.
 # Failure of these scripts leaves the cluster in an unsafe state (e.g.
-# admin credentials on disk, plaintext secrets in the DB).
-SECURITY_CRITICAL_SCRIPTS="00-reencrypt-secrets.sh 99-purge-kubeconfig.sh"
+# admin credentials on disk, plaintext secrets in the DB, or the validator
+# unable to authenticate to this VM).
+SECURITY_CRITICAL_SCRIPTS="00-reencrypt-secrets.sh 03-k3s-validator-auth.sh 99-purge-kubeconfig.sh"
 
 is_security_critical() {
     local name="$1"
