@@ -220,3 +220,67 @@ async def test_internal_proxy_never_signs():
     )
 
     assert "x-signature" not in {k.lower() for k in response.headers.keys()}
+
+
+# ---------------------------------------------------------------------------
+# Server header stripping (regression: aiohttp 3.13.4 duplicate Server header)
+# ---------------------------------------------------------------------------
+
+
+def _make_httpx_response_with_server_header(
+    content: bytes = b"response body",
+    status_code: int = 200,
+    server_header: str = "uvicorn",
+):
+    """Upstream response that includes a Server header, as FastAPI/Uvicorn backends do."""
+    response = MagicMock()
+    response.content = content
+    response.status_code = status_code
+    response.headers = {"content-type": "application/json", "server": server_header}
+    return response
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_strips_upstream_server_header_internal():
+    """Upstream Server header must not be forwarded; Uvicorn adds its own.
+
+    Forwarding it produces a duplicate Server header in the final HTTP response,
+    which aiohttp 3.13.4+ rejects with 'Duplicate Server header found'.
+    """
+    from attestation_proxy.service import InternalProxyServer
+
+    server = _make_server(InternalProxyServer, private_key=None)
+    server.shared.http_client.request = AsyncMock(
+        return_value=_make_httpx_response_with_server_header(content=b"body")
+    )
+
+    response = await server.proxy_request(
+        target_url="http://fake-upstream",
+        method="GET",
+        path="/server/devices",
+        headers={},
+        body=b"",
+    )
+
+    assert "server" not in {k.lower() for k in response.headers.keys()}
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_strips_upstream_server_header_external(rsa_key):
+    """Same guarantee holds for the external (signed) proxy path."""
+    from attestation_proxy.service import ExternalProxyServer
+
+    server = _make_server(ExternalProxyServer, private_key=rsa_key)
+    server.shared.http_client.request = AsyncMock(
+        return_value=_make_httpx_response_with_server_header(content=b"body")
+    )
+
+    response = await server.proxy_request(
+        target_url="http://fake-upstream",
+        method="GET",
+        path="/server/devices",
+        headers={},
+        body=b"",
+    )
+
+    assert "server" not in {k.lower() for k in response.headers.keys()}

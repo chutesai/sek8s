@@ -190,6 +190,7 @@ class BaseProxyServer(WebServer):
                     "te",
                     "trailers",
                     "transfer-encoding",
+                    "server",
                 ]
             }
 
