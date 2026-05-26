@@ -129,7 +129,15 @@
   community.crypto.luks_device:
     device: "{{ root_partition }}"
     state: present
+    type: luks2
     passphrase: "{{ luks_passphrase }}"
+  no_log: true
+
+- name: Add first-boot LUKS2 token
+  ansible.builtin.shell: >-
+    cryptsetup token add {{ root_partition }}
+    --token-id 15
+    --json '{"type":"chutes-first-boot","keyslots":[],"version":"{{ vm_version }}"}'
   no_log: true
 
 - name: Open LUKS container
@@ -213,6 +221,14 @@
     regexp: '^LABEL=cloudimg-rootfs\s+/\s+ext4\s+discard,commit=30,errors=remount-ro\s+0\s+1$'
     replace: '/dev/mapper/{{ encrypted_root_name }}\t/\text4\tdiscard,errors=remount-ro\t0 1'
     backup: yes
+
+- name: Copy shared LUKS helpers (init script sourced by both premount and init-bottom)
+  ansible.builtin.copy:
+    src: files/initramfs/luks-helpers
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/luks-helpers"
+    mode: '0755'
+    owner: root
+    group: root
 
 - name: Copy TDX initramfs hooks
   ansible.builtin.copy:

@@ -88,7 +88,7 @@ def main():
     vm_config = config.get('vm', {})
     hostname = vm_config.get('hostname', '')
     base_image = vm_config.get('base_image', '')
-    overlay_directory = vm_config.get('overlay_directory', '')
+    vm_image_directory = vm_config.get('vm_image_directory', '')
 
     miner_ss58 = config.get('miner', {}).get('ss58', '')
     miner_seed = config.get('miner', {}).get('seed', '')
@@ -133,7 +133,7 @@ def main():
 
     print(f"HOSTNAME={shlex.quote(hostname)}")
     print(f"BASE_IMAGE={shlex.quote(base_image)}")
-    print(f"OVERLAY_DIR={shlex.quote(overlay_directory)}")
+    print(f"VM_IMAGE_DIR={shlex.quote(vm_image_directory)}")
     print(f"MINER_SS58={shlex.quote(miner_ss58)}")
     print(f"MINER_SEED={shlex.quote(miner_seed)}")
     print(f"VM_IP={shlex.quote(vm_ip)}")

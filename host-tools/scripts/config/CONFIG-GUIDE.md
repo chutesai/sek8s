@@ -67,7 +67,7 @@ pip3 install jsonschema
 
 Values are resolved in this order (highest to lowest):
 
-1. **CLI arguments** (`--hostname`, `--base-image`, `--overlay-dir`, `--docker-hub-username` / `--docker-hub-token` when **both** are set, etc.)
+1. **CLI arguments** (`--hostname`, `--base-image`, `--vm-image-dir`, `--docker-hub-username` / `--docker-hub-token` when **both** are set, etc.)
 2. **YAML config file** (your config.yaml)
 3. **Hard-coded defaults** (in quick-launch.sh)
 
@@ -109,7 +109,7 @@ docker_hub:
 vm:
   hostname: chutes-miner-prod-0
   base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"  # Encrypted image
-  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
+  vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 
 volumes:
   cache:
@@ -130,7 +130,7 @@ volumes:
 vm:
   hostname: chutes-miner-debug-0
   base_image: "/var/lib/chutes/base-images/tdx-guest-debug.qcow2"  # Debug image
-  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
+  vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 
 volumes:
   cache:
@@ -154,7 +154,7 @@ volumes:
 ```yaml
 vm:
   base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"
-  overlay_directory: ""  # Empty = /var/lib/chutes/vm-overlays/
+  vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 ```
 
 Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest.qcow2`.
@@ -163,7 +163,7 @@ Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest.q
 
 ```bash
 ./quick-launch.sh config.yaml --base-image /path/to/tdx-guest.qcow2
-./quick-launch.sh config.yaml --overlay-dir /custom/overlay/path
+./quick-launch.sh config.yaml --vm-image-dir /custom/vm-images/
 ```
 
 ## Volume Auto-Generation
@@ -275,7 +275,7 @@ Remove deprecated fields from your config. Check `config.tmpl.yaml` for current 
 
 See `config-schema.json` for the complete schema definition. Key sections:
 
-- **vm**: hostname (required), base_image (optional), overlay_directory (optional)
+- **vm**: hostname (required), base_image (optional), vm_image_directory (optional)
 - **miner**: ss58, seed (both required)
 - **network**: vm_ip, bridge_ip, dns, public_interface (all required), type, ssh_port (optional)
 - **volumes**: cache, storage (both required), config (optional)
@@ -291,7 +291,7 @@ See `config-schema.json` for the complete schema definition. Key sections:
 vm:
   hostname: my-miner
   base_image: ""  # Optional: default /var/lib/chutes/base-images/tdx-guest.qcow2
-  overlay_directory: ""  # Optional: default /var/lib/chutes/vm-overlays/
+  vm_image_directory: ""  # Optional: default /var/lib/chutes/vm-images/
 
 miner:
   ss58: "5Grw..."

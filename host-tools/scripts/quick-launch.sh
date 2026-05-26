@@ -26,7 +26,7 @@ CONFIG_FILE=""
 
 HOSTNAME=""
 BASE_IMAGE=""
-OVERLAY_DIR=""
+VM_IMAGE_DIR=""
 MINER_SS58=""
 MINER_SEED=""
 
@@ -54,7 +54,7 @@ DOCKER_HUB_TOKEN=""
 # --------------------------------------------------------------------
 CLI_HOSTNAME=""
 CLI_BASE_IMAGE=""
-CLI_OVERLAY_DIR=""
+CLI_VM_IMAGE_DIR=""
 CLI_MINER_SS58=""
 CLI_MINER_SEED=""
 CLI_VM_IP=""
@@ -118,7 +118,7 @@ while [[ $# -gt 0 ]]; do
     --config) CONFIG_FILE="$2"; shift 2 ;;
     --hostname) CLI_HOSTNAME="$2"; shift 2 ;;
     --base-image) CLI_BASE_IMAGE="$2"; shift 2 ;;
-    --overlay-dir) CLI_OVERLAY_DIR="$2"; shift 2 ;;
+    --vm-image-dir) CLI_VM_IMAGE_DIR="$2"; shift 2 ;;
     --miner-ss58) CLI_MINER_SS58="$2"; shift 2 ;;
     --miner-seed) CLI_MINER_SEED="$2"; shift 2 ;;
     --vm-ip) CLI_VM_IP="$2"; shift 2 ;;
@@ -201,7 +201,7 @@ Config File:
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
   --base-image PATH         Path to base VM image (qcow2). Default: /var/lib/chutes/base-images/tdx-guest.qcow2
-  --overlay-dir PATH        Directory for overlay files. Default: /var/lib/chutes/vm-overlays/
+  --vm-image-dir PATH       Directory for per-VM image files. Default: /var/lib/chutes/vm-images/
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)
   --docker-hub-username U   Docker Hub username (optional; use with --docker-hub-token; overrides config.yaml)
@@ -225,7 +225,7 @@ Volumes:
 Runtime:
   --foreground
   --network-type [tap|user]
-  --ephemeral               Use ephemeral overlay (cleared on reboot)
+  --ephemeral               Use ephemeral per-VM image in /tmp/ (discarded on reboot)
 
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
@@ -258,6 +258,7 @@ Examples:
 
   # Command line only
   $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
+  $0 config.yaml --vm-image-dir /custom/vm-images/
 EOF
       exit 0
       ;;
@@ -317,7 +318,7 @@ fi
 # --------------------------------------------------------------------
 [[ -n "$CLI_HOSTNAME" ]] && HOSTNAME="$CLI_HOSTNAME"
 [[ -n "$CLI_BASE_IMAGE" ]] && BASE_IMAGE="$CLI_BASE_IMAGE"
-[[ -n "$CLI_OVERLAY_DIR" ]] && OVERLAY_DIR="$CLI_OVERLAY_DIR"
+[[ -n "$CLI_VM_IMAGE_DIR" ]] && VM_IMAGE_DIR="$CLI_VM_IMAGE_DIR"
 [[ -n "$CLI_MINER_SS58" ]] && MINER_SS58="$CLI_MINER_SS58"
 [[ -n "$CLI_MINER_SEED" ]] && MINER_SEED="$CLI_MINER_SEED"
 
@@ -422,9 +423,9 @@ fi
 # Default base image and overlay directory when not specified
 [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest.qcow2"
 if [[ "$EPHEMERAL" == "true" ]]; then
-  OVERLAY_DIR="/tmp/chutes-vm-overlays"
-elif [[ -z "$OVERLAY_DIR" ]]; then
-  OVERLAY_DIR="/var/lib/chutes/vm-overlays"
+  VM_IMAGE_DIR="/tmp/chutes-vm-images"
+elif [[ -z "$VM_IMAGE_DIR" ]]; then
+  VM_IMAGE_DIR="/var/lib/chutes/vm-images"
 fi
 
 # Validate network type
@@ -475,7 +476,7 @@ echo "Config source: ${CONFIG_FILE:-command line only}"
 echo "Mode: $([[ "$BENCHMARK" == "true" ]] && echo "benchmark" || echo "standard")"
 echo "Hostname: $HOSTNAME"
 echo "Base image: $BASE_IMAGE"
-echo "Overlay dir: $OVERLAY_DIR"
+echo "VM image dir: $VM_IMAGE_DIR"
 echo "VM IP: $VM_IP"
 echo "Bridge IP: $BRIDGE_IP"
 if [[ "$BENCHMARK" != "true" ]]; then
@@ -655,17 +656,15 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Step 4b: Prepare VM image (verify base SHA256, create/reuse overlay)
+# Step 4b: Prepare VM image (verify base SHA256, create/reuse per-VM copy)
 # --------------------------------------------------------------------
-echo "Step 4b: Preparing VM image (verify + overlay)..."
-# Use tail -1 to extract only the path; qemu-img create may write "Formatting '...'" to stderr
-# which can be captured when streams are merged (e.g. in some environments)
+echo "Step 4b: Preparing VM image (verify + per-VM copy)..."
 SKIP_ARG=""
 [[ "$SKIP_CHECKSUM" == "true" ]] && SKIP_ARG="1"
-OVERLAY_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$OVERLAY_DIR" $SKIP_ARG | tail -1)
+VM_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$VM_IMAGE_DIR" $SKIP_ARG | tail -1)
 # Pipeline masks exit status; PIPESTATUS[0] is prepare-vm-image's exit code
 [[ ${PIPESTATUS[0]} -ne 0 ]] && { echo "Error: VM image preparation failed (see output above)"; exit 1; }
-[[ -z "$OVERLAY_IMAGE" ]] && { echo "Error: Failed to get overlay image path"; exit 1; }
+[[ -z "$VM_IMAGE" ]] && { echo "Error: Failed to get VM image path"; exit 1; }
 echo ""
 
 # --------------------------------------------------------------------
@@ -747,7 +746,7 @@ echo "Launching Chutes VM..."
 
 LAUNCH_ARGS=(
   --pass-gpus
-  --image "$OVERLAY_IMAGE"
+  --image "$VM_IMAGE"
   --network-type "$NETWORK_TYPE"
 )
 

@@ -22,9 +22,9 @@
           "description": "Path to benchmark base image (qcow2). Defaults to /var/lib/chutes/base-images/tdx-guest-benchmark.qcow2",
           "minLength": 0
         },
-        "overlay_directory": {
+        "vm_image_directory": {
           "type": "string",
-          "description": "Directory for per-VM overlay files. Defaults to /var/lib/chutes/vm-overlays/",
+          "description": "Directory for per-VM image files. Defaults to /var/lib/chutes/vm-images/",
           "minLength": 0
         }
       }

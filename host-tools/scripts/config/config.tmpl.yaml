@@ -5,7 +5,7 @@
 vm:
   hostname: chutes-miner-tee-0 # Must be unique per miner hotkey
   base_image: ""  # Path to base VM image (qcow2). Empty = /var/lib/chutes/base-images/tdx-guest.qcow2
-  overlay_directory: ""  # Directory for overlay files. Empty = /var/lib/chutes/vm-overlays/ (naming: tdx-<hostname>-<sha256>.qcow2)
+  vm_image_directory: ""  # Directory for per-VM image files. Empty = /var/lib/chutes/vm-images/ (naming: tdx-<hostname>-<sha256>.qcow2)
 
 # Miner Credentials (Optional - prefer passing via CLI for security)
 miner:

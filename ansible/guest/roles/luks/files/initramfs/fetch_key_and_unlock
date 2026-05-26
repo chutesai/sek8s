@@ -5,6 +5,7 @@ prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
+. /scripts/luks-helpers
 
 log_msg() {
     if [ "$quiet" != "y" ]; then
@@ -39,6 +40,10 @@ LUKS_QUOTE_NONCE=""  # single-use nonce for the init-bottom POST /luks quote
 VM_NAME=""
 HOTKEY=""
 VM_AUTH_SS58=""      # per-VM ephemeral SR25519 SS58 for validator auth (rotates every boot)
+ROOT_NEXT=""         # next root passphrase returned by boot attestation (rotation target)
+ROOT_CONFIRM_NONCE="" # nonce for confirming root passphrase rotation
+OLD_ROOT_SLOTS=""    # slot numbers present before luksAddKey; killed by number after confirm
+FIRST_BOOT="false"   # true if the first-boot LUKS2 token is present (never rotated, use build-time default)
 SUCCESS_FLAG=0
 
 # Function to securely clear the LUKS key and temporary files
@@ -50,6 +55,13 @@ clear_luks_key() {
         LUKS_KEY=""
         unset LUKS_KEY
     fi
+    if [ -n "$ROOT_NEXT" ]; then
+        ROOT_NEXT="$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\n' | head -c 1000)"
+        ROOT_NEXT=""
+        unset ROOT_NEXT
+    fi
+    ROOT_CONFIRM_NONCE=""
+    unset ROOT_CONFIRM_NONCE
     
     # Clear any temporary files that might contain sensitive data.
     # On success the cert must survive until setup_storage (init-bottom) completes
@@ -359,7 +371,7 @@ fetch_luks_key() {
             --cacert "$API_CA_CERT" \
             --cert "$CLIENT_CERT" \
             --key "$CLIENT_KEY" \
-            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\"}" \
+            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}" \
             -o "$response_file" \
             "$API_ENDPOINT")
         
@@ -368,6 +380,8 @@ fetch_luks_key() {
                 LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
                 LUKS_QUOTE_NONCE=$(jq -r '.luks_quote_nonce // empty' "$response_file" 2>/dev/null)
                 VM_AUTH_SS58=$(jq -r '.vm_auth_ss58 // empty' "$response_file" 2>/dev/null)
+                ROOT_NEXT=$(jq -r '.root_next // empty' "$response_file" 2>/dev/null)
+                ROOT_CONFIRM_NONCE=$(jq -r '.root_confirm_nonce // empty' "$response_file" 2>/dev/null)
                 if [ -n "$LUKS_KEY" ] && [ -n "$LUKS_QUOTE_NONCE" ] && [ -n "$VM_AUTH_SS58" ]; then
                     rm -f "$response_file"
                     send_result=0
@@ -477,7 +491,20 @@ main() {
     
     # Unmount config volume now that we have all the data
     unmount_config_volume
-    
+
+    # Detect first-boot LUKS2 token before attestation so the flag is
+    # included in the boot attestation POST body.
+    log_begin_msg "Checking for first-boot LUKS2 token (id 15)"
+    if cryptsetup token export "$DEVICE_PATH" --token-id 15 >/dev/null 2>&1; then
+        FIRST_BOOT="true"
+        log_end_msg 0
+        log_msg "  First-boot token present — VM booting from original published state"
+    else
+        FIRST_BOOT="false"
+        log_end_msg 0
+        log_msg "  No first-boot token (normal reboot)"
+    fi
+
     # Fetch LUKS key from API (nonce and quote generated per attempt)
     if ! fetch_luks_key; then
         handle_failure "Failed to retrieve LUKS key from API after $FETCH_ATTEMPTS attempt(s)"
@@ -489,42 +516,114 @@ main() {
         handle_failure "LUKS key is empty after fetch"
         return 1
     fi
-    
-    # Unlock the device
-    if unlock_device; then
-        # Save vm_name, hotkey, boot token, and luks quote nonce to /run for storage setup.
-        # luks-quote-nonce is the REPORTDATA nonce for the init-bottom POST /luks quote.
-        mkdir -m 700 -p /run/chutes
-        echo "$VM_NAME" > /run/chutes/vm-name
-        echo "$HOTKEY" > /run/chutes/hotkey
-        if [ -n "$LUKS_QUOTE_NONCE" ]; then
-            printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
-            chmod 600 /run/chutes/luks-quote-nonce
-        fi
-        # Save cert hash so setup_storage can bind it into the luks/attest REPORTDATA.
-        # The cert files themselves stay in /tmp/ (cleared by setup_storage after use).
-        if [ -n "$CERT_HASH" ]; then
-            printf '%s' "$CERT_HASH" > /run/chutes/cert-hash
-            chmod 600 /run/chutes/cert-hash
-        fi
-        # Save per-VM ephemeral validator auth SS58 for write-validator-auth (init-bottom)
-        # and 03-k3s-validator-auth.sh (cluster-init).  Rotates on every boot.
-        if [ -n "$VM_AUTH_SS58" ]; then
-            printf '%s' "$VM_AUTH_SS58" > /run/chutes/validator-ss58
-            chmod 600 /run/chutes/validator-ss58
-        fi
 
-        # Mark as successful before cleanup
-        SUCCESS_FLAG=1
-        
-        # Clear key from memory immediately after successful unlock
-        clear_luks_key
-        log_success_msg "TDX-based unlock completed successfully"
-        return 0
-    else
+    # Root passphrase rotation is mandatory on every boot.
+    if [ -z "$ROOT_NEXT" ] || [ -z "$ROOT_CONFIRM_NONCE" ]; then
+        handle_failure "Boot attestation did not return root_next/root_confirm_nonce — root rotation is required"
+        return 1
+    fi
+
+    # Unlock the device
+    if ! unlock_device; then
         handle_failure "Device unlock failed with retrieved key"
         return 1
     fi
+
+    # Remove the first-boot token now that luksOpen succeeded.
+    # Best-effort: absence on subsequent boots is the expected normal-reboot state.
+    cryptsetup token remove "$DEVICE_PATH" --token-id 15 2>/dev/null || true
+
+    # Capture all currently-enabled slot numbers before adding the new one.
+    # After confirm these slots are killed by number, cleaning up any stale
+    # slots from previous failed removals in addition to the one being rotated.
+    OLD_ROOT_SLOTS=$(cryptsetup luksDump --dump-json-metadata "$DEVICE_PATH" 2>/dev/null \
+        | jq -r '.keyslots | keys[]' 2>/dev/null | tr '\n' ' ')
+    if [ -z "$OLD_ROOT_SLOTS" ]; then
+        handle_failure "could not enumerate root LUKS key slots"
+        return 1
+    fi
+
+    # Root passphrase rotation: add new key slot, confirm with API, then kill
+    # all old slots by number.  At least one valid slot exists at all times.
+    log_begin_msg "Adding next root key slot (rotation)"
+    if luks_add_key "$DEVICE_PATH" "$LUKS_KEY" "$ROOT_NEXT"; then
+        log_end_msg 0
+
+        log_begin_msg "Confirming root passphrase rotation with API"
+        local confirm_code
+        confirm_code=$(curl -s -w "%{http_code}" \
+            -X POST \
+            -H "X-Confirm-Nonce: $ROOT_CONFIRM_NONCE" \
+            -H "X-Chutes-Hotkey: $HOTKEY" \
+            -H "Content-Type: application/json" \
+            -H "User-Agent: TDX-LUKS-Client/1.0" \
+            --max-time "$TIMEOUT" \
+            --retry 0 \
+            --cacert "$API_CA_CERT" \
+            --cert "$CLIENT_CERT" \
+            --key "$CLIENT_KEY" \
+            -d '{"volumes":{"root":{"rotated":true}}}' \
+            -o /dev/null \
+            "${VALIDATOR_BASE_URL}/servers/${VM_NAME}/luks/confirm")
+
+        if [ "$confirm_code" = "200" ]; then
+            log_end_msg 0
+            # Kill every pre-existing slot by number, authorising with the new
+            # passphrase.  This removes the rotated-away slot and any stale
+            # slots left over from previous incomplete rotations.
+            local f_auth
+            f_auth=$(write_key_file "$ROOT_NEXT")
+            for slot in $OLD_ROOT_SLOTS; do
+                if ! cryptsetup luksKillSlot --key-file="$f_auth" \
+                        "$DEVICE_PATH" "$slot" 2>/dev/null; then
+                    shred_key_file "$f_auth"
+                    handle_failure "root key slot cleanup failed"
+                    return 1
+                fi
+            done
+            shred_key_file "$f_auth"
+            log_success_msg "Root key rotation complete"
+        else
+            log_end_msg 1
+            # Confirm failed: remove the newly-added slot to restore single-slot state.
+            luks_remove_key "$DEVICE_PATH" "$ROOT_NEXT" \
+                || { handle_failure "root key slot rollback failed"; return 1; }
+        fi
+    else
+        log_end_msg 1
+        handle_failure "luksAddKey failed for root — cannot complete mandatory rotation"
+        return 1
+    fi
+
+    # Save vm_name, hotkey, boot token, and luks quote nonce to /run for storage setup.
+    # luks-quote-nonce is the REPORTDATA nonce for the init-bottom POST /luks quote.
+    mkdir -m 700 -p /run/chutes
+    echo "$VM_NAME" > /run/chutes/vm-name
+    echo "$HOTKEY" > /run/chutes/hotkey
+    if [ -n "$LUKS_QUOTE_NONCE" ]; then
+        printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
+        chmod 600 /run/chutes/luks-quote-nonce
+    fi
+    # Save cert hash so setup_storage can bind it into the luks/attest REPORTDATA.
+    # The cert files themselves stay in /tmp/ (cleared by setup_storage after use).
+    if [ -n "$CERT_HASH" ]; then
+        printf '%s' "$CERT_HASH" > /run/chutes/cert-hash
+        chmod 600 /run/chutes/cert-hash
+    fi
+    # Save per-VM ephemeral validator auth SS58 for write-validator-auth (init-bottom)
+    # and 03-k3s-validator-auth.sh (cluster-init).  Rotates on every boot.
+    if [ -n "$VM_AUTH_SS58" ]; then
+        printf '%s' "$VM_AUTH_SS58" > /run/chutes/validator-ss58
+        chmod 600 /run/chutes/validator-ss58
+    fi
+
+    # Mark as successful before cleanup
+    SUCCESS_FLAG=1
+
+    # Clear key material from memory
+    clear_luks_key
+    log_success_msg "TDX-based unlock and root rotation completed successfully"
+    return 0
 }
 
 # Run main function

@@ -5,6 +5,7 @@ prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
+. /scripts/luks-helpers
 
 # The initramfs stops udevd after mounting the root filesystem (local-bottom),
 # but leaves /run/udev/control behind.  libdevmapper sees this stale socket,
@@ -28,10 +29,12 @@ STORAGE_DEVICE=""
 STORAGE_KEY=""       # current passphrase (for luksOpen)
 STORAGE_KEY_NEXT=""  # next passphrase (rotation target)
 STORAGE_KEY_ADDED=0  # 1 if luksAddKey succeeded for storage this boot
+STORAGE_OLD_SLOTS="" # slot numbers present before luksAddKey; killed by number after confirm
 CACHE_DEVICE=""
 CACHE_KEY=""
 CACHE_KEY_NEXT=""
 CACHE_KEY_ADDED=0    # 1 if luksAddKey succeeded for cache this boot
+CACHE_OLD_SLOTS=""   # slot numbers present before luksAddKey; killed by number after confirm
 CONFIRM_NONCE=""     # one-time token returned by API for confirming rotation
 K3S_ENCRYPTION_KEY="" # base64-encoded secretbox key for k3s EncryptionConfiguration
 VM_NAME=""
@@ -42,7 +45,8 @@ SUCCESS_FLAG=0
 clear_sensitive_data() {
     for var in STORAGE_KEY STORAGE_KEY_NEXT \
                CACHE_KEY CACHE_KEY_NEXT \
-               CONFIRM_NONCE K3S_ENCRYPTION_KEY; do
+               CONFIRM_NONCE K3S_ENCRYPTION_KEY \
+               STORAGE_OLD_SLOTS CACHE_OLD_SLOTS; do
         eval "if [ -n \"\${${var}}\" ]; then
             ${var}=\"\$(head -c 1000 /dev/urandom 2>/dev/null | base64 | tr -d '\\n' | head -c 1000)\"
             ${var}=\"\"
@@ -317,60 +321,9 @@ post_sync_keys() {
 # the old key slot only if the API confirms it committed the new passphrase.
 # Using two separate operations (luksAddKey then luksRemoveKey) means the
 # volume always has at least one valid key regardless of crash timing.
-
-# Write a passphrase string to a temp file with restricted permissions.
-# Caller must remove the file when done.
-write_key_file() {
-    local key="$1"
-    local tmpfile
-    tmpfile=$(mktemp /tmp/luks_key_XXXXXXXX)
-    chmod 600 "$tmpfile"
-    printf '%s' "$key" > "$tmpfile"
-    printf '%s' "$tmpfile"
-}
-
-# Securely erase and delete a temp key file.
-shred_key_file() {
-    local f="$1"
-    [ -f "$f" ] || return 0
-    dd if=/dev/urandom of="$f" bs=1 count="$(wc -c < "$f")" conv=notrunc 2>/dev/null || true
-    rm -f "$f"
-}
-
-# Add a new key slot to a LUKS device.  current_key authenticates the
-# operation; next_key is the new passphrase to add.
-# Returns 0 on success, 1 on failure.
-luks_add_key() {
-    local device="$1"
-    local current_key="$2"
-    local next_key="$3"
-
-    local f_cur f_nxt
-    f_cur=$(write_key_file "$current_key")
-    f_nxt=$(write_key_file "$next_key")
-
-    cryptsetup luksAddKey "$device" "$f_nxt" --key-file="$f_cur" 2>/dev/null
-    local rc=$?
-
-    shred_key_file "$f_cur"
-    shred_key_file "$f_nxt"
-    return $rc
-}
-
-# Remove a key slot matching the given passphrase.
-luks_remove_key() {
-    local device="$1"
-    local old_key="$2"
-
-    local f_old
-    f_old=$(write_key_file "$old_key")
-
-    cryptsetup luksRemoveKey "$device" --key-file="$f_old" 2>/dev/null
-    local rc=$?
-
-    shred_key_file "$f_old"
-    return $rc
-}
+#
+# write_key_file, shred_key_file, luks_add_key, luks_remove_key are sourced
+# from /scripts/luks-helpers above.
 
 # POST to the confirm endpoint so the API promotes the pending passphrase to
 # current.  Returns 0 on HTTP 200, 1 on any failure.
@@ -552,6 +505,8 @@ setup_storage() {
     # it we cannot finalize, and adding a slot we can never confirm would leave
     # the volume in a permanently dual-slot state.
     if [ -n "$STORAGE_KEY_NEXT" ] && [ -n "$CONFIRM_NONCE" ]; then
+        STORAGE_OLD_SLOTS=$(cryptsetup luksDump --dump-json-metadata "$STORAGE_DEVICE" 2>/dev/null \
+            | jq -r '.keyslots | keys[]' 2>/dev/null | tr '\n' ' ')
         log_begin_msg "Adding next storage key slot (rotation)"
         if luks_add_key "$STORAGE_DEVICE" "$STORAGE_KEY" "$STORAGE_KEY_NEXT"; then
             STORAGE_KEY_ADDED=1
@@ -621,6 +576,8 @@ setup_cache() {
     fi
 
     if [ -n "$CACHE_KEY_NEXT" ] && [ -n "$CONFIRM_NONCE" ]; then
+        CACHE_OLD_SLOTS=$(cryptsetup luksDump --dump-json-metadata "$CACHE_DEVICE" 2>/dev/null \
+            | jq -r '.keyslots | keys[]' 2>/dev/null | tr '\n' ' ')
         log_begin_msg "Adding next cache key slot (rotation)"
         if luks_add_key "$CACHE_DEVICE" "$CACHE_KEY" "$CACHE_KEY_NEXT"; then
             CACHE_KEY_ADDED=1
@@ -636,37 +593,51 @@ setup_cache() {
 }
 
 # Called after confirm_rotation() succeeds or fails.
-#   confirmed=1 (success): remove the old (current) key slot — next is now active.
-#   confirmed=0 (failure): remove the new (next) key slot — revert to single slot.
-# Non-fatal: a leftover slot is harmless and cleaned up on the next boot.
+#   confirmed=1: kill all pre-existing slots by number (removes the rotated-away slot and any
+#                stale slots from prior incomplete rotations); authorises with the new passphrase.
+#   confirmed=0: remove the newly-added slot by passphrase to revert to single-slot state.
+# Any failure powers off the VM to avoid leaving untracked key slots on the device.
 finalize_rotation() {
     local confirmed="$1"
+    local f_auth slot
 
     if [ "$confirmed" = "1" ]; then
         if [ "$STORAGE_KEY_ADDED" = "1" ]; then
-            log_begin_msg "Removing old storage key slot"
-            luks_remove_key "$STORAGE_DEVICE" "$STORAGE_KEY" \
-                && log_success_msg "Old storage key slot removed" \
-                || log_failure_msg "Failed to remove old storage slot (non-fatal)"
+            f_auth=$(write_key_file "$STORAGE_KEY_NEXT")
+            for slot in $STORAGE_OLD_SLOTS; do
+                if ! cryptsetup luksKillSlot --key-file="$f_auth" \
+                        "$STORAGE_DEVICE" "$slot" 2>/dev/null; then
+                    shred_key_file "$f_auth"
+                    handle_failure "storage key slot cleanup failed"
+                fi
+            done
+            shred_key_file "$f_auth"
+            log_success_msg "Storage key rotation complete"
         fi
         if [ "$CACHE_KEY_ADDED" = "1" ]; then
-            log_begin_msg "Removing old cache key slot"
-            luks_remove_key "$CACHE_DEVICE" "$CACHE_KEY" \
-                && log_success_msg "Old cache key slot removed" \
-                || log_failure_msg "Failed to remove old cache slot (non-fatal)"
+            f_auth=$(write_key_file "$CACHE_KEY_NEXT")
+            for slot in $CACHE_OLD_SLOTS; do
+                if ! cryptsetup luksKillSlot --key-file="$f_auth" \
+                        "$CACHE_DEVICE" "$slot" 2>/dev/null; then
+                    shred_key_file "$f_auth"
+                    handle_failure "cache key slot cleanup failed"
+                fi
+            done
+            shred_key_file "$f_auth"
+            log_success_msg "Cache key rotation complete"
         fi
     else
         if [ "$STORAGE_KEY_ADDED" = "1" ]; then
             log_begin_msg "Reverting storage key slot (confirm failed)"
             luks_remove_key "$STORAGE_DEVICE" "$STORAGE_KEY_NEXT" \
                 && log_success_msg "Storage key slot reverted" \
-                || log_failure_msg "Failed to revert storage slot (non-fatal, extra slot persists)"
+                || handle_failure "storage key slot rollback failed"
         fi
         if [ "$CACHE_KEY_ADDED" = "1" ]; then
             log_begin_msg "Reverting cache key slot (confirm failed)"
             luks_remove_key "$CACHE_DEVICE" "$CACHE_KEY_NEXT" \
                 && log_success_msg "Cache key slot reverted" \
-                || log_failure_msg "Failed to revert cache slot (non-fatal, extra slot persists)"
+                || handle_failure "cache key slot rollback failed"
         fi
     fi
 }
