@@ -69,3 +69,8 @@ manual_add_modules vmw_vsock_virtio_transport_common
 
 # XFS module for cache/storage volume mounts
 manual_add_modules xfs
+
+# Shared LUKS helpers (plain shell script, not a binary)
+mkdir -p "$DESTDIR/scripts"
+cp /etc/initramfs-tools/scripts/luks-helpers "$DESTDIR/scripts/luks-helpers"
+chmod 755 "$DESTDIR/scripts/luks-helpers"

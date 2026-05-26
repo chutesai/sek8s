@@ -18,12 +18,12 @@
         },
         "base_image": {
           "type": "string",
-          "description": "Path to base VM image (qcow2). Empty uses default /var/lib/chutes/base-images/tdx-guest.qcow2. Overlay is created from this; QEMU boots from overlay only.",
+          "description": "Path to base VM image (qcow2). Empty uses default /var/lib/chutes/base-images/tdx-guest.qcow2.",
           "minLength": 0
         },
-        "overlay_directory": {
+        "vm_image_directory": {
           "type": "string",
-          "description": "Directory for per-VM overlay files (naming: tdx-<hostname>-<sha256>.qcow2). Empty uses /var/lib/chutes/vm-overlays/",
+          "description": "Directory for per-VM image files (naming: tdx-<hostname>-<sha256>.qcow2). Empty uses /var/lib/chutes/vm-images/",
           "minLength": 0
         }
       }
