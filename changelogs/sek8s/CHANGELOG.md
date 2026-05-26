@@ -10,6 +10,13 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
+## [0.4.0] - 2026-05-26
+
+### Changed
+- Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
+- `AdmissionConfig`: replaced `chutes_cosign_public_key_path` (`CHUTES_COSIGN_PUBLIC_KEY_PATH`) with `chutes_public_key_path` (`CHUTES_PUBLIC_KEY_PATH`) and new `dockerhub_public_key_path` (`DOCKERHUB_PUBLIC_KEY_PATH`)
+- `ValidationContext.required_key_path: Optional[Path]` replaced by `required_key_paths: set[Path]`; `_require_ctx_key` now validates against set membership rather than a single path
+
 ## [0.3.0] - 2026-05-15
 
 ### Added

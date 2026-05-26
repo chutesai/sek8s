@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `src/attestation-proxy/VERSION`
 
+## [0.3.2] - 2026-05-26
+
+### Changed
+- Forward `server` response header to clients (removed from hop-by-hop suppression list)
+
 ## [0.3.1] - 2026-05-26
 
 ### Fixed
