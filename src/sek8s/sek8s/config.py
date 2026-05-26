@@ -207,11 +207,16 @@ class AdmissionConfig(ServerConfig):
         description="Pod name prefixes the miner may read logs from in chutes namespace",
     )
 
-    # Chutes namespace: path to cosign public key used to enforce signed images in chutes namespace
-    chutes_cosign_public_key_path: Optional[Path] = Field(
-        default=Path("/etc/admission-controller/cosign/cosign.pub"),
-        alias="CHUTES_COSIGN_PUBLIC_KEY_PATH",
-        description="Path to cosign public key for chutes namespace image signing enforcement",
+    # Cosign public keys for chutes namespace enforcement
+    chutes_public_key_path: Path = Field(
+        default=Path("/etc/admission-controller/cosign/chutes.pub"),
+        alias="CHUTES_PUBLIC_KEY_PATH",
+        description="Path to cosign public key for localregistry image signing enforcement",
+    )
+    dockerhub_public_key_path: Path = Field(
+        default=Path("/etc/admission-controller/cosign/dockerhub.pub"),
+        alias="DOCKERHUB_PUBLIC_KEY_PATH",
+        description="Path to cosign public key for Docker Hub image signing enforcement",
     )
 
     @field_validator("namespace_policies", mode="before")

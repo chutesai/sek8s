@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "sek8s"
-version = "0.3.0"
+version = "0.4.0"
 description = "GPU infrastructure for Chutes miners and zero-trust workloads"
 authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"

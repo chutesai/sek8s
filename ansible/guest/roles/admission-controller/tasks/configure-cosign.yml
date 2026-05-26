@@ -25,10 +25,19 @@
         group: admission
         mode: '0750'
 
-    - name: Setup cosign key
+    - name: Setup cosign chutes key
       ansible.builtin.copy:
-        src: "{{ cosign_public_key_path }}"
-        dest: /etc/admission-controller/cosign/cosign.pub
+        src: "{{ cosign_chutes_public_key_path }}"
+        dest: /etc/admission-controller/cosign/chutes.pub
+        owner: root
+        group: admission
+        mode: '0640'
+      notify: restart admission-controller
+
+    - name: Setup cosign dockerhub key
+      ansible.builtin.copy:
+        src: "{{ cosign_dockerhub_public_key_path }}"
+        dest: /etc/admission-controller/cosign/dockerhub.pub
         owner: root
         group: admission
         mode: '0640'
