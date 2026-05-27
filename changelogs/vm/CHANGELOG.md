@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-05-26
+## [1.3.1] - 2026-05-27
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -24,6 +24,14 @@ Version source of truth: `ansible/guest/VERSION`
 - RTMR3 progress logging: per-directory collection progress and periodic hashing progress (every 200 files) logged to `/dev/kmsg` during the expanded measurement phase.
 - `ansible/guest/roles/luks/files/initramfs/luks-helpers`: shared initramfs shell library with `write_key_file`, `shred_key_file`, `luks_add_key`, `luks_remove_key` — sourced by both `fetch_key_and_unlock` (init-premount) and `setup_storage` (init-bottom).
 - Root LUKS passphrase rotation in `fetch_key_and_unlock` (init-premount): detects first-boot LUKS2 token (id 15, type `chutes-first-boot`), sends `first_boot` flag in boot attestation POST, enforces mandatory rotation on every boot — adds new key slot, confirms with API, then kills all pre-existing slots by number to ensure no stale keys remain on the device.
+- `ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf` and `tdx-measure-gpu.conf`: extended RTMR3 measurement coverage to additional filesystem paths not previously included:
+  - `/usr/lib/systemd/system`
+  - `/etc/fstab`
+  - `/var/spool/cron/crontabs`
+  - `/etc/init.d`
+  - `/etc/rc.local`
+  - `/root/.bashrc`, `/root/.bash_profile`, `/root/.profile`
+- `tdx-measure-gpu.conf` aligned to the same measurement tiers as `tdx-measure-miner.conf`: systemd unit dirs, ld.so config, modprobe, sysctl, profile, environment, fstab, crontabs, init scripts, root shell startup files, and the `/usr/local/bin`, `/usr/local/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/lib` binary tiers.
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
