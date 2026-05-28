@@ -13,6 +13,7 @@
   become: true
   vars:
   roles:
+    - role: ntp
     - role: host_prerequisites
     - role: host_tools
     - role: tdx_bootstrap

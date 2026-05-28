@@ -30,6 +30,41 @@
           - chutes_hotkey_path | length > 0
         fail_msg: "Set chutes_hotkey_path in inventory or Vault."
 
+    - name: Verify host clock is NTP-synchronized before launch
+      # VMs inherit the host RTC at QEMU boot time. If the host clock is skewed,
+      # any mTLS certificates generated inside the guest before NTP starts will
+      # carry wrong timestamps and be rejected by the attestation endpoint.
+      # Fail here so the operator knows to run setup.yml first.
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if ! command -v chronyc &>/dev/null; then
+          echo "FAIL: chrony not installed — run playbooks/setup.yml first" >&2
+          exit 1
+        fi
+        # chronyc tracking returns non-zero when not synced
+        offset=$(chronyc tracking 2>/dev/null | awk '/^System time/ {print $4}')
+        if [ -z "$offset" ]; then
+          echo "FAIL: chrony is not currently tracking a source" >&2
+          exit 1
+        fi
+        # Fail if offset > 5 seconds (absolute value)
+        python3 -c "
+        import sys
+        offset = float('$offset')
+        if abs(offset) > 5:
+            print(f'FAIL: clock offset {offset:+.3f}s exceeds 5s threshold', file=sys.stderr)
+            sys.exit(1)
+        print(f'OK: clock offset {offset:+.3f}s')
+        "
+      args:
+        executable: /bin/bash
+      register: clock_check
+      changed_when: false
+
+    - name: Display clock sync result
+      ansible.builtin.debug:
+        msg: "{{ clock_check.stdout }}"
+
     - name: Refuse launch while a chutes-td guest is already running
       ansible.builtin.include_role:
         name: chutes_tee_vm

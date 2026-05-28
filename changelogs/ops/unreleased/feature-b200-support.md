@@ -4,6 +4,8 @@
 - `detect_cx7_bridge_pfs()` in `chutes.guest.detection` — identifies ConnectX-7 NVSwitch bridge PFs via VPD `SMDL=SW_MNG` field so they can be excluded from guest passthrough.
 - CX7 NVSwitch bridge PF exclusion in `setup_passthrough()` — bridge PFs are logged and excluded before IB NIC VFs are created, preventing accidental VFIO binding of FM-managed devices.
 - `(25.10, B200, 8)` added to validated topology matrix in `support_matrix.py`.
+- `ansible/host/roles/ntp` — new Ansible role that installs chrony, masks `systemd-timesyncd`, and configures `makestep 1 -1` so large clock offsets (e.g. BMC RTC set ahead) are stepped immediately on first boot rather than slowly slewed. Wired as the first role in `setup.yml`.
+- `playbooks/launch.yml` now verifies host clock offset is within 5 seconds via `chronyc tracking` before launching the VM. A skewed host clock causes VMs to boot with the wrong time, which breaks boot-time mTLS cert validation at the attestation endpoint.
 
 ### Changed
 
