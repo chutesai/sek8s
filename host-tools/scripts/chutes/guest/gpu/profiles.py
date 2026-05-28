@@ -125,7 +125,8 @@ class B200Profile(GpuProfile):
 
     @property
     def bar_size_mb(self) -> int:
-        return 524288  # 512GB recommended
+        # 256 GiB: confirmed from lspci Region 2 on am-b200-34 reference host.
+        return 262144
 
     @property
     def vram_gb(self) -> int:
@@ -133,7 +134,12 @@ class B200Profile(GpuProfile):
 
     @property
     def host_cpus(self) -> int:
-        return 112  # 2x Xeon 8570
+        # 2 sockets x 48 cores x 2 threads = 192 (confirmed from lscpu on am-b200-34).
+        return 192
+
+    @property
+    def host_sockets(self) -> int:
+        return 2
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]

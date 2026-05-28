@@ -127,11 +127,56 @@ def _is_vf(bdf: str) -> bool:
     return os.path.exists(physfn)
 
 
-def detect_infiniband_pfs() -> list[str]:
+def detect_cx7_bridge_pfs() -> list[str]:
+    """Detect ConnectX-7 NVSwitch bridge Physical Function BDFs via VPD.
+
+    On B200 HGX systems the NVSwitch ASICs are not visible as PCIe devices.
+    They are managed through ConnectX-7 bridge PFs whose Vital Product Data
+    contains the field ``SMDL=SW_MNG``.  These PFs must stay on the host for
+    Fabric Manager to communicate with the NVSwitches over InfiniBand; they
+    must never be bound to vfio-pci or passed through to a guest.
+
+    Regular ConnectX-7 NIC PFs share the same PCI device ID (15b3:1021) but
+    their VPD does not contain ``SMDL=SW_MNG``, so this function correctly
+    returns only the bridge PFs.
+
+    Returns an empty list on non-B200 hosts (VPD read is cheap; no NVSwitch
+    bridge PFs will have the marker).
+    """
+    bridge_pfs = []
+    for line in _lspci_lines(_MELLANOX_VENDOR):
+        parts = line.strip().split()
+        if not parts:
+            continue
+        if f'[{_PCI_CLASS_INFINIBAND}]' not in line:
+            continue
+        bdf = parts[0]
+        if _is_vf(bdf):
+            continue
+        try:
+            result = subprocess.run(
+                ["lspci", "-vv", "-s", bdf],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if "SMDL=SW_MNG" in result.stdout:
+                bridge_pfs.append(bdf)
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    return sorted(bridge_pfs)
+
+
+def detect_infiniband_pfs(exclude_bdfs: list[str] | None = None) -> list[str]:
     """Detect InfiniBand Physical Function BDFs (vendor 15b3, class 0207, not VF).
 
     PFs stay bound to mlx5_core on the host; we create VFs from them for passthrough.
+
+    ``exclude_bdfs`` is an optional list of BDFs to omit from the result.  Pass
+    the output of :func:`detect_cx7_bridge_pfs` here to ensure NVSwitch bridge
+    PFs are never included in the passthrough device list.
     """
+    excluded = set(exclude_bdfs) if exclude_bdfs else set()
     devices = []
     for line in _lspci_lines(_MELLANOX_VENDOR):
         parts = line.strip().split()
@@ -140,8 +185,11 @@ def detect_infiniband_pfs() -> list[str]:
         if f'[{_PCI_CLASS_INFINIBAND}]' not in line:
             continue
         bdf = parts[0]
-        if not _is_vf(bdf):
-            devices.append(bdf)
+        if _is_vf(bdf):
+            continue
+        if bdf in excluded:
+            continue
+        devices.append(bdf)
     return sorted(devices)
 
 

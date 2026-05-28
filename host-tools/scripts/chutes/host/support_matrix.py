@@ -11,6 +11,7 @@ Keys use GpuProfile ``name`` values (e.g. ``H200``, ``RTX_PRO_6000``).
 _VALIDATED_TOPOLOGIES: frozenset[tuple[str, str, int]] = frozenset(
     {
         ("25.04", "H200", 8),
+        ("25.10", "B200", 8),
         ("25.10", "RTX_PRO_6000", 8),
     }
 )
@@ -28,6 +29,11 @@ _VALIDATED_NOTES: dict[tuple[str, str, int], str] = {
         "H200",
         8,
     ): "NVSwitch required.",
+    (
+        "25.10",
+        "B200",
+        8,
+    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host (excluded from passthrough).",
     (
         "25.10",
         "RTX_PRO_6000",

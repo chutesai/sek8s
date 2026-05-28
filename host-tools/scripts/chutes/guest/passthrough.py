@@ -5,6 +5,7 @@ import subprocess
 import time
 
 from chutes.guest.detection import (
+    detect_cx7_bridge_pfs,
     detect_infiniband_pfs,
     detect_infiniband_vfs,
     detect_nvidia_gpus,
@@ -253,7 +254,14 @@ def setup_passthrough(cmd: list[str]):
 
     ib_devices: list[str] = []
     if profile.should_passthrough_infiniband:
-        ib_pfs = detect_infiniband_pfs()
+        # Exclude CX7 NVSwitch bridge PFs (SMDL=SW_MNG in VPD) — these must
+        # remain on the host for Fabric Manager to manage the NVSwitch fabric.
+        # Only regular CX7 NIC PFs should produce VFs for guest passthrough.
+        cx7_bridge_pfs = detect_cx7_bridge_pfs()
+        if cx7_bridge_pfs:
+            print(f'  Detected {len(cx7_bridge_pfs)} CX7 NVSwitch bridge PF(s) '
+                  f'(host-only, excluded from passthrough): {cx7_bridge_pfs}')
+        ib_pfs = detect_infiniband_pfs(exclude_bdfs=cx7_bridge_pfs)
         if ib_pfs:
             print(f'  Creating SR-IOV VFs from {len(ib_pfs)} InfiniBand PF(s)...')
             for pf in ib_pfs:

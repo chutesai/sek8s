@@ -273,6 +273,97 @@ def _grub_update_cmdline(additions: list[str]):
 
 
 
+def _detect_b200_gpus() -> bool:
+    """Return True if any B200 GPUs are present on this host."""
+    try:
+        output = subprocess.run(
+            ["lspci", "-Dnn"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return any("10de:2901" in line for line in output.stdout.splitlines())
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+
+
+def _setup_host_fabric_manager():
+    """Install and configure Fabric Manager for B200 hosts.
+
+    B200 NVSwitches are not visible as PCIe devices — they are managed by
+    Fabric Manager through ConnectX-7 bridge PFs on the host.  This function
+    is a no-op on non-B200 hosts (GPU detection is cheap).
+
+    Packages installed:
+    - nvidia-fabricmanager: manages the NVSwitch fabric
+    - nvlsm: NVLink Subnet Manager (required for B200/B300)
+    - libibumad3 + infiniband-diags: InfiniBand management libraries
+    - DOCA OFED / ib_umad: kernel module for CX7 bridge communication
+
+    Configuration applied:
+    - /etc/modules-load.d/ib_umad.conf: autoload ib_umad at boot
+    - fabricmanager.cfg: PARTITION_RAIL_POLICY=symmetric (required for CC mode)
+    - nvidia-fabricmanager.service: enabled
+    """
+    if not _detect_b200_gpus():
+        print("  No B200 GPUs detected — skipping host Fabric Manager setup")
+        return
+
+    print("  B200 GPUs detected — installing host Fabric Manager stack...")
+
+    # ib_umad must be loaded before fabricmanager starts so it can open
+    # the InfiniBand management datagram interface to the CX7 bridge PFs.
+    ib_umad_conf = "/etc/modules-load.d/ib_umad.conf"
+    ib_umad_content = "# Required for B200 Fabric Manager CX7 bridge communication\nib_umad\n"
+    already_current = False
+    if os.path.exists(ib_umad_conf):
+        with open(ib_umad_conf) as f:
+            if f.read() == ib_umad_content:
+                print(f"  {ib_umad_conf} already up to date")
+                already_current = True
+    if not already_current:
+        _write_system_file(ib_umad_conf, ib_umad_content)
+        print(f"  ✓ {ib_umad_conf} written")
+
+    # Load ib_umad now (idempotent — modprobe is a no-op if already loaded).
+    subprocess.run(["sudo", "modprobe", "ib_umad"], check=False)
+
+    # Install host-side FM stack.  The CUDA apt repo is expected to be
+    # configured already (same repo used by nvidia-gpu-tools setup).
+    _run(["apt", "install", "--yes", "--allow-downgrades",
+          "nvidia-fabricmanager",
+          "nvlsm",
+          "libibumad3",
+          "infiniband-diags",
+          ])
+    print("  ✓ Fabric Manager packages installed")
+
+    # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
+    # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
+    fm_cfg = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
+    if os.path.exists(fm_cfg):
+        with open(fm_cfg) as f:
+            original = f.read()
+        updated = re.sub(
+            r"^PARTITION_RAIL_POLICY\s*=.*$",
+            "PARTITION_RAIL_POLICY=1",
+            original,
+            flags=re.MULTILINE,
+        )
+        if "PARTITION_RAIL_POLICY" not in original:
+            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=1\n"
+        if updated != original:
+            _write_system_file(fm_cfg, updated)
+            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to 1 (symmetric)")
+        else:
+            print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
+    else:
+        print(f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly")
+
+    _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
+    print("  ✓ nvidia-fabricmanager.service enabled")
+
+
 def _blacklist_gpu_drivers():
     """Blacklist nouveau and nvidia kernel modules on the host.
 
@@ -493,6 +584,10 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     # 5b. Blacklist GPU drivers on host (GPUs are for VFIO passthrough only)
     print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
     _blacklist_gpu_drivers()
+
+    # 5c. Host Fabric Manager for B200 (no-op on non-B200 hosts)
+    print("\nStep 5c: Configuring host Fabric Manager (B200 only)...")
+    _setup_host_fabric_manager()
 
     # 6. QGS vsock mode
     print("\nStep 6: Configuring QGS for vsock (port 4050)...")
