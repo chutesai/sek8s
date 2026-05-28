@@ -2,6 +2,38 @@
 # Non-interactive PCCS: template default.json, TLS material, restart service, run PCKIDRetrievalTool.
 # Requires both pccs_api_key and pccs_password when automated PCCS runs; omit both to skip (with notice).
 
+- name: Patch pcs_client.js — drop v3 PCS API downgrade blocks
+  # PCCS ≤1.26 intentionally rewrites v4 URLs to v3 for QE/QVE identity and TCB
+  # so it can serve v3-format PCCS API clients. Intel retired v3 in 2026 (returns
+  # 410), so PCCS returns 404 to PCKIDRetrievalTool before its own v4 fallback
+  # completes. Removing the two downgrade blocks makes PCCS always use v4; the
+  # data format is identical and clients requesting v3 collateral from PCCS still
+  # work — they just receive v4-sourced data under the v3 cache key.
+  # Idempotent: re.sub is a no-op when the block is already absent.
+  # TODO: remove this task once intel/confidential-computing.tee.dcap.pccs#52
+  # is merged and a fixed sgx-dcap-pccs package ships to the Intel apt repo.
+  ansible.builtin.shell: |
+    python3 - <<'EOF'
+    import re, sys
+    path = '/opt/intel/sgx-dcap-pccs/pcs_client/pcs_client.js'
+    original = open(path).read()
+    patched = re.sub(
+        r'\n\s+if \(global\.PCS_VERSION === 4 && version === 3\) \{[^}]*\}',
+        '',
+        original,
+    )
+    if original == patched:
+        print('already_patched')
+        sys.exit(0)
+    open(path, 'w').write(patched)
+    print('patched')
+    EOF
+  args:
+    executable: /bin/bash
+  register: pccs_v3_patch
+  changed_when: "'patched' in pccs_v3_patch.stdout"
+  notify: Restart pccs
+
 - name: Check if PCCS package files are present
   ansible.builtin.stat:
     path: /opt/intel/sgx-dcap-pccs/package.json
@@ -165,12 +197,15 @@
         enabled: true
 
     - name: Register platform with PCKIDRetrievalTool
-      ansible.builtin.shell: |
-        printf '%s\n' '{{ pccs_password }}' | sudo -E PCKIDRetrievalTool \
-          -url https://localhost:8081 \
-          -use_secure_cert false
-      args:
-        executable: /bin/bash
+      ansible.builtin.command:
+        argv:
+          - PCKIDRetrievalTool
+          - -url
+          - https://localhost:8081
+          - -user_token
+          - "{{ pccs_password }}"
+          - -use_secure_cert
+          - "false"
       register: pck_tool
       no_log: true
       failed_when: false
@@ -178,7 +213,10 @@
     - name: Fail with manual remediation when PCK tool reports an error
       ansible.builtin.fail:
         msg: >-
-          PCKIDRetrievalTool did not succeed. stdout: {{ pck_tool.stdout | default('') }}.
-          Common causes: wrong pccs_password, PCCS not reachable, or service not yet started.
+          PCKIDRetrievalTool did not succeed.
+          stdout: {{ pck_tool.stdout | default('') }}.
+          stderr: {{ pck_tool.stderr | default('') }}.
+          Common causes: wrong pccs_password, PCCS version too old (v3 API EOL — upgrade
+          sgx-dcap-pccs), PCCS not reachable, or SGX device not accessible (run as root).
           Complete host-tools/README.md Step 2 manually if needed.
       when: "'the data has been sent to cache server successfully' not in (pck_tool.stdout | default(''))"

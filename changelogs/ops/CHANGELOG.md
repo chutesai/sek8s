@@ -3,6 +3,21 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.05.2] - 2026-05-28
+
+### Fixed
+- `ansible/host/roles/pccs_configure`: fixed automated SGX platform registration via `PCKIDRetrievalTool`.
+  Two bugs were addressed:
+  1. `PCKIDRetrievalTool` was piped a password via stdin which the tool ignores (reads from `/dev/tty`);
+     replaced with the `-user_token` CLI flag.
+  2. PCCS ≤1.26 intentionally downgrades Intel PCS requests for QE/QVE identity and TCB to v3 when a
+     v3-format response is needed, but Intel retired the v3 PCS API in 2026 (returns HTTP 410). This caused
+     PCCS to return 404 to `PCKIDRetrievalTool` before its own v4 retry completed. A patch task now removes
+     the two downgrade blocks from `pcs_client.js` so PCCS always uses v4; the data format is identical and
+     v3 PCCS API clients continue to work. Upstream fix submitted as
+     [intel/confidential-computing.tee.dcap.pccs#52](https://github.com/intel/confidential-computing.tee.dcap.pccs/pull/52).
+     The patch task will be removed once that PR is merged and a fixed package ships.
+
 ## [2026.05.1] - 2026-05-21
 
 ### Fixed
