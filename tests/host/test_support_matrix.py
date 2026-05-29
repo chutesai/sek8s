@@ -24,19 +24,25 @@ def test_wrong_gpu_count_not_validated():
     assert not is_validated_topology("25.04", "H200", 4)
 
 
+def test_b200_8_on_2510_validated():
+    assert is_validated_topology("25.10", "B200", 8)
+
+
 def test_validated_rows_match_known_pairs():
     rows = validated_topology_rows()
     assert ("25.04", "H200", 8) in rows
     assert ("25.10", "RTX_PRO_6000", 8) in rows
-    assert len(rows) == 2
+    assert ("25.10", "B200", 8) in rows
+    assert len(rows) == 3
 
 
-def test_format_matrix_mentions_both_skus():
+def test_format_matrix_mentions_all_skus():
     text = format_topology_matrix()
     assert "25.04" in text
     assert "25.10" in text
     assert "H200" in text
     assert "RTX Pro 6000" in text
+    assert "B200" in text
 
 
 def test_format_matrix_h200_note_requires_nvswitch():
