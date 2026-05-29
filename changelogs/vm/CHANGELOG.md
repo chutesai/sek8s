@@ -59,6 +59,25 @@ Version source of truth: `ansible/guest/VERSION`
 - Build-time Helm keyring is now fetched from the signing-keys API and PGP-verified on the build host (same trust chain as boot-time fetch). The key is written to `/tmp/` for the `helm upgrade --install` call and deleted immediately after. No leaf key files (`helm-pubkey.gpg`, `chutes.pub`, `dockerhub.pub`) need to be distributed to build machines — only the root PGP public key is required.
 - `/etc/admission-controller/cosign` removed from RTMR3 measurement path list (`tdx-measure-miner.conf`). Trust in cosign keys is now delegated to the PGP chain rooted at the measured `/etc/chutes/root-signing-key.gpg`.
 - AppArmor profile `sek8s.system-manager` updated to allow reads from `/run/chutes/signing-keys/`.
+- `fetch_key_and_unlock` (initramfs init-premount): the boot nonce endpoint (`/servers/nonce`) is
+  now fetched via the mTLS proxy (`TDX_BASE_URL`) instead of the regular TLS API
+  (`VALIDATOR_BASE_URL`), matching the API-side change that validates the miner cert during nonce
+  issuance.
+- `fetch_key_and_unlock`: the nonce request now includes the miner hotkey as the `miner_hotkey`
+  query parameter (`?miner_hotkey=<hotkey>`), binding the nonce to the requesting miner. The API
+  enforces that the same hotkey appears in the subsequent boot attestation POST body; nonces issued
+  without a hotkey are rejected by the server as legacy.
+- All boot-sensitive initramfs API calls now go through the mTLS proxy (`TDX_BASE_URL`). The LUKS
+  root-rotation confirm (`fetch_key_and_unlock`) and storage/cache rotation confirm
+  (`setup_storage`) previously used the regular TLS API; both now use `TDX_BASE_URL` with the
+  ephemeral client certificate. In `setup_storage` the mTLS cert deletion is deferred from
+  `post_sync_keys` to `confirm_rotation` so the cert is available for the confirm call; it is also
+  cleaned up in `clear_sensitive_data` as a safety net for boots where confirm is skipped.
+  Exception: `fetch-signing-keys` continues to use `VALIDATOR_BASE_URL` — the signing-keys
+  endpoint is intentionally public and does not require mTLS.
+- `VALIDATOR_BASE_URL` is no longer required or validated by `fetch_key_and_unlock`. It remains in
+  `tdx-luks.conf` for `fetch-signing-keys` (signing keys bundle fetch) and post-boot services
+  (system-manager).
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
