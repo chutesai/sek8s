@@ -17,15 +17,15 @@ log_msg() {
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
 # Validate required configuration
-if [ -z "$TDX_BASE_URL" ] || [ -z "$VALIDATOR_BASE_URL" ]; then
+if [ -z "$TDX_BASE_URL" ]; then
     echo "ERROR: Missing required TDX configuration. Check /etc/tdx-luks.conf" >&2
     exit 1
 fi
 
-# Endpoints are derived from the two base URLs; paths are stable and not configurable.
-# TDX_BASE_URL is the mTLS proxy; VALIDATOR_BASE_URL is the regular TLS API.
+# All initramfs API calls go through the mTLS proxy (TDX_BASE_URL).
+# Paths are stable and not configurable.
 API_ENDPOINT="${TDX_BASE_URL}/servers/boot/attestation"
-NONCE_ENDPOINT="${VALIDATOR_BASE_URL}/servers/nonce"
+NONCE_ENDPOINT="${TDX_BASE_URL}/servers/nonce"
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
@@ -85,7 +85,7 @@ trap clear_luks_key EXIT INT TERM
 
 echo ""
 log_msg "Starting TDX-based disk unlock"
-log_msg "TDX base: ${TDX_BASE_URL}, validator base: ${VALIDATOR_BASE_URL}"
+log_msg "TDX mTLS base: ${TDX_BASE_URL}"
 
 # Function to generate self-signed client certificate
 generate_client_cert() {
@@ -286,7 +286,7 @@ fetch_nonce() {
         --cert "$CLIENT_CERT" \
         --key "$CLIENT_KEY" \
         -o "$response_file" \
-        "$NONCE_ENDPOINT")
+        "${NONCE_ENDPOINT}?miner_hotkey=${HOTKEY}")
     
     case "$http_code" in
         200)
@@ -564,7 +564,7 @@ main() {
             --key "$CLIENT_KEY" \
             -d '{"volumes":{"root":{"rotated":true}}}' \
             -o /dev/null \
-            "${VALIDATOR_BASE_URL}/servers/${VM_NAME}/luks/confirm")
+            "${TDX_BASE_URL}/servers/${VM_NAME}/luks/confirm")
 
         if [ "$confirm_code" = "200" ]; then
             log_end_msg 0
