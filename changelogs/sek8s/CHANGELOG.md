@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-05-26
+## [0.4.0] - 2026-05-29
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -21,6 +21,8 @@ Version source of truth: `src/sek8s/VERSION`
 - `ValidationContext.required_key_path: Optional[Path]` replaced with `required_key_paths: Set[Path]` — the chutes namespace now accepts images signed by either the localregistry key or the Docker Hub key, eliminating false rejections when images are dual-signed or sourced from different registries.
 - `ImageConfig.image_pull_allowed_registries` default changed from `["localhost:30500", "127.0.0.1:30500"]` to `["localregistry.chutes.ai:30500"]` to match the static registry hostname decoupled from the validator hotkey.
 - `resolve_to_full_ref` registry-matching predicate updated from `.localregistry.chutes.ai` (dot-prefix, validator-scoped) to `localregistry.chutes.ai` (bare hostname) to reflect the static registry change.
+- `AdmissionConfig.chutes_public_key_path` default updated from `/etc/admission-controller/cosign/chutes.pub` to `/run/chutes/signing-keys/cosign/chutes.pub`.
+- `AdmissionConfig.dockerhub_public_key_path` default updated from `/etc/admission-controller/cosign/dockerhub.pub` to `/run/chutes/signing-keys/cosign/dockerhub.pub`.
 
 ## [0.3.0] - 2026-05-15
 
