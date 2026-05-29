@@ -33,9 +33,13 @@ profile sek8s.system-manager flags=(enforce) {
   # containerd socket for image operations
   /run/k3s/containerd/containerd.sock rw,
 
-  # Docker config and cosign key for image verification
+  # Docker config and cosign key for image verification (ImageConfig)
   /etc/admission-controller/docker-config/** r,
   /etc/admission-controller/cosign/cosign.pub r,
+
+  # Dynamic signing keys — fetched at boot by fetch-signing-keys initramfs script,
+  # PGP-verified against attested root key, written to tmpfs before pivot_root.
+  /run/chutes/signing-keys/** r,
 
   # Helper binaries (sudoers-restricted)
   /usr/local/bin/k3s-images-helper mrix,

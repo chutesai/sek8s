@@ -13,7 +13,7 @@ LOG_FILE="/var/log/helm-chart-upgrade.log"
 CHART_VERSIONS_DIR="/etc/chutes/chart-versions"
 CHART_CONFIGS_DIR="/etc/chutes/chart-configs"
 CHART_OVERRIDES_DIR="/etc/chutes/chart-upgrade-overrides"
-KEYRING_FILE="/etc/chutes/helm-pubkey.gpg"
+KEYRING_FILE="/run/chutes/signing-keys/helm-pubkey.gpg"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 # HELM_*_HOME are set by k3s-cluster-init.service; no fallbacks for determinism
 

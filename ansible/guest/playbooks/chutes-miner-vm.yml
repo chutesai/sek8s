@@ -157,6 +157,21 @@
         apply:
           tags: admission-controller
 
+- name: Install signing key trust anchor and initramfs fetch scripts
+  hosts: vm
+  become: true
+  tags:
+    - signing-keys
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Signing keys
+      ansible.builtin.include_role:
+        name: signing-keys
+        apply:
+          tags: signing-keys
+
 - name: Setup system manager service (status + cache)
   hosts: vm
   become: true
