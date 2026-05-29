@@ -11,10 +11,6 @@ chutes_chart_version: "0.3.0"
 # is written after a successful install so the boot-time upgrade script can detect drift.
 gpu_operator_chart_version: "v26.3.1"
 
-# Path to Helm chart signing PGP public key (build-time, like cosign_public_key_path).
-# Required. Override in inventory or group_vars.
-helm_chart_public_key_path: "~/.chutes/helm-pubkey.gpg"
-
 # Helm repo URL for chutes-miner charts (used at build time and inherited by boot script).
 chutes_helm_repo_url: "https://chutesai.github.io/chutes-miner"
 

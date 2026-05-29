@@ -96,7 +96,9 @@ def test_is_registry_allowed_localhost_not_in_restricted_list():
 
 def test_is_registry_allowed_partial_match_not_sufficient():
     """Partial substring is not a match."""
-    assert is_registry_allowed("localregistry.chutes.ai", ALLOWED) is False  # missing port
+    assert (
+        is_registry_allowed("localregistry.chutes.ai", ALLOWED) is False
+    )  # missing port
 
 
 # ── validate_image_ref ─────────────────────────────────────────────────────────

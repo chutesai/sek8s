@@ -1,0 +1,36 @@
+#!/bin/sh
+# /etc/initramfs-tools/hooks/fetch-signing-keys
+#
+# Copies gpgv (and its shared-library dependencies) plus the root PGP public
+# key and signing-keys.conf into the initramfs image at build time.
+#
+# curl, jq, and base64 are already copied into the initramfs by the fetch_key
+# hook (ansible/guest/roles/luks).  This hook only adds what is unique to the
+# PGP verification step.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# gpgv: minimal signature verifier; copy_exec resolves shared-library deps.
+copy_exec /usr/bin/gpgv
+
+# Root PGP public key — trust anchor for all dynamically-fetched leaf keys.
+if [ -f /etc/chutes/root-signing-key.gpg ]; then
+    mkdir -p "$DESTDIR/etc/chutes"
+    cp /etc/chutes/root-signing-key.gpg "$DESTDIR/etc/chutes/root-signing-key.gpg"
+    chmod 644 "$DESTDIR/etc/chutes/root-signing-key.gpg"
+else
+    echo "fetch-signing-keys-hook: WARNING: /etc/chutes/root-signing-key.gpg not found" >&2
+fi
+
+# API URL config for the fetch script.
+if [ -f /etc/chutes/signing-keys.conf ]; then
+    mkdir -p "$DESTDIR/etc/chutes"
+    cp /etc/chutes/signing-keys.conf "$DESTDIR/etc/chutes/signing-keys.conf"
+    chmod 644 "$DESTDIR/etc/chutes/signing-keys.conf"
+else
+    echo "fetch-signing-keys-hook: WARNING: /etc/chutes/signing-keys.conf not found" >&2
+fi

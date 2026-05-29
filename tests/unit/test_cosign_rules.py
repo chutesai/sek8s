@@ -18,9 +18,9 @@ from sek8s.validators.cosign import CosignValidator, ValidationContext
 # Fixtures
 # ---------------------------------------------------------------------------
 
-CHUTES_KEY = Path("/etc/admission-controller/cosign/chutes.pub")
-DOCKERHUB_KEY = Path("/etc/admission-controller/cosign/dockerhub.pub")
-UNKNOWN_KEY = Path("/etc/admission-controller/cosign/unknown.pub")
+CHUTES_KEY = Path("/run/chutes/signing-keys/cosign/chutes.pub")
+DOCKERHUB_KEY = Path("/run/chutes/signing-keys/cosign/dockerhub.pub")
+UNKNOWN_KEY = Path("/run/chutes/signing-keys/cosign/unknown.pub")
 
 
 @pytest.fixture
@@ -357,13 +357,13 @@ async def test_require_ctx_key_deduplicates_images(validator):
 
 
 def test_admission_config_default_key_paths():
-    """AdmissionConfig defaults point to the expected filesystem paths."""
+    """AdmissionConfig defaults point to the dynamic signing-keys tmpfs paths."""
     cfg = AdmissionConfig(opa_url="http://localhost:8181")
     assert cfg.chutes_public_key_path == Path(
-        "/etc/admission-controller/cosign/chutes.pub"
+        "/run/chutes/signing-keys/cosign/chutes.pub"
     )
     assert cfg.dockerhub_public_key_path == Path(
-        "/etc/admission-controller/cosign/dockerhub.pub"
+        "/run/chutes/signing-keys/cosign/dockerhub.pub"
     )
 
 

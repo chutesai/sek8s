@@ -1,0 +1,7 @@
+---
+# Path to the root PGP public key on the build host.
+# This key is baked into the image at /etc/chutes/root-signing-key.gpg and
+# measured into RTMR3 (via /etc/chutes/ recursive measurement).  It is the
+# trust anchor for all dynamically-fetched leaf keys (cosign, Helm).
+# Missing key is a hard build failure — see tasks/main.yml assertion.
+root_signing_key_path: "~/.chutes/root-signing-key.gpg"

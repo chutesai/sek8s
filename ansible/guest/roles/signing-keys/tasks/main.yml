@@ -1,0 +1,77 @@
+---
+# signing-keys — Install root PGP trust anchor and initramfs fetch machinery.
+#
+# Bakes the root PGP public key into /etc/chutes/ (measured by RTMR3).
+# At boot the initramfs fetch-signing-keys script fetches cosign/Helm keys
+# from the validator API, verifies them against the root key with gpgv, and
+# writes verified keys to /run/chutes/signing-keys/ (ephemeral tmpfs).
+
+# ── Validate build-host prerequisites ───────────────────────────────────────
+
+- name: Stat root signing key on build host
+  ansible.builtin.stat:
+    path: "{{ root_signing_key_path }}"
+  delegate_to: localhost
+  become: false
+  register: _root_key_stat
+
+- name: Assert root signing key exists
+  ansible.builtin.assert:
+    that: _root_key_stat.stat.exists
+    fail_msg: >-
+      Root signing PGP key not found at {{ root_signing_key_path }}.
+      Generate it with: gpg --export security@chutes.ai > {{ root_signing_key_path }}
+      Store the private key offline or in an HSM — never on the VM.
+
+# ── Install root PGP public key and URL config ───────────────────────────────
+
+- name: Ensure /etc/chutes directory exists
+  ansible.builtin.file:
+    path: /etc/chutes
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install root PGP signing key
+  ansible.builtin.copy:
+    src: "{{ root_signing_key_path }}"
+    dest: /etc/chutes/root-signing-key.gpg
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install signing-keys.conf
+  ansible.builtin.template:
+    src: signing-keys.conf.j2
+    dest: /etc/chutes/signing-keys.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# ── Ensure gpgv is installed (needed by the initramfs hook's copy_exec) ──────
+
+- name: Ensure gpgv is installed
+  ansible.builtin.apt:
+    name: gpgv
+    state: present
+
+# ── Install initramfs hook and init-bottom script ────────────────────────────
+
+- name: Install fetch-signing-keys initramfs hook
+  ansible.builtin.copy:
+    src: initramfs/fetch-signing-keys-hook
+    dest: /etc/initramfs-tools/hooks/fetch-signing-keys
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+- name: Install fetch-signing-keys init-bottom script
+  ansible.builtin.copy:
+    src: initramfs/fetch-signing-keys
+    dest: /etc/initramfs-tools/scripts/init-bottom/fetch-signing-keys
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
