@@ -33,6 +33,8 @@ ansible-playbook -i ~/chutes/my-inventory.yml playbooks/setup.yml
 
 ### `launch.yml` — render config, download image, start VM
 
+Before launching, `launch.yml` verifies that the host clock is NTP-synchronized (chrony offset < 5 s). VMs inherit the host RTC at QEMU boot time — a skewed clock causes boot-time mTLS certificates generated inside the guest to carry wrong `notBefore` timestamps, which the attestation endpoint rejects. If this check fails, run `setup.yml` first to install and sync chrony.
+
 Requires everything in `setup.yml` (SSH) plus:
 
 | Variable | Scope | Required | Notes |
@@ -210,6 +212,7 @@ upgrade-host.yml                   upgrade-guest.yml
 
 | Role | Task file | Used by |
 |---|---|---|
+| `ntp` | `main.yml` | `setup.yml` (first role — installs chrony, forces immediate clock step) |
 | `chutes_tee_vm` | `assert_not_running.yml` | `launch.yml`, `upgrade-host.yml` |
 | `chutes_tee_vm` | `drain_and_shutdown.yml` | `upgrade-guest.yml`, `upgrade-host.yml` |
 | `chutes_tee_vm` | `shutdown_via_miner.yml` | `shutdown.yml`, `drain_and_shutdown.yml` |

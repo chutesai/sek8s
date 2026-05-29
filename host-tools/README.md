@@ -16,6 +16,7 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 
 | Ubuntu | GPU SKU      | GPU count | Status              | Notes |
 |--------|--------------|-----------|---------------------|-------|
+| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [B200 notes](#b200-notes). |
 | 25.10  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
 | 25.10  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
 | 26.04  | —            | —         | Profile only        | Profile exists; not yet end-to-end validated. |
@@ -26,6 +27,15 @@ Print the canonical matrix from the repo:
 cd host-tools/scripts
 ./setup-tdx-host --topology-matrix
 ```
+
+#### B200 notes
+
+B200 uses a different NVSwitch architecture from H100/H200. Key differences that affect host setup:
+
+- **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `setup-tdx-host` when B200 GPUs are detected. The guest's Fabric Manager is masked.
+- **CX7 NVSwitch bridge PFs stay on the host**: ConnectX-7 devices acting as the host interface to NVSwitches (identified by `SMDL=SW_MNG` in PCIe VPD) are excluded from VFIO passthrough. Regular CX7 NIC PFs are still passed through normally.
+- **Encrypted NVLink (MPT CC mode)**: NVLink traffic between GPUs and the host Fabric Manager is encrypted, so host-side FM does not compromise the zero-trust security model.
+- **`nvidia-open` driver**: Required on both host and guest for B200 (already the default in the guest image).
 
 ---
 
