@@ -274,8 +274,9 @@
   ansible.builtin.copy:
     content: |
       # TDX LUKS Configuration
-      # tdx_base_url: mTLS proxy — boot attestation and LUKS passphrase endpoints
-      # validator_base_url: regular TLS API — nonce, confirm, and all other endpoints
+      # tdx_base_url: mTLS proxy — all boot-sensitive initramfs API calls (nonce,
+      #   boot attestation, LUKS attest, root confirm, storage confirm)
+      # validator_base_url: fetch-signing-keys (public endpoint) and post-boot services
       # Specific paths are hardcoded in fetch_key_and_unlock and setup_storage.
       TDX_BASE_URL="{{ tdx_base_url }}"
       VALIDATOR_BASE_URL="{{ validator_base_url }}"
