@@ -22,7 +22,8 @@ if [ -z "$TDX_BASE_URL" ]; then
     exit 1
 fi
 
-# All initramfs API calls go through the mTLS proxy (TDX_BASE_URL).
+# All boot-sensitive API calls go through the mTLS proxy (TDX_BASE_URL).
+# Exception: fetch-signing-keys uses VALIDATOR_BASE_URL (public endpoint).
 # Paths are stable and not configurable.
 API_ENDPOINT="${TDX_BASE_URL}/servers/boot/attestation"
 NONCE_ENDPOINT="${TDX_BASE_URL}/servers/nonce"

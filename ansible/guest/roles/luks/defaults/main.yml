@@ -8,8 +8,8 @@ build_env: "dev"
 final_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version | default('0.0.0') }}{{ '-debug' if debug_build | default(false) else '' }}.qcow2"
 
 # TDX-specific configuration
-# tdx_base_url: mTLS proxy — all initramfs API calls
-# validator_base_url: post-boot services (system-manager, etc.); not used by initramfs
+# tdx_base_url: mTLS proxy — all boot-sensitive initramfs API calls
+# validator_base_url: fetch-signing-keys (public endpoint) and post-boot services (system-manager)
 tdx_base_url: "https://tdx-attestation.example.com:8443"
 validator_base_url: "https://api.chutes.ai"
 tdx_timeout: 30
