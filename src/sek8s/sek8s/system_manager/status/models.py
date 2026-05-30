@@ -11,6 +11,7 @@ class ServiceDefinition:
     service_id: str
     unit: str
     description: str
+    masked_ok: bool = False
 
 
 @dataclass
@@ -57,6 +58,7 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
         service_id="nvidia-fabricmanager",
         unit="nvidia-fabricmanager.service",
         description="NVIDIA fabric manager",
+        masked_ok=True,
     ),
     "infiniband-config": ServiceDefinition(
         service_id="infiniband-config",

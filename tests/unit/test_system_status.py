@@ -268,6 +268,105 @@ def test_oneshot_service_unhealthy_when_exited_nonzero(status_client, fake_runne
     assert data["healthy"] is False
 
 
+def test_fabricmanager_healthy_when_masked(status_client, fake_runner):
+    """Masked nvidia-fabricmanager must be reported healthy (valid on non-NVLink hosts)."""
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=nvidia-fabricmanager.service\n"
+                "LoadState=masked\n"
+                "ActiveState=inactive\n"
+                "SubState=dead\n"
+                "MainPID=0\n"
+                "ExecMainStatus=0\n"
+                "ExecMainCode=0\n"
+                "UnitFileState=masked\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/services/nvidia-fabricmanager/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"]["unit_file_state"] == "masked"
+    assert data["healthy"] is True
+
+
+def test_is_service_healthy_masked_with_masked_ok():
+    """is_service_healthy returns True for a masked service when masked_ok=True."""
+    from sek8s.system_manager.status.responses import ServiceStatus
+    from sek8s.system_manager.status.util import is_service_healthy
+
+    status = ServiceStatus(
+        load_state="masked",
+        active_state="inactive",
+        sub_state="dead",
+        unit_file_state="masked",
+        main_pid="0",
+        exit_code="0",
+        exit_status="0",
+    )
+    assert is_service_healthy(status, masked_ok=True) is True
+
+
+def test_is_service_healthy_masked_without_masked_ok():
+    """is_service_healthy returns False for a masked service when masked_ok=False."""
+    from sek8s.system_manager.status.responses import ServiceStatus
+    from sek8s.system_manager.status.util import is_service_healthy
+
+    status = ServiceStatus(
+        load_state="masked",
+        active_state="inactive",
+        sub_state="dead",
+        unit_file_state="masked",
+        main_pid="0",
+        exit_code="0",
+        exit_status="0",
+    )
+    assert is_service_healthy(status, masked_ok=False) is False
+
+
+def test_fabricmanager_has_masked_ok_set():
+    """nvidia-fabricmanager ServiceDefinition must have masked_ok=True."""
+    from sek8s.system_manager.status.models import SERVICE_ALLOWLIST
+
+    assert SERVICE_ALLOWLIST["nvidia-fabricmanager"].masked_ok is True
+
+
+def test_non_masked_ok_service_unhealthy_when_masked(status_client, fake_runner):
+    """A service without masked_ok=True must be reported unhealthy when masked."""
+    fake_runner.set_response(
+        "systemctl",
+        CommandResult(
+            exit_code=0,
+            stdout=(
+                "Id=k3s.service\n"
+                "LoadState=masked\n"
+                "ActiveState=inactive\n"
+                "SubState=dead\n"
+                "MainPID=0\n"
+                "ExecMainStatus=0\n"
+                "ExecMainCode=0\n"
+                "UnitFileState=masked\n"
+            ),
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/services/k3s/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"]["unit_file_state"] == "masked"
+    assert data["healthy"] is False
+
+
 def test_overview_degraded_on_service_failure(status_client, fake_runner):
     fake_runner.set_response(
         "systemctl",
