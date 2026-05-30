@@ -35,5 +35,4 @@ allowed_registries:
   - rancher
   - nvcr.io
   - parachutes
-  - bitnami
   - "localregistry.chutes.ai:30500"

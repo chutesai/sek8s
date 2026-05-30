@@ -142,7 +142,7 @@ spec:
         - 987  # tdx-attest group GID
       initContainers:
       - name: wait-for-credentials
-        image: bitnami/kubectl:latest
+        image: parachutes/kubectl:{{ kubectl_image_tag }}
         command:
         - /bin/sh
         - -c
