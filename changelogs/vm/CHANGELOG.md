@@ -78,6 +78,7 @@ Version source of truth: `ansible/guest/VERSION`
 - `VALIDATOR_BASE_URL` is no longer required or validated by `fetch_key_and_unlock`. It remains in
   `tdx-luks.conf` for `fetch-signing-keys` (signing keys bundle fetch) and post-boot services
   (system-manager).
+- Attestation proxy init container migrated from `bitnami/kubectl:latest` (unsigned, unpinned) to `parachutes/kubectl` (cosign-signed with `dockerhub.pub`). Removed the `require_signature: false` exception for `bitnami/kubectl` from the cosign registry config and removed `bitnami` from the OPA registry allowlist.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
