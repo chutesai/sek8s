@@ -190,6 +190,9 @@ timeout 20 qemu-system-x86_64 \
   -nographic \
   -serial none \
   -monitor none \
+  -smbios type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000 \
+  -smbios type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0 \
+  -smbios type=3,manufacturer=Chutes,version=1.0,serial=0 \
   -object iommufd,id=iommufd0 \
   "${DEV_OPTS[@]}" \
   -no-reboot \
