@@ -164,24 +164,16 @@ def _write_system_file(path: str, content: str):
 
 
 def _get_kernel_version(kernel_package: str) -> str:
-    """Resolve the concrete kernel version from a metapackage name.
+    """Extract the kernel version string from a pinned package name.
 
-    Parses `apt show <metapackage>` for the Depends line to extract
-    the actual kernel version string (e.g. '6.17.0-15-generic').
+    Expects a concrete package like ``linux-image-6.17.0-35-generic``.
+    Raises if the name doesn't match the expected pattern.
     """
-    result = subprocess.run(
-        ["apt", "show", kernel_package],
-        capture_output=True,
-        text=True,
-    )
-    match = re.search(
-        r"Depends:.*linux-image-([^,\s]+)",
-        result.stdout,
-    )
+    match = re.match(r"linux-image-(\d+\.\d+\.\d+-\d+-\S+)", kernel_package)
     if not match:
-        raise RuntimeError(
-            f"Could not determine kernel version from {kernel_package}. "
-            f"apt show output:\n{result.stdout}"
+        raise ValueError(
+            f"kernel_package must be a pinned version "
+            f"(e.g. 'linux-image-6.17.0-35-generic'), got '{kernel_package}'"
         )
     return match.group(1)
 
@@ -605,6 +597,16 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
         print("Error: this script must be run as root (sudo).", file=sys.stderr)
         sys.exit(1)
 
+    if not re.match(r"linux-image-\d+\.\d+\.\d+-\d+-\S+", profile.kernel_package):
+        print(
+            f"Error: kernel_package must be a pinned version "
+            f"(e.g. 'linux-image-6.17.0-35-generic'), "
+            f"got '{profile.kernel_package}'.\n"
+            f"Unpinned metapackages cause RTMR0 measurement drift.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if noninteractive:
         os.environ["DEBIAN_FRONTEND"] = "noninteractive"
 
@@ -634,8 +636,8 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     kernel_version = _get_kernel_version(profile.kernel_package)
     print(f"  Kernel version resolved: {kernel_version}")
 
-    # linux-modules-extra may not be pulled in by the metapackage;
-    # not all kernel builds ship it as a separate package (e.g. 25.10 generic).
+    # linux-modules-extra is a separate package that may not be pulled in
+    # automatically; not all kernel builds ship it (e.g. 25.10 generic).
     modules_extra = f"linux-modules-extra-{kernel_version}"
     print(f"  Ensuring {modules_extra} is installed...")
     result = subprocess.run(

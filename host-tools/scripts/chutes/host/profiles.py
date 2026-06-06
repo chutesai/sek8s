@@ -77,7 +77,14 @@ class HostProfile(ABC):
     @property
     @abstractmethod
     def kernel_package(self) -> str:
-        """Metapackage for the TDX-capable kernel."""
+        """Pinned kernel image package (e.g. 'linux-image-6.17.0-35-generic').
+
+        Must be a concrete versioned package, not a metapackage like
+        linux-image-generic, so that every host in the fleet installs the
+        exact same kernel.  RTMR0 measurements depend on the host kernel
+        version — unpinned kernels cause attestation failures when hosts
+        diverge after routine apt upgrades.
+        """
         ...
 
     @property
@@ -123,7 +130,7 @@ class Ubuntu2510Profile(HostProfile):
 
     @property
     def kernel_package(self) -> str:
-        return "linux-image-generic"
+        return "linux-image-6.17.0-35-generic"
 
     @property
     def packages(self) -> list[str]:
@@ -172,7 +179,7 @@ class Ubuntu2604Profile(HostProfile):
 
     @property
     def kernel_package(self) -> str:
-        return "linux-image-generic"
+        return "linux-image-6.17.0-35-generic"
 
     @property
     def packages(self) -> list[str]:
