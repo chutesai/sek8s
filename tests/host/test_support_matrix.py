@@ -28,12 +28,17 @@ def test_b200_8_on_2510_validated():
     assert is_validated_topology("25.10", "B200", 8)
 
 
+def test_b300_8_on_2604_validated():
+    assert is_validated_topology("26.04", "B300", 8)
+
+
 def test_validated_rows_match_known_pairs():
     rows = validated_topology_rows()
     assert ("25.04", "H200", 8) in rows
     assert ("25.10", "RTX_PRO_6000", 8) in rows
     assert ("25.10", "B200", 8) in rows
-    assert len(rows) == 3
+    assert ("26.04", "B300", 8) in rows
+    assert len(rows) == 4
 
 
 def test_format_matrix_mentions_all_skus():
@@ -43,6 +48,7 @@ def test_format_matrix_mentions_all_skus():
     assert "H200" in text
     assert "RTX Pro 6000" in text
     assert "B200" in text
+    assert "B300" in text
 
 
 def test_format_matrix_h200_note_requires_nvswitch():

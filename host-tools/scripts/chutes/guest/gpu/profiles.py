@@ -155,6 +155,45 @@ class B200Profile(GpuProfile):
         return "CC mode (B200)"
 
 
+class B300Profile(GpuProfile):
+    pci_device_ids = ["3182"]  # GB110 [B300 SXM6 AC]
+
+    @property
+    def name(self) -> str:
+        return "B300"
+
+    @property
+    def bar_size_mb(self) -> int:
+        # 512 GiB: confirmed from lspci Region 2 on am-b300-61.
+        return 524288
+
+    @property
+    def vram_gb(self) -> int:
+        return 288  # B300 HBM3e (SXM6 AC)
+
+    @property
+    def host_cpus(self) -> int:
+        # 2 sockets x 48 cores x 2 threads = 192 (confirmed from lscpu on am-b300-61).
+        return 192
+
+    @property
+    def host_sockets(self) -> int:
+        return 2
+
+    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
+
+    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
+        return False
+
+    @property
+    def should_passthrough_infiniband(self) -> bool:
+        return True
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (B300)"
+
+
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
 
@@ -235,6 +274,7 @@ class RTXPro6000Profile(GpuProfile):
 
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
+    "B300": B300Profile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
 }
