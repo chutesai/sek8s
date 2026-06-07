@@ -273,8 +273,11 @@ def _grub_update_cmdline(additions: list[str]):
 
 
 
-def _detect_b200_gpus() -> bool:
-    """Return True if any B200 GPUs are present on this host."""
+_BLACKWELL_HGX_GPU_IDS = ("10de:2901", "10de:3182")  # B200, B300
+
+
+def _detect_blackwell_hgx_gpus() -> bool:
+    """Return True if any B200/B300 GPUs are present on this host."""
     try:
         output = subprocess.run(
             ["lspci", "-Dnn"],
@@ -282,17 +285,21 @@ def _detect_b200_gpus() -> bool:
             text=True,
             timeout=15,
         )
-        return any("10de:2901" in line for line in output.stdout.splitlines())
+        return any(
+            gpu_id in line
+            for line in output.stdout.splitlines()
+            for gpu_id in _BLACKWELL_HGX_GPU_IDS
+        )
     except (subprocess.TimeoutExpired, OSError):
         return False
 
 
 def _setup_host_fabric_manager():
-    """Install and configure Fabric Manager for B200 hosts.
+    """Install and configure Fabric Manager for B200/B300 HGX hosts.
 
-    B200 NVSwitches are not visible as PCIe devices — they are managed by
+    Blackwell NVSwitches are not visible as PCIe devices — they are managed by
     Fabric Manager through ConnectX-7 bridge PFs on the host.  This function
-    is a no-op on non-B200 hosts (GPU detection is cheap).
+    is a no-op on non-Blackwell HGX hosts (GPU detection is cheap).
 
     Packages installed:
     - nvidia-fabricmanager: manages the NVSwitch fabric
@@ -305,16 +312,16 @@ def _setup_host_fabric_manager():
     - fabricmanager.cfg: PARTITION_RAIL_POLICY=symmetric (required for CC mode)
     - nvidia-fabricmanager.service: enabled
     """
-    if not _detect_b200_gpus():
-        print("  No B200 GPUs detected — skipping host Fabric Manager setup")
+    if not _detect_blackwell_hgx_gpus():
+        print("  No B200/B300 GPUs detected — skipping host Fabric Manager setup")
         return
 
-    print("  B200 GPUs detected — installing host Fabric Manager stack...")
+    print("  B200/B300 GPUs detected — installing host Fabric Manager stack...")
 
     # ib_umad must be loaded before fabricmanager starts so it can open
     # the InfiniBand management datagram interface to the CX7 bridge PFs.
     ib_umad_conf = "/etc/modules-load.d/ib_umad.conf"
-    ib_umad_content = "# Required for B200 Fabric Manager CX7 bridge communication\nib_umad\n"
+    ib_umad_content = "# Required for B200/B300 Fabric Manager CX7 bridge communication\nib_umad\n"
     already_current = False
     if os.path.exists(ib_umad_conf):
         with open(ib_umad_conf) as f:
@@ -585,8 +592,8 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
     _blacklist_gpu_drivers()
 
-    # 5c. Host Fabric Manager for B200 (no-op on non-B200 hosts)
-    print("\nStep 5c: Configuring host Fabric Manager (B200 only)...")
+    # 5c. Host Fabric Manager for B200/B300 (no-op on other SKUs)
+    print("\nStep 5c: Configuring host Fabric Manager (B200/B300)...")
     _setup_host_fabric_manager()
 
     # 6. QGS vsock mode

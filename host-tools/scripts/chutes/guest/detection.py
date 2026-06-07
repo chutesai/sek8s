@@ -130,7 +130,7 @@ def _is_vf(bdf: str) -> bool:
 def detect_cx7_bridge_pfs() -> list[str]:
     """Detect ConnectX-7 NVSwitch bridge Physical Function BDFs via VPD.
 
-    On B200 HGX systems the NVSwitch ASICs are not visible as PCIe devices.
+    On B200/B300 HGX systems the NVSwitch ASICs are not visible as PCIe devices.
     They are managed through ConnectX-7 bridge PFs whose Vital Product Data
     contains the field ``SMDL=SW_MNG``.  These PFs must stay on the host for
     Fabric Manager to communicate with the NVSwitches over InfiniBand; they
@@ -140,7 +140,7 @@ def detect_cx7_bridge_pfs() -> list[str]:
     their VPD does not contain ``SMDL=SW_MNG``, so this function correctly
     returns only the bridge PFs.
 
-    Returns an empty list on non-B200 hosts (VPD read is cheap; no NVSwitch
+    Returns an empty list on non-Blackwell HGX hosts (VPD read is cheap; no NVSwitch
     bridge PFs will have the marker).
     """
     bridge_pfs = []

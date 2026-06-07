@@ -88,6 +88,41 @@ def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
 
 
 # ---------------------------------------------------------------------------
+# Blackwell HGX (B200 / B300): CC mode, host-side NVSwitch, IB passthrough
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model_key", ["B200", "B300"])
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_blackwell_hgx_uses_cc_mode_only(model_key, gpu_count):
+    profile = GPU_PROFILES[model_key]
+    args = profile.get_cc_mode_args(gpu_count)
+    assert len(args) == 1
+    assert "--set-cc-mode=on" in args[0]
+    flat = " ".join(args[0]).lower()
+    assert "ppcie" not in flat
+
+
+@pytest.mark.parametrize("model_key", ["B200", "B300"])
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_blackwell_hgx_never_passes_through_nvswitches(model_key, gpu_count):
+    profile = GPU_PROFILES[model_key]
+    assert profile.should_passthrough_nvswitches(gpu_count) is False
+
+
+@pytest.mark.parametrize("model_key", ["B200", "B300"])
+def test_blackwell_hgx_passes_through_infiniband(model_key):
+    profile = GPU_PROFILES[model_key]
+    assert profile.should_passthrough_infiniband is True
+
+
+def test_b300_matches_pci_device_id_3182():
+    profile = GPU_PROFILES["B300"]
+    assert profile.matches_device_id("3182")
+    assert profile.matches_device_id("3182".upper())
+
+
+# ---------------------------------------------------------------------------
 # H200 conditional logic: PPCIe vs CC depends on GPU count
 # ---------------------------------------------------------------------------
 
@@ -155,9 +190,9 @@ def test_smp_topology_threads_is_one(model_key):
     assert "threads=1" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200"])
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B300"])
 def test_two_socket_profiles_use_two_sockets(model_key):
-    """128-CPU 2-socket servers must reflect physical socket count in smp_topology.
+    """2-socket servers must reflect physical socket count in smp_topology.
 
     A flat sockets=1 topology causes QEMU to emit a degenerate CPUID with only a
     thread level and 0-bit shift — no core or package levels — which triggers the
@@ -168,7 +203,7 @@ def test_two_socket_profiles_use_two_sockets(model_key):
     assert "sockets=2" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200"])
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B300"])
 def test_two_socket_profiles_preserve_full_vcpu_count(model_key):
     """Switching to sockets=2 must not reduce the vCPU count."""
     profile = GPU_PROFILES[model_key]
