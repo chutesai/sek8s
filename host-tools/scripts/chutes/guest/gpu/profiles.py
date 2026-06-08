@@ -188,7 +188,11 @@ class B300Profile(GpuProfile):
 
     @property
     def should_passthrough_infiniband(self) -> bool:
-        return True
+        # B300 HGX: every ConnectX-7 IB-class PF (15b3:1021, PCI class 0207) is an
+        # NVSwitch bridge (SMDL=SW_MNG) and must stay on the host for Fabric Manager.
+        # Remaining CX7 data NICs are Ethernet-class (0200), not IB passthrough targets.
+        # Guest networking uses virtio-net; GPU fabric is NVLink via host-side FM.
+        return False
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
