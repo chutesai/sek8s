@@ -40,7 +40,7 @@ _VALIDATED_NOTES: dict[tuple[str, str, int], str] = {
         "26.04",
         "B300",
         8,
-    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host (excluded from passthrough).",
+    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host. No IB passthrough (guest uses virtio-net).",
     (
         "25.10",
         "RTX_PRO_6000",

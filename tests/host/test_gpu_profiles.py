@@ -88,7 +88,7 @@ def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
 
 
 # ---------------------------------------------------------------------------
-# Blackwell HGX (B200 / B300): CC mode, host-side NVSwitch, IB passthrough
+# Blackwell HGX (B200 / B300): CC mode, host-side NVSwitch
 # ---------------------------------------------------------------------------
 
 
@@ -110,10 +110,14 @@ def test_blackwell_hgx_never_passes_through_nvswitches(model_key, gpu_count):
     assert profile.should_passthrough_nvswitches(gpu_count) is False
 
 
-@pytest.mark.parametrize("model_key", ["B200", "B300"])
-def test_blackwell_hgx_passes_through_infiniband(model_key):
-    profile = GPU_PROFILES[model_key]
-    assert profile.should_passthrough_infiniband is True
+def test_b200_passes_through_infiniband():
+    """B200 HGX has separate CX7 NIC PFs (class 0207) for guest IB passthrough."""
+    assert GPU_PROFILES["B200"].should_passthrough_infiniband is True
+
+
+def test_b300_does_not_pass_through_infiniband():
+    """B300 HGX: all IB-class CX7 PFs are NVSwitch bridges; guest uses virtio-net."""
+    assert GPU_PROFILES["B300"].should_passthrough_infiniband is False
 
 
 def test_b300_matches_pci_device_id_3182():
