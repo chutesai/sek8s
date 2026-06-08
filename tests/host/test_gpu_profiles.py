@@ -88,6 +88,28 @@ def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
 
 
 # ---------------------------------------------------------------------------
+# B200 NUMA topology flag
+# ---------------------------------------------------------------------------
+
+
+def test_b200_enables_numa_topology():
+    profile = GPU_PROFILES["B200"]
+    assert profile.enable_numa_topology is True
+
+
+def test_b200_enables_post_launch_tuning():
+    profile = GPU_PROFILES["B200"]
+    assert profile.enable_post_launch_tuning is True
+
+
+@pytest.mark.parametrize("model_key", ["H200", "RTX_PRO_6000"])
+def test_non_b200_profiles_disable_numa_topology(model_key):
+    profile = GPU_PROFILES[model_key]
+    assert profile.enable_numa_topology is False
+    assert profile.enable_post_launch_tuning is False
+
+
+# ---------------------------------------------------------------------------
 # H200 conditional logic: PPCIe vs CC depends on GPU count
 # ---------------------------------------------------------------------------
 

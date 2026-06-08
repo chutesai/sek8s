@@ -111,6 +111,16 @@ class GpuProfile(ABC):
         """Whether InfiniBand devices should be detected and passed through."""
         return False
 
+    @property
+    def enable_numa_topology(self) -> bool:
+        """Use guest NUMA nodes, per-node memory bind, and PXB-PCIe grouping."""
+        return False
+
+    @property
+    def enable_post_launch_tuning(self) -> bool:
+        """Tune host CPU power and pin QEMU vCPU threads after launch."""
+        return False
+
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
         return f"{self.name} passthrough"
@@ -149,6 +159,14 @@ class B200Profile(GpuProfile):
 
     @property
     def should_passthrough_infiniband(self) -> bool:
+        return True
+
+    @property
+    def enable_numa_topology(self) -> bool:
+        return True
+
+    @property
+    def enable_post_launch_tuning(self) -> bool:
         return True
 
     def describe_mode(self, total_gpus: int) -> str:

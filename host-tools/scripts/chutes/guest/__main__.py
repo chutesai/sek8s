@@ -18,7 +18,16 @@ from chutes.guest.detection import (
 )
 from chutes.guest.gpu.profiles import resolve_profile
 from chutes.guest.passthrough import setup_passthrough
-from chutes.guest.qemu import add_volumes, add_vsock, build_base_cmd, build_network
+from chutes.guest.post_launch import apply_post_launch_tuning
+from chutes.guest.qemu import (
+    PcieRootPinning,
+    add_volumes,
+    add_vsock,
+    build_base_cmd,
+    build_network,
+    host_numa_nodes,
+    use_numa_topology,
+)
 
 PIDFILE = "/tmp/tdx-td-pid.pid"
 LOGFILE = "/tmp/tdx-guest-td.log"
@@ -64,6 +73,7 @@ def launch_vm(args) -> int:
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
+    profile = None
 
     if args.pass_gpus:
         gpus = get_gpu_bdfs()
@@ -82,11 +92,16 @@ def launch_vm(args) -> int:
                 f" → {vcpus} vCPUs, {mem} RAM"
             )
 
+    profile_wants_numa = profile is not None and profile.enable_numa_topology
+    numa_active = use_numa_topology(profile_wants_numa)
+
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
     ubuntu_version = platform.freedesktop_os_release().get("VERSION_ID")
     cpu_args = "host" if ubuntu_version == "24.04" else "host,-avx10"
+
+    pci_pinning = PcieRootPinning(numa_active)
 
     qemu_cmds = build_base_cmd(
         mem=mem,
@@ -98,6 +113,8 @@ def launch_vm(args) -> int:
         foreground=args.foreground,
         pidfile=PIDFILE,
         logfile=LOGFILE,
+        enable_numa_topology=profile_wants_numa,
+        pci_pinning=pci_pinning,
     )
 
     build_network(
@@ -106,6 +123,7 @@ def launch_vm(args) -> int:
         net_iface=args.net_iface,
         ssh_port=args.ssh_port,
         net_queues=args.net_queues,
+        pci_pinning=pci_pinning,
     )
 
     add_volumes(
@@ -113,21 +131,36 @@ def launch_vm(args) -> int:
         config_volume=args.config_volume,
         cache_volume=args.cache_volume,
         storage_volume=args.storage_volume,
+        pci_pinning=pci_pinning,
     )
 
-    add_vsock(qemu_cmds)
+    add_vsock(qemu_cmds, pci_pinning=pci_pinning)
 
     if args.pass_gpus:
         setup_passthrough(qemu_cmds)
 
     print("Launching QEMU...")
+    launch_prefix = [] if numa_active else ["numactl", "--interleave=all"]
     result = subprocess.run(
-        ["numactl", "--interleave=all"] + qemu_cmds,
+        launch_prefix + qemu_cmds,
         stderr=subprocess.STDOUT,
     )
     if result.returncode != 0:
         print(f"Error: QEMU failed (exit {result.returncode}).", file=sys.stderr)
         return result.returncode
+
+    if (
+        not args.foreground
+        and profile is not None
+        and profile.enable_post_launch_tuning
+    ):
+        apply_post_launch_tuning(
+            pidfile=PIDFILE,
+            process_name=PROCESS_NAME,
+            vcpus_total=int(vcpus),
+            host_nodes=host_numa_nodes(),
+            pin_threads=numa_active,
+        )
 
     if not args.foreground:
         print(f"Log file: {LOGFILE}")

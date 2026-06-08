@@ -15,7 +15,7 @@ from chutes.guest.detection import (
 )
 from chutes.guest.gpu.profiles import GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
-from chutes.guest.qemu import PciTopologyState
+from chutes.guest.qemu import NumaPciTopologyState, PciTopologyState, use_numa_topology
 from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
@@ -192,7 +192,11 @@ def _build_pci_topology(
     profile: GpuProfile,
 ):
     """Add GPU, NVSwitch, and IB devices to the QEMU PCI topology."""
-    topo = PciTopologyState()
+    if use_numa_topology(profile.enable_numa_topology):
+        print('  PCI topology: NUMA-local PXB-PCIe bridges')
+        topo = NumaPciTopologyState()
+    else:
+        topo = PciTopologyState()
 
     print(f'  Adding {len(gpus)} GPU(s) to PCI topology...')
     for i, gpu in enumerate(gpus):
