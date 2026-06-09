@@ -120,6 +120,16 @@ def test_b300_does_not_pass_through_infiniband():
     assert GPU_PROFILES["B300"].should_passthrough_infiniband is False
 
 
+def test_b300_skips_ovmf_mmio_fw_cfg():
+    """B300: 8×512 GiB BARs need OVMF auto-sized aggregate MMIO, not per-GPU fw_cfg."""
+    assert GPU_PROFILES["B300"].use_ovmf_mmio_fw_cfg is False
+
+
+@pytest.mark.parametrize("model_key", ["B200", "H200", "RTX_PRO_6000"])
+def test_other_profiles_use_ovmf_mmio_fw_cfg(model_key):
+    assert GPU_PROFILES[model_key].use_ovmf_mmio_fw_cfg is True
+
+
 def test_b300_matches_pci_device_id_3182():
     profile = GPU_PROFILES["B300"]
     assert profile.matches_device_id("3182")
