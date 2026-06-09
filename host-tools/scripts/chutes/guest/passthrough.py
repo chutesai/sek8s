@@ -21,8 +21,10 @@ from chutes.guest.vfio import (
     ensure_sriov_vfs,
     has_stale_vfio_devices,
     install_udev_rules,
+    pci_operations_wedged,
     unbind_non_vfio_drivers,
     unbind_stale_vfio_devices,
+    wait_pci_operations_idle,
 )
 
 _gpu_tools_cmd: str | None = None
@@ -142,14 +144,42 @@ def _prepare_devices(
     if ib_devices:
         all_devices.extend(ib_devices)
 
+    if pci_operations_wedged():
+        raise RuntimeError(
+            'PCI operations are wedged (uninterruptible D-state tasks from a '
+            'previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in '
+            'this state — reboot the host, then retry quick-launch.'
+        )
+
     if has_stale_vfio_devices(all_devices):
         print('  Stale vfio-pci devices detected from previous session')
         print('  Unbinding stale vfio-pci devices (no SBR needed for clean shutdown)...')
-        unbind_stale_vfio_devices(all_devices)
+        unbind_failed = unbind_stale_vfio_devices(all_devices)
 
-        if has_stale_vfio_devices(all_devices):
-            print('  Some devices could not be unbound — escalating to SBR reset...')
-            _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+        if pci_operations_wedged():
+            print('  Waiting for in-flight vfio unbind(s) to finish...')
+            if not wait_pci_operations_idle(timeout_secs=90):
+                raise RuntimeError(
+                    'vfio-pci unbind wedged the PCI subsystem (D-state tasks). '
+                    'SBR cannot run until the host is rebooted.'
+                )
+
+        needs_sbr = (
+            unbind_failed > 0
+            or has_stale_vfio_devices(all_devices)
+        )
+        if needs_sbr:
+            if pci_operations_wedged():
+                raise RuntimeError(
+                    'vfio-pci unbind wedged the PCI subsystem (D-state tasks). '
+                    'SBR cannot run until the host is rebooted.'
+                )
+            sbr_args = profile.get_sbr_reset_args()
+            print(
+                '  Some devices could not be unbound — escalating to SBR reset '
+                f'({profile.name}: {" ".join(sbr_args)})...'
+            )
+            _run_gpu_tools(*sbr_args)
             print(f'  Waiting {SBR_SETTLE_SECS}s for devices to re-initialize after SBR...')
             time.sleep(SBR_SETTLE_SECS)
             print('  Verifying device responsiveness...')
