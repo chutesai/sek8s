@@ -56,8 +56,17 @@ class GpuProfile(ABC):
     @property
     @abstractmethod
     def bar_size_mb(self) -> int:
-        """MMIO BAR size in MB for QEMU fw_cfg hint."""
+        """MMIO BAR size in MB for QEMU fw_cfg hint (when use_ovmf_mmio_fw_cfg is True)."""
         ...
+
+    @property
+    def use_ovmf_mmio_fw_cfg(self) -> bool:
+        """Whether to pass opt/ovmf/X-PciMmio64Mb* fw_cfg hints per GPU to QEMU.
+
+        B300 disables this: 8×512 GiB BARs need a multi-TB aggregate MMIO window that
+        OVMF auto-sizes; per-GPU fw_cfg hints can prevent correct BAR assignment.
+        """
+        return True
 
     @property
     @abstractmethod
@@ -192,6 +201,10 @@ class B300Profile(GpuProfile):
         # NVSwitch bridge (SMDL=SW_MNG) and must stay on the host for Fabric Manager.
         # Remaining CX7 data NICs are Ethernet-class (0200), not IB passthrough targets.
         # Guest networking uses virtio-net; GPU fabric is NVLink via host-side FM.
+        return False
+
+    @property
+    def use_ovmf_mmio_fw_cfg(self) -> bool:
         return False
 
     def describe_mode(self, total_gpus: int) -> str:
