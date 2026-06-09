@@ -195,16 +195,30 @@ def _build_pci_topology(
     topo = PciTopologyState()
 
     print(f'  Adding {len(gpus)} GPU(s) to PCI topology...')
+    if profile.use_ovmf_mmio_fw_cfg:
+        mmio_note = f'fw_cfg BAR hint {profile.bar_size_mb} MB per GPU'
+    else:
+        mmio_note = (
+            f'OVMF auto-sizes MMIO window (no fw_cfg; '
+            f'~{profile.bar_size_mb} MB BAR per {profile.name} GPU)'
+        )
+    print(f'    MMIO: {mmio_note}')
     for i, gpu in enumerate(gpus):
-        bar_size = profile.bar_size_mb
-        print(f'    GPU {gpu}: {profile.name} detected, using {bar_size} MB BAR')
+        bar_kwargs: dict = {}
+        if profile.use_ovmf_mmio_fw_cfg:
+            bar_kwargs = {
+                'bar_size_mb': profile.bar_size_mb,
+                'bar_index': i + 1,
+            }
+            print(f'    GPU {gpu}: {profile.name}, BAR fw_cfg {profile.bar_size_mb} MB')
+        else:
+            print(f'    GPU {gpu}: {profile.name}')
         topo.add_device(
             cmd,
             host_bdf=gpu,
             rp_id=f'rp{i + 1}',
             chassis=i + 1,
-            bar_size_mb=bar_size,
-            bar_index=i + 1,
+            **bar_kwargs,
         )
 
     if nvswitches_for_vm:
