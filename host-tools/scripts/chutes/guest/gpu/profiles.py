@@ -110,6 +110,14 @@ class GpuProfile(ABC):
         """
         ...
 
+    def get_sbr_reset_args(self) -> list[str]:
+        """Return nvidia-gpu-tools args for a Secondary Bus Reset recovery.
+
+        CC-mode GPUs (B200, B300, RTX) use --reset-after-cc-mode-switch.
+        H200 8-GPU PPCIe configs use --reset-after-ppcie-mode-switch.
+        """
+        return ["--reset-with-sbr", "--reset-after-cc-mode-switch"]
+
     @abstractmethod
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         """Whether NVSwitch devices should be detected and passed through."""
@@ -244,6 +252,9 @@ class H200Profile(GpuProfile):
             ["--set-ppcie-mode=off", "--reset-after-ppcie-mode-switch"],
             ["--set-cc-mode=on", "--reset-after-cc-mode-switch"],
         ]
+
+    def get_sbr_reset_args(self) -> list[str]:
+        return ["--reset-with-sbr", "--reset-after-ppcie-mode-switch"]
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return total_gpus == 8

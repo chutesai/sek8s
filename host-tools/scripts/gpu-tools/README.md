@@ -10,6 +10,7 @@ The wheel file (`nvidia_gpu_admin_tools-*.whl`) is a pre-built Python package th
 
 The wheel is built from:
 - Repository: https://github.com/NVIDIA/gpu-admin-tools
+- Release: [v2026.06.05](https://github.com/NVIDIA/gpu-admin-tools/releases/tag/v2026.06.05)
 - Built using: `poetry build --format wheel` or `python3 -m build --wheel`
 
 ### Building the Wheel

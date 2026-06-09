@@ -7,10 +7,12 @@ set -e
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
 TARGET_DIR="${SCRIPT_DIR}"
 GPU_ADMIN_TOOLS_URL="https://github.com/NVIDIA/gpu-admin-tools.git"
+GPU_ADMIN_TOOLS_TAG="${GPU_ADMIN_TOOLS_TAG:-v2026.06.05}"
 BUILD_DIR="${TARGET_DIR}/.build"
 
 echo "Bundling GPU admin tools from NVIDIA gpu-admin-tools repository..."
 echo "Repository: ${GPU_ADMIN_TOOLS_URL}"
+echo "Tag: ${GPU_ADMIN_TOOLS_TAG}"
 echo "Target: ${TARGET_DIR}"
 echo ""
 
@@ -18,8 +20,8 @@ echo ""
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 
-echo "Cloning gpu-admin-tools repository..."
-git clone --depth 1 "${GPU_ADMIN_TOOLS_URL}" "${BUILD_DIR}/gpu-admin-tools" 2>&1 | grep -v "^Cloning\|^remote:\|^Resolving\|^Receiving\|^Updating" || true
+echo "Cloning gpu-admin-tools repository at ${GPU_ADMIN_TOOLS_TAG}..."
+git clone --depth 1 --branch "${GPU_ADMIN_TOOLS_TAG}" "${GPU_ADMIN_TOOLS_URL}" "${BUILD_DIR}/gpu-admin-tools" 2>&1 | grep -v "^Cloning\|^remote:\|^Resolving\|^Receiving\|^Updating" || true
 
 REPO_DIR="${BUILD_DIR}/gpu-admin-tools"
 
@@ -52,21 +54,19 @@ echo ""
 echo "Building wheel package..."
 cd "${BUILD_SRC_DIR}"
 
+BUILD_VENV="${BUILD_DIR}/build-venv"
+python3 -m venv "${BUILD_VENV}"
+"${BUILD_VENV}/bin/pip" install -q --upgrade pip build wheel poetry-core
+
 # Try poetry build first, fall back to python -m build
 if command -v poetry &> /dev/null; then
     echo "  Using poetry to build wheel..."
     poetry build --format wheel 2>&1 | grep -v "^Building\|^Created" || true
     WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
 else
-    echo "  Poetry not found, using python -m build..."
-    if command -v python3 &> /dev/null; then
-        python3 -m pip install --upgrade pip build wheel 2>&1 | grep -v "^Requirement\|^Collecting\|^Using\|^Already" || true
-        python3 -m build --wheel 2>&1 | grep -v "^Creating\|^Adding\|^Copying\|^Building" || true
-        WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
-    else
-        echo "Error: Neither poetry nor python3 found, cannot build wheel"
-        exit 1
-    fi
+    echo "  Using isolated venv python -m build..."
+    "${BUILD_VENV}/bin/python" -m build --wheel 2>&1 | grep -v "^Creating\|^Adding\|^Copying\|^Building" || true
+    WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
 fi
     
 # Find the built wheel and move it to target directory

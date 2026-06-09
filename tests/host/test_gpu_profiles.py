@@ -110,6 +110,19 @@ def test_blackwell_hgx_never_passes_through_nvswitches(model_key, gpu_count):
     assert profile.should_passthrough_nvswitches(gpu_count) is False
 
 
+@pytest.mark.parametrize("model_key", ["B200", "B300", "RTX_PRO_6000"])
+def test_cc_mode_profiles_use_cc_sbr_reset(model_key):
+    profile = GPU_PROFILES[model_key]
+    args = profile.get_sbr_reset_args()
+    assert args == ["--reset-with-sbr", "--reset-after-cc-mode-switch"]
+
+
+def test_h200_uses_ppcie_sbr_reset():
+    profile = GPU_PROFILES["H200"]
+    args = profile.get_sbr_reset_args()
+    assert args == ["--reset-with-sbr", "--reset-after-ppcie-mode-switch"]
+
+
 def test_b200_passes_through_infiniband():
     """B200 HGX has separate CX7 NIC PFs (class 0207) for guest IB passthrough."""
     assert GPU_PROFILES["B200"].should_passthrough_infiniband is True

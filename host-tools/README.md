@@ -199,9 +199,21 @@ cd /opt/intel/sgx-dcap-pccs && npm install && systemctl restart pccs
 Caused by non-interactive install skipping the `npm install` post-install step.
 
 **GPU stuck or unhealthy**
+
+If `quick-launch` or `chutes-reset-gpus` hangs, check for wedged PCI tasks:
 ```bash
-chutes-reset-gpus                                          # all GPUs
-sudo nvidia-gpu-tools --reset-with-sbr --gpu-bdf=<bdf>    # single GPU
+ps aux | awk '$8 ~ /D/ && /nvidia-gpu-tools|vfio-pci\/unbind/'
+```
+When that shows D-state processes, **reboot the host** before retrying — SBR cannot run while those are stuck.
+
+B200/B300 use CC mode (not PPCIe); use CC-mode SBR flags:
+```bash
+chutes-reset-gpus    # auto-selects flags from detected GPU type
+sudo nvidia-gpu-tools --reset-with-sbr --reset-after-cc-mode-switch --gpu-bdf=<bdf>
+```
+H200 8-GPU PPCIe configs:
+```bash
+sudo nvidia-gpu-tools --reset-with-sbr --reset-after-ppcie-mode-switch --gpu-bdf=<bdf>
 ```
 
 **TDX not initialized after reboot**

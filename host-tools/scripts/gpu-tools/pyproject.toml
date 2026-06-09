@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "nvidia-gpu-admin-tools"
-version = "2025.11.21"
+version = "2026.06.05"
 description = "NVIDIA GPU Admin Tools for Confidential Computing configuration"
 authors = ["NVIDIA"]
 license = "MIT"
