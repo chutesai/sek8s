@@ -24,6 +24,11 @@ system_packages:
   - ca-certificates
   - gnupg-agent
   - software-properties-common
+  - cryptsetup
+  - dhcpcd-base
+  - openssl
+  - xfsprogs
+  - e2fsprogs
 
 # Networking configuration (used by all)
 k3s_api_port: "6443"
