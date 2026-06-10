@@ -121,6 +121,15 @@ class GpuProfile(ABC):
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
         return False
 
+    @property
+    def firmware_filename(self) -> str:
+        """TDVF firmware filename in the repo firmware/ directory.
+
+        Changing the firmware changes MRTD — attestation policy must be
+        re-baselined for any profile using a different image.
+        """
+        return "TDVF.fd"
+
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
         return f"{self.name} passthrough"
@@ -168,6 +177,12 @@ class B200Profile(GpuProfile):
     @property
     def enable_post_launch_tuning(self) -> bool:
         return True
+
+    @property
+    def firmware_filename(self) -> str:
+        # Ubuntu ovmf-inteltdx package build, copied unmodified from
+        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
+        return "OVMF.inteltdx.ms.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
