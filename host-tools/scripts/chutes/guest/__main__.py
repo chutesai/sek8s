@@ -27,13 +27,14 @@ PROCESS_NAME = "chutes-td"
 DEFAULT_MEM = "100G"
 DEFAULT_VCPUS = "32"
 
-# TDVF MUST NOT be overridden (MRTD depends on it)
-_FIRMWARE_REL = "../../firmware/TDVF.fd"
+# TDVF MUST NOT be overridden by user config (MRTD depends on it).
+# The filename is selected per GPU profile; see GpuProfile.firmware_filename.
+_DEFAULT_FIRMWARE = "TDVF.fd"
 
 
-def _firmware_path() -> str:
+def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
     scripts_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(scripts_dir, _FIRMWARE_REL)
+    return os.path.join(scripts_dir, "../../firmware", filename)
 
 
 def print_vm_status(ssh_port: int, show_ssh: bool = False):
@@ -64,6 +65,7 @@ def launch_vm(args) -> int:
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
+    profile = None
 
     if args.pass_gpus:
         gpus = get_gpu_bdfs()
@@ -88,12 +90,16 @@ def launch_vm(args) -> int:
     ubuntu_version = platform.freedesktop_os_release().get("VERSION_ID")
     cpu_args = "host" if ubuntu_version == "24.04" else "host,-avx10"
 
+    firmware_filename = profile.firmware_filename if profile else _DEFAULT_FIRMWARE
+    firmware = _firmware_path(firmware_filename)
+    print(f"Firmware: {firmware}")
+
     qemu_cmds = build_base_cmd(
         mem=mem,
         smp_topology=smp_topology,
         process_name=PROCESS_NAME,
         cpu_args=cpu_args,
-        firmware=_firmware_path(),
+        firmware=firmware,
         img_path=args.image,
         foreground=args.foreground,
         pidfile=PIDFILE,
