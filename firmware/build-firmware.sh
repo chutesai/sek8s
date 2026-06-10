@@ -68,19 +68,19 @@ set -u
 
 if [[ $SECURE_BOOT -eq 0 ]]; then
     echo "--- Building Config-B (IntelTdxX64.dsc, no Secure Boot) ---"
-    build -p OvmfPkg/IntelTdx/IntelTdxX64.dsc -a X64 -t GCC5 -b RELEASE
+    build -p OvmfPkg/IntelTdx/IntelTdxX64.dsc -a X64 -t GCC -b RELEASE
 
     DEST="${SCRIPT_DIR}/OVMF.inteltdx.fd"
-    cp "${EDK2_DIR}/Build/IntelTdx/RELEASE_GCC5/FV/OVMF.fd" "${DEST}"
+    cp "${EDK2_DIR}/Build/IntelTdx/RELEASE_GCC/FV/OVMF.fd" "${DEST}"
 else
     echo "--- Building Config-A (OvmfPkgX64.dsc, Secure Boot) ---"
-    build -p OvmfPkg/OvmfPkgX64.dsc -a X64 -t GCC5 -b RELEASE \
+    build -p OvmfPkg/OvmfPkgX64.dsc -a X64 -t GCC -b RELEASE \
         -D CC_MEASUREMENT_ENABLE=TRUE \
         -D SECURE_BOOT_ENABLE=TRUE \
         -D FD_SIZE_4MB
 
     DEST="${SCRIPT_DIR}/OVMF.inteltdx.ms.fd"
-    cp "${EDK2_DIR}/Build/OvmfX64/RELEASE_GCC5/FV/OVMF.fd" "${DEST}"
+    cp "${EDK2_DIR}/Build/OvmfX64/RELEASE_GCC/FV/OVMF.fd" "${DEST}"
 
     echo "--- Enrolling Microsoft Secure Boot keys ---"
     virt-fw-vars \
