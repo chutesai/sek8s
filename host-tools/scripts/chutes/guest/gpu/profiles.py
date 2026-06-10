@@ -135,7 +135,10 @@ class GpuProfile(ABC):
         Changing the firmware changes MRTD — attestation policy must be
         re-baselined for any profile using a different image.
         """
-        return "TDVF.fd"
+        # Ubuntu ovmf-inteltdx package build, copied unmodified from
+        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
+        # Includes CVE-2025-2296 Fix #5 (legacy loader disabled in TDX guests).
+        return "OVMF.inteltdx.ms.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
@@ -176,12 +179,6 @@ class B200Profile(GpuProfile):
     @property
     def should_passthrough_infiniband(self) -> bool:
         return True
-
-    @property
-    def firmware_filename(self) -> str:
-        # Ubuntu ovmf-inteltdx package build, copied unmodified from
-        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
-        return "OVMF.inteltdx.ms.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
