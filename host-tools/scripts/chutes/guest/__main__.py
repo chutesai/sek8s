@@ -29,7 +29,7 @@ DEFAULT_VCPUS = "32"
 
 # TDVF MUST NOT be overridden by user config (MRTD depends on it).
 # The filename is selected per GPU profile; see GpuProfile.firmware_filename.
-_DEFAULT_FIRMWARE = "TDVF.fd"
+_DEFAULT_FIRMWARE = "OVMF.inteltdx.ms.fd"
 
 
 def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
