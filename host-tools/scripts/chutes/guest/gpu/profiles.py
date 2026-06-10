@@ -230,6 +230,13 @@ class B300Profile(GpuProfile):
     def use_ovmf_mmio_fw_cfg(self) -> bool:
         return False
 
+    @property
+    def firmware_filename(self) -> str:
+        # Same Ubuntu ovmf-inteltdx package build as B200 (unmodified from
+        # /usr/share/ovmf/OVMF.inteltdx.ms.fd, ovmf-inteltdx 2025.11-3ubuntu7).
+        # OVMF auto-sizes the multi-TB aggregate MMIO window for 8x512 GiB BARs.
+        return "OVMF.inteltdx.ms.fd"
+
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
 

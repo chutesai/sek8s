@@ -138,6 +138,17 @@ def test_b300_skips_ovmf_mmio_fw_cfg():
     assert GPU_PROFILES["B300"].use_ovmf_mmio_fw_cfg is False
 
 
+@pytest.mark.parametrize("model_key", ["B200", "B300"])
+def test_blackwell_hgx_uses_ovmf_inteltdx_firmware(model_key):
+    """B200/B300 boot the Ubuntu ovmf-inteltdx TDVF build."""
+    assert GPU_PROFILES[model_key].firmware_filename == "OVMF.inteltdx.ms.fd"
+
+
+@pytest.mark.parametrize("model_key", ["H200", "RTX_PRO_6000"])
+def test_other_profiles_use_default_tdvf(model_key):
+    assert GPU_PROFILES[model_key].firmware_filename == "TDVF.fd"
+
+
 @pytest.mark.parametrize("model_key", ["B200", "H200", "RTX_PRO_6000"])
 def test_other_profiles_use_ovmf_mmio_fw_cfg(model_key):
     assert GPU_PROFILES[model_key].use_ovmf_mmio_fw_cfg is True
