@@ -4,7 +4,7 @@ Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
 
-## [2026.05.3] - 2026-05-29
+## [2026.05.3] - 2026-06-10
 
 ### Added
 - `ansible/guest/roles/luks/files/initramfs/luks-helpers`: shared initramfs shell library with `write_key_file`, `shred_key_file`, `luks_add_key`, `luks_remove_key` — sourced by both `fetch_key_and_unlock` (init-premount) and `setup_storage` (init-bottom).
@@ -16,6 +16,9 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - `host-tools/scripts/prepare-vm-image.sh`: replaced QEMU qcow2 overlay creation with a full `cp` of the base image into a per-VM file; added stale-image cleanup for previous base image versions.
 - `host-tools/scripts/quick-launch.sh`: renamed `--overlay-dir` to `--vm-image-dir`; default directory changed from `/var/lib/chutes/vm-overlays/` to `/var/lib/chutes/vm-images/`.
 - Config key `overlay_directory` renamed to `vm_image_directory` in schemas, templates, example configs, `config.py`, and `CONFIG-GUIDE.md`.
+
+### Fixed
+- Add `xfsprogs` to host prerequisites so `mkfs.xfs` is available when `create-cache.sh` creates the storage volume (regression introduced in #34 when the storage volume format was switched from ext4 to XFS)
 
 ## [2026.05.2] - 2026-05-29
 
