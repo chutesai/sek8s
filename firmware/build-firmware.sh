@@ -61,7 +61,10 @@ git submodule update --init --recursive
 echo "--- Building BaseTools ---"
 make -C BaseTools -j"$(nproc)"
 
+export PYTHON_COMMAND=python3
+set +u
 source ./edksetup.sh
+set -u
 
 if [[ $SECURE_BOOT -eq 0 ]]; then
     echo "--- Building Config-B (IntelTdxX64.dsc, no Secure Boot) ---"
