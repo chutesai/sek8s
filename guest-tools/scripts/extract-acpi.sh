@@ -8,13 +8,10 @@ set -euo pipefail
 
 # Firmware path for ACPI extraction.
 #
-# All supported stacks (25.04, 25.10, 26.04) use TDVF.fd to maintain backward
-# compatibility and a single MRTD/RTMR attestation policy.
-#
-# OVMF.inteltdx.ms.fd is reserved for a future upgrade.  Override via env
-# only when testing the new firmware:
+# Default firmware is OVMF.inteltdx.fd (Config-B, no Secure Boot).
+# Override via env to test alternative firmware builds:
 #   TDVF_FIRMWARE=firmware/OVMF.inteltdx.ms.fd ./extract-acpi.sh
-TDVF="${TDVF_FIRMWARE:-firmware/TDVF.fd}"
+TDVF="${TDVF_FIRMWARE:-firmware/OVMF.inteltdx.fd}"
 OUT_DIR="measure/acpi"
 
 # Match production defaults unless overridden via env

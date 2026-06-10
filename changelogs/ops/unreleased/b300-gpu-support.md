@@ -6,6 +6,6 @@
 - PCI wedge detection (`pci_operations_wedged()`, `wait_pci_operations_idle()`) — pre-flight and post-unbind checks abort with a clear message instead of hanging when the PCI subsystem is stuck in D-state.
 
 ### Changed
-- All GPU profiles now use `OVMF.inteltdx.ms.fd` firmware (Ubuntu `ovmf-inteltdx 2025.11-3ubuntu7`). Addresses CVE-2025-2296 (legacy Linux loader disabled in TDX guests). Old `TDVF.fd` removed.
+- All GPU profiles now use `OVMF.inteltdx.fd` firmware (edk2-stable202605 Config-B, no Secure Boot). Addresses CVE-2025-2296 (legacy Linux loader disabled by default). Old `TDVF.fd` removed.
 - `gpu-admin-tools` bumped to v2026.06.05 with hardened B300 PCI recovery.
 - B300 disables InfiniBand passthrough: all ConnectX-7 IB-class PFs are NVSwitch bridge devices managed by host-side Fabric Manager; guest networking uses virtio-net.

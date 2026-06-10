@@ -2,7 +2,7 @@
   "boot_config": {
     "cpus": 32,
     "memory": "10G",
-    "bios": "firmware/TDVF.fd",
+    "bios": "firmware/OVMF.inteltdx.fd",
     "acpi_dtb": "acpi/acpi-tables.dtb"
   },
   "kernel": {
