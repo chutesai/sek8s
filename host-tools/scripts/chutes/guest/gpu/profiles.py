@@ -135,7 +135,9 @@ class GpuProfile(ABC):
         Changing the firmware changes MRTD — attestation policy must be
         re-baselined for any profile using a different image.
         """
-        return "TDVF.fd"
+        # Built from edk2 Config-B (IntelTdxX64.dsc), no Secure Boot.
+        # Run firmware/build-firmware.sh to rebuild from source.
+        return "OVMF.inteltdx.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
@@ -176,12 +178,6 @@ class B200Profile(GpuProfile):
     @property
     def should_passthrough_infiniband(self) -> bool:
         return True
-
-    @property
-    def firmware_filename(self) -> str:
-        # Ubuntu ovmf-inteltdx package build, copied unmodified from
-        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
-        return "OVMF.inteltdx.ms.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
@@ -229,13 +225,6 @@ class B300Profile(GpuProfile):
     @property
     def use_ovmf_mmio_fw_cfg(self) -> bool:
         return False
-
-    @property
-    def firmware_filename(self) -> str:
-        # Same Ubuntu ovmf-inteltdx package build as B200 (unmodified from
-        # /usr/share/ovmf/OVMF.inteltdx.ms.fd, ovmf-inteltdx 2025.11-3ubuntu7).
-        # OVMF auto-sizes the multi-TB aggregate MMIO window for 8x512 GiB BARs.
-        return "OVMF.inteltdx.ms.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
