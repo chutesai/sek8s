@@ -27,11 +27,11 @@ CACHE_LUKS_NAME="${CACHE_LUKS_NAME:-$CACHE_LABEL}"
 STORAGE_DEVICE=""
 STORAGE_KEY=""       # current passphrase (for luksOpen)
 STORAGE_KEY_NEXT=""  # next passphrase (rotation target)
-STORAGE_KEY_ADDED=0  # 1 if luksAddKey succeeded for storage this boot
+STORAGE_KEY_ADDED=0  # 1 if key was applied this boot (format or luksAddKey)
 CACHE_DEVICE=""
 CACHE_KEY=""
 CACHE_KEY_NEXT=""
-CACHE_KEY_ADDED=0    # 1 if luksAddKey succeeded for cache this boot
+CACHE_KEY_ADDED=0    # 1 if key was applied this boot (format or luksAddKey)
 CONFIRM_NONCE=""     # one-time token returned by API for confirming rotation
 K3S_ENCRYPTION_KEY="" # base64-encoded secretbox key for k3s EncryptionConfiguration
 VM_NAME=""
@@ -536,6 +536,7 @@ setup_storage() {
             log_failure_msg "Failed to format storage"
             return 1
         fi
+        STORAGE_KEY_ADDED=1
         log_success_msg "Storage encrypted and formatted"
     fi
 
@@ -617,6 +618,7 @@ setup_cache() {
             log_failure_msg "Failed to format cache"
             return 1
         fi
+        CACHE_KEY_ADDED=1
         log_success_msg "Cache encrypted and formatted"
     fi
 
@@ -643,26 +645,26 @@ finalize_rotation() {
     local confirmed="$1"
 
     if [ "$confirmed" = "1" ]; then
-        if [ "$STORAGE_KEY_ADDED" = "1" ]; then
+        if [ "$STORAGE_KEY_ADDED" = "1" ] && [ -n "$STORAGE_KEY_NEXT" ]; then
             log_begin_msg "Removing old storage key slot"
             luks_remove_key "$STORAGE_DEVICE" "$STORAGE_KEY" \
                 && log_success_msg "Old storage key slot removed" \
                 || log_failure_msg "Failed to remove old storage slot (non-fatal)"
         fi
-        if [ "$CACHE_KEY_ADDED" = "1" ]; then
+        if [ "$CACHE_KEY_ADDED" = "1" ] && [ -n "$CACHE_KEY_NEXT" ]; then
             log_begin_msg "Removing old cache key slot"
             luks_remove_key "$CACHE_DEVICE" "$CACHE_KEY" \
                 && log_success_msg "Old cache key slot removed" \
                 || log_failure_msg "Failed to remove old cache slot (non-fatal)"
         fi
     else
-        if [ "$STORAGE_KEY_ADDED" = "1" ]; then
+        if [ "$STORAGE_KEY_ADDED" = "1" ] && [ -n "$STORAGE_KEY_NEXT" ]; then
             log_begin_msg "Reverting storage key slot (confirm failed)"
             luks_remove_key "$STORAGE_DEVICE" "$STORAGE_KEY_NEXT" \
                 && log_success_msg "Storage key slot reverted" \
                 || log_failure_msg "Failed to revert storage slot (non-fatal, extra slot persists)"
         fi
-        if [ "$CACHE_KEY_ADDED" = "1" ]; then
+        if [ "$CACHE_KEY_ADDED" = "1" ] && [ -n "$CACHE_KEY_NEXT" ]; then
             log_begin_msg "Reverting cache key slot (confirm failed)"
             luks_remove_key "$CACHE_DEVICE" "$CACHE_KEY_NEXT" \
                 && log_success_msg "Cache key slot reverted" \
