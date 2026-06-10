@@ -8,10 +8,6 @@ set -euo pipefail
 # Usage:
 #   ./build-firmware.sh                  # Config-B → firmware/OVMF.inteltdx.fd
 #   ./build-firmware.sh --secure-boot    # Config-A → firmware/OVMF.inteltdx.ms.fd
-#
-# Prerequisites:
-#   apt install uuid-dev nasm iasl build-essential python3-distutils git
-#   pip install virt-firmware   (only needed for --secure-boot)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDK2_TAG="edk2-stable202605"
@@ -25,7 +21,6 @@ for arg in "$@"; do
             echo "Usage: $0 [--secure-boot]"
             echo ""
             echo "  --secure-boot   Build Config-A with Microsoft Secure Boot keys"
-            echo "                  (requires python3 virt-firmware package)"
             echo ""
             echo "Without flags, builds Config-B (IntelTdxX64.dsc) without Secure Boot."
             echo "Output lands in firmware/ ready to commit."
@@ -37,6 +32,16 @@ for arg in "$@"; do
         *) echo "Unknown argument: $arg"; exit 1 ;;
     esac
 done
+
+# --- Install build prerequisites ---
+PACKAGES=(uuid-dev nasm iasl build-essential python3-distutils git)
+if [[ $SECURE_BOOT -eq 1 ]]; then
+    PACKAGES+=(python3-virt-firmware)
+fi
+
+echo "--- Installing build prerequisites ---"
+sudo apt-get update -qq
+sudo apt-get install -y -qq "${PACKAGES[@]}"
 
 echo "=== Building TDVF firmware from ${EDK2_TAG} ==="
 echo "    Secure Boot: $([ $SECURE_BOOT -eq 1 ] && echo 'yes' || echo 'no')"
