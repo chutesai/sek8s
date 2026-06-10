@@ -2,6 +2,12 @@
 set -euo pipefail
 
 log() { echo "[gpu-verify] $*"; }
+
+# Normalize a PCI BDF to lowercase bus:dev.fn, stripping the domain prefix.
+# sysfs uses "0000:a1:00.0", nvidia-smi uses "00000000:A1:00.0" — this yields "a1:00.0".
+normalize_bdf() {
+    echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/^[0-9a-f]*://'
+}
 fatal() {
     echo "[gpu-verify] FATAL: $*"
     if [[ "${GPU_VERIFY_DEBUG_MODE:-false}" == "true" ]]; then
@@ -23,7 +29,7 @@ mapfile -t expected_gpu_bdfs < <(
         class=$(cat "$dev/class")
         # 0x0300: VGA compatible controller, 0x0302: 3D controller (used by H200/B200)
         if [[ "$vendor" == "0x10de" && ( "$class" == 0x0300* || "$class" == 0x0302* ) ]]; then
-            basename "$dev"
+            normalize_bdf "$(basename "$dev")"
         fi
     done | sort
 )
@@ -39,7 +45,8 @@ fi
 
 # Enumerate visible GPUs via the NVIDIA driver
 mapfile -t visible_gpu_bdfs < <(
-    nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | sed 's/^GPU-//g' | sort || true
+    nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader | sed 's/^GPU-//g' |
+        while IFS= read -r bdf; do normalize_bdf "$bdf"; done | sort || true
 )
 
 VISIBLE_COUNT=${#visible_gpu_bdfs[@]}
