@@ -135,10 +135,9 @@ class GpuProfile(ABC):
         Changing the firmware changes MRTD — attestation policy must be
         re-baselined for any profile using a different image.
         """
-        # Ubuntu ovmf-inteltdx package build, copied unmodified from
-        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
-        # Includes CVE-2025-2296 Fix #5 (legacy loader disabled in TDX guests).
-        return "OVMF.inteltdx.ms.fd"
+        # Built from edk2 Config-B (IntelTdxX64.dsc), no Secure Boot.
+        # Run firmware/build-firmware.sh to rebuild from source.
+        return "OVMF.inteltdx.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
