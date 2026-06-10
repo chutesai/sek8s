@@ -34,7 +34,7 @@ for arg in "$@"; do
 done
 
 # --- Install build prerequisites ---
-PACKAGES=(uuid-dev nasm iasl build-essential python3-distutils git)
+PACKAGES=(uuid-dev nasm iasl build-essential git)
 if [[ $SECURE_BOOT -eq 1 ]]; then
     PACKAGES+=(python3-virt-firmware)
 fi
