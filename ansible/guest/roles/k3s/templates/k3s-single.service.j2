@@ -1,9 +1,9 @@
 [Unit]
 Description=Lightweight Kubernetes
 Documentation=https://k3s.io
-After=network-online.target
+After=network-online.target attestation-service.service
 Requires=network-online.target
-Wants=network-online.target
+Wants=network-online.target attestation-service.service
 # Note: RequiresMountsFor for containerd is added at runtime via cleanup role drop-in
 # because the storage volume doesn't exist during build phase
 
