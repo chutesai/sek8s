@@ -34,18 +34,38 @@ def _lspci_lines(vendor: str) -> list[str]:
     return [line for line in output.decode().splitlines() if vendor in line]
 
 
-def _match_gpu_model(lspci_line: str) -> str | None:
+def _match_gpu_model(lspci_line: str, host_cpus: int | None = None) -> str | None:
     """Return the GPU_PROFILES key for an lspci line, or None.
 
-    Uses PCI device ID only; each profile's matches_device_id checks pci_device_ids.
+    Uses PCI device ID as the primary discriminant. When multiple profiles share
+    the same device ID (e.g. B200 and B200_XEON6 both use 2901), host_cpus must
+    match exactly. If no exact match is found a ValueError is raised listing the
+    known CPU counts so the operator knows what profile to add.
     """
     device_id = _extract_device_id(lspci_line, _NVIDIA_VENDOR)
     if not device_id:
         return None
-    for name, profile in GPU_PROFILES.items():
-        if profile.matches_device_id(device_id):
-            return name
-    return None
+    matches = [(name, profile) for name, profile in GPU_PROFILES.items()
+               if profile.matches_device_id(device_id)]
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0][0]
+
+    # Multiple profiles share this device ID — require an exact CPU count match.
+    if host_cpus is not None:
+        exact = [(name, p) for name, p in matches if p.host_cpus == host_cpus]
+        if len(exact) == 1:
+            return exact[0][0]
+        known = {name: p.host_cpus for name, p in matches}
+        raise ValueError(
+            f"Device ID {device_id} matches multiple profiles {known} but none "
+            f"has host_cpus={host_cpus}. Add a new profile for this CPU topology."
+        )
+
+    # No CPU count provided — can't disambiguate; return first match.
+    # This path should only be reached in tests or non-GPU-passthrough code paths.
+    return matches[0][0]
 
 
 def detect_nvidia_gpus() -> list[str]:
@@ -121,8 +141,12 @@ def detect_nvswitches() -> list[str]:
     return sorted(devices)
 
 
-def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
-    """Map each GPU BDF to its GPU_PROFILES key (or 'default') via lspci."""
+def get_gpu_models_from_lspci(bdfs: list[str], host_cpus: int | None = None) -> dict[str, str]:
+    """Map each GPU BDF to its GPU_PROFILES key (or 'default') via lspci.
+
+    host_cpus is used to disambiguate profiles that share the same PCI device ID
+    (e.g. B200 vs B200_XEON6). Pass the result of _detect_host_cpus() when available.
+    """
     bdf_set = set(bdfs)
     result = {}
     for line in _lspci_lines(_NVIDIA_VENDOR):
@@ -132,7 +156,7 @@ def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
         bdf = parts[0]
         if bdf not in bdf_set:
             continue
-        result[bdf] = _match_gpu_model(line) or 'default'
+        result[bdf] = _match_gpu_model(line, host_cpus=host_cpus) or 'default'
     return result
 
 

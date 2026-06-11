@@ -26,31 +26,66 @@ def test_device_id_matching_is_case_insensitive(device_id):
 
 
 def test_device_id_rejects_other_profiles_ids():
-    """Each profile only matches its own PCI IDs, not another profile's."""
+    """Each profile should not match a foreign profile's device IDs.
+
+    Sibling profiles (same device ID, different host SKU) are an intentional
+    exception — e.g. B200 and B200_XEON6 both use 2901 and are disambiguated
+    by host CPU count at runtime.
+    """
+    # Build sibling groups: profiles that share at least one device ID
+    def _sibling_keys(key: str, profile: "GpuProfile") -> set[str]:
+        our_ids = set(pid.lower() for pid in profile.pci_device_ids)
+        return {
+            k for k, p in GPU_PROFILES.items()
+            if k != key and set(pid.lower() for pid in p.pci_device_ids) & our_ids
+        }
+
     for key, profile in GPU_PROFILES.items():
-        other_ids = [
-            pid for k, p in GPU_PROFILES.items() if k != key for pid in p.pci_device_ids
+        siblings = _sibling_keys(key, profile)
+        non_sibling_ids = [
+            pid
+            for k, p in GPU_PROFILES.items()
+            if k != key and k not in siblings
+            for pid in p.pci_device_ids
         ]
-        for foreign_id in other_ids:
+        for foreign_id in non_sibling_ids:
             assert not profile.matches_device_id(
                 foreign_id
             ), f"{key} should not match {foreign_id}"
 
 
+def test_b200_variants_share_device_id():
+    """B200 and B200_XEON6 are siblings — same GPU, different host CPU SKU."""
+    assert GPU_PROFILES["B200"].pci_device_ids == GPU_PROFILES["B200_XEON6"].pci_device_ids
+
+
 # ---------------------------------------------------------------------------
-# Registry integrity: no duplicate PCI device IDs across profiles
+# Registry integrity: duplicate PCI device IDs only allowed for explicit siblings
 # ---------------------------------------------------------------------------
 
 
 def test_no_duplicate_pci_device_ids_across_profiles():
-    seen: dict[str, str] = {}
+    """Duplicate device IDs are only allowed between intentional sibling pairs.
+
+    Siblings (profiles that share a device ID) must differ in host_cpus so
+    the runtime disambiguator can pick between them. Any other duplication is
+    a registration error.
+    """
+    # group profiles by device ID
+    by_device_id: dict[str, list[str]] = {}
     for key, profile in GPU_PROFILES.items():
         for pid in profile.pci_device_ids:
-            pid_lower = pid.lower()
-            assert pid_lower not in seen, (
-                f"PCI device ID {pid} claimed by both " f"{seen[pid_lower]} and {key}"
-            )
-            seen[pid_lower] = key
+            by_device_id.setdefault(pid.lower(), []).append(key)
+
+    for pid, keys in by_device_id.items():
+        if len(keys) <= 1:
+            continue
+        # Multiple profiles share this ID — they must all have distinct host_cpus
+        cpu_counts = [GPU_PROFILES[k].host_cpus for k in keys]
+        assert len(cpu_counts) == len(set(cpu_counts)), (
+            f"PCI device ID {pid} is claimed by {keys} but they have "
+            f"the same host_cpus={cpu_counts}; disambiguation is impossible"
+        )
 
 
 def test_all_registered_profiles_are_gpu_profile_subclasses():
@@ -88,7 +123,7 @@ def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
 
 
 # ---------------------------------------------------------------------------
-# B200 NUMA topology flag
+# NUMA topology and post-launch tuning flags
 # ---------------------------------------------------------------------------
 
 
@@ -103,8 +138,15 @@ def test_b200_enables_post_launch_tuning():
 
 
 @pytest.mark.parametrize("model_key", ["H200", "RTX_PRO_6000"])
-def test_non_b200_profiles_disable_numa_topology(model_key):
+def test_h200_and_rtx_enable_numa_topology(model_key):
     profile = GPU_PROFILES[model_key]
+    assert profile.enable_numa_topology is True
+    assert profile.enable_post_launch_tuning is True
+
+
+def test_b300_does_not_enable_numa_topology():
+    # B300 hardware topology not yet confirmed via discover-profile.sh.
+    profile = GPU_PROFILES["B300"]
     assert profile.enable_numa_topology is False
     assert profile.enable_post_launch_tuning is False
 
@@ -239,7 +281,7 @@ def test_smp_topology_threads_is_one(model_key):
     assert "threads=1" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B300"])
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"])
 def test_two_socket_profiles_use_two_sockets(model_key):
     """2-socket servers must reflect physical socket count in smp_topology.
 
@@ -252,7 +294,7 @@ def test_two_socket_profiles_use_two_sockets(model_key):
     assert "sockets=2" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B300"])
+@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"])
 def test_two_socket_profiles_preserve_full_vcpu_count(model_key):
     """Switching to sockets=2 must not reduce the vCPU count."""
     profile = GPU_PROFILES[model_key]
@@ -309,3 +351,90 @@ def test_resolve_profile_rejects_all_default():
     models = {"0000:41:00.0": "default", "0000:42:00.0": "default"}
     with pytest.raises(ValueError, match="No supported GPU models"):
         resolve_profile(models)
+
+
+# ---------------------------------------------------------------------------
+# B200_XEON6: sibling profile properties and disambiguation
+# ---------------------------------------------------------------------------
+
+
+def test_b200_xeon6_has_correct_cpu_topology():
+    profile = GPU_PROFILES["B200_XEON6"]
+    assert profile.host_cpus == 288
+    assert profile.host_sockets == 2
+    assert profile.vcpus == 288 - HOST_RESERVED_CPUS
+    assert "sockets=2" in profile.smp_topology
+    count = int(profile.smp_topology.split(",")[0])
+    assert count == profile.vcpus
+
+
+def test_b200_xeon6_has_higher_ram_per_gpu_than_b200():
+    """Xeon6 host has ~3 TB RAM so it can allocate more RAM per GPU."""
+    assert GPU_PROFILES["B200_XEON6"].ram_per_gpu_gb > GPU_PROFILES["B200"].ram_per_gpu_gb
+
+
+def test_b200_xeon6_inherits_cc_mode_and_ib_passthrough():
+    profile = GPU_PROFILES["B200_XEON6"]
+    args = profile.get_cc_mode_args(8)
+    assert any("--set-cc-mode=on" in a for a in args[0])
+    assert profile.should_passthrough_infiniband is True
+    assert profile.should_passthrough_nvswitches(8) is False
+
+
+def test_b200_xeon6_enables_numa_topology_and_tuning():
+    profile = GPU_PROFILES["B200_XEON6"]
+    assert profile.enable_numa_topology is True
+    assert profile.enable_post_launch_tuning is True
+
+
+def test_match_gpu_model_disambiguates_b200_by_host_cpus():
+    """_match_gpu_model picks the right B200 variant based on exact host CPU count."""
+    from chutes.guest.detection import _match_gpu_model
+
+    line = "0000:0d:00.0 3D controller [0302]: NVIDIA Corporation GB100 [B200] [10de:2901] (rev a1)"
+    assert _match_gpu_model(line, host_cpus=192) == "B200"
+    assert _match_gpu_model(line, host_cpus=288) == "B200_XEON6"
+    # No host_cpus: falls back to first match (B200)
+    assert _match_gpu_model(line) == "B200"
+
+
+def test_match_gpu_model_raises_on_unknown_b200_cpu_count():
+    """An unrecognised CPU count for a shared device ID raises ValueError."""
+    import pytest
+    from chutes.guest.detection import _match_gpu_model
+
+    line = "0000:0d:00.0 3D controller [0302]: NVIDIA Corporation GB100 [B200] [10de:2901] (rev a1)"
+    with pytest.raises(ValueError, match="Add a new profile for this CPU topology"):
+        _match_gpu_model(line, host_cpus=240)
+
+
+def test_get_gpu_models_from_lspci_uses_host_cpus_for_disambiguation():
+    """get_gpu_models_from_lspci routes to the correct B200 variant."""
+    from unittest.mock import patch
+
+    from chutes.guest.detection import get_gpu_models_from_lspci
+
+    fake_lspci = [
+        "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)",
+    ]
+    with patch("chutes.guest.detection._lspci_lines", return_value=fake_lspci):
+        result_192 = get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=192)
+        result_288 = get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=288)
+
+    assert result_192 == {"0000:0d:00.0": "B200"}
+    assert result_288 == {"0000:0d:00.0": "B200_XEON6"}
+
+
+def test_get_gpu_models_from_lspci_raises_on_unknown_b200_cpu_count():
+    """An unrecognised CPU count for a shared device ID raises ValueError, not a silent mismatch."""
+    import pytest
+    from unittest.mock import patch
+
+    from chutes.guest.detection import get_gpu_models_from_lspci
+
+    fake_lspci = [
+        "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)",
+    ]
+    with patch("chutes.guest.detection._lspci_lines", return_value=fake_lspci):
+        with pytest.raises(ValueError, match="Add a new profile for this CPU topology"):
+            get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=240)

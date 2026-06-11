@@ -72,6 +72,20 @@ def stop_existing_vm():
     restore_host_tuning()
 
 
+def _detect_host_cpus() -> int | None:
+    """Read the host's actual logical CPU count from sysfs."""
+    try:
+        present = open("/sys/devices/system/cpu/present").read().strip()
+        # Format is "0-N" or a cpulist; the max value + 1 is the count.
+        parts = present.split(",")
+        last = parts[-1]
+        if "-" in last:
+            return int(last.split("-")[1]) + 1
+        return int(last) + 1
+    except (OSError, ValueError):
+        return None
+
+
 def launch_vm(args) -> int:
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
@@ -83,10 +97,10 @@ def launch_vm(args) -> int:
         if not gpus:
             gpus = detect_nvidia_gpus()
         if gpus:
-            gpu_models = get_gpu_models_from_lspci(gpus)
+            gpu_models = get_gpu_models_from_lspci(gpus, host_cpus=_detect_host_cpus())
             profile = resolve_profile(gpu_models)
             total_gpus = len(gpus)
-            mem = f"{total_gpus * profile.vram_gb}G"
+            mem = f"{total_gpus * profile.ram_per_gpu_gb}G"
             vcpus = str(profile.vcpus)
             smp_topology = profile.smp_topology
             print(
