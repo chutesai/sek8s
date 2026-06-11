@@ -276,10 +276,10 @@ spec:
               - -k
               - -f
               - https://localhost:8443/health
-          initialDelaySeconds: 5
-          periodSeconds: 5
+          initialDelaySeconds: 10
+          periodSeconds: 10
           timeoutSeconds: 10
-          failureThreshold: 12
+          failureThreshold: 30
 
       volumes:
       - name: attestation-socket
