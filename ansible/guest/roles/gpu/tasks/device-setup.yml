@@ -108,6 +108,15 @@
       ansible.builtin.apt:
         update_cache: true
 
+    - name: Pin all NVIDIA/libnvidia packages to {{ nvidia_pkg_version }}
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/nvidia-version-pin
+        content: |
+          Package: nvidia-* libnvidia-*
+          Pin: version {{ nvidia_pkg_version }}
+          Pin-Priority: 1001
+        mode: "0644"
+
     - name: GPU Setup Tasks
       when:
         - manage_nvidia_drivers | default(true) | bool
