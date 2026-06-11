@@ -56,8 +56,17 @@ class GpuProfile(ABC):
     @property
     @abstractmethod
     def bar_size_mb(self) -> int:
-        """MMIO BAR size in MB for QEMU fw_cfg hint."""
+        """MMIO BAR size in MB for QEMU fw_cfg hint (when use_ovmf_mmio_fw_cfg is True)."""
         ...
+
+    @property
+    def use_ovmf_mmio_fw_cfg(self) -> bool:
+        """Whether to pass opt/ovmf/X-PciMmio64Mb* fw_cfg hints per GPU to QEMU.
+
+        B300 disables this: 8×512 GiB BARs need a multi-TB aggregate MMIO window that
+        OVMF auto-sizes; per-GPU fw_cfg hints can prevent correct BAR assignment.
+        """
+        return True
 
     @property
     @abstractmethod
@@ -101,6 +110,14 @@ class GpuProfile(ABC):
         """
         ...
 
+    def get_sbr_reset_args(self) -> list[str]:
+        """Return nvidia-gpu-tools args for a Secondary Bus Reset recovery.
+
+        CC-mode GPUs (B200, B300, RTX) use --reset-after-cc-mode-switch.
+        H200 8-GPU PPCIe configs use --reset-after-ppcie-mode-switch.
+        """
+        return ["--reset-with-sbr", "--reset-after-cc-mode-switch"]
+
     @abstractmethod
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         """Whether NVSwitch devices should be detected and passed through."""
@@ -128,7 +145,9 @@ class GpuProfile(ABC):
         Changing the firmware changes MRTD — attestation policy must be
         re-baselined for any profile using a different image.
         """
-        return "TDVF.fd"
+        # Built from edk2 Config-B (IntelTdxX64.dsc), no Secure Boot.
+        # Run firmware/build-firmware.sh to rebuild from source.
+        return "OVMF.inteltdx.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
@@ -178,14 +197,55 @@ class B200Profile(GpuProfile):
     def enable_post_launch_tuning(self) -> bool:
         return True
 
-    @property
-    def firmware_filename(self) -> str:
-        # Ubuntu ovmf-inteltdx package build, copied unmodified from
-        # /usr/share/ovmf/OVMF.inteltdx.ms.fd (ovmf-inteltdx 2025.11-3ubuntu7).
-        return "OVMF.inteltdx.ms.fd"
-
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
+
+
+class B300Profile(GpuProfile):
+    pci_device_ids = ["3182"]  # GB110 [B300 SXM6 AC]
+
+    @property
+    def name(self) -> str:
+        return "B300"
+
+    @property
+    def bar_size_mb(self) -> int:
+        # 512 GiB: confirmed from lspci Region 2 on am-b300-61.
+        return 524288
+
+    @property
+    def vram_gb(self) -> int:
+        return 288  # B300 HBM3e (SXM6 AC)
+
+    @property
+    def host_cpus(self) -> int:
+        # 2 sockets x 48 cores x 2 threads = 192 (confirmed from lscpu on am-b300-61).
+        return 192
+
+    @property
+    def host_sockets(self) -> int:
+        return 2
+
+    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
+
+    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
+        return False
+
+    @property
+    def should_passthrough_infiniband(self) -> bool:
+        # B300 HGX: every ConnectX-7 IB-class PF (15b3:1021, PCI class 0207) is an
+        # NVSwitch bridge (SMDL=SW_MNG) and must stay on the host for Fabric Manager.
+        # Remaining CX7 data NICs are Ethernet-class (0200), not IB passthrough targets.
+        # Guest networking uses virtio-net; GPU fabric is NVLink via host-side FM.
+        return False
+
+    @property
+    def use_ovmf_mmio_fw_cfg(self) -> bool:
+        return False
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (B300)"
 
 
 class H200Profile(GpuProfile):
@@ -221,6 +281,9 @@ class H200Profile(GpuProfile):
             ["--set-ppcie-mode=off", "--reset-after-ppcie-mode-switch"],
             ["--set-cc-mode=on", "--reset-after-cc-mode-switch"],
         ]
+
+    def get_sbr_reset_args(self) -> list[str]:
+        return ["--reset-with-sbr", "--reset-after-ppcie-mode-switch"]
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return total_gpus == 8
@@ -268,6 +331,7 @@ class RTXPro6000Profile(GpuProfile):
 
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
+    "B300": B300Profile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
 }

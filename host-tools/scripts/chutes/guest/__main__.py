@@ -12,6 +12,7 @@ import sys
 import time
 
 from chutes.guest.detection import (
+    detect_gpu_numa_nodes,
     detect_nvidia_gpus,
     get_gpu_bdfs,
     get_gpu_models_from_lspci,
@@ -38,7 +39,7 @@ DEFAULT_VCPUS = "32"
 
 # TDVF MUST NOT be overridden by user config (MRTD depends on it).
 # The filename is selected per GPU profile; see GpuProfile.firmware_filename.
-_DEFAULT_FIRMWARE = "TDVF.fd"
+_DEFAULT_FIRMWARE = "OVMF.inteltdx.fd"
 
 
 def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
@@ -144,8 +145,21 @@ def launch_vm(args) -> int:
     if args.pass_gpus:
         setup_passthrough(qemu_cmds)
 
+    # Guest NUMA topology (numa_active) binds memory per node via QEMU
+    # memory-backends, so no numactl prefix is needed. Otherwise interleave
+    # across the GPUs' host NUMA nodes (all nodes if detection finds none).
+    if numa_active:
+        launch_prefix = []
+    else:
+        numa_nodes = detect_gpu_numa_nodes(gpus) if args.pass_gpus and gpus else []
+        if numa_nodes:
+            interleave = ",".join(str(n) for n in numa_nodes)
+            print(f"  NUMA: interleaving memory across GPU nodes {interleave}")
+        else:
+            interleave = "all"
+        launch_prefix = ["numactl", f"--interleave={interleave}"]
+
     print("Launching QEMU...")
-    launch_prefix = [] if numa_active else ["numactl", "--interleave=all"]
     result = subprocess.run(
         launch_prefix + qemu_cmds,
         stderr=subprocess.STDOUT,

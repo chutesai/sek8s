@@ -95,8 +95,17 @@ fi
 
 GPU_TOOLS_TIMEOUT=120
 
-echo "Resetting GPUs via Secondary Bus Reset (timeout: ${GPU_TOOLS_TIMEOUT}s)..."
-if ! timeout "$GPU_TOOLS_TIMEOUT" sudo "$CMD" --reset-with-sbr --reset-after-ppcie-mode-switch; then
+# CC-mode Blackwell / RTX use --reset-after-cc-mode-switch; H200 PPCIe uses ppcie flag.
+if lspci -Dnn 2>/dev/null | grep -qE '10de:(3182|2901|2bb1|2bb5)'; then
+    SBR_ARGS=(--reset-with-sbr --reset-after-cc-mode-switch)
+    SBR_LABEL="CC-mode Blackwell/RTX"
+else
+    SBR_ARGS=(--reset-with-sbr --reset-after-ppcie-mode-switch)
+    SBR_LABEL="PPCIe (H200/H100)"
+fi
+
+echo "Resetting GPUs via Secondary Bus Reset (${SBR_LABEL}, timeout: ${GPU_TOOLS_TIMEOUT}s)..."
+if ! timeout "$GPU_TOOLS_TIMEOUT" sudo "$CMD" "${SBR_ARGS[@]}"; then
     echo ""
     echo "Error: GPU reset timed out or failed after ${GPU_TOOLS_TIMEOUT}s."
     echo "GPU hardware may be wedged at the PCIe level."

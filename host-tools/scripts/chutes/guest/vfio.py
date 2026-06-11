@@ -3,6 +3,7 @@
 import concurrent.futures
 import os
 import subprocess
+import time
 
 # Number of SR-IOV VFs to create per InfiniBand PF for VM passthrough
 IB_VFS_PER_PF = 1
@@ -115,6 +116,52 @@ def has_stale_vfio_devices(devices: list[str]) -> bool:
     return any(_get_bound_driver(bdf) == 'vfio-pci' for bdf in devices)
 
 
+def _d_state_pci_tasks() -> list[str]:
+    """Return cmdlines of D-state vfio unbind or nvidia-gpu-tools tasks."""
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'stat,args'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
+    if result.returncode != 0:
+        return []
+    tasks: list[str] = []
+    for line in result.stdout.splitlines():
+        if not line.startswith('D'):
+            continue
+        if 'nvidia-gpu-tools' in line or 'vfio-pci/unbind' in line:
+            tasks.append(line.strip())
+    return tasks
+
+
+def pci_operations_wedged() -> bool:
+    """Return True if PCI sysfs or nvidia-gpu-tools ops are stuck in D state.
+
+    When vfio unbind or gpu-tools hang in uninterruptible sleep, further SBR or
+    CC-mode commands will also hang until the host is rebooted.
+    """
+    return bool(_d_state_pci_tasks())
+
+
+def wait_pci_operations_idle(timeout_secs: float = 90.0) -> bool:
+    """Wait for in-flight vfio/gpu-tools D-state tasks to finish.
+
+    A subprocess unbind timeout does not always mean the kernel op failed —
+    the sysfs write may still complete shortly after.  Returns True when no
+    D-state PCI tasks remain.
+    """
+    deadline = time.time() + timeout_secs
+    while time.time() < deadline:
+        if not pci_operations_wedged():
+            return True
+        time.sleep(2)
+    return False
+
+
 def unbind_non_vfio_drivers(devices: list[str]) -> list[str]:
     """Unbind devices from any non-vfio driver (e.g. nouveau, nvidia).
 
@@ -143,7 +190,7 @@ def unbind_non_vfio_drivers(devices: list[str]) -> list[str]:
 def unbind_stale_vfio_devices(
     devices: list[str],
     per_device_timeout: float = 45.0,
-):
+) -> int:
     """Unbind devices from vfio-pci and clear driver_override.
 
     After a QEMU session exits, devices remain bound to vfio-pci with stale
@@ -164,7 +211,7 @@ def unbind_stale_vfio_devices(
     """
     stale = [bdf for bdf in devices if _get_bound_driver(bdf) == 'vfio-pci']
     if not stale:
-        return
+        return 0
 
     def _unbind_one(bdf: str) -> tuple[str, bool]:
         unbind_path = '/sys/bus/pci/drivers/vfio-pci/unbind'
@@ -192,6 +239,7 @@ def unbind_stale_vfio_devices(
         print(f'  Unbound {succeeded} stale vfio-pci device(s)')
     if failed:
         print(f'  Warning: {failed} device(s) could not be unbound (may need host reboot)')
+    return failed
 
 
 def install_udev_rules(scripts_dir: str):

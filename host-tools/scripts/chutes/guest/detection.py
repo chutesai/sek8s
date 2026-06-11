@@ -60,6 +60,25 @@ def detect_nvidia_gpus() -> list[str]:
     return sorted(devices)
 
 
+def detect_gpu_numa_nodes(gpu_bdfs: list[str]) -> list[int]:
+    """Return sorted list of unique NUMA node IDs that have GPUs attached.
+
+    Reads /sys/bus/pci/devices/<bdf>/numa_node for each GPU BDF.
+    Skips devices that report -1 (no NUMA affinity) or are unreadable.
+    """
+    nodes: set[int] = set()
+    for bdf in gpu_bdfs:
+        numa_path = f'/sys/bus/pci/devices/{bdf}/numa_node'
+        try:
+            with open(numa_path) as f:
+                node = int(f.read().strip())
+            if node >= 0:
+                nodes.add(node)
+        except (OSError, ValueError):
+            continue
+    return sorted(nodes)
+
+
 def get_gpu_bdfs() -> list[str] | None:
     """Get GPU BDFs from nvidia-gpu-tools --query-cc-mode.
 
@@ -130,7 +149,7 @@ def _is_vf(bdf: str) -> bool:
 def detect_cx7_bridge_pfs() -> list[str]:
     """Detect ConnectX-7 NVSwitch bridge Physical Function BDFs via VPD.
 
-    On B200 HGX systems the NVSwitch ASICs are not visible as PCIe devices.
+    On B200/B300 HGX systems the NVSwitch ASICs are not visible as PCIe devices.
     They are managed through ConnectX-7 bridge PFs whose Vital Product Data
     contains the field ``SMDL=SW_MNG``.  These PFs must stay on the host for
     Fabric Manager to communicate with the NVSwitches over InfiniBand; they
@@ -140,7 +159,7 @@ def detect_cx7_bridge_pfs() -> list[str]:
     their VPD does not contain ``SMDL=SW_MNG``, so this function correctly
     returns only the bridge PFs.
 
-    Returns an empty list on non-B200 hosts (VPD read is cheap; no NVSwitch
+    Returns an empty list on non-Blackwell HGX hosts (VPD read is cheap; no NVSwitch
     bridge PFs will have the marker).
     """
     bridge_pfs = []

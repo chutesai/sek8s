@@ -126,8 +126,8 @@ class PciTopologyState:
             host_bdf: PCI BDF of the host device.
             rp_id: Root port identifier (e.g. 'rp1', 'rp_nvsw1').
             chassis: Chassis number for the root port.
-            bar_size_mb: Optional MMIO BAR size hint (fw_cfg).
-            bar_index: 1-based fw_cfg index (only needed when bar_size_mb is set).
+            bar_size_mb: Optional MMIO BAR size hint (fw_cfg opt/ovmf/X-PciMmio64Mb).
+            bar_index: 1-based fw_cfg index (only when bar_size_mb is set).
         """
         if self.func == 0:
             cmd.extend([

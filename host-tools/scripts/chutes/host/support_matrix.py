@@ -12,6 +12,7 @@ _VALIDATED_TOPOLOGIES: frozenset[tuple[str, str, int]] = frozenset(
     {
         ("25.04", "H200", 8),
         ("25.10", "B200", 8),
+        ("26.04", "B300", 8),
         ("25.10", "RTX_PRO_6000", 8),
     }
 )
@@ -19,6 +20,7 @@ _VALIDATED_TOPOLOGIES: frozenset[tuple[str, str, int]] = frozenset(
 _GPU_SKU_LABEL: dict[str, str] = {
     "H200": "H200",
     "B200": "B200",
+    "B300": "B300",
     "RTX_PRO_6000": "RTX Pro 6000",
 }
 
@@ -34,6 +36,11 @@ _VALIDATED_NOTES: dict[tuple[str, str, int], str] = {
         "B200",
         8,
     ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host (excluded from passthrough).",
+    (
+        "26.04",
+        "B300",
+        8,
+    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host. No IB passthrough (guest uses virtio-net).",
     (
         "25.10",
         "RTX_PRO_6000",
