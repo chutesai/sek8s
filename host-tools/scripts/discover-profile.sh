@@ -239,7 +239,10 @@ NVSWITCH_DEVICES=()
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
     NVSWITCH_DEVICES+=("$bdf")
-done < <(lspci -Dnn | grep -iE '10de.*nvswitch|10de.*bridge.*fusion' || true)
+# NVSwitches are NVIDIA (10de) PCI class 0680 (Other Bridge).
+# lspci -Dnn format: "BDF Class [classcode]: Vendor Desc [vendorid:devid]"
+# [0680] appears before the vendor ID so we match class first, then filter 10de.
+done < <(lspci -Dnn 2>/dev/null | grep '\[0680\]' | grep '10de' || true)
 
 # ---------------------------------------------------------------------------
 # Profile verification notes
