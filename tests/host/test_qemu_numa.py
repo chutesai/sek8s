@@ -3,7 +3,6 @@
 from unittest.mock import patch
 
 import pytest
-
 from chutes.guest.qemu import (
     PcieRootPinning,
     _append_numa_memory,
@@ -79,7 +78,13 @@ def test_config_volume_uses_explicit_virtio_blk_not_legacy_if_virtio(tmp_path):
     config.write_bytes(b"")
     pinning = PcieRootPinning(True)
     cmd: list[str] = []
-    add_volumes(cmd, config_volume=str(config), cache_volume=None, storage_volume=None, pci_pinning=pinning)
+    add_volumes(
+        cmd,
+        config_volume=str(config),
+        cache_volume=None,
+        storage_volume=None,
+        pci_pinning=pinning,
+    )
     flat = " ".join(cmd)
     assert "if=virtio" not in flat
     assert "virtio-config" in flat

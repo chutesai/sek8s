@@ -164,9 +164,7 @@ _DOWNLOAD_MAX_RETRIES = 5
 _DOWNLOAD_RETRY_BASE_DELAY = 10
 
 
-def _snapshot_download_with_retry(
-    repo_id: str, revision: str, cache_dir: str
-) -> None:
+def _snapshot_download_with_retry(repo_id: str, revision: str, cache_dir: str) -> None:
     """Call snapshot_download with retries for transient CDN failures.
 
     HuggingFace's CDN serves files via presigned URLs that expire after ~60
