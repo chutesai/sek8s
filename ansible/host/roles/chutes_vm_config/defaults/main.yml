@@ -15,6 +15,7 @@ chutes_volume_storage_path: "/data/prod/storage.raw"
 chutes_volume_config_path: "/data/prod/config.qcow2"
 chutes_devices_bind: true
 chutes_runtime_foreground: false
+chutes_runtime_tune_host: false
 
 # If set (e.g. "192.168.50.0/24"), skip pick_guest_network.py and use .2 / .1/24 on this prefix.
 # chutes_guest_bridge_network: ""

@@ -37,3 +37,4 @@ devices:
 
 runtime:
   foreground: {{ 'true' if chutes_runtime_foreground | bool else 'false' }}
+  tune_host: {{ 'true' if chutes_runtime_tune_host | bool else 'false' }}
