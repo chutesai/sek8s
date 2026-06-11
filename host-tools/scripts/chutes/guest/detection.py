@@ -60,6 +60,25 @@ def detect_nvidia_gpus() -> list[str]:
     return sorted(devices)
 
 
+def detect_gpu_numa_nodes(gpu_bdfs: list[str]) -> list[int]:
+    """Return sorted list of unique NUMA node IDs that have GPUs attached.
+
+    Reads /sys/bus/pci/devices/<bdf>/numa_node for each GPU BDF.
+    Skips devices that report -1 (no NUMA affinity) or are unreadable.
+    """
+    nodes: set[int] = set()
+    for bdf in gpu_bdfs:
+        numa_path = f'/sys/bus/pci/devices/{bdf}/numa_node'
+        try:
+            with open(numa_path) as f:
+                node = int(f.read().strip())
+            if node >= 0:
+                nodes.add(node)
+        except (OSError, ValueError):
+            continue
+    return sorted(nodes)
+
+
 def get_gpu_bdfs() -> list[str] | None:
     """Get GPU BDFs from nvidia-gpu-tools --query-cc-mode.
 

@@ -12,6 +12,7 @@ import sys
 import time
 
 from chutes.guest.detection import (
+    detect_gpu_numa_nodes,
     detect_nvidia_gpus,
     get_gpu_bdfs,
     get_gpu_models_from_lspci,
@@ -126,9 +127,17 @@ def launch_vm(args) -> int:
     if args.pass_gpus:
         setup_passthrough(qemu_cmds)
 
+    numa_nodes = detect_gpu_numa_nodes(gpus) if args.pass_gpus and gpus else []
+    if numa_nodes:
+        interleave = ",".join(str(n) for n in numa_nodes)
+        print(f"  NUMA: interleaving memory across GPU nodes {interleave}")
+    else:
+        interleave = "all"
+    numa_prefix = ["numactl", f"--interleave={interleave}"]
+
     print("Launching QEMU...")
     result = subprocess.run(
-        ["numactl", "--interleave=all"] + qemu_cmds,
+        numa_prefix + qemu_cmds,
         stderr=subprocess.STDOUT,
     )
     if result.returncode != 0:
