@@ -14,10 +14,10 @@ import time
 from chutes.guest.detection import (
     detect_gpu_numa_nodes,
     detect_nvidia_gpus,
+    detect_profile,
     get_gpu_bdfs,
-    get_gpu_models_from_lspci,
 )
-from chutes.guest.gpu.profiles import resolve_profile
+from chutes.guest.gpu.profiles import GPU_PROFILES  # noqa: F401 — available for introspection
 from chutes.guest.passthrough import setup_passthrough
 from chutes.guest.post_launch import apply_post_launch_tuning, restore_host_tuning
 from chutes.guest.qemu import (
@@ -72,42 +72,25 @@ def stop_existing_vm():
     restore_host_tuning()
 
 
-def _detect_host_cpus() -> int | None:
-    """Read the host's actual logical CPU count from sysfs."""
-    try:
-        present = open("/sys/devices/system/cpu/present").read().strip()
-        # Format is "0-N" or a cpulist; the max value + 1 is the count.
-        parts = present.split(",")
-        last = parts[-1]
-        if "-" in last:
-            return int(last.split("-")[1]) + 1
-        return int(last) + 1
-    except (OSError, ValueError):
-        return None
-
-
 def launch_vm(args) -> int:
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
     profile = None
+    gpus = []
 
     if args.pass_gpus:
-        gpus = get_gpu_bdfs()
-        if not gpus:
-            gpus = detect_nvidia_gpus()
-        if gpus:
-            gpu_models = get_gpu_models_from_lspci(gpus, host_cpus=_detect_host_cpus())
-            profile = resolve_profile(gpu_models)
-            total_gpus = len(gpus)
-            mem = f"{total_gpus * profile.ram_per_gpu_gb}G"
-            vcpus = str(profile.vcpus)
-            smp_topology = profile.smp_topology
-            print(
-                f"  GPU passthrough: {total_gpus}x {profile.name}"
-                f" ({profile.vram_gb}GB VRAM each)"
-                f" → {vcpus} vCPUs, {mem} RAM"
-            )
+        profile = detect_profile()
+        gpus = get_gpu_bdfs() or detect_nvidia_gpus()
+        total_gpus = len(gpus)
+        mem = f"{total_gpus * profile.ram_per_gpu_gb}G"
+        vcpus = str(profile.vcpus)
+        smp_topology = profile.smp_topology
+        print(
+            f"  GPU passthrough: {total_gpus}x {profile.name}"
+            f" ({profile.vram_gb}GB VRAM each)"
+            f" → {vcpus} vCPUs, {mem} RAM"
+        )
 
     profile_wants_numa = profile is not None and profile.enable_numa_topology
     numa_active = use_numa_topology(profile_wants_numa)

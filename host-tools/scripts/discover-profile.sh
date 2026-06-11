@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# discover-profile.sh — Probe hardware and generate GPU profile metrics.
+# discover-profile.sh — Probe host hardware and report GPU metrics.
 #
-# Collects all values needed to verify or author a GpuProfile entry in
-# host-tools/scripts/chutes/guest/gpu/profiles.py.
+# Collects raw hardware facts (GPU device IDs, CPU topology, NUMA layout,
+# InfiniBand, NVSwitches) and writes them to a JSON file. No profile matching
+# or verification is performed — use the Python module for that.
 #
 # Usage:
 #   ./discover-profile.sh              # Report to terminal + JSON in CWD
@@ -184,24 +185,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Known profile matching
-# ---------------------------------------------------------------------------
-# Map device_id -> profile name, expected bar_size_mb, expected host_cpus
-declare -A PROFILE_NAME=( [2901]="B200" [3182]="B300" [2335]="H200" [2bb1]="RTX_PRO_6000" [2bb5]="RTX_PRO_6000" )
-declare -A PROFILE_BAR=(  [2901]=262144  [3182]=524288  [2335]=262144 [2bb1]=131072       [2bb5]=131072 )
-declare -A PROFILE_CPUS=( [2901]=192     [3182]=192     [2335]=128    [2bb1]=128           [2bb5]=128 )
-
-MATCHED_PROFILE=""
-if [[ ${#UNIQUE_DEVICE_IDS[@]} -gt 0 ]]; then
-    for id in "${UNIQUE_DEVICE_IDS[@]}"; do
-        id_lower="${id,,}"
-        if [[ -n "${PROFILE_NAME[$id_lower]:-}" ]]; then
-            MATCHED_PROFILE="${PROFILE_NAME[$id_lower]}"
-        fi
-    done
-fi
-
-# ---------------------------------------------------------------------------
 # Mellanox / ConnectX NIC detection
 # ---------------------------------------------------------------------------
 IB_CLASS_DEVICES=()
@@ -211,8 +194,6 @@ PASSTHROUGH_CANDIDATES=()
 
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
-    pci_class=$(echo "$line" | grep -oP '\[02\K[0-9a-fA-F]{2}(?=\])' || true)
-    # Full class is [0207] or [0200]
     full_class=$(echo "$line" | grep -oP '\[02[0-9a-fA-F]{2}\]' | tr -d '[]' || true)
     if [[ "$full_class" == "0207" ]]; then
         IB_CLASS_DEVICES+=("$bdf")
@@ -239,27 +220,7 @@ NVSWITCH_DEVICES=()
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
     NVSWITCH_DEVICES+=("$bdf")
-# NVSwitches are NVIDIA (10de) PCI class 0680 (Other Bridge).
-# lspci -Dnn format: "BDF Class [classcode]: Vendor Desc [vendorid:devid]"
-# [0680] appears before the vendor ID so we match class first, then filter 10de.
-done < <(lspci -Dnn 2>/dev/null | grep '\[0680\]' | grep '10de' || true)
-
-# ---------------------------------------------------------------------------
-# Profile verification notes
-# ---------------------------------------------------------------------------
-NOTES=()
-if [[ -n "$MATCHED_PROFILE" && ${#UNIQUE_DEVICE_IDS[@]} -gt 0 ]]; then
-    id_lower="${UNIQUE_DEVICE_IDS[0],,}"
-    expected_bar=${PROFILE_BAR[$id_lower]:-0}
-    expected_cpus=${PROFILE_CPUS[$id_lower]:-0}
-
-    if [[ -n "$BAR_SIZE_MB" && "$BAR_SIZE_MB" != "-1" && "$BAR_SIZE_MB" != "$expected_bar" ]]; then
-        NOTES+=("BAR size mismatch: profile expects ${expected_bar} MB, hardware shows ${BAR_SIZE_MB} MB")
-    fi
-    if [[ "$CPU_TOTAL" != "$expected_cpus" ]]; then
-        NOTES+=("CPU count mismatch: profile expects ${expected_cpus}, hardware has ${CPU_TOTAL}")
-    fi
-fi
+done < <(lspci -Dnn | grep '\[0680\]' | grep '10de' || true)
 
 # ---------------------------------------------------------------------------
 # Terminal report
@@ -267,38 +228,37 @@ fi
 if [[ $REPORT_OUTPUT -eq 1 ]]; then
     HOSTNAME_STR=$(hostname)
     echo ""
-    printf '\033[1;37m  GPU Profile Discovery Report — %s\033[0m\n' "$HOSTNAME_STR"
+    printf '\033[1;37m  GPU Hardware Discovery Report — %s\033[0m\n' "$HOSTNAME_STR"
     bar
 
     section "GPUs"
-    row "Count" "$GPU_COUNT"
+    row "Count"             "$GPU_COUNT"
     row "Unique device IDs" "${UNIQUE_DEVICE_IDS[*]:-none}"
-    row "Matched profile" "${MATCHED_PROFILE:-"(unknown — new hardware?)"}"
     echo ""
     for i in "${!GPU_BDFS[@]}"; do
         row "  GPU $i: ${GPU_BDFS[$i]}" "device=${GPU_DEVICE_IDS[$i]:-?}  numa=${GPU_NUMA_NODES[$i]}"
     done
     echo ""
-    row "BAR size (Region 2)"       "${BAR_SIZE_MB:-(not detected)} MB  → bar_size_mb"
-    row "VRAM per GPU (nvidia-smi)" "${VRAM_GB:-(not detected)} GB  → vram_gb"
-    row "Suggested ram_per_gpu_gb"  "${SUGGESTED_RAM_PER_GPU} GB  (= ${GPU_COUNT}×${SUGGESTED_RAM_PER_GPU} = $(( GPU_COUNT * SUGGESTED_RAM_PER_GPU )) GB total VM RAM)"
+    row "BAR size (Region 2)"       "${BAR_SIZE_MB:-(not detected)} MB"
+    row "VRAM per GPU (nvidia-smi)" "${VRAM_GB:-(not detected)} GB"
+    row "Suggested ram_per_gpu_gb"  "${SUGGESTED_RAM_PER_GPU} GB  (${GPU_COUNT}× = $(( GPU_COUNT * SUGGESTED_RAM_PER_GPU )) GB total)"
 
     section "CPU"
-    row "Total CPUs"          "${CPU_TOTAL}  → host_cpus"
-    row "Sockets"             "${CPU_SOCKETS}  → host_sockets"
-    row "Cores per socket"    "$CPU_CORES_PER_SOCKET"
-    row "Threads per core"    "$CPU_THREADS_PER_CORE"
-    row "vCPUs (cpus - 4)"   "${VCPUS}"
-    row "SMP topology"        "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
+    row "Total CPUs"        "$CPU_TOTAL"
+    row "Sockets"           "$CPU_SOCKETS"
+    row "Cores per socket"  "$CPU_CORES_PER_SOCKET"
+    row "Threads per core"  "$CPU_THREADS_PER_CORE"
+    row "vCPUs (cpus - 4)"  "$VCPUS"
+    row "SMP topology"      "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
 
     section "Memory"
-    row "Total host RAM"          "${MEM_TOTAL_GB} GB"
-    row "Total VM RAM (suggested)" "$(( GPU_COUNT * SUGGESTED_RAM_PER_GPU )) GB"
+    row "Total host RAM"           "${MEM_TOTAL_GB} GB"
+    row "Suggested total VM RAM"   "$(( GPU_COUNT * SUGGESTED_RAM_PER_GPU )) GB"
 
     section "NUMA"
-    row "NUMA node count"   "$NUMA_NODE_COUNT"
+    row "NUMA node count" "$NUMA_NODE_COUNT"
     for n in "${NUMA_NODES[@]:-}"; do
-        row "  Node ${n} CPUs"   "${NUMA_CPULIST[$n]}"
+        row "  Node ${n} CPUs" "${NUMA_CPULIST[$n]}"
     done
     echo ""
     echo "  GPU → NUMA node mapping:"
@@ -307,34 +267,14 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     done
 
     section "Mellanox / InfiniBand NICs"
-    row "IB-class [0207] devices"  "${#IB_CLASS_DEVICES[@]}"
-    row "Ethernet-class [0200]"    "${#ETH_CLASS_DEVICES[@]}"
-    row "Bridge PFs (SMDL=SW_MNG)" "${BRIDGE_PFS[*]:-none}"
+    row "IB-class [0207] devices"   "${#IB_CLASS_DEVICES[@]}"
+    row "Ethernet-class [0200]"     "${#ETH_CLASS_DEVICES[@]}"
+    row "Bridge PFs (SMDL=SW_MNG)"  "${BRIDGE_PFS[*]:-none}"
     row "IB passthrough candidates" "${PASSTHROUGH_CANDIDATES[*]:-none}"
 
     section "NVSwitches"
     row "NVSwitch devices" "${#NVSWITCH_DEVICES[@]}  (${NVSWITCH_DEVICES[*]:-none})"
-    row "should_passthrough_nvswitches" "$( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'True (present)' || echo 'False (none detected)' )"
 
-    section "Profile Property Summary"
-    printf '  %-35s %s\n' "Property" "Value"
-    bar
-    printf '  %-35s %s\n' "pci_device_ids"           "[\"${UNIQUE_DEVICE_IDS[*]:-?}\"]"
-    printf '  %-35s %s\n' "host_cpus"                "$CPU_TOTAL"
-    printf '  %-35s %s\n' "host_sockets"             "$CPU_SOCKETS"
-    printf '  %-35s %s\n' "vram_gb"                  "${VRAM_GB:-(check nvidia-smi)}"
-    printf '  %-35s %s\n' "ram_per_gpu_gb"           "$SUGGESTED_RAM_PER_GPU"
-    printf '  %-35s %s\n' "bar_size_mb"              "${BAR_SIZE_MB:-(not detected)}"
-    printf '  %-35s %s\n' "should_passthrough_infiniband" "$( [[ ${#PASSTHROUGH_CANDIDATES[@]} -gt 0 ]] && echo 'True' || echo 'False' )"
-    printf '  %-35s %s\n' "should_passthrough_nvswitches" "$( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'True (for 8-GPU)' || echo 'False' )"
-
-    if [[ ${#NOTES[@]} -gt 0 ]]; then
-        echo ""
-        printf '\033[1;33m  Verification Notes:\033[0m\n'
-        for note in "${NOTES[@]}"; do
-            warn "$note"
-        done
-    fi
     echo ""
 fi
 
@@ -344,8 +284,6 @@ fi
 if [[ $JSON_OUTPUT -eq 1 ]]; then
     OUT_FILE="discover-profile-$(hostname)-$(date +%Y%m%dT%H%M%S).json"
 
-    # Helper: build a JSON string array from bash array elements.
-    # Usage: json_str_array result_var arr[@]
     json_str_array() {
         local _var="$1"; shift
         local _arr=("$@")
@@ -359,7 +297,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         printf -v "$_var" '%s' "$_out"
     }
 
-    # Helper: build a JSON int array from bash array elements.
     json_int_array() {
         local _var="$1"; shift
         local _arr=("$@")
@@ -373,7 +310,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         printf -v "$_var" '%s' "$_out"
     }
 
-    # Build arrays
     if [[ ${#GPU_BDFS[@]} -gt 0 ]]; then
         json_str_array gpu_bdfs_json "${GPU_BDFS[@]}"
         json_str_array gpu_ids_json  "${GPU_DEVICE_IDS[@]}"
@@ -423,24 +359,10 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         nvswitch_json="[]"
     fi
 
-    if [[ ${#NOTES[@]} -gt 0 ]]; then
-        json_str_array notes_json "${NOTES[@]}"
-    else
-        notes_json="[]"
-    fi
-
-    # matched_profile as a JSON value (null or quoted string)
-    if [[ -n "$MATCHED_PROFILE" ]]; then
-        matched_profile_json="\"${MATCHED_PROFILE}\""
-    else
-        matched_profile_json="null"
-    fi
-
     cat > "$OUT_FILE" <<JSON
 {
   "hostname": "$(hostname)",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "matched_profile": ${matched_profile_json},
   "gpu": {
     "pci_device_ids": ${uniq_ids_json},
     "bdfs": ${gpu_bdfs_json},
@@ -471,25 +393,13 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "eth_class_count": ${#ETH_CLASS_DEVICES[@]},
     "ib_devices": ${ib_json},
     "bridge_pfs": ${bridge_json},
-    "passthrough_candidates": ${passthru_json},
-    "should_passthrough_infiniband": $( [[ ${#PASSTHROUGH_CANDIDATES[@]} -gt 0 ]] && echo 'true' || echo 'false' )
+    "passthrough_candidates": ${passthru_json}
   },
   "nvswitch": {
     "present": $( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'true' || echo 'false' ),
     "count": ${#NVSWITCH_DEVICES[@]},
     "devices": ${nvswitch_json}
-  },
-  "profile_properties": {
-    "pci_device_ids": ${uniq_ids_json},
-    "host_cpus": ${CPU_TOTAL},
-    "host_sockets": ${CPU_SOCKETS},
-    "vram_gb": ${VRAM_GB:-null},
-    "ram_per_gpu_gb": ${SUGGESTED_RAM_PER_GPU},
-    "bar_size_mb": ${BAR_SIZE_MB:--1},
-    "should_passthrough_infiniband": $( [[ ${#PASSTHROUGH_CANDIDATES[@]} -gt 0 ]] && echo 'true' || echo 'false' ),
-    "should_passthrough_nvswitches": $( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'true' || echo 'false' )
-  },
-  "verification_notes": ${notes_json}
+  }
 }
 JSON
 

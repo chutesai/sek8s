@@ -409,7 +409,7 @@ def test_match_gpu_model_raises_on_unknown_b200_cpu_count():
 
 
 def test_get_gpu_models_from_lspci_uses_host_cpus_for_disambiguation():
-    """get_gpu_models_from_lspci routes to the correct B200 variant."""
+    """get_gpu_models_from_lspci auto-detects CPU topology and routes to the correct B200 variant."""
     from unittest.mock import patch
 
     from chutes.guest.detection import get_gpu_models_from_lspci
@@ -418,8 +418,10 @@ def test_get_gpu_models_from_lspci_uses_host_cpus_for_disambiguation():
         "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)",
     ]
     with patch("chutes.guest.detection._lspci_lines", return_value=fake_lspci):
-        result_192 = get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=192)
-        result_288 = get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=288)
+        with patch("chutes.guest.detection.detect_host_cpus", return_value=192):
+            result_192 = get_gpu_models_from_lspci(["0000:0d:00.0"])
+        with patch("chutes.guest.detection.detect_host_cpus", return_value=288):
+            result_288 = get_gpu_models_from_lspci(["0000:0d:00.0"])
 
     assert result_192 == {"0000:0d:00.0": "B200"}
     assert result_288 == {"0000:0d:00.0": "B200_XEON6"}
@@ -436,5 +438,124 @@ def test_get_gpu_models_from_lspci_raises_on_unknown_b200_cpu_count():
         "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)",
     ]
     with patch("chutes.guest.detection._lspci_lines", return_value=fake_lspci):
-        with pytest.raises(ValueError, match="Add a new profile for this CPU topology"):
-            get_gpu_models_from_lspci(["0000:0d:00.0"], host_cpus=240)
+        with patch("chutes.guest.detection.detect_host_cpus", return_value=240):
+            with pytest.raises(ValueError, match="Add a new profile for this CPU topology"):
+                get_gpu_models_from_lspci(["0000:0d:00.0"])
+
+
+# ---------------------------------------------------------------------------
+# detect_profile: full topology detection
+# ---------------------------------------------------------------------------
+
+
+def _make_lspci_b200(bdf: str = "0000:0d:00.0") -> list[str]:
+    return [f"{bdf} 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)"]
+
+
+def _patch_detection(
+    lspci_lines=None,
+    host_cpus=192,
+    host_sockets=2,
+    numa_count=2,
+    nvswitch_bdfs=None,
+    ib_pf_bdfs=None,
+    gpu_bdfs=None,
+):
+    """Return a context manager stack that patches all detection side effects."""
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    stack = ExitStack()
+    stack.enter_context(patch("chutes.guest.detection._lspci_lines", return_value=lspci_lines or []))
+    stack.enter_context(patch("chutes.guest.detection.detect_host_cpus", return_value=host_cpus))
+    stack.enter_context(patch("chutes.guest.detection.detect_host_sockets", return_value=host_sockets))
+    stack.enter_context(patch("chutes.guest.detection.detect_numa_node_count", return_value=numa_count))
+    stack.enter_context(patch("chutes.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []))
+    stack.enter_context(patch("chutes.guest.detection.detect_infiniband_pfs", return_value=ib_pf_bdfs or []))
+    stack.enter_context(patch("chutes.guest.detection.detect_cx7_bridge_pfs", return_value=[]))
+    bdfs = gpu_bdfs if gpu_bdfs is not None else ["0000:0d:00.0"]
+    stack.enter_context(patch("chutes.guest.detection.get_gpu_bdfs", return_value=bdfs))
+    return stack
+
+
+def test_detect_profile_returns_correct_profile():
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(
+        lspci_lines=_make_lspci_b200(),
+        host_cpus=192,
+        host_sockets=2,
+        ib_pf_bdfs=["0000:0e:00.0"],
+    ):
+        profile = detect_profile()
+
+    assert profile is GPU_PROFILES["B200"]
+
+
+def test_detect_profile_resolves_b200_xeon6_by_cpu_count():
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(
+        lspci_lines=_make_lspci_b200(),
+        host_cpus=288,
+        host_sockets=2,
+        ib_pf_bdfs=["0000:0e:00.0"],
+    ):
+        profile = detect_profile()
+
+    assert profile is GPU_PROFILES["B200_XEON6"]
+
+
+def test_detect_profile_raises_on_socket_mismatch():
+    import pytest
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(
+        lspci_lines=_make_lspci_b200(),
+        host_cpus=192,
+        host_sockets=1,   # profile expects 2
+        ib_pf_bdfs=["0000:0e:00.0"],
+    ):
+        with pytest.raises(ValueError, match="Socket count mismatch"):
+            detect_profile()
+
+
+def test_detect_profile_raises_when_nvswitches_expected_but_missing():
+    import pytest
+    from chutes.guest.detection import detect_profile
+
+    h200_lines = [
+        f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA [H200] [10de:2335] (rev a1)"
+        for i in range(8)
+    ]
+    bdfs = [f"0000:{i:02x}:00.0" for i in range(8)]
+    with _patch_detection(
+        lspci_lines=h200_lines,
+        host_cpus=128,
+        host_sockets=2,
+        nvswitch_bdfs=[],
+        gpu_bdfs=bdfs,
+    ):
+        with pytest.raises(ValueError, match="NVSwitch"):
+            detect_profile()
+
+
+def test_detect_profile_raises_when_no_gpus():
+    import pytest
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(gpu_bdfs=[]):
+        with pytest.raises(ValueError, match="No GPU devices detected"):
+            detect_profile()
+
+
+def test_detect_profile_raises_on_unknown_cpu_count():
+    import pytest
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(
+        lspci_lines=_make_lspci_b200(),
+        host_cpus=240,
+    ):
+        with pytest.raises(ValueError, match="Add a new profile"):
+            detect_profile()

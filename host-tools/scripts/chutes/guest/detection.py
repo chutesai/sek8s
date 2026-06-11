@@ -1,18 +1,57 @@
 """PCI device discovery for GPU, NVSwitch, and InfiniBand devices.
 
-All functions are side-effect-free: they read lspci / nvidia-gpu-tools output
-and return BDF lists or model mappings without modifying system state.
+Most functions are self-contained: they read lspci / sysfs / nvidia-gpu-tools
+output and return BDF lists or model mappings without modifying system state.
 """
 
 import os
+import glob
 import re
 import subprocess
 
-from chutes.guest.gpu.profiles import GPU_PROFILES
+from chutes.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
 
 _NVIDIA_VENDOR = '10de'
 _MELLANOX_VENDOR = '15b3'
+
+
+def detect_host_cpus() -> int | None:
+    """Return the host's total logical CPU count from sysfs.
+
+    Reads /sys/devices/system/cpu/present (e.g. '0-287') which reflects the
+    CPUs present in hardware regardless of online/offline state. Returns None
+    if the file is unreadable or unparseable.
+    """
+    try:
+        present = open("/sys/devices/system/cpu/present").read().strip()
+        parts = present.split(",")
+        last = parts[-1]
+        if "-" in last:
+            return int(last.split("-")[1]) + 1
+        return int(last) + 1
+    except (OSError, ValueError):
+        return None
+
+
+def detect_host_sockets() -> int | None:
+    """Return the number of physical CPU sockets from sysfs topology.
+
+    Counts unique physical_package_id values across all CPU entries.
+    Returns None if the topology files are unreadable.
+    """
+    packages: set[str] = set()
+    for path in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/topology/physical_package_id"):
+        try:
+            packages.add(open(path).read().strip())
+        except OSError:
+            continue
+    return len(packages) if packages else None
+
+
+def detect_numa_node_count() -> int:
+    """Return the number of NUMA nodes visible to the OS from sysfs."""
+    return len(glob.glob("/sys/devices/system/node/node[0-9]*"))
 
 # NVSwitch device ID (H100/H200 multi-GPU systems)
 _PCI_DEVICE_NVSWITCH = '22a3'
@@ -141,12 +180,14 @@ def detect_nvswitches() -> list[str]:
     return sorted(devices)
 
 
-def get_gpu_models_from_lspci(bdfs: list[str], host_cpus: int | None = None) -> dict[str, str]:
+def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
     """Map each GPU BDF to its GPU_PROFILES key (or 'default') via lspci.
 
-    host_cpus is used to disambiguate profiles that share the same PCI device ID
-    (e.g. B200 vs B200_XEON6). Pass the result of _detect_host_cpus() when available.
+    Host topology (CPU count) is detected automatically from sysfs to
+    disambiguate profiles that share the same PCI device ID. Raises ValueError
+    if the detected topology doesn't match any known profile for that device ID.
     """
+    host_cpus = detect_host_cpus()
     bdf_set = set(bdfs)
     result = {}
     for line in _lspci_lines(_NVIDIA_VENDOR):
@@ -270,3 +311,52 @@ def detect_infiniband_devices() -> list[str]:
         return []
     vfs = detect_infiniband_vfs(pfs)
     return vfs if vfs else pfs
+
+
+# ---------------------------------------------------------------------------
+# Full topology detection and profile matching
+# ---------------------------------------------------------------------------
+
+
+def detect_profile() -> GpuProfile:
+    """Probe host hardware topology and match to a registered GpuProfile.
+
+    Collects GPU PCI device IDs, CPU count, socket count, NVSwitch presence,
+    and InfiniBand PF presence, then verifies the detected topology matches a
+    registered profile exactly. Raises ValueError on any mismatch — there is
+    no partial match or advisory path.
+    """
+    gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
+    if not gpu_bdfs:
+        raise ValueError("No GPU devices detected on this host.")
+
+    gpu_models = get_gpu_models_from_lspci(gpu_bdfs)
+    profile = resolve_profile(gpu_models)
+    total_gpus = len(gpu_bdfs)
+
+    detected_sockets = detect_host_sockets()
+    if detected_sockets is not None and detected_sockets != profile.host_sockets:
+        raise ValueError(
+            f"Socket count mismatch: profile '{profile.name}' expects "
+            f"{profile.host_sockets} socket(s), detected {detected_sockets}. "
+            f"Verify lscpu and add a new profile if this is a different server SKU."
+        )
+
+    if profile.should_passthrough_nvswitches(total_gpus):
+        nvswitch_bdfs = detect_nvswitches()
+        if not nvswitch_bdfs:
+            raise ValueError(
+                f"Profile '{profile.name}' requires NVSwitches for {total_gpus} GPU(s) "
+                f"but none were detected. "
+                f"Verify with: lspci -Dnn | grep '\\[0680\\]' | grep '10de'"
+            )
+
+    if profile.should_passthrough_infiniband:
+        ib_pf_bdfs = detect_infiniband_pfs(exclude_bdfs=detect_cx7_bridge_pfs())
+        if not ib_pf_bdfs:
+            raise ValueError(
+                f"Profile '{profile.name}' requires InfiniBand devices for passthrough "
+                f"but none were detected. Verify with: lspci -Dnn | grep '15b3'"
+            )
+
+    return profile
