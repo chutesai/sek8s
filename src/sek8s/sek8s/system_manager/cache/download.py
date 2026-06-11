@@ -160,10 +160,47 @@ class DownloadProcess:
 # ======================================================================
 
 
+_DOWNLOAD_MAX_RETRIES = 5
+_DOWNLOAD_RETRY_BASE_DELAY = 10
+
+
+def _snapshot_download_with_retry(
+    repo_id: str, revision: str, cache_dir: str
+) -> None:
+    """Call snapshot_download with retries for transient CDN failures.
+
+    HuggingFace's CDN serves files via presigned URLs that expire after ~60
+    minutes.  For large models the download can outlast the URL TTL, producing
+    403 Forbidden errors from hf_transfer.  Retrying is safe because
+    snapshot_download resumes from the HF cache -- already-complete files are
+    skipped and partial blobs are re-fetched.
+    """
+    for attempt in range(1, _DOWNLOAD_MAX_RETRIES + 1):
+        try:
+            snapshot_download(
+                repo_id=repo_id,
+                revision=revision,
+                cache_dir=cache_dir,
+            )
+            return
+        except Exception as exc:
+            exc_text = str(exc)
+            is_transient = "403" in exc_text or "Forbidden" in exc_text
+            if not is_transient or attempt == _DOWNLOAD_MAX_RETRIES:
+                raise
+            delay = _DOWNLOAD_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            print(
+                f"[download] Transient failure (attempt {attempt}/"
+                f"{_DOWNLOAD_MAX_RETRIES}), retrying in {delay}s: {exc_text}",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+
+
 async def _run(repo_id: str, revision: str, path: Path) -> None:
     hub_path = path / "hub"
 
-    snapshot_download(
+    _snapshot_download_with_retry(
         repo_id=repo_id,
         revision=revision,
         cache_dir=str(hub_path),
