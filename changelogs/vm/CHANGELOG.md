@@ -20,6 +20,9 @@ Version source of truth: `ansible/guest/VERSION`
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots
 - Normalize PCI BDF addresses in gpu-verify to strip domain prefix and lowercase before comparison, fixing mismatches between sysfs and nvidia-smi formats (e.g. `0000:a1:00.0` vs `00000000:A1:00.0`)
+- System manager no longer crash-loops waiting for k3s: made `ReadOnlyPaths=/run/k3s/containerd` optional so the service starts immediately on boot even if k3s hasn't created the socket yet
+- Attestation proxy startup probe: increased tolerance from 65s to 310s as a safety net for slow boots
+- k3s boot ordering: added `After=attestation-service.service` so the attestation-proxy pod isn't scheduled before the host attestation socket and TLS certs exist
 
 ## [1.3.0] - 2026-05-18
 
