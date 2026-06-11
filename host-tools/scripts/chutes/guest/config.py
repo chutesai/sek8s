@@ -124,6 +124,7 @@ def main():
 
     runtime = config.get('runtime', {})
     foreground = runtime.get('foreground', False)
+    tune_host = runtime.get('tune_host', False)
 
     docker_hub = config.get('docker_hub') or {}
     if not isinstance(docker_hub, dict):
@@ -149,6 +150,7 @@ def main():
     print(f"CONFIG_VOLUME={shlex.quote(config_volume)}")
     print(f"SKIP_BIND={'true' if not bind_devices else 'false'}")
     print(f"FOREGROUND={'true' if foreground else 'false'}")
+    print(f"TUNE_HOST={'true' if tune_host else 'false'}")
     print(f"DOCKER_HUB_USERNAME={shlex.quote(docker_hub_username)}")
     print(f"DOCKER_HUB_TOKEN={shlex.quote(docker_hub_token)}")
 

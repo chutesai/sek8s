@@ -19,7 +19,7 @@ from chutes.guest.detection import (
 )
 from chutes.guest.gpu.profiles import resolve_profile
 from chutes.guest.passthrough import setup_passthrough
-from chutes.guest.post_launch import apply_post_launch_tuning
+from chutes.guest.post_launch import apply_post_launch_tuning, restore_host_tuning
 from chutes.guest.qemu import (
     PcieRootPinning,
     add_volumes,
@@ -69,6 +69,7 @@ def stop_existing_vm():
         os.remove(PIDFILE)
     except FileNotFoundError:
         pass
+    restore_host_tuning()
 
 
 def launch_vm(args) -> int:
@@ -168,18 +169,19 @@ def launch_vm(args) -> int:
         print(f"Error: QEMU failed (exit {result.returncode}).", file=sys.stderr)
         return result.returncode
 
-    if (
-        not args.foreground
-        and profile is not None
-        and profile.enable_post_launch_tuning
-    ):
-        apply_post_launch_tuning(
-            pidfile=PIDFILE,
-            process_name=PROCESS_NAME,
-            vcpus_total=int(vcpus),
-            host_nodes=host_numa_nodes(),
-            pin_threads=numa_active,
-        )
+    if not args.foreground:
+        # CPU governor/C-state tuning applies to any TDX VM; --tune-host is the opt-in.
+        # vCPU thread pinning is additionally gated on the profile enabling NUMA topology
+        # (requires dual-socket host with PXB-PCIe grouping active).
+        pin_threads = numa_active and profile is not None and profile.enable_post_launch_tuning
+        if args.tune_host or pin_threads:
+            apply_post_launch_tuning(
+                pidfile=PIDFILE,
+                vcpus_total=int(vcpus),
+                host_nodes=host_numa_nodes(),
+                pin_threads=pin_threads,
+                tune_cpu=args.tune_host,
+            )
 
     if not args.foreground:
         print(f"Log file: {LOGFILE}")
@@ -195,6 +197,17 @@ def main() -> int:
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--ssh", action="store_true", help="Show SSH login hint after launch (benchmark and debug modes)")
+    parser.add_argument(
+        "--tune-host",
+        action="store_true",
+        default=False,
+        help=(
+            "Apply host-wide CPU performance tuning after VM launch "
+            "(performance governor, turbo on, C-states off). "
+            "Settings are snapshotted and restored on next VM stop. "
+            "Has no effect on TDX measurements."
+        ),
+    )
 
     parser.add_argument("--config-volume", type=str)
     parser.add_argument("--cache-volume", type=str)

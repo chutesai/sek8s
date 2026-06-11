@@ -156,6 +156,11 @@
           "type": "boolean",
           "description": "Run VM in foreground mode (blocks until VM exits)",
           "default": false
+        },
+        "tune_host": {
+          "type": "boolean",
+          "description": "Apply host-wide CPU performance tuning after VM launch: performance governor, turbo on, C-states off. Settings are snapshotted and restored automatically on next VM stop. Has no effect on TDX measurements.",
+          "default": false
         }
       }
     },

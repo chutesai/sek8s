@@ -43,3 +43,6 @@ devices:
 
 runtime:
   foreground: false
+  # tune_host: false  # Set true to enable host-wide CPU perf tuning on launch
+  #                   # (performance governor, turbo on, C-states off).
+  #                   # Settings are snapshotted and restored on next VM stop.

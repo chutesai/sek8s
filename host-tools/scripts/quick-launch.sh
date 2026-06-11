@@ -41,6 +41,7 @@ STORAGE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
+TUNE_HOST="false"
 SKIP_CHECKSUM="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
@@ -68,6 +69,7 @@ CLI_STORAGE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
+CLI_TUNE_HOST=""
 CLI_SKIP_CHECKSUM=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
@@ -132,6 +134,7 @@ while [[ $# -gt 0 ]]; do
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
+    --tune-host) CLI_TUNE_HOST="true"; shift ;;
     --skip-checksum) CLI_SKIP_CHECKSUM="true"; shift ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
@@ -226,6 +229,10 @@ Runtime:
   --foreground
   --network-type [tap|user]
   --ephemeral               Use ephemeral overlay (cleared on reboot)
+  --tune-host               Apply host-wide CPU tuning after VM launch: performance
+                            governor, turbo on, C-states off. Settings are
+                            snapshotted and restored on next VM stop. No effect
+                            on TDX measurements.
 
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 
@@ -334,6 +341,7 @@ fi
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
 [[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
+[[ -n "$CLI_TUNE_HOST" ]] && TUNE_HOST="$CLI_TUNE_HOST"
 [[ -n "$CLI_SKIP_CHECKSUM" ]] && SKIP_CHECKSUM="true"
 
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
@@ -767,6 +775,7 @@ else
   LAUNCH_ARGS+=(--storage-volume "$STORAGE_VOLUME")
 fi
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
+[[ "$TUNE_HOST" == "true" ]] && LAUNCH_ARGS+=(--tune-host)
 
 # Call Python runner
 if ! python3 ./run-td "${LAUNCH_ARGS[@]}"; then
