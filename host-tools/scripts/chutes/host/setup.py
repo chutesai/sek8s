@@ -391,22 +391,23 @@ def _setup_host_fabric_manager():
     print(f"  ✓ Fabric Manager {FM_PKG_VERSION} installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
-    # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
+    # Blackwell MPT CC mode (greedy is the default, which disables CC).
+    # FM 595+ requires the string "symmetric" (older versions used numeric "1").
     fm_cfg = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
     if os.path.exists(fm_cfg):
         with open(fm_cfg) as f:
             original = f.read()
         updated = re.sub(
             r"^PARTITION_RAIL_POLICY\s*=.*$",
-            "PARTITION_RAIL_POLICY=1",
+            "PARTITION_RAIL_POLICY=symmetric",
             original,
             flags=re.MULTILINE,
         )
         if "PARTITION_RAIL_POLICY" not in original:
-            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=1\n"
+            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=symmetric\n"
         if updated != original:
             _write_system_file(fm_cfg, updated)
-            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to 1 (symmetric)")
+            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to symmetric")
         else:
             print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
     else:
