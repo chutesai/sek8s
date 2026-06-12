@@ -354,9 +354,9 @@ def detect_profile() -> GpuProfile:
     if profile.should_passthrough_infiniband:
         ib_pf_bdfs = detect_infiniband_pfs(exclude_bdfs=detect_cx7_bridge_pfs())
         if not ib_pf_bdfs:
-            raise ValueError(
-                f"Profile '{profile.name}' requires InfiniBand devices for passthrough "
-                f"but none were detected. Verify with: lspci -Dnn | grep '15b3'"
+            print(
+                f"  Note: profile '{profile.name}' supports InfiniBand passthrough "
+                f"but no IB devices detected on this host — skipping IB passthrough."
             )
 
     return profile
