@@ -1,20 +1,15 @@
 """Unit tests for post-launch host tuning helpers."""
 
 import os
-import stat
-from unittest.mock import MagicMock, call, patch
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 from chutes.guest.post_launch import (
-    RESTORE_SCRIPT,
     apply_post_launch_tuning,
     expand_cpulist,
     find_qemu_pid,
     restore_host_tuning,
     tune_host_cpu_power,
 )
-
 
 # ---------------------------------------------------------------------------
 # expand_cpulist
@@ -66,6 +61,7 @@ def _glob_side_effect(pattern):
 
 def _open_side_effect(original_saved):
     """Return a side_effect for open() that reads 'original_saved' from sysfs files."""
+
     def _open(path, *args, **kwargs):
         if any(path == f for f in _GOV_FILES + _IDLE_FILES + [_NO_TURBO]):
             m = MagicMock()
@@ -74,17 +70,20 @@ def _open_side_effect(original_saved):
             m.read.return_value = original_saved
             return m
         return original_open(path, *args, **kwargs)
+
     original_open = open
     return _open
 
 
 def _isfile_side_effect(restore_path: str, restore_exists: bool):
     """Return True for no_turbo always; return restore_exists for the restore script."""
+
     def _isfile(path):
         if path == restore_path:
             return restore_exists
         # Default: return True for no_turbo and other sysfs paths
         return True
+
     return _isfile
 
 
@@ -99,7 +98,10 @@ def test_tune_first_call_writes_restore_script(tmp_path):
     with (
         patch("chutes.guest.post_launch.RESTORE_SCRIPT", restore_path),
         patch("chutes.guest.post_launch.glob.glob", side_effect=_glob_side_effect),
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, False),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         patch("chutes.guest.post_launch._write_root"),
         patch("chutes.guest.post_launch.os.makedirs"),
@@ -123,7 +125,10 @@ def test_tune_first_call_applies_settings(tmp_path):
     with (
         patch("chutes.guest.post_launch.RESTORE_SCRIPT", restore_path),
         patch("chutes.guest.post_launch.glob.glob", side_effect=_glob_side_effect),
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, False),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         patch("chutes.guest.post_launch._write_root", write_root),
         patch("chutes.guest.post_launch.os.makedirs"),
@@ -131,7 +136,9 @@ def test_tune_first_call_applies_settings(tmp_path):
     ):
         tune_host_cpu_power()
 
-    gov_calls = [c for c in write_root.call_args_list if "scaling_governor" in c.args[0]]
+    gov_calls = [
+        c for c in write_root.call_args_list if "scaling_governor" in c.args[0]
+    ]
     assert all(c.args[1] == "performance" for c in gov_calls)
 
     idle_calls = [c for c in write_root.call_args_list if "cpuidle" in c.args[0]]
@@ -155,7 +162,10 @@ def test_tune_second_call_does_not_overwrite_restore_script(tmp_path):
     with (
         patch("chutes.guest.post_launch.RESTORE_SCRIPT", restore_path),
         patch("chutes.guest.post_launch.glob.glob", side_effect=_glob_side_effect),
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, True),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         patch("chutes.guest.post_launch._write_root"),
         patch("chutes.guest.post_launch.os.makedirs"),
@@ -176,7 +186,10 @@ def test_tune_second_call_still_reapplies_settings(tmp_path):
     with (
         patch("chutes.guest.post_launch.RESTORE_SCRIPT", restore_path),
         patch("chutes.guest.post_launch.glob.glob", side_effect=_glob_side_effect),
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, True),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         patch("chutes.guest.post_launch._write_root", write_root),
         patch("chutes.guest.post_launch.os.makedirs"),
@@ -404,7 +417,10 @@ def test_full_lifecycle_preserves_original_state(tmp_path):
     with (
         common_patches["restore_script"],
         common_patches["glob"],
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, False),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         common_patches["write_root"],
         common_patches["makedirs"],
@@ -420,7 +436,10 @@ def test_full_lifecycle_preserves_original_state(tmp_path):
     with (
         common_patches["restore_script"],
         common_patches["glob"],
-        patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
+        patch(
+            "chutes.guest.post_launch.os.path.isfile",
+            side_effect=_isfile_side_effect(restore_path, True),
+        ),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         common_patches["write_root"],
         common_patches["makedirs"],

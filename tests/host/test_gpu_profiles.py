@@ -32,11 +32,13 @@ def test_device_id_rejects_other_profiles_ids():
     exception — e.g. B200 and B200_XEON6 both use 2901 and are disambiguated
     by host CPU count at runtime.
     """
+
     # Build sibling groups: profiles that share at least one device ID
     def _sibling_keys(key: str, profile: "GpuProfile") -> set[str]:
         our_ids = set(pid.lower() for pid in profile.pci_device_ids)
         return {
-            k for k, p in GPU_PROFILES.items()
+            k
+            for k, p in GPU_PROFILES.items()
             if k != key and set(pid.lower() for pid in p.pci_device_ids) & our_ids
         }
 
@@ -56,7 +58,9 @@ def test_device_id_rejects_other_profiles_ids():
 
 def test_b200_variants_share_device_id():
     """B200 and B200_XEON6 are siblings — same GPU, different host CPU SKU."""
-    assert GPU_PROFILES["B200"].pci_device_ids == GPU_PROFILES["B200_XEON6"].pci_device_ids
+    assert (
+        GPU_PROFILES["B200"].pci_device_ids == GPU_PROFILES["B200_XEON6"].pci_device_ids
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +285,9 @@ def test_smp_topology_threads_is_one(model_key):
     assert "threads=1" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"])
+@pytest.mark.parametrize(
+    "model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"]
+)
 def test_two_socket_profiles_use_two_sockets(model_key):
     """2-socket servers must reflect physical socket count in smp_topology.
 
@@ -294,7 +300,9 @@ def test_two_socket_profiles_use_two_sockets(model_key):
     assert "sockets=2" in profile.smp_topology
 
 
-@pytest.mark.parametrize("model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"])
+@pytest.mark.parametrize(
+    "model_key", ["RTX_PRO_6000", "H200", "B200", "B200_XEON6", "B300"]
+)
 def test_two_socket_profiles_preserve_full_vcpu_count(model_key):
     """Switching to sockets=2 must not reduce the vCPU count."""
     profile = GPU_PROFILES[model_key]
@@ -370,7 +378,9 @@ def test_b200_xeon6_has_correct_cpu_topology():
 
 def test_b200_xeon6_has_higher_ram_per_gpu_than_b200():
     """Xeon6 host has ~3 TB RAM so it can allocate more RAM per GPU."""
-    assert GPU_PROFILES["B200_XEON6"].ram_per_gpu_gb > GPU_PROFILES["B200"].ram_per_gpu_gb
+    assert (
+        GPU_PROFILES["B200_XEON6"].ram_per_gpu_gb > GPU_PROFILES["B200"].ram_per_gpu_gb
+    )
 
 
 def test_b200_xeon6_inherits_cc_mode_and_ib_passthrough():
@@ -429,9 +439,9 @@ def test_get_gpu_models_from_lspci_uses_host_cpus_for_disambiguation():
 
 def test_get_gpu_models_from_lspci_raises_on_unknown_b200_cpu_count():
     """An unrecognised CPU count for a shared device ID raises ValueError, not a silent mismatch."""
-    import pytest
     from unittest.mock import patch
 
+    import pytest
     from chutes.guest.detection import get_gpu_models_from_lspci
 
     fake_lspci = [
@@ -439,7 +449,9 @@ def test_get_gpu_models_from_lspci_raises_on_unknown_b200_cpu_count():
     ]
     with patch("chutes.guest.detection._lspci_lines", return_value=fake_lspci):
         with patch("chutes.guest.detection.detect_host_cpus", return_value=240):
-            with pytest.raises(ValueError, match="Add a new profile for this CPU topology"):
+            with pytest.raises(
+                ValueError, match="Add a new profile for this CPU topology"
+            ):
                 get_gpu_models_from_lspci(["0000:0d:00.0"])
 
 
@@ -466,13 +478,32 @@ def _patch_detection(
     from unittest.mock import patch
 
     stack = ExitStack()
-    stack.enter_context(patch("chutes.guest.detection._lspci_lines", return_value=lspci_lines or []))
-    stack.enter_context(patch("chutes.guest.detection.detect_host_cpus", return_value=host_cpus))
-    stack.enter_context(patch("chutes.guest.detection.detect_host_sockets", return_value=host_sockets))
-    stack.enter_context(patch("chutes.guest.detection.detect_numa_node_count", return_value=numa_count))
-    stack.enter_context(patch("chutes.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []))
-    stack.enter_context(patch("chutes.guest.detection.detect_infiniband_pfs", return_value=ib_pf_bdfs or []))
-    stack.enter_context(patch("chutes.guest.detection.detect_cx7_bridge_pfs", return_value=[]))
+    stack.enter_context(
+        patch("chutes.guest.detection._lspci_lines", return_value=lspci_lines or [])
+    )
+    stack.enter_context(
+        patch("chutes.guest.detection.detect_host_cpus", return_value=host_cpus)
+    )
+    stack.enter_context(
+        patch("chutes.guest.detection.detect_host_sockets", return_value=host_sockets)
+    )
+    stack.enter_context(
+        patch("chutes.guest.detection.detect_numa_node_count", return_value=numa_count)
+    )
+    stack.enter_context(
+        patch(
+            "chutes.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []
+        )
+    )
+    stack.enter_context(
+        patch(
+            "chutes.guest.detection.detect_infiniband_pfs",
+            return_value=ib_pf_bdfs or [],
+        )
+    )
+    stack.enter_context(
+        patch("chutes.guest.detection.detect_cx7_bridge_pfs", return_value=[])
+    )
     bdfs = gpu_bdfs if gpu_bdfs is not None else ["0000:0d:00.0"]
     stack.enter_context(patch("chutes.guest.detection.get_gpu_bdfs", return_value=bdfs))
     return stack
@@ -513,7 +544,7 @@ def test_detect_profile_raises_on_socket_mismatch():
     with _patch_detection(
         lspci_lines=_make_lspci_b200(),
         host_cpus=192,
-        host_sockets=1,   # profile expects 2
+        host_sockets=1,  # profile expects 2
         ib_pf_bdfs=["0000:0e:00.0"],
     ):
         with pytest.raises(ValueError, match="Socket count mismatch"):
