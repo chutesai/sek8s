@@ -1,0 +1,2 @@
+### Fixed
+- system-manager hf-xet cache directory (`/var/snap/cache/.xdg-cache`) is now created reliably at runtime via a dedicated systemd drop-in (`system-manager.service.d/cache-volume.conf`). The `ExecStartPre` uses the `+` prefix to run outside the unit sandbox so the chown to `system-manager:tdx` has `CAP_CHOWN`, and `ReadWritePaths=/var/snap/cache` is scoped to the drop-in since the cache volume only exists at runtime, not during image build.
