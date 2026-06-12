@@ -13,6 +13,14 @@ import sys
 
 from chutes.host.profiles import APTRepo, HostProfile, PPA
 
+# Fabric Manager version must match the NVIDIA driver version in the guest
+# image.  FM communicates with GPU firmware shared between host and guest;
+# version mismatches cause NVLink initialization failures and Xid errors.
+# Keep in sync with nvidia_version / nvidia_pkg_version in
+# ansible/guest/playbooks/group_vars/all.yml.
+FM_DRIVER_BRANCH = "595"
+FM_PKG_VERSION = "595.71.05-1"
+
 
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
@@ -337,13 +345,48 @@ def _setup_host_fabric_manager():
 
     # Install host-side FM stack.  The CUDA apt repo is expected to be
     # configured already (same repo used by nvidia-gpu-tools setup).
+    #
+    # Use the version-pinned package (nvidia-fabricmanager-NNN) to avoid
+    # conflicts with other FM versions and ensure FM matches the guest driver.
+    # The unversioned nvidia-fabricmanager metapackage pulls the latest version
+    # which can conflict with an already-installed pinned version and may not
+    # match the guest driver.
+    fm_pkg = f"nvidia-fabricmanager-{FM_DRIVER_BRANCH}"
+    fm_pkg_pinned = f"{fm_pkg}={FM_PKG_VERSION}"
+
+    # Abort if a mismatched FM version is installed — apt will fail with a
+    # Conflicts error otherwise.  We don't auto-remove to keep setup safe
+    # for clean hosts; the operator must remove the old package manually.
+    try:
+        dpkg_out = subprocess.run(
+            ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
+            capture_output=True, text=True, timeout=10,
+        )
+        stale_fm = [
+            line.split()[1]
+            for line in dpkg_out.stdout.splitlines()
+            if line.startswith("ii")
+            and line.split()[1].startswith("nvidia-fabricmanager")
+            and line.split()[1] != fm_pkg
+        ]
+        if stale_fm:
+            raise RuntimeError(
+                f"Mismatched Fabric Manager package(s) installed: {', '.join(stale_fm)}\n"
+                f"Required: {fm_pkg_pinned}\n"
+                f"Please remove the old package(s) first:\n"
+                f"  sudo apt remove -y {' '.join(stale_fm)}\n"
+                f"Then re-run setup."
+            )
+    except (subprocess.TimeoutExpired, OSError, IndexError):
+        pass
+
     _run(["apt", "install", "--yes", "--allow-downgrades",
-          "nvidia-fabricmanager",
+          fm_pkg_pinned,
           "nvlsm",
           "libibumad3",
           "infiniband-diags",
           ])
-    print("  ✓ Fabric Manager packages installed")
+    print(f"  ✓ Fabric Manager {FM_PKG_VERSION} packages installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
     # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
