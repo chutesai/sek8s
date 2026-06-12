@@ -310,7 +310,7 @@ def _setup_host_fabric_manager():
     Configuration applied:
     - /etc/modules-load.d/ib_umad.conf: autoload ib_umad at boot
     - fabricmanager.cfg: PARTITION_RAIL_POLICY=symmetric (required for CC mode)
-    - nvidia-fabricmanager.service: enabled
+    - nvidia-fabricmanager.service: enabled and started immediately
     """
     if not _detect_blackwell_hgx_gpus():
         print("  No B200/B300 GPUs detected — skipping host Fabric Manager setup")
@@ -367,8 +367,19 @@ def _setup_host_fabric_manager():
     else:
         print(f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly")
 
+    # Check if already running before enable/start to avoid unnecessary restarts.
+    already_running = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
+        check=False,
+    ).returncode == 0
+
     _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
-    print("  ✓ nvidia-fabricmanager.service enabled")
+    if already_running:
+        print("  nvidia-fabricmanager.service already running — restarting to pick up config changes")
+        _run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
+    else:
+        _run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
+    print("  ✓ nvidia-fabricmanager.service enabled and running")
 
 
 def _blacklist_gpu_drivers():

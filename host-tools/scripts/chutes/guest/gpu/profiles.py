@@ -146,6 +146,16 @@ class GpuProfile(ABC):
         return False
 
     @property
+    def requires_fabric_manager(self) -> bool:
+        """Whether the host Fabric Manager must be running before launch.
+
+        True for NVSwitch-based HGX systems (B200, B300) where FM manages the
+        NVSwitch fabric. FM must be active before CC mode SBR to ensure GPUs
+        properly re-initialize NVLink connections after each reset.
+        """
+        return False
+
+    @property
     def firmware_filename(self) -> str:
         """TDVF firmware filename in the repo firmware/ directory.
 
@@ -217,6 +227,10 @@ class B200Profile(GpuProfile):
 
     @property
     def enable_post_launch_tuning(self) -> bool:
+        return True
+
+    @property
+    def requires_fabric_manager(self) -> bool:
         return True
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -302,6 +316,10 @@ class B300Profile(GpuProfile):
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
+
+    @property
+    def requires_fabric_manager(self) -> bool:
+        return True
 
 
 class H200Profile(GpuProfile):

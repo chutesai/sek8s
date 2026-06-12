@@ -1,6 +1,7 @@
 """GPU passthrough for QEMU using per-SKU GpuProfile rules."""
 
 import os
+import re
 import subprocess
 import time
 
@@ -60,6 +61,101 @@ def _run_gpu_tools(*args: str):
         )
 
 
+def _check_fabric_manager(profile: GpuProfile):
+    """Raise if Fabric Manager is required by the profile but not running.
+
+    FM must be active before CC mode SBR so GPUs properly re-initialize their
+    NVLink connections to the NVSwitches after each reset. Without FM, some
+    GPUs may be left mid-initialization and appear as ERR! in the guest.
+    """
+    if not profile.requires_fabric_manager:
+        return
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', 'nvidia-fabricmanager'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() == 'active':
+            return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    raise RuntimeError(
+        f'nvidia-fabricmanager is not running (required for {profile.name}). '
+        'The NVSwitch fabric will not initialize properly without it, causing '
+        'GPU ERR! states in the guest.\n'
+        'Run host setup to install and start it:\n'
+        '  python3 host-tools/scripts/chutes/host/setup.py'
+    )
+
+
+def _query_cc_modes(gpus: list[str]) -> dict[str, str] | None:
+    """Query CC mode state for each GPU BDF via nvidia-gpu-tools.
+
+    Returns a dict mapping BDF → mode string (e.g. 'On', 'Off'), or None if
+    the query fails (tool unavailable, timeout, parse error).
+    """
+    global _gpu_tools_cmd
+    if _gpu_tools_cmd is None:
+        try:
+            _gpu_tools_cmd = ensure_gpu_tools_available()
+        except Exception:
+            return None
+    try:
+        out = subprocess.run(
+            [_gpu_tools_cmd, '--query-cc-mode'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    # Output line format (nvidia-gpu-tools v2026+):
+    #   Index  Type  BDF                    CC Mode  DevId
+    #       0  GPU   0000:17:00.0           [On]     10de:2901
+    line_re = re.compile(
+        r'\s*\d+\s+GPU\s+([0-9a-f]{4}:[0-9a-f]{2,4}:[0-9a-f]{2}\.[0-9])'
+        r'.*?\[(\w+)\]',
+        re.IGNORECASE,
+    )
+    modes: dict[str, str] = {}
+    for line in out.stdout.splitlines():
+        m = line_re.search(line)
+        if m:
+            modes[m.group(1).lower()] = m.group(2)
+    return modes if modes else None
+
+
+def _gpus_need_cc_configure(gpus: list[str], profile: GpuProfile) -> bool:
+    """Return True if any GPU needs CC/PPCIe mode configuration (SBR).
+
+    Queries current CC mode state and compares against the profile's target.
+    If all GPUs already report the correct mode, we can skip the entire
+    _configure_gpus call and avoid unnecessary SBRs that disturb the NVSwitch
+    fabric and can leave GPUs in a partially-initialized state.
+
+    Returns True (configure needed) if the query fails — safe default.
+    """
+    # Only skip for simple CC-mode-on profiles (B200, B300, RTX).
+    # H200 PPCIe mode requires two-step CC off + PPCIe on; skip detection there.
+    target_args = profile.get_cc_mode_args(1)  # total_gpus=1 for simple check
+    if len(target_args) != 1 or '--set-cc-mode=on' not in target_args[0]:
+        return True
+
+    modes = _query_cc_modes(gpus)
+    if modes is None:
+        return True  # query failed, configure to be safe
+
+    for bdf in gpus:
+        current = modes.get(bdf.lower())
+        if current is None or current.lower() != 'on':
+            return True
+    return False
+
+
 def _scripts_dir() -> str:
     """Return the host-tools/scripts/ directory."""
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -85,7 +181,14 @@ def _configure_gpus(
     profile: GpuProfile,
     total_gpus: int,
 ):
-    """Configure each GPU's CC/PPCIe mode before VFIO binding."""
+    """Configure each GPU's CC/PPCIe mode before VFIO binding.
+
+    Skipped entirely when all GPUs are already in the target mode — avoids
+    unnecessary SBRs that disrupt the NVSwitch fabric on HGX systems.
+    """
+    if not _gpus_need_cc_configure(gpus, profile):
+        print('  CC mode already set on all GPUs — skipping SBR configuration')
+        return
     print('  Configuring GPUs...')
     for gpu in gpus:
         mode_str = profile.describe_mode(total_gpus)
@@ -150,6 +253,8 @@ def _prepare_devices(
             'previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in '
             'this state — reboot the host, then retry quick-launch.'
         )
+
+    _check_fabric_manager(profile)
 
     if has_stale_vfio_devices(all_devices):
         print('  Stale vfio-pci devices detected from previous session')
