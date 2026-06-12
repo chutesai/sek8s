@@ -19,7 +19,7 @@ from chutes.host.profiles import APTRepo, HostProfile, PPA
 # Keep in sync with nvidia_version / nvidia_pkg_version in
 # ansible/guest/playbooks/group_vars/all.yml.
 FM_DRIVER_BRANCH = "595"
-FM_PKG_VERSION = "595.71.05-1"
+FM_PKG_VERSION = "595.71.05-0ubuntu0.26.04.1"
 
 
 def _run(cmd: list[str], **kwargs):
@@ -380,13 +380,15 @@ def _setup_host_fabric_manager():
     except (subprocess.TimeoutExpired, OSError, IndexError):
         pass
 
+    # Pin to the exact version — matches how the Ansible guest role pins
+    # nvidia packages via /etc/apt/preferences.d/nvidia-version-pin.
     _run(["apt", "install", "--yes", "--allow-downgrades",
           fm_pkg_pinned,
           "nvlsm",
           "libibumad3",
           "infiniband-diags",
           ])
-    print(f"  ✓ Fabric Manager {FM_PKG_VERSION} packages installed")
+    print(f"  ✓ Fabric Manager {FM_PKG_VERSION} installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
     # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
