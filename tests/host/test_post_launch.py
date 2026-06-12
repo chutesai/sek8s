@@ -102,7 +102,6 @@ def test_tune_first_call_writes_restore_script(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         patch("chutes.guest.post_launch._write_root"),
-        patch("chutes.guest.post_launch.shutil.which", return_value=None),
         patch("chutes.guest.post_launch.os.makedirs"),
         patch("chutes.guest.post_launch.os.chmod"),
     ):
@@ -127,7 +126,6 @@ def test_tune_first_call_applies_settings(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         patch("chutes.guest.post_launch._write_root", write_root),
-        patch("chutes.guest.post_launch.shutil.which", return_value=None),
         patch("chutes.guest.post_launch.os.makedirs"),
         patch("chutes.guest.post_launch.os.chmod"),
     ):
@@ -160,7 +158,6 @@ def test_tune_second_call_does_not_overwrite_restore_script(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         patch("chutes.guest.post_launch._write_root"),
-        patch("chutes.guest.post_launch.shutil.which", return_value=None),
         patch("chutes.guest.post_launch.os.makedirs"),
         patch("chutes.guest.post_launch.os.chmod"),
     ):
@@ -182,7 +179,6 @@ def test_tune_second_call_still_reapplies_settings(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         patch("chutes.guest.post_launch._write_root", write_root),
-        patch("chutes.guest.post_launch.shutil.which", return_value=None),
         patch("chutes.guest.post_launch.os.makedirs"),
         patch("chutes.guest.post_launch.os.chmod"),
     ):
@@ -399,7 +395,6 @@ def test_full_lifecycle_preserves_original_state(tmp_path):
     common_patches = dict(
         glob=patch("chutes.guest.post_launch.glob.glob", side_effect=_glob_side_effect),
         write_root=patch("chutes.guest.post_launch._write_root"),
-        which=patch("chutes.guest.post_launch.shutil.which", return_value=None),
         makedirs=patch("chutes.guest.post_launch.os.makedirs"),
         chmod=patch("chutes.guest.post_launch.os.chmod"),
         restore_script=patch("chutes.guest.post_launch.RESTORE_SCRIPT", restore_path),
@@ -412,7 +407,6 @@ def test_full_lifecycle_preserves_original_state(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, False)),
         patch("builtins.open", side_effect=_open_side_effect("powersave")),
         common_patches["write_root"],
-        common_patches["which"],
         common_patches["makedirs"],
         common_patches["chmod"],
     ):
@@ -429,7 +423,6 @@ def test_full_lifecycle_preserves_original_state(tmp_path):
         patch("chutes.guest.post_launch.os.path.isfile", side_effect=_isfile_side_effect(restore_path, True)),
         patch("builtins.open", side_effect=_open_side_effect("performance")),
         common_patches["write_root"],
-        common_patches["which"],
         common_patches["makedirs"],
         common_patches["chmod"],
     ):

@@ -5,7 +5,6 @@ from __future__ import annotations
 import glob
 import os
 import re
-import shutil
 import subprocess
 import time
 
@@ -81,18 +80,6 @@ def tune_host_cpu_power() -> None:
         "",
     ]
 
-    if shutil.which("cpupower"):
-        result = _run_root(
-            ["cpupower", "frequency-set", "-g", "performance"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode != 0:
-            print("  Warning: cpupower governor set failed")
-    else:
-        print("  Hint: install cpupower (linux-tools-common) for CPU frequency pinning")
-
     for gov_file in sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor")):
         if not already_tuned:
             try:
@@ -102,6 +89,21 @@ def tune_host_cpu_power() -> None:
             except OSError:
                 pass
         _write_root(gov_file, "performance")
+
+    for epp_file in sorted(glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference")):
+        if not already_tuned:
+            try:
+                with open(epp_file) as f:
+                    saved = f.read().strip()
+                restore_cmds.append(f"echo {saved} | sudo tee {epp_file} > /dev/null")
+            except OSError:
+                pass
+        _write_root(epp_file, "performance")
+
+    if glob.glob("/sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference"):
+        print("  CPU governor + EPP: performance")
+    else:
+        print("  CPU governor: performance")
 
     no_turbo = "/sys/devices/system/cpu/intel_pstate/no_turbo"
     if os.path.isfile(no_turbo):
