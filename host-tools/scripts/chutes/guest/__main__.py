@@ -69,10 +69,13 @@ def stop_existing_vm():
         os.remove(PIDFILE)
     except FileNotFoundError:
         pass
+    print("Restoring host tuning settings (if any)")
     restore_host_tuning()
 
 
 def launch_vm(args) -> int:
+
+    print("Starting TDX VM...")
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
