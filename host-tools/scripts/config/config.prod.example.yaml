@@ -43,6 +43,6 @@ devices:
 
 runtime:
   foreground: false
-  # tune_host: false  # Set true to enable host-wide CPU perf tuning on launch
-  #                   # (performance governor, turbo on, C-states off).
-  #                   # Settings are snapshotted and restored on next VM stop.
+  # Host CPU tuning is a separate, operator-driven step (decoupled from launch):
+  #   sudo host-tools/scripts/tune-host.sh      # governor=performance, disable C1E/C6
+  #   sudo host-tools/scripts/restore-host.sh   # revert
