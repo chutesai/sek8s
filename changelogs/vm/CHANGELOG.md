@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-06-11
+## [1.3.1] - 2026-06-13
 
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
@@ -23,6 +23,8 @@ Version source of truth: `ansible/guest/VERSION`
 - System manager no longer crash-loops waiting for k3s: made `ReadOnlyPaths=/run/k3s/containerd` optional so the service starts immediately on boot even if k3s hasn't created the socket yet
 - Attestation proxy startup probe: increased tolerance from 65s to 310s as a safety net for slow boots
 - k3s boot ordering: added `After=attestation-service.service` so the attestation-proxy pod isn't scheduled before the host attestation socket and TLS certs exist
+- attestation-proxy now self-heals after an ungraceful reboot. A new every-boot cluster-init script (`05-attestation-proxy-recovery.sh`, ordered before the `99-purge-kubeconfig.sh` admin-kubeconfig purge) force-deletes any attestation-proxy DaemonSet pod left in an `Unknown`/`Failed` phase or with `reason=NodeLost` — states the DaemonSet controller will not replace on its own — so the proxy is recreated automatically instead of staying down until a manual `kubectl rollout restart`. Running/Pending pods are left untouched, and the script always exits 0 so it can never trigger the cluster-init power-off.
+- system-manager hf-xet cache directory (`/var/snap/cache/.xdg-cache`) is now created reliably at runtime via a dedicated systemd drop-in (`system-manager.service.d/cache-volume.conf`). The `ExecStartPre` uses the `+` prefix to run outside the unit sandbox so the chown to `system-manager:tdx` has `CAP_CHOWN`, and `ReadWritePaths=/var/snap/cache` is scoped to the drop-in since the cache volume only exists at runtime, not during image build.
 
 ## [1.3.0] - 2026-05-18
 

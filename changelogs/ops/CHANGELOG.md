@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.06.0] - 2026-06-11
+## [2026.06.0] - 2026-06-13
 
 ### Added
 - B300 Blackwell HGX GPU support for TDX VM launch (`B300Profile`: PCI device ID `3182`, 288 GiB HBM3e VRAM, 2-socket/192-vCPU topology).
@@ -11,11 +11,22 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - `use_ovmf_mmio_fw_cfg` profile property — B300 disables per-GPU fw_cfg MMIO hints in favour of OVMF auto-sized multi-TB MMIO window.
 - `get_sbr_reset_args()` profile method for Secondary Bus Reset recovery after CC-mode switch.
 - PCI wedge detection (`pci_operations_wedged()`, `wait_pci_operations_idle()`) — pre-flight and post-unbind checks abort with a clear message instead of hanging when the PCI subsystem is stuck in D-state.
+- Standalone host CPU tuning tool (`python -m chutes.host.tune apply|restore`, exposed as the `chutes-tune-host` / `chutes-restore-host` commands via the existing `setup-tdx-host` tool-symlink step), decoupled from VM launch — applied and reverted deliberately by the operator rather than automatically on every start/stop. Implements the NVIDIA Confidential Computing Deployment Guide (DU-12302-001) host-OS recommendation: CPU frequency governor → `performance` and C-states **C1E/C6** disabled, leaving the shallow `POLL`/`C1` states enabled for thermal headroom (it no longer disables every C-state, nor forces turbo/EPP). Pre-tuning values are snapshotted to `/var/lib/chutes/tdx-host-tuning-restore.sh`; re-running `apply` reapplies settings without overwriting the saved original state.
+- Automatic GPU profile detection from host PCI/sysfs topology, with multi-GPU host support — new `detect_host_cpus()`, `detect_host_sockets()`, and `detect_numa_node_count()` helpers read CPU count, socket count, and NUMA layout from sysfs to select and verify the correct `GpuProfile`.
 
 ### Changed
 - All GPU profiles now use `OVMF.inteltdx.fd` firmware (edk2-stable202605 Config-B, no Secure Boot). Addresses CVE-2025-2296 (legacy Linux loader disabled by default). Old `TDVF.fd` removed.
 - `gpu-admin-tools` bumped to v2026.06.05 with hardened B300 PCI recovery.
 - B300 disables InfiniBand passthrough: all ConnectX-7 IB-class PFs are NVSwitch bridge devices managed by host-side Fabric Manager; guest networking uses virtio-net.
+- NVSwitch-based B200/B300 profiles now declare `requires_fabric_manager`; host setup starts (or restarts) `nvidia-fabricmanager.service` immediately rather than only enabling it, so the NVSwitch fabric is active before launch.
+- InfiniBand passthrough is now optional: a host whose profile supports IB passthrough but exposes no IB devices logs a note and skips passthrough instead of aborting the launch.
+- `discover-profile.sh` now reports detected CPU socket and NUMA topology alongside the existing GPU, PCI BAR, and firmware values.
+
+### Fixed
+- Host OOM-kill of the VM under load: the per-NUMA-node guest memory backends no longer set `prealloc=on`. Under TDX the guest's RAM is private memory served lazily from `guest_memfd`, so preallocating the memory-backend pinned a second full copy of pages the guest never uses as shared (~2× guest RAM), which OOM-killed QEMU as a pod warmed up. NUMA locality (`host-nodes=…,policy=bind`) is preserved. Affected all NUMA profiles (H200/B200/B300).
+- VM launch now aborts with a clear error instead of OOM-killing the host when a profile's fixed guest RAM cannot physically fit (host RAM minus reserve). Guest RAM stays a fixed, profile-determined value (it feeds the guest ACPI tables and thus TDX measurements), so this check never resizes the VM.
+- Fabric Manager `PARTITION_RAIL_POLICY` is now set to the string `symmetric` required by FM 595+ instead of the numeric `1` that newer FM rejects (CC mode would otherwise stay silently disabled on Blackwell).
+- Pinned the Fabric Manager package to `595.71.05-0ubuntu0.26.04.1` (full distro-qualified version) to match the guest driver pin and stop apt from installing a mismatched build.
 
 ## [2026.05.2] - 2026-06-11
 
