@@ -228,9 +228,9 @@ Runtime:
   --ephemeral               Use ephemeral overlay (cleared on reboot)
 
 Host CPU tuning is a separate, operator-driven step (decoupled from launch):
-  sudo host-tools/scripts/tune-host.sh      Apply NVIDIA-recommended tuning
-                                            (governor=performance, disable C1E/C6)
-  sudo host-tools/scripts/restore-host.sh   Revert to the saved settings
+  sudo chutes-tune-host      Apply NVIDIA-recommended tuning
+                             (governor=performance, disable C1E/C6)
+  sudo chutes-restore-host   Revert to the saved settings
 
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 

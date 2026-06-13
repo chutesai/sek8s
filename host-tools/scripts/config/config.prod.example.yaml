@@ -43,6 +43,7 @@ devices:
 
 runtime:
   foreground: false
-  # Host CPU tuning is a separate, operator-driven step (decoupled from launch):
-  #   sudo host-tools/scripts/tune-host.sh      # governor=performance, disable C1E/C6
-  #   sudo host-tools/scripts/restore-host.sh   # revert
+  # Host CPU tuning is a separate, operator-driven step (decoupled from launch).
+  # After host setup these are on PATH (else run host-tools/scripts/*.sh directly):
+  #   sudo chutes-tune-host      # governor=performance, disable C1E/C6
+  #   sudo chutes-restore-host   # revert
