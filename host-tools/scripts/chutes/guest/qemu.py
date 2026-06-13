@@ -18,6 +18,31 @@ def _block_format(path: str | None) -> str:
     return "raw"
 
 
+# TDX guest memory is pinned and unreclaimable, so the guest must leave the host
+# enough RAM for the host OS, the TDX PAMT, page tables, and VFIO DMA pinning --
+# otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
+# Reserve at least this fraction of host RAM, and never less than the floor.
+VM_MEM_RESERVE_FRACTION = 0.12
+VM_MEM_RESERVE_FLOOR_GB = 64
+
+
+def safe_vm_mem_gb(desired_gb: int, host_gb: int | None) -> int:
+    """Clamp desired guest RAM (GB) to what the host can safely back.
+
+    Returns ``desired_gb`` unchanged when host RAM is unknown or already leaves
+    enough headroom; otherwise caps it at ``host_gb`` minus a reserve. Never
+    returns a value below 1 GB or clamps upward.
+    """
+    if not host_gb or host_gb <= 0:
+        return desired_gb
+    reserve = max(VM_MEM_RESERVE_FLOOR_GB, int(host_gb * VM_MEM_RESERVE_FRACTION))
+    safe = host_gb - reserve
+    if safe < 1:
+        # Pathologically small host: can't help, leave the request as-is.
+        return desired_gb
+    return min(desired_gb, safe)
+
+
 def _parse_mem_mib(mem: str) -> int:
     """Parse QEMU memory size string (e.g. '1536G', '512M') to MiB."""
     match = re.match(r"^(\d+)([GgMm])$", mem)
@@ -79,7 +104,16 @@ def read_pci_numa_node(bdf: str) -> int:
 
 
 def _append_numa_memory(cmd: list[str], mem_mib: int, host_nodes: list[int]) -> None:
-    """Add per-node memory backends and guest NUMA topology."""
+    """Add per-node memory backends and guest NUMA topology.
+
+    NB: do NOT set prealloc=on on these backends. Under TDX
+    (confidential-guest-support=tdx) the guest's actual RAM is private memory
+    served from guest_memfd, allocated lazily as the guest accepts pages.
+    Preallocating the memory-backend pins a second full copy of pages the guest
+    never uses as shared, doubling host memory consumption (~2x guest RAM) and
+    OOM-killing the host during pod warmup. host-nodes/policy=bind keeps the
+    lazy allocations NUMA-local, which is the only reason these backends exist.
+    """
     num_nodes = len(host_nodes)
     per_node_mib = mem_mib // num_nodes
     for i, hnode in enumerate(host_nodes):
@@ -91,7 +125,7 @@ def _append_numa_memory(cmd: list[str], mem_mib: int, host_nodes: list[int]) -> 
             "-object",
             (
                 f"memory-backend-ram,id=mem-node{i},size={node_size_mib}M,"
-                f"prealloc=on,prealloc-threads=32,host-nodes={hnode},policy=bind"
+                f"host-nodes={hnode},policy=bind"
             ),
         ])
         cmd.extend(["-numa", f"node,nodeid={i},memdev=mem-node{i}"])

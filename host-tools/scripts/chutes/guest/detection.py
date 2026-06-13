@@ -53,6 +53,24 @@ def detect_numa_node_count() -> int:
     """Return the number of NUMA nodes visible to the OS from sysfs."""
     return len(glob.glob("/sys/devices/system/node/node[0-9]*"))
 
+
+def detect_host_mem_gb() -> int | None:
+    """Return total host RAM in GB from /proc/meminfo MemTotal.
+
+    Used to clamp guest RAM so a TDX VM (whose memory is pinned and
+    unreclaimable) cannot be sized beyond what the host can physically back.
+    Returns None if MemTotal is unreadable or unparseable.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // (1024 * 1024)
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
 # NVSwitch device ID (H100/H200 multi-GPU systems)
 _PCI_DEVICE_NVSWITCH = '22a3'
 

@@ -6,8 +6,9 @@
 - NVSwitch-based B200/B300 profiles now declare `requires_fabric_manager`; host setup starts (or restarts) `nvidia-fabricmanager.service` immediately rather than only enabling it, so the NVSwitch fabric is active before launch.
 - InfiniBand passthrough is now optional: a host whose profile supports IB passthrough but exposes no IB devices logs a note and skips passthrough instead of aborting the launch.
 - `discover-profile.sh` now reports detected CPU socket and NUMA topology alongside the existing GPU, PCI BAR, and firmware values.
-- Host CPU tuning no longer depends on `cpupower` (`linux-tools-common`); the governor and energy-performance-preference are written directly via sysfs.
 
 ### Fixed
+- Host OOM-kill of the VM under load: the per-NUMA-node guest memory backends no longer set `prealloc=on`. Under TDX the guest's RAM is private memory served lazily from `guest_memfd`, so preallocating the memory-backend pinned a second full copy of pages the guest never uses as shared (~2× guest RAM), which OOM-killed QEMU as a pod warmed up. NUMA locality (`host-nodes=…,policy=bind`) is preserved. Affected all NUMA profiles (H200/B200/B300).
+- VM launch now aborts with a clear error instead of OOM-killing the host when a profile's fixed guest RAM cannot physically fit (host RAM minus reserve). Guest RAM stays a fixed, profile-determined value (it feeds the guest ACPI tables and thus TDX measurements), so this check never resizes the VM.
 - Fabric Manager `PARTITION_RAIL_POLICY` is now set to the string `symmetric` required by FM 595+ instead of the numeric `1` that newer FM rejects (CC mode would otherwise stay silently disabled on Blackwell).
 - Pinned the Fabric Manager package to `595.71.05-0ubuntu0.26.04.1` (full distro-qualified version) to match the guest driver pin and stop apt from installing a mismatched build.

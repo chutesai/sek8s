@@ -13,6 +13,7 @@ import time
 
 from chutes.guest.detection import (
     detect_gpu_numa_nodes,
+    detect_host_mem_gb,
     detect_nvidia_gpus,
     detect_profile,
     get_gpu_bdfs,
@@ -27,6 +28,7 @@ from chutes.guest.qemu import (
     build_base_cmd,
     build_network,
     host_numa_nodes,
+    safe_vm_mem_gb,
     use_numa_topology,
 )
 
@@ -84,7 +86,24 @@ def launch_vm(args) -> int:
         profile = detect_profile()
         gpus = get_gpu_bdfs() or detect_nvidia_gpus()
         total_gpus = len(gpus)
-        mem = f"{total_gpus * profile.ram_per_gpu_gb}G"
+        # Guest RAM is a FIXED, profile-determined value: it shapes the guest
+        # ACPI/memory-map tables and therefore the TDX measurements, so it must
+        # be identical across every host running this profile. We never resize
+        # it to the host. We do refuse to launch if it cannot physically fit:
+        # TDX guest memory is pinned and unreclaimable, so an over-large guest
+        # OOM-kills the host instead of paging. Aborting is measurement-safe —
+        # it never changes the VM.
+        mem_gb = total_gpus * profile.ram_per_gpu_gb
+        host_gb = detect_host_mem_gb()
+        if host_gb is not None and safe_vm_mem_gb(mem_gb, host_gb) < mem_gb:
+            print(
+                f"Error: profile '{profile.name}' requires {mem_gb}G guest RAM but this "
+                f"host has only {host_gb}G — launching would OOM-kill the VM. The profile "
+                f"memory must fit the host (guest RAM is fixed for measurement determinism).",
+                file=sys.stderr,
+            )
+            return 1
+        mem = f"{mem_gb}G"
         vcpus = str(profile.vcpus)
         smp_topology = profile.smp_topology
         print(
