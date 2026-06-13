@@ -12,10 +12,13 @@ Version source of truth: `ansible/guest/VERSION`
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
 - `nvidia-modprobe` package to DKMS kernel module install (fixes module load on boot).
+- NVIDIA apt version pin (`/etc/apt/preferences.d/nvidia-version-pin`, `Pin-Priority: 1001`) locking all `nvidia-*`/`libnvidia-*` packages to `nvidia_pkg_version` so apt cannot pull a mismatched driver build.
 
 ### Changed
 - System manager env: replaced `HF_HUB_DISABLE_XET=1` + `HF_HUB_ENABLE_HF_TRANSFER=1` with throttled XET tuning (`HF_XET_FIXED_DOWNLOAD_CONCURRENCY=16`, `TOKIO_WORKER_THREADS=8`)
 - OPA admission policy: added `HF_XET_FIXED_DOWNLOAD_CONCURRENCY` and `TOKIO_WORKER_THREADS` to allowed pod env vars
+- Admission controller source repository moved from `rayonlabs/sek8s` to `chutesai/sek8s` (`admission_controller_repo` default).
+- LUKS build dependencies (`cryptsetup`, `dhcpcd-base`, `openssl`, `xfsprogs`, `e2fsprogs`) are now installed via `system_packages` during base image setup instead of a late `chroot apt-get install` in `luks_encrypt.yml`, removing a network-dependent install step from the encryption stage. Packages still land in the final image via the rootfs backup/restore.
 
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots
