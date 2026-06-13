@@ -13,11 +13,12 @@ import time
 
 from chutes.guest.detection import (
     detect_gpu_numa_nodes,
+    detect_host_mem_gb,
     detect_nvidia_gpus,
+    detect_profile,
     get_gpu_bdfs,
-    get_gpu_models_from_lspci,
 )
-from chutes.guest.gpu.profiles import resolve_profile
+from chutes.guest.gpu.profiles import GPU_PROFILES  # noqa: F401 — available for introspection
 from chutes.guest.passthrough import setup_passthrough
 from chutes.guest.post_launch import apply_post_launch_tuning
 from chutes.guest.qemu import (
@@ -27,6 +28,7 @@ from chutes.guest.qemu import (
     build_base_cmd,
     build_network,
     host_numa_nodes,
+    safe_vm_mem_gb,
     use_numa_topology,
 )
 
@@ -72,27 +74,43 @@ def stop_existing_vm():
 
 
 def launch_vm(args) -> int:
+
+    print("Starting TDX VM...")
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
     profile = None
+    gpus = []
 
     if args.pass_gpus:
-        gpus = get_gpu_bdfs()
-        if not gpus:
-            gpus = detect_nvidia_gpus()
-        if gpus:
-            gpu_models = get_gpu_models_from_lspci(gpus)
-            profile = resolve_profile(gpu_models)
-            total_gpus = len(gpus)
-            mem = f"{total_gpus * profile.vram_gb}G"
-            vcpus = str(profile.vcpus)
-            smp_topology = profile.smp_topology
+        profile = detect_profile()
+        gpus = get_gpu_bdfs() or detect_nvidia_gpus()
+        total_gpus = len(gpus)
+        # Guest RAM is a FIXED, profile-determined value: it shapes the guest
+        # ACPI/memory-map tables and therefore the TDX measurements, so it must
+        # be identical across every host running this profile. We never resize
+        # it to the host. We do refuse to launch if it cannot physically fit:
+        # TDX guest memory is pinned and unreclaimable, so an over-large guest
+        # OOM-kills the host instead of paging. Aborting is measurement-safe —
+        # it never changes the VM.
+        mem_gb = total_gpus * profile.ram_per_gpu_gb
+        host_gb = detect_host_mem_gb()
+        if host_gb is not None and safe_vm_mem_gb(mem_gb, host_gb) < mem_gb:
             print(
-                f"  GPU passthrough: {total_gpus}x {profile.name}"
-                f" ({profile.vram_gb}GB VRAM each)"
-                f" → {vcpus} vCPUs, {mem} RAM"
+                f"Error: profile '{profile.name}' requires {mem_gb}G guest RAM but this "
+                f"host has only {host_gb}G — launching would OOM-kill the VM. The profile "
+                f"memory must fit the host (guest RAM is fixed for measurement determinism).",
+                file=sys.stderr,
             )
+            return 1
+        mem = f"{mem_gb}G"
+        vcpus = str(profile.vcpus)
+        smp_topology = profile.smp_topology
+        print(
+            f"  GPU passthrough: {total_gpus}x {profile.name}"
+            f" ({profile.vram_gb}GB VRAM each)"
+            f" → {vcpus} vCPUs, {mem} RAM"
+        )
 
     profile_wants_numa = profile is not None and profile.enable_numa_topology
     numa_active = use_numa_topology(profile_wants_numa)
@@ -168,18 +186,19 @@ def launch_vm(args) -> int:
         print(f"Error: QEMU failed (exit {result.returncode}).", file=sys.stderr)
         return result.returncode
 
-    if (
-        not args.foreground
-        and profile is not None
-        and profile.enable_post_launch_tuning
-    ):
-        apply_post_launch_tuning(
-            pidfile=PIDFILE,
-            process_name=PROCESS_NAME,
-            vcpus_total=int(vcpus),
-            host_nodes=host_numa_nodes(),
-            pin_threads=numa_active,
-        )
+    if not args.foreground:
+        # vCPU thread pinning is gated on the profile enabling NUMA topology
+        # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
+        # CPU power tuning is separate and operator-driven; see
+        # `python -m chutes.host.tune` (tune-host.sh / restore-host.sh).
+        pin_threads = numa_active and profile is not None and profile.enable_post_launch_tuning
+        if pin_threads:
+            apply_post_launch_tuning(
+                pidfile=PIDFILE,
+                vcpus_total=int(vcpus),
+                host_nodes=host_numa_nodes(),
+                pin_threads=pin_threads,
+            )
 
     if not args.foreground:
         print(f"Log file: {LOGFILE}")

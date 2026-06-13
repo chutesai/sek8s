@@ -1,11 +1,15 @@
-"""Post-launch host tuning: CPU power and QEMU vCPU thread pinning."""
+"""Post-launch QEMU vCPU/IOthread pinning to host NUMA-local CPUs.
+
+Host-wide CPU power tuning (governor, C-states) is a separate, operator-driven
+concern handled by ``chutes.host.tune`` -- it is intentionally decoupled from
+the VM lifecycle. Thread pinning here is scoped to QEMU's own threads and
+reverts automatically when the process exits.
+"""
 
 from __future__ import annotations
 
-import glob
 import os
 import re
-import shutil
 import subprocess
 import time
 
@@ -41,49 +45,6 @@ def _run_root(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(["sudo", *cmd], **kwargs)
 
 
-def _write_root(path: str, value: str) -> None:
-    if os.geteuid() == 0:
-        with open(path, "w") as f:
-            f.write(value)
-        return
-    subprocess.run(
-        ["sudo", "tee", path],
-        input=value,
-        text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-
-
-def tune_host_cpu_power() -> None:
-    """Set performance governor, enable turbo, and disable C-states (TDX perf §3.0)."""
-    print("Host CPU performance tuning...")
-    if shutil.which("cpupower"):
-        result = _run_root(
-            ["cpupower", "frequency-set", "-g", "performance"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        if result.returncode != 0:
-            print("  Warning: cpupower governor set failed")
-    else:
-        print("  Hint: install cpupower (linux-tools-common) for CPU frequency pinning")
-
-    for gov_file in glob.glob("/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"):
-        _write_root(gov_file, "performance")
-
-    no_turbo = "/sys/devices/system/cpu/intel_pstate/no_turbo"
-    if os.path.isfile(no_turbo):
-        _write_root(no_turbo, "0")
-        print("  Turbo Boost: enabled")
-
-    for idle_disable in glob.glob("/sys/devices/system/cpu/cpu*/cpuidle/state*/disable"):
-        _write_root(idle_disable, "1")
-    print("  C-states: disabled at runtime")
-
-
 def _read_pidfile(pidfile: str) -> int | None:
     try:
         with open(pidfile) as f:
@@ -92,23 +53,16 @@ def _read_pidfile(pidfile: str) -> int | None:
         return None
 
 
-def find_qemu_pid(*, pidfile: str, process_name: str) -> int | None:
-    """Resolve QEMU PID from pidfile or process name."""
-    pid = _read_pidfile(pidfile)
-    if pid and os.path.exists(f"/proc/{pid}"):
-        return pid
+def find_qemu_pid(*, pidfile: str) -> int | None:
+    """Resolve QEMU PID from the pidfile written at launch.
 
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", f"qemu-system.*process={process_name}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return int(result.stdout.strip().splitlines()[0])
-    except (OSError, ValueError):
-        pass
+    Returns None if the pidfile is missing, unreadable, or the process is
+    no longer running. Intentionally does not fall back to pgrep to avoid
+    accidentally pinning threads of an unrelated process.
+    """
+    pid = _read_pidfile(pidfile)
+    if pid is not None and os.path.exists(f"/proc/{pid}"):
+        return pid
     return None
 
 
@@ -233,19 +187,22 @@ def pin_qemu_threads(
 def apply_post_launch_tuning(
     *,
     pidfile: str,
-    process_name: str,
     vcpus_total: int,
     host_nodes: list[int],
     pin_threads: bool,
 ) -> None:
-    """Apply host CPU tuning and optional QEMU thread pinning after daemonized launch."""
-    tune_host_cpu_power()
+    """Pin QEMU vCPU/IOthread threads to host NUMA-local CPUs after launch.
+
+    Scoped to QEMU's own threads and reverts automatically when the process
+    exits. Host-wide CPU power tuning is handled separately by
+    ``chutes.host.tune`` and is not tied to the VM lifecycle.
+    """
     if not pin_threads:
         return
 
     print("Pinning vCPU threads to host NUMA nodes...")
     time.sleep(3)
-    pid = find_qemu_pid(pidfile=pidfile, process_name=process_name)
+    pid = find_qemu_pid(pidfile=pidfile)
     if pid is None:
         print("  Warning: could not find QEMU PID for thread pinning")
         return

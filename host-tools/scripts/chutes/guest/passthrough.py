@@ -60,6 +60,35 @@ def _run_gpu_tools(*args: str):
         )
 
 
+def _check_fabric_manager(profile: GpuProfile):
+    """Raise if Fabric Manager is required by the profile but not running.
+
+    FM must be active before CC mode SBR so GPUs properly re-initialize their
+    NVLink connections to the NVSwitches after each reset. Without FM, some
+    GPUs may be left mid-initialization and appear as ERR! in the guest.
+    """
+    if not profile.requires_fabric_manager:
+        return
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', 'nvidia-fabricmanager'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() == 'active':
+            return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    raise RuntimeError(
+        f'nvidia-fabricmanager is not running (required for {profile.name}). '
+        'The NVSwitch fabric will not initialize properly without it, causing '
+        'GPU ERR! states in the guest.\n'
+        'Run host setup to install and start it:\n'
+        '  python3 host-tools/scripts/chutes/host/setup.py'
+    )
+
+
 def _scripts_dir() -> str:
     """Return the host-tools/scripts/ directory."""
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -150,6 +179,8 @@ def _prepare_devices(
             'previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in '
             'this state — reboot the host, then retry quick-launch.'
         )
+
+    _check_fabric_manager(profile)
 
     if has_stale_vfio_devices(all_devices):
         print('  Stale vfio-pci devices detected from previous session')

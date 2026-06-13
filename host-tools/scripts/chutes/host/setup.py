@@ -13,6 +13,14 @@ import sys
 
 from chutes.host.profiles import APTRepo, HostProfile, PPA
 
+# Fabric Manager version must match the NVIDIA driver version in the guest
+# image.  FM communicates with GPU firmware shared between host and guest;
+# version mismatches cause NVLink initialization failures and Xid errors.
+# Keep in sync with nvidia_version / nvidia_pkg_version in
+# ansible/guest/playbooks/group_vars/all.yml.
+FM_DRIVER_BRANCH = "595"
+FM_PKG_VERSION = "595.71.05-0ubuntu0.26.04.1"
+
 
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
@@ -310,7 +318,7 @@ def _setup_host_fabric_manager():
     Configuration applied:
     - /etc/modules-load.d/ib_umad.conf: autoload ib_umad at boot
     - fabricmanager.cfg: PARTITION_RAIL_POLICY=symmetric (required for CC mode)
-    - nvidia-fabricmanager.service: enabled
+    - nvidia-fabricmanager.service: enabled and started immediately
     """
     if not _detect_blackwell_hgx_gpus():
         print("  No B200/B300 GPUs detected — skipping host Fabric Manager setup")
@@ -337,38 +345,87 @@ def _setup_host_fabric_manager():
 
     # Install host-side FM stack.  The CUDA apt repo is expected to be
     # configured already (same repo used by nvidia-gpu-tools setup).
+    #
+    # Use the version-pinned package (nvidia-fabricmanager-NNN) to avoid
+    # conflicts with other FM versions and ensure FM matches the guest driver.
+    # The unversioned nvidia-fabricmanager metapackage pulls the latest version
+    # which can conflict with an already-installed pinned version and may not
+    # match the guest driver.
+    fm_pkg = f"nvidia-fabricmanager-{FM_DRIVER_BRANCH}"
+    fm_pkg_pinned = f"{fm_pkg}={FM_PKG_VERSION}"
+
+    # Abort if a mismatched FM version is installed — apt will fail with a
+    # Conflicts error otherwise.  We don't auto-remove to keep setup safe
+    # for clean hosts; the operator must remove the old package manually.
+    try:
+        dpkg_out = subprocess.run(
+            ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
+            capture_output=True, text=True, timeout=10,
+        )
+        stale_fm = [
+            line.split()[1]
+            for line in dpkg_out.stdout.splitlines()
+            if line.startswith("ii")
+            and line.split()[1].startswith("nvidia-fabricmanager")
+            and line.split()[1] != fm_pkg
+        ]
+        if stale_fm:
+            raise RuntimeError(
+                f"Mismatched Fabric Manager package(s) installed: {', '.join(stale_fm)}\n"
+                f"Required: {fm_pkg_pinned}\n"
+                f"Please remove the old package(s) first:\n"
+                f"  sudo apt remove -y {' '.join(stale_fm)}\n"
+                f"Then re-run setup."
+            )
+    except (subprocess.TimeoutExpired, OSError, IndexError):
+        pass
+
+    # Pin to the exact version — matches how the Ansible guest role pins
+    # nvidia packages via /etc/apt/preferences.d/nvidia-version-pin.
     _run(["apt", "install", "--yes", "--allow-downgrades",
-          "nvidia-fabricmanager",
+          fm_pkg_pinned,
           "nvlsm",
           "libibumad3",
           "infiniband-diags",
           ])
-    print("  ✓ Fabric Manager packages installed")
+    print(f"  ✓ Fabric Manager {FM_PKG_VERSION} installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
-    # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
+    # Blackwell MPT CC mode (greedy is the default, which disables CC).
+    # FM 595+ requires the string "symmetric" (older versions used numeric "1").
     fm_cfg = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
     if os.path.exists(fm_cfg):
         with open(fm_cfg) as f:
             original = f.read()
         updated = re.sub(
             r"^PARTITION_RAIL_POLICY\s*=.*$",
-            "PARTITION_RAIL_POLICY=1",
+            "PARTITION_RAIL_POLICY=symmetric",
             original,
             flags=re.MULTILINE,
         )
         if "PARTITION_RAIL_POLICY" not in original:
-            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=1\n"
+            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=symmetric\n"
         if updated != original:
             _write_system_file(fm_cfg, updated)
-            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to 1 (symmetric)")
+            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to symmetric")
         else:
             print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
     else:
         print(f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly")
 
+    # Check if already running before enable/start to avoid unnecessary restarts.
+    already_running = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
+        check=False,
+    ).returncode == 0
+
     _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
-    print("  ✓ nvidia-fabricmanager.service enabled")
+    if already_running:
+        print("  nvidia-fabricmanager.service already running — restarting to pick up config changes")
+        _run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
+    else:
+        _run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
+    print("  ✓ nvidia-fabricmanager.service enabled and running")
 
 
 def _blacklist_gpu_drivers():

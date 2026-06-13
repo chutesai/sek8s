@@ -9,8 +9,43 @@ from chutes.guest.qemu import (
     _parse_mem_mib,
     add_volumes,
     build_base_cmd,
+    safe_vm_mem_gb,
     use_numa_topology,
 )
+
+# ---------------------------------------------------------------------------
+# safe_vm_mem_gb — clamp guest RAM to host capacity (TDX mem is unreclaimable)
+# ---------------------------------------------------------------------------
+
+
+def test_safe_mem_clamps_when_request_exceeds_host():
+    # The dev-h200-tee OOM: 8x141=1128G requested on a ~1024G host.
+    # 12% reserve (>64G floor) -> int(1024*0.12)=122G reserved -> 902G safe.
+    assert safe_vm_mem_gb(1128, 1024) == 902
+
+
+def test_safe_mem_unchanged_when_request_fits():
+    # 4x141=564G on a 1024G host fits under the 902G ceiling.
+    assert safe_vm_mem_gb(564, 1024) == 564
+
+
+def test_safe_mem_floor_reserve_on_small_host():
+    # 256G host: 12% = 30G < 64G floor, so reserve the 64G floor -> 192G safe.
+    assert safe_vm_mem_gb(256, 256) == 192
+
+
+def test_safe_mem_passthrough_when_host_unknown():
+    assert safe_vm_mem_gb(1128, None) == 1128
+    assert safe_vm_mem_gb(1128, 0) == 1128
+
+
+def test_safe_mem_never_clamps_upward():
+    assert safe_vm_mem_gb(100, 2048) == 100
+
+
+def test_safe_mem_pathological_tiny_host_returns_request():
+    # reserve (64G floor) exceeds host -> can't help, leave request as-is.
+    assert safe_vm_mem_gb(50, 32) == 50
 
 
 @pytest.mark.parametrize(
@@ -64,6 +99,9 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
     assert "-numa node,nodeid=0,memdev=mem-node0" in flat
     assert "-numa dist,src=0,dst=1,val=21" in flat
     assert "memory-backend=mem0" not in flat
+    # prealloc must NOT be set under TDX: it pins a second full copy of guest
+    # RAM (guest_memfd serves the real private pages), ~2x usage -> host OOM.
+    assert "prealloc" not in flat
 
 
 def test_append_numa_memory_splits_remainder_on_last_node():
