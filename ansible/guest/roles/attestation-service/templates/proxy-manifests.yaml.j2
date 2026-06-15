@@ -174,6 +174,42 @@ spec:
           requests:
             memory: "32Mi"
             cpu: "10m"
+      # The attestation UDS is created by the host attestation-service (Type=simple),
+      # whose systemd "started" state is reached at process fork — before uvicorn binds
+      # the socket (~2s later). k3s orders After= that, so the proxy can start in the gap
+      # and fail its /health probe (503: unix socket unavailable). Gate on the real socket
+      # file here so the proxy only starts once the UDS is actually bound.
+      - name: wait-for-attestation-socket
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for attestation socket at /var/run/attestation/attestation.sock..."
+          until [ -S /var/run/attestation/attestation.sock ]; do
+            echo "Socket not found, waiting 5s..."
+            sleep 5
+          done
+          echo "Attestation socket found, proceeding with startup"
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+        volumeMounts:
+        - name: attestation-socket
+          mountPath: /var/run/attestation
+          readOnly: true
       containers:
       - name: attestation-proxy
         image: parachutes/sek8s:{{ sek8s_image_tag }}
