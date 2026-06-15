@@ -11,7 +11,7 @@
 #   $2 - installed_version (from helm list)
 #
 # Inherits KUBECONFIG and HELM_*_HOME from the calling environment
-# (set by k3s-cluster-init.service).
+# (set by k3s-post-start.service).
 set -euo pipefail
 
 expected_version="$1"

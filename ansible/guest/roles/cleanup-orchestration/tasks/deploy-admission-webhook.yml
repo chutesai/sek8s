@@ -58,7 +58,7 @@
     attributes: '+i'
 
 # Authorization webhook kubeconfig — read by kube-apiserver at startup via
-# --authorization-webhook-config-file (added by k3s-config-init.sh on first
+# --authorization-webhook-config-file (added by k3s-pre-start.sh on first
 # boot).  Deployed at cleanup alongside the admission webhooks so it doesn't
 # exist during the build pipeline.
 - name: Deploy authorization webhook kubeconfig

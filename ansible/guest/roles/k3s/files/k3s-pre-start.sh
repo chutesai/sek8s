@@ -1,6 +1,6 @@
 #!/bin/bash
-# /usr/local/bin/k3s-config-init.sh
-# k3s-config-init: Generate k3s configuration before service starts.
+# /usr/local/bin/k3s-pre-start.sh
+# k3s-pre-start: Generate k3s configuration before service starts.
 # Runs every boot so new image versions can inject updated API server args
 # (e.g. authorization webhook) without manual migration. The CA and existing
 # certs on the storage volume are untouched; k3s only regenerates leaf certs
@@ -8,7 +8,7 @@
 set -e
 
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-config-init.log
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-pre-start.log
 }
 
 # Clear stale k3s/CNI runtime state left by an ungraceful stop or crash, before

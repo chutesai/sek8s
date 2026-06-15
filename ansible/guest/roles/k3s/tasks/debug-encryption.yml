@@ -9,7 +9,7 @@
 # This task bakes a random key into /etc/chutes/k3s-encryption-config.yaml at
 # image build time.  A k3s drop-in (installed by cleanup-orchestration) then
 # copies it to /run/chutes/ as ExecStartPre on every boot, keeping the path
-# that k3s-config-init.sh checks identical for both environments.
+# that k3s-pre-start.sh checks identical for both environments.
 #
 # Security note: the key is static and embedded in the debug image — not
 # secret.  Debug builds are not production-hardened; the goal is code-path

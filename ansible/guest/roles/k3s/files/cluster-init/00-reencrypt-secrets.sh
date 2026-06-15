@@ -1,11 +1,11 @@
 #!/bin/bash
 # 00-reencrypt-secrets.sh — Re-encrypt any plaintext secrets in state.db.
 #
-# Runs first in the cluster-init sequence (00- prefix).
+# Runs first in the post-start sequence (00- prefix).
 #
 # Secrets encryption is MANDATORY as of the current VM version — there is no
 # supported unencrypted state. Any condition that would leave secrets unencrypted
-# is a HARD FAILURE (no marker), which in the cluster-init orchestrator escalates
+# is a HARD FAILURE (no marker), which in the post-start orchestrator escalates
 # to a VM power-off. The completion marker is self-validating: it is trusted only
 # when secrets are verified encrypted at rest, so a stale marker from an earlier
 # false-success run cannot permanently skip re-encryption.
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 MARKER="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}/reencrypt-secrets.done"
-LOG_FILE="/var/log/k3s-cluster-init.log"
+LOG_FILE="/var/log/k3s-post-start.log"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [00-reencrypt-secrets] $1" | tee -a "$LOG_FILE"
@@ -78,7 +78,7 @@ fi
 
 # Guard 2: secrets encryption is MANDATORY as of the current VM version — there is
 # no supported unencrypted state. So each of the following is a HARD FAILURE with
-# NO marker written (in cluster-init this escalates to a VM power-off, which is
+# NO marker written (in post-start this escalates to a VM power-off, which is
 # correct): we must never run, nor record success, with secrets unencrypted.
 
 # The apiserver must actually be configured to encrypt. The encryption config FILE
@@ -108,7 +108,7 @@ log "Replacing all secrets and configmaps so live kine rows have encrypted value
 #
 # A bulk `kubectl get --all-namespaces -o json | kubectl apply` has a race window:
 # k3s-managed objects (validator-auth, k3s-serving, node-password, etc.) are
-# updated by the addon controller concurrently during cluster init.  If the
+# updated by the addon controller concurrently during post-start.  If the
 # controller updates one between our bulk get and the apply, kubectl apply uses
 # the stale resourceVersion from the snapshot and the API server rejects it with
 # a 409 Conflict.

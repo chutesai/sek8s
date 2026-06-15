@@ -18,7 +18,7 @@ helm_chart_public_key_path: "~/.chutes/helm-pubkey.gpg"
 # Helm repo URL for chutes-miner charts (used at build time and inherited by boot script).
 chutes_helm_repo_url: "https://chutesai.github.io/chutes-miner"
 
-# Helm paths; must match k3s role defaults for cluster-init service.
+# Helm paths; must match k3s role defaults for post-start service.
 # On root volume (VM-version-specific); not on storage so no sync needed.
 helm_config_home: /var/lib/chutes/helm-config
 helm_cache_home: /var/lib/chutes/helm-cache

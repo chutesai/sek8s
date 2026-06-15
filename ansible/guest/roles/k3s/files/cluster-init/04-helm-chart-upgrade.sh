@@ -15,7 +15,7 @@ CHART_CONFIGS_DIR="/etc/chutes/chart-configs"
 CHART_OVERRIDES_DIR="/etc/chutes/chart-upgrade-overrides"
 KEYRING_FILE="/etc/chutes/helm-pubkey.gpg"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-# HELM_*_HOME are set by k3s-cluster-init.service; no fallbacks for determinism
+# HELM_*_HOME are set by k3s-post-start.service; no fallbacks for determinism
 
 export KUBECONFIG
 

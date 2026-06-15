@@ -137,8 +137,8 @@ All three volumes are validated at boot. Missing or invalid volumes trigger imme
 - Blocks namespace manipulation and webhook modifications
 
 ### K3s Initialization
-- `k3s-config-init` - Generates node configuration with TLS SANs
-- `k3s-cluster-init` - Runs post-boot setup scripts:
+- `k3s-pre-start` - Generates node configuration with TLS SANs
+- `k3s-post-start` - Runs post-boot setup scripts:
   - Node cleanup and labeling
   - Certificate generation for remote access
   - Miner credential injection
