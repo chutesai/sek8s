@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-06-13
+## [1.3.1] - 2026-06-15
 
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
@@ -28,6 +28,7 @@ Version source of truth: `ansible/guest/VERSION`
 - k3s boot ordering: added `After=attestation-service.service` so the attestation-proxy pod isn't scheduled before the host attestation socket and TLS certs exist
 - attestation-proxy now self-heals after an ungraceful reboot. A new every-boot cluster-init script (`05-attestation-proxy-recovery.sh`, ordered before the `99-purge-kubeconfig.sh` admin-kubeconfig purge) force-deletes any attestation-proxy DaemonSet pod left in an `Unknown`/`Failed` phase or with `reason=NodeLost` — states the DaemonSet controller will not replace on its own — so the proxy is recreated automatically instead of staying down until a manual `kubectl rollout restart`. Running/Pending pods are left untouched, and the script always exits 0 so it can never trigger the cluster-init power-off.
 - system-manager hf-xet cache directory (`/var/snap/cache/.xdg-cache`) is now created reliably at runtime via a dedicated systemd drop-in (`system-manager.service.d/cache-volume.conf`). The `ExecStartPre` uses the `+` prefix to run outside the unit sandbox so the chown to `system-manager:tdx` has `CAP_CHOWN`, and `ReadWritePaths=/var/snap/cache` is scoped to the drop-in since the cache volume only exists at runtime, not during image build.
+- attestation-proxy no longer fails its startup health probe after a reboot. The proxy's `/health` returns 503 until the attestation Unix socket (`/run/attestation-service/attestation.sock`) is bound, but that socket is created by the host `attestation-service` — a `Type=simple` unit, so systemd considers it "started" at process fork, ~2s before uvicorn actually binds the socket. k3s only orders `After=` that unit, so the proxy could start in the gap and churn on the failing probe (surfacing as `Unknown`/`Completed` pods after reboot). The proxy DaemonSet now has a `wait-for-attestation-socket` init container that blocks on the real socket file before the main container starts.
 
 ## [1.3.0] - 2026-05-18
 
