@@ -1,8 +1,14 @@
 #!/bin/bash
 # 00-reencrypt-secrets.sh — Re-encrypt any plaintext secrets in state.db.
 #
-# Runs first in the cluster-init sequence (00- prefix).  Uses a marker so it
-# only runs once — on the first boot where secrets encryption is active.
+# Runs first in the cluster-init sequence (00- prefix).
+#
+# Secrets encryption is MANDATORY as of the current VM version — there is no
+# supported unencrypted state. Any condition that would leave secrets unencrypted
+# is a HARD FAILURE (no marker), which in the cluster-init orchestrator escalates
+# to a VM power-off. The completion marker is self-validating: it is trusted only
+# when secrets are verified encrypted at rest, so a stale marker from an earlier
+# false-success run cannot permanently skip re-encryption.
 #
 # Why this is needed:
 #   On first boot of a fresh VM, setup-storage-bind-mounts deletes the
@@ -24,23 +30,74 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [00-reencrypt-secrets] $1" | tee -a "$LOG_FILE"
 }
 
-if [[ -f "$MARKER" ]]; then
-    log "Re-encryption marker exists — skipping"
-    exit 0
-fi
-
+export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
 ENCRYPTION_CONFIG="/run/chutes/k3s-encryption-config.yaml"
-if [[ ! -f "$ENCRYPTION_CONFIG" ]]; then
-    log "No encryption config at $ENCRYPTION_CONFIG — skipping (encryption not active)"
-    touch "$MARKER"
-    exit 0
+K3S_CONFIG="/etc/rancher/k3s/config.yaml"
+
+# Returns 0 if every live secret in kine is encrypted at rest, 1 if any is still
+# plaintext. Reads state.db directly (offline), so it works even before k3s is up.
+verify_secrets_encrypted() {
+    python3 - "$STATE_DB" <<'PYEOF'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+plain = [n for (n, v) in conn.execute(
+    "SELECT name, value FROM kine k WHERE name LIKE '/registry/secrets/%' "
+    "AND id=(SELECT MAX(id) FROM kine WHERE name=k.name)")
+    if b'k8s:enc:secretbox' not in bytes(v or b'')]
+conn.close()
+# Intentionally no detail logged — do not publicize which/whether secrets are
+# unencrypted. Caller logs a neutral message and acts on the exit code.
+sys.exit(1 if plain else 0)
+PYEOF
+}
+
+# Self-validating marker: "done" is only trusted if secrets are ACTUALLY
+# encrypted at rest. A prior bug (bad key / encryption silently inactive /
+# apiserver down) could set the marker without encrypting anything; a stale
+# marker must not permanently skip re-encryption. If the marker is present but
+# secrets are still plaintext, clear it and re-run.
+if [[ -f "$MARKER" ]]; then
+    if [[ ! -f "$STATE_DB" ]] || verify_secrets_encrypted; then
+        log "Re-encryption marker present and secrets encrypted at rest — skipping"
+        exit 0
+    fi
+    log "Detected inconsistent secrets-encryption state — repairing"
+    rm -f "$MARKER"
 fi
 
-# Check encryption is actually using secretbox (not identity-only)
+# Guard 1: the apiserver must be reachable. This is an ONLINE tool — the
+# re-encryption below is `kubectl get | kubectl apply`, i.e. the apiserver does
+# the sealing. If k3s is down, kubectl returns nothing, the rewrite loop is a
+# vacuous no-op, and we would still run the destructive purge and mark done with
+# plaintext secrets. Fail loudly and retry instead.
+if ! kubectl get --raw='/readyz' >/dev/null 2>&1; then
+    log "ERROR: apiserver not reachable — cannot re-encrypt online; will retry next boot"
+    exit 1
+fi
+
+# Guard 2: secrets encryption is MANDATORY as of the current VM version — there is
+# no supported unencrypted state. So each of the following is a HARD FAILURE with
+# NO marker written (in cluster-init this escalates to a VM power-off, which is
+# correct): we must never run, nor record success, with secrets unencrypted.
+
+# The apiserver must actually be configured to encrypt. The encryption config FILE
+# existing is NOT sufficient — a prior bug copied it without wiring
+# encryption-provider-config into the apiserver.
+if ! grep -q "encryption-provider-config" "$K3S_CONFIG" 2>/dev/null; then
+    log "FATAL: no encryption-provider-config in $K3S_CONFIG — secrets encryption is required; refusing to continue"
+    exit 1
+fi
+
+if [[ ! -f "$ENCRYPTION_CONFIG" ]]; then
+    log "FATAL: encryption config $ENCRYPTION_CONFIG is missing — secrets encryption is required; refusing to continue"
+    exit 1
+fi
+
+# A present-but-identity-only EncryptionConfiguration means nothing is sealed.
 if ! grep -q "secretbox" "$ENCRYPTION_CONFIG"; then
-    log "Encryption config present but identity-only — skipping"
-    touch "$MARKER"
-    exit 0
+    log "FATAL: $ENCRYPTION_CONFIG is identity-only (no secretbox) — secrets encryption is required; refusing to continue"
+    exit 1
 fi
 
 log "Secrets encryption is active — re-encrypting all existing plaintext secrets and configmaps..."
@@ -121,6 +178,16 @@ if ! reencrypt_resource_type "configmaps"; then
 fi
 log "All live records re-written through the active encryption provider"
 
+# Guard 3: verify secrets are actually encrypted AT REST before the destructive
+# purge or marking done. The rewrite only seals data if the apiserver is truly
+# encrypting; if it silently isn't, the live rows are still plaintext and we must
+# NOT purge (it only deletes dead rows) or mark (which permanently skips re-encrypt).
+if [[ -f "$STATE_DB" ]] && ! verify_secrets_encrypted; then
+    log "ERROR: secrets-encryption state check failed after repair — not finalizing; will retry next boot"
+    exit 1
+fi
+log "Verified: all secrets encrypted at rest"
+
 # Purge kine history and scrub old_value.
 #
 # kine is append-only: every write appends a new row, leaving the previous
@@ -135,7 +202,6 @@ log "All live records re-written through the active encryption provider"
 # is a security issue and must not be silently skipped.  The kubectl replace
 # retry is safe: already-encrypted values are decrypted and re-encrypted
 # idempotently, producing only additional dead rows for the next purge to clean.
-STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
 if [[ -f "$STATE_DB" ]]; then
     if python3 - "$STATE_DB" <<'PYEOF'
 import sqlite3, sys

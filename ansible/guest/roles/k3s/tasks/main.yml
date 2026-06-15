@@ -31,6 +31,10 @@
   ansible.builtin.include_tasks: setup_cluster_init.yml
   tags: k3s-cluster-init
 
+- name: Setup graceful shutdown (logind drop-in)
+  ansible.builtin.include_tasks: setup_graceful_shutdown.yml
+  tags: k3s-graceful-shutdown
+
 - name: Configure NVIDIA container runtime for K3s
   ansible.builtin.include_tasks: nvidia-runtime.yml
   tags: k3s-nvidia-runtime

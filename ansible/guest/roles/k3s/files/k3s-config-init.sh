@@ -11,6 +11,40 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-config-init.log
 }
 
+# Clear stale k3s/CNI runtime state left by an ungraceful stop or crash, before
+# k3s starts. This runs in the existing pre-k3s hook (k3s Requires= this unit,
+# which runs After= the storage bind mount), so no separate service is needed.
+#
+# After a force-kill (the shutdown `pkill containerd-shim` backstop) or a hard
+# crash, leftover CNI IPAM/interfaces and kubelet pod mounts persist on the
+# storage volume and block the kubelet from GC'ing stale pod sandboxes — leaving
+# pods wedged with multiple containerd sandboxes (a split-brain the kubelet never
+# converges). Clearing it here lets the kubelet start clean and reconcile.
+#
+# Best-effort: every step is guarded so it can never fail config generation
+# (k3s Requires= this unit), and it never touches the containerd image content
+# store (/var/lib/rancher/k3s/agent/containerd) — images are preserved.
+cleanup_stale_runtime_state() {
+    log "Clearing stale k3s/CNI runtime state before k3s start..."
+    if [ -r /proc/self/mounts ]; then
+        local mp
+        while read -r mp; do
+            [ -n "$mp" ] || continue
+            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
+        done < <(awk '$2 ~ "^/var/lib/kubelet/pods" || $2 ~ "^/var/lib/kubelet/plugins" || $2 ~ "^/run/k3s" || $2 ~ "^/run/netns/cni-" {print $2}' /proc/self/mounts | sort -r)
+    fi
+    rm -rf /var/lib/cni/networks /var/lib/cni/results 2>/dev/null || true
+    local link
+    for link in cni0 flannel.1 flannel-v6.1; do
+        ip link delete "$link" 2>/dev/null || true
+    done
+    rm -rf /run/flannel 2>/dev/null || true
+    log "Stale runtime state cleanup complete"
+    return 0
+}
+
+# Run the cleanup first so k3s/kubelet start from a clean slate on every boot.
+cleanup_stale_runtime_state || true
 
 # Public IP detection configuration
 INCLUDE_PUBLIC_IP="${INCLUDE_PUBLIC_IP:-true}"
@@ -128,6 +162,21 @@ EOF
 # are kube-apiserver flags; they must be passed via kube-apiserver-arg, not as
 # top-level k3s config keys (unknown top-level keys are silently ignored by k3s).
 ENCRYPTION_CONFIG="/run/chutes/k3s-encryption-config.yaml"
+
+# Debug builds bake a static encryption config at /etc/chutes; production writes
+# the real one to /run/chutes from initramfs before this script runs. Materialize
+# the debug copy here — BEFORE the check below — so debug enables encryption at the
+# same boot stage prod does. Otherwise this script (which runs before k3s.service)
+# never sees the file, because the debug copy was previously done by k3s.service's
+# ExecStartPre, which runs AFTER this — leaving encryption off for the whole boot.
+DEBUG_ENCRYPTION_SRC="/etc/chutes/k3s-encryption-config.yaml"
+if [ ! -f "$ENCRYPTION_CONFIG" ] && [ -f "$DEBUG_ENCRYPTION_SRC" ]; then
+    mkdir -m 700 -p /run/chutes
+    cp "$DEBUG_ENCRYPTION_SRC" "$ENCRYPTION_CONFIG"
+    chmod 600 "$ENCRYPTION_CONFIG"
+    log "Materialized debug secrets-encryption config from $DEBUG_ENCRYPTION_SRC"
+fi
+
 KUBE_API_ARGS=()
 
 if [ -f "$ENCRYPTION_CONFIG" ]; then
@@ -156,6 +205,26 @@ if [ ${#KUBE_API_ARGS[@]} -gt 0 ]; then
         echo "  - \"${arg}\"" >> /etc/rancher/k3s/config.yaml
     done
 fi
+
+# Kubelet graceful node shutdown. shutdownGracePeriod is a KubeletConfiguration
+# field with no equivalent CLI flag, so it's dropped into a config-dir that k3s
+# merges over its generated kubelet config. Written here (at runtime) because
+# /etc/rancher/k3s is a storage bind mount that starts empty — an image-baked
+# file under it would be shadowed. Pairs with the logind InhibitDelayMaxSec
+# drop-in, which must be >= shutdownGracePeriod or pods get killed mid-drain.
+KUBELET_CONF_DIR="/etc/rancher/k3s/kubelet.conf.d"
+mkdir -p "$KUBELET_CONF_DIR"
+cat > "$KUBELET_CONF_DIR/10-graceful-shutdown.conf" << 'KUBELET_EOF'
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+shutdownGracePeriod: 30s
+shutdownGracePeriodCriticalPods: 10s
+KUBELET_EOF
+cat >> /etc/rancher/k3s/config.yaml << EOF
+kubelet-arg:
+  - "config-dir=${KUBELET_CONF_DIR}"
+EOF
+log "Kubelet graceful shutdown configured (config-dir=$KUBELET_CONF_DIR, grace 30s)"
 
 # Log the configuration for debugging
 log "k3s configuration created with the following settings:"
