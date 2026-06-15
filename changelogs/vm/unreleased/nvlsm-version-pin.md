@@ -1,0 +1,2 @@
+### Fixed
+- Pinned `nvlsm` to `2025.10.12-1` in the InfiniBand setup (`gpu` role) via the new `nvlsm_version` var. NVIDIA's CUDA repo can publish a `Packages` index entry for a newer `nvlsm` before uploading the matching `.deb`, so the unpinned install resolved a candidate version that 404'd, failing the guest image build. Bump `nvlsm_version` to the newest version whose `.deb` resolves when updating.

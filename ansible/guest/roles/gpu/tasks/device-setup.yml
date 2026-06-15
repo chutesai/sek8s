@@ -361,7 +361,9 @@
             name:
               - infiniband-diags
               - rdma-core
-              - nvlsm
+              # Pinned via nvlsm_version: NVIDIA's "latest" can 404 when the
+              # Packages index lists a version before its .deb is uploaded.
+              - "nvlsm={{ nvlsm_version }}"
             state: present
 
         # NVSHMEM: GPU-to-GPU communication over PCIe/NVLink/InfiniBand.
