@@ -1,2 +1,0 @@
-### Fixed
-- The attestation-proxy `wait-for-credentials` init container no longer wedges indefinitely after a pod sandbox recreate. Its `kubectl get secret` call now uses `--request-timeout=10s`, so when the API ClusterIP route is briefly unreachable (as can happen right after a `SandboxChanged` event) the call fails fast and the loop retries, instead of hanging on the first call forever and leaving the pod stuck in `Init:0/2`.
