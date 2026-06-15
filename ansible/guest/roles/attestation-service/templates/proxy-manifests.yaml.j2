@@ -154,8 +154,13 @@ spec:
         - -c
         - |
           echo "Waiting for miner-credentials secret..."
-          until kubectl get secret miner-credentials -n attestation-system >/dev/null 2>&1; do
-            echo "Secret not found, waiting 5s..."
+          # --request-timeout bounds each call: after a sandbox recreate the
+          # API ClusterIP route can be briefly unreachable, and without a
+          # timeout kubectl hangs on the first call forever instead of
+          # retrying. Bound it so the loop keeps polling until connectivity
+          # (and the secret) are back.
+          until kubectl get secret miner-credentials -n attestation-system --request-timeout=10s >/dev/null 2>&1; do
+            echo "Secret not reachable yet, retrying in 5s..."
             sleep 5
           done
           echo "Secret found, proceeding with startup"
