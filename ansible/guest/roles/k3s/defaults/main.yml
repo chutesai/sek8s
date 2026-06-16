@@ -14,6 +14,12 @@ k3s_extra_server_args: ""
 k3s_server_config_yaml: |-
   write-kubeconfig-mode: "0600"
   encryption-provider-config: /run/chutes/k3s-encryption-config.yaml
+  # Bound terminal-phase pods (Completed/Error and graceful-shutdown tombstones);
+  # default is 12500 so on a single node they never get reaped. NOTE: k3s-pre-start.sh
+  # regenerates config.yaml at boot and is the authoritative runtime source — keep this
+  # in sync with the kube-controller-manager-arg written there.
+  kube-controller-manager-arg:
+    - "terminated-pod-gc-threshold=50"
   disable:
     - traefik
     - servicelb

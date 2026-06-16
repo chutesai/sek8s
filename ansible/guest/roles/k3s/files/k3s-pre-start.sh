@@ -11,40 +11,16 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/k3s-pre-start.log
 }
 
-# Clear stale k3s/CNI runtime state left by an ungraceful stop or crash, before
-# k3s starts. This runs in the existing pre-k3s hook (k3s Requires= this unit,
-# which runs After= the storage bind mount), so no separate service is needed.
-#
-# After a force-kill (the shutdown `pkill containerd-shim` backstop) or a hard
-# crash, leftover CNI IPAM/interfaces and kubelet pod mounts persist on the
-# storage volume and block the kubelet from GC'ing stale pod sandboxes — leaving
-# pods wedged with multiple containerd sandboxes (a split-brain the kubelet never
-# converges). Clearing it here lets the kubelet start clean and reconcile.
-#
-# Best-effort: every step is guarded so it can never fail config generation
-# (k3s Requires= this unit), and it never touches the containerd image content
-# store (/var/lib/rancher/k3s/agent/containerd) — images are preserved.
-cleanup_stale_runtime_state() {
-    log "Clearing stale k3s/CNI runtime state before k3s start..."
-    if [ -r /proc/self/mounts ]; then
-        local mp
-        while read -r mp; do
-            [ -n "$mp" ] || continue
-            umount "$mp" 2>/dev/null || umount -l "$mp" 2>/dev/null || true
-        done < <(awk '$2 ~ "^/var/lib/kubelet/pods" || $2 ~ "^/var/lib/kubelet/plugins" || $2 ~ "^/run/k3s" || $2 ~ "^/run/netns/cni-" {print $2}' /proc/self/mounts | sort -r)
-    fi
-    rm -rf /var/lib/cni/networks /var/lib/cni/results 2>/dev/null || true
-    local link
-    for link in cni0 flannel.1 flannel-v6.1; do
-        ip link delete "$link" 2>/dev/null || true
-    done
-    rm -rf /run/flannel 2>/dev/null || true
-    log "Stale runtime state cleanup complete"
-    return 0
-}
-
-# Run the cleanup first so k3s/kubelet start from a clean slate on every boot.
-cleanup_stale_runtime_state || true
+# NOTE: A boot-time CNI/runtime wipe used to live here. It was removed because it
+# did net harm: wiping CNI IPAM (/var/lib/cni/networks) out from under containerd's
+# sandbox metadata — which persists on the storage volume across reboots — left the
+# old sandboxes un-teardownable (CNI DEL has no IPAM record), so they piled up as
+# orphaned NotReady sandboxes every boot and forced a double sandbox-create per pod.
+# Kubelet graceful node shutdown (shutdownGracePeriod, configured below) is the
+# correct fix: pods drain cleanly at shutdown so nothing is orphaned to begin with,
+# and on boot kubelet reconciles/ GCs leftover sandboxes itself. Do not reintroduce
+# a partial wipe; if a full reset is ever needed it must clear containerd sandbox
+# state and CNI state together, never one without the other.
 
 # Public IP detection configuration
 INCLUDE_PUBLIC_IP="${INCLUDE_PUBLIC_IP:-true}"
@@ -156,6 +132,8 @@ disable:
   - servicelb
 cluster-cidr: 10.42.0.0/16
 service-cidr: 10.43.0.0/16
+kube-controller-manager-arg:
+  - "terminated-pod-gc-threshold=50"
 EOF
 
 # Build kube-apiserver-arg list.  Both encryption and the authorization webhook

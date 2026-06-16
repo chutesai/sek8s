@@ -1,0 +1,5 @@
+### Removed
+- Removed the boot-time CNI/runtime wipe (`cleanup_stale_runtime_state`) from `k3s-pre-start`. It wiped CNI IPAM (`/var/lib/cni/networks`) out from under containerd's sandbox metadata, which persists on the storage volume across reboots — leaving the old sandboxes un-teardownable (CNI DEL has no IPAM record). The result was an orphaned `NotReady` sandbox pile that grew every boot and a double sandbox-create per pod on each start. Kubelet graceful node shutdown (already configured) is the correct fix: pods drain cleanly so nothing is orphaned, and kubelet reconciles/GCs leftover sandboxes on boot.
+
+### Changed
+- k3s now sets `kube-controller-manager-arg: terminated-pod-gc-threshold=50` (default is 12500, so terminal-phase pods effectively never get reaped on a single-node miner). This bounds the `Completed`/`Error` pods and graceful-shutdown tombstones that accumulate across reboots. Set in both `k3s-pre-start.sh` (the authoritative config regenerated each boot) and the role default.
