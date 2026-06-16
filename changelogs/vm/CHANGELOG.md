@@ -19,6 +19,7 @@ Version source of truth: `ansible/guest/VERSION`
 - OPA admission policy: added `HF_XET_FIXED_DOWNLOAD_CONCURRENCY` and `TOKIO_WORKER_THREADS` to allowed pod env vars
 - Admission controller source repository moved from `rayonlabs/sek8s` to `chutesai/sek8s` (`admission_controller_repo` default).
 - LUKS build dependencies (`cryptsetup`, `dhcpcd-base`, `openssl`, `xfsprogs`, `e2fsprogs`) are now installed via `system_packages` during base image setup instead of a late `chroot apt-get install` in `luks_encrypt.yml`, removing a network-dependent install step from the encryption stage. Packages still land in the final image via the rootfs backup/restore.
+- k3s now sets `kube-controller-manager-arg: terminated-pod-gc-threshold=50` (default is 12500, so terminal-phase pods effectively never get reaped on a single-node miner). This bounds the `Completed`/`Error` pods and graceful-shutdown tombstones that accumulate across reboots. Set in both `k3s-pre-start.sh` (the authoritative config regenerated each boot) and the role default.
 
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots
@@ -42,6 +43,7 @@ Version source of truth: `ansible/guest/VERSION`
 
 ### Removed
 - Removed the attestation-proxy `wait-for-credentials` init container. It re-checked the miner-credentials secret with an in-pod `kubectl get secret`, which requires pod networking (flannel/kube-proxy) to be up — so when the API ClusterIP route wasn't ready yet (early on a fresh boot, or after a sandbox recreate) the call hung and the pod stuck in `Init:0/2`. The secret is already required by the main container via `secretKeyRef` (`MINER_SS58`, `optional: false`), which the kubelet injects over its own host-network API client with no dependency on pod networking — so the gate is preserved and the proxy now reaches Ready independent of pod-network readiness. (Supersedes the earlier `--request-timeout` mitigation, which only turned the hang into an endless retry without removing the pod-network dependency.)
+- Removed the boot-time CNI/runtime wipe (`cleanup_stale_runtime_state`) from `k3s-pre-start`. It wiped CNI IPAM (`/var/lib/cni/networks`) out from under containerd's sandbox metadata, which persists on the storage volume across reboots — leaving the old sandboxes un-teardownable (CNI DEL has no IPAM record). The result was an orphaned `NotReady` sandbox pile that grew every boot and a double sandbox-create per pod on each start. Kubelet graceful node shutdown (already configured) is the correct fix: pods drain cleanly so nothing is orphaned, and kubelet reconciles/GCs leftover sandboxes on boot.
 
 ## [1.3.0] - 2026-05-18
 
