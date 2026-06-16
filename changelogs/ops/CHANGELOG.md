@@ -14,6 +14,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - Standalone host CPU tuning tool (`python -m chutes.host.tune apply|restore`, exposed as the `chutes-tune-host` / `chutes-restore-host` commands via the existing `setup-tdx-host` tool-symlink step), decoupled from VM launch — applied and reverted deliberately by the operator rather than automatically on every start/stop. Implements the NVIDIA Confidential Computing Deployment Guide (DU-12302-001) host-OS recommendation: CPU frequency governor → `performance` and C-states **C1E/C6** disabled, leaving the shallow `POLL`/`C1` states enabled for thermal headroom (it no longer disables every C-state, nor forces turbo/EPP). Pre-tuning values are snapshotted to `/var/lib/chutes/tdx-host-tuning-restore.sh`; re-running `apply` reapplies settings without overwriting the saved original state.
 - Automatic GPU profile detection from host PCI/sysfs topology, with multi-GPU host support — new `detect_host_cpus()`, `detect_host_sockets()`, and `detect_numa_node_count()` helpers read CPU count, socket count, and NUMA layout from sysfs to select and verify the correct `GpuProfile`.
 - `discover-profile.sh`: hardware discovery script that probes GPU topology, PCI BAR sizes, NUMA layout, CPU/memory configuration, and firmware paths — outputs a terminal report and JSON file with all values needed to verify or author a `GpuProfile` entry.
+- `benchmark-hf-downloads.py`: new TDX-focused benchmark comparing XET concurrency configurations.
 
 ### Changed
 - All GPU profiles now use `OVMF.inteltdx.fd` firmware (edk2-stable202605 Config-B, no Secure Boot). Addresses CVE-2025-2296 (legacy Linux loader disabled by default). Old `TDVF.fd` removed.
@@ -21,6 +22,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - B300 disables InfiniBand passthrough: all ConnectX-7 IB-class PFs are NVSwitch bridge devices managed by host-side Fabric Manager; guest networking uses virtio-net.
 - NVSwitch-based B200/B300 profiles now declare `requires_fabric_manager`; host setup starts (or restarts) `nvidia-fabricmanager.service` immediately rather than only enabling it, so the NVSwitch fabric is active before launch.
 - InfiniBand passthrough is now optional: a host whose profile supports IB passthrough but exposes no IB devices logs a note and skips passthrough instead of aborting the launch.
+- `benchmark-network.py`: removed `hf_transfer` scenario (deprecated in huggingface_hub 1.x).
 
 ### Fixed
 - Host OOM-kill of the VM under load: the per-NUMA-node guest memory backends no longer set `prealloc=on`. Under TDX the guest's RAM is private memory served lazily from `guest_memfd`, so preallocating the memory-backend pinned a second full copy of pages the guest never uses as shared (~2× guest RAM), which OOM-killed QEMU as a pod warmed up. NUMA locality (`host-nodes=…,policy=bind`) is preserved. Affected all NUMA profiles (H200/B200/B300).
@@ -28,7 +30,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - Fabric Manager `PARTITION_RAIL_POLICY` is now set to the string `symmetric` required by FM 595+ instead of the numeric `1` that newer FM rejects (CC mode would otherwise stay silently disabled on Blackwell).
 - Pinned the Fabric Manager package to `595.71.05-0ubuntu0.26.04.1` (full distro-qualified version) to match the guest driver pin and stop apt from installing a mismatched build.
 
-## [2026.05.2] - 2026-06-11
+## [2026.05.2] - 2026-05-29
 
 ### Added
 - B200 GPU support: host-side Fabric Manager setup in `chutes.host.setup` — detects B200 GPUs at runtime and installs `nvidia-fabricmanager`, `nvlsm`, `libibumad3`, `infiniband-diags`, configures `ib_umad` autoload and `PARTITION_RAIL_POLICY=1` in `fabricmanager.cfg`, and enables `nvidia-fabricmanager.service`.
@@ -37,12 +39,10 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - `(25.10, B200, 8)` added to validated topology matrix in `support_matrix.py`.
 - `ansible/host/roles/ntp` — new Ansible role that installs chrony, masks `systemd-timesyncd`, and configures `makestep 1 -1` so large clock offsets (e.g. BMC RTC set ahead) are stepped immediately on first boot rather than slowly slewed. Wired as the first role in `setup.yml`.
 - `playbooks/launch.yml` now verifies host clock offset is within 5 seconds via `chronyc tracking` before launching the VM. A skewed host clock causes VMs to boot with the wrong time, which breaks boot-time mTLS cert validation at the attestation endpoint.
-- `benchmark-hf-downloads.py`: new TDX-focused benchmark comparing XET concurrency configurations
 
 ### Changed
 - `B200Profile` corrected: `host_cpus=192`, `host_sockets=2`, `bar_size_mb=262144` (256 GiB BAR confirmed from hardware).
 - `detect_infiniband_pfs()` now accepts an optional `exclude_bdfs` parameter.
-- `benchmark-network.py`: removed `hf_transfer` scenario (deprecated in huggingface_hub 1.x)
 
 ### Fixed
 - `ansible/host/roles/pccs_configure`: fixed automated SGX platform registration via `PCKIDRetrievalTool`.
