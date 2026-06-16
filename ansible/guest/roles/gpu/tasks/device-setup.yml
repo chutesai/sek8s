@@ -474,6 +474,24 @@
   tags:
     - gpu-device-setup
   block:
+    # Defensive: guards against residual state on a REUSED build node, not a bug in
+    # this pipeline. On a clean rootfs nothing creates an empty daemon.json — docker.io
+    # ships none, and nvidia-ctk happily starts from an absent file. But nvidia-ctk
+    # reads daemon.json before editing and aborts with "unable to load config for
+    # runtime docker: EOF" when the file is 0 bytes / invalid JSON. That happens when a
+    # prior run on the same long-lived build VM was interrupted mid-write (a shell
+    # redirect truncates the target to 0 bytes before the writer runs). Normalize to
+    # valid JSON here so the step is idempotent across rebuilds. TODO: revisit — the
+    # real ordering smell is that admission-controller (which guarantees a valid
+    # daemon.json) runs after the gpu role that first depends on it.
+    - name: Ensure /etc/docker/daemon.json is valid JSON before nvidia-ctk
+      ansible.builtin.shell: |
+        mkdir -p /etc/docker
+        if [ ! -s /etc/docker/daemon.json ] || ! python3 -c "import json,sys; json.load(open('/etc/docker/daemon.json'))" 2>/dev/null; then
+          printf '{}\n' > /etc/docker/daemon.json
+        fi
+      changed_when: false
+
     - name: Configure NVIDIA Container Toolkit for Docker
       ansible.builtin.shell: |
         nvidia-ctk runtime configure --runtime=docker --set-as-default
