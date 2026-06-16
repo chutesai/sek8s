@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-06-15
+## [1.3.1] - 2026-06-16
 
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
@@ -38,6 +38,10 @@ Version source of truth: `ansible/guest/VERSION`
   - **Boot-time cleanup** — `k3s-config-init.sh` (the existing pre-k3s hook) now clears leftover CNI IPAM state, bridge/vxlan interfaces, and kubelet pod mounts before k3s starts, so the kubelet's sandbox GC can reconcile cleanly after a crash or force-kill. It preserves the containerd image content store (no re-pull) and is best-effort (guarded so it can never fail config generation). The shutdown `pkill containerd-shim` backstop is retained as a no-op-in-the-common-case safety net.
 - Pinned `nvlsm` to `2025.10.12-1` in the InfiniBand setup (`gpu` role) via the new `nvlsm_version` var. NVIDIA's CUDA repo can publish a `Packages` index entry for a newer `nvlsm` before uploading the matching `.deb`, so the unpinned install resolved a candidate version that 404'd, failing the guest image build. Bump `nvlsm_version` to the newest version whose `.deb` resolves when updating.
 - The attestation-proxy `wait-for-credentials` init container no longer wedges indefinitely after a pod sandbox recreate. Its `kubectl get secret` call now uses `--request-timeout=10s`, so when the API ClusterIP route is briefly unreachable (as can happen right after a `SandboxChanged` event) the call fails fast and the loop retries, instead of hanging on the first call forever and leaving the pod stuck in `Init:0/2`.
+- Guest image build no longer fails at "Configure NVIDIA Container Toolkit for Docker" on reused build nodes. `nvidia-ctk runtime configure --runtime=docker` reads `/etc/docker/daemon.json` first and aborts with `unable to load config for runtime docker: EOF` when that file is 0 bytes / invalid JSON. This is residual state, not a bug in the pipeline: on a clean rootfs nothing creates an empty `daemon.json` (the `docker.io` package ships none and `nvidia-ctk` starts fine from an absent file), but a build interrupted mid-write on a long-lived/reused build VM can leave a truncated file behind. The gpu role now normalizes `/etc/docker/daemon.json` to valid JSON (`{}`) before invoking `nvidia-ctk`, making the step idempotent across rebuilds.
+
+### Removed
+- Removed the attestation-proxy `wait-for-credentials` init container. It re-checked the miner-credentials secret with an in-pod `kubectl get secret`, which requires pod networking (flannel/kube-proxy) to be up — so when the API ClusterIP route wasn't ready yet (early on a fresh boot, or after a sandbox recreate) the call hung and the pod stuck in `Init:0/2`. The secret is already required by the main container via `secretKeyRef` (`MINER_SS58`, `optional: false`), which the kubelet injects over its own host-network API client with no dependency on pod networking — so the gate is preserved and the proxy now reaches Ready independent of pod-network readiness. (Supersedes the earlier `--request-timeout` mitigation, which only turned the hang into an endless retry without removing the pod-network dependency.)
 
 ## [1.3.0] - 2026-05-18
 
