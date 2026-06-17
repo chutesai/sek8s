@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-06-16
+## [1.3.1] - 2026-06-17
 
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
@@ -22,6 +22,8 @@ Version source of truth: `ansible/guest/VERSION`
 - LUKS build dependencies (`cryptsetup`, `dhcpcd-base`, `openssl`, `xfsprogs`, `e2fsprogs`) are now installed via `system_packages` during base image setup instead of a late `chroot apt-get install` in `luks_encrypt.yml`, removing a network-dependent install step from the encryption stage. Packages still land in the final image via the rootfs backup/restore.
 - Renamed the k3s boot helpers for clarity: `k3s-config-init.{sh,service}` → `k3s-pre-start.{sh,service}` and `k3s-cluster-init.sh` / `k3s-cluster-init.service.j2` → `k3s-post-start.{sh,service}` (Ansible tasks `setup_config_init.yml` / `setup_cluster_init.yml` → `setup_pre_start.yml` / `setup_post_start.yml`; RTMR3 measurement paths updated to match). Pre-start regenerates the k3s config before the daemon starts; post-start runs the `cluster-init/` scripts afterward.
 - k3s now sets `kube-controller-manager-arg: terminated-pod-gc-threshold=50` (default is 12500, so terminal-phase pods effectively never get reaped on a single-node miner). This bounds the `Completed`/`Error` pods and graceful-shutdown tombstones that accumulate across reboots. Set in both `k3s-pre-start.sh` (the authoritative config regenerated each boot) and the role default.
+- Bumped the guest NVIDIA driver from `595.71.05` to `610.43.02` (`nvidia_version` / `nvidia_pkg_version` in `group_vars/all.yml`). 610 uses the same unversioned CUDA-repo package naming and DKMS module build as 595, so the gpu role install/pin tasks needed no structural changes — only the pinned version string. All driver/lib/fabricmanager/nscq/imex packages resolve to the same `610.43.02-1ubuntu1` in the CUDA repo (verified with `local/analyze-nvidia-driver-packages-610.sh`). Motivated by PCIe link-instability investigation on HGX H200 in PPCIe/CC mode; 595.71 was a re-released/troubled branch, and 610.43.02 is the current datacenter driver. CUDA toolkit pin unchanged (`13-2`).
+- Pinned the guest HWE kernel to an exact version (`guest_hwe_kernel_version`, currently `6.17.0-35.35~24.04.1`) instead of riding the rolling `linux-image-generic-hwe-24.04` meta. The build installs the meta at the pinned version and drops an apt preferences pin (priority 1001), so the guest kernel — and therefore the RTMR/measurement baseline — is reproducible across rebuilds rather than silently advancing when Canonical ships a new HWE kernel. This is **not** a kernel change versus the previously-running image (it was already on `6.17.0-35`, the current latest HWE for noble; `6.18` is not yet in the archive). Constraints: the kernel must stay `>= 6.16` for the RTMR3 `tsm-mr` sysfs interface; bumping is now a deliberate one-line `guest_hwe_kernel_version` change and opts out of automatic HWE kernel security updates.
 
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots
