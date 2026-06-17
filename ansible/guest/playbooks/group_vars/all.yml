@@ -51,12 +51,18 @@ guest_hwe_kernel_version: "6.17.0-35.35~24.04.1"
 # CUDA version - leave as-is unless skipping CUDA entirely (skip_cuda: true) for providers with pre-installed drivers
 cuda_version: "13-2"
 # NVIDIA driver branch
-nvidia_version: "610"
-# Package version pin — 610 uses unversioned package names from the CUDA repo only
-# (same scheme as 595: nvidia-dkms-open, libnvidia-compute, nvidia-firmware, etc.);
-# all driver/lib packages are pinned to this single version string.
-nvidia_pkg_version: "610.43.02-1ubuntu1"
-# 610 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
+nvidia_version: "595"
+# Package version pin — 595 uses unversioned package names from the CUDA repo only
+# (nvidia-dkms-open, libnvidia-compute, nvidia-firmware, etc.); all driver/lib
+# packages are pinned to this single version string.
+# Reverted from 610.43.02: 610 fails NVLink fabric registration under TNVL on HGX
+# H200 PPCIe (only 1/8 GPUs reach Fabric=Completed -> CUDA 802). Back to 595.71.05,
+# the driver the last *stable* release also shipped. The crash-after-hours on the
+# most recent 595.71.05 build is NOT a driver-version regression (the prior release
+# ran the same 595.71.05 fine) — it is being chased as an upstream package drift:
+# same version string, changed bytes / drifted unpinned dep from the CUDA repo.
+nvidia_pkg_version: "595.71.05-1ubuntu1"
+# 595 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
 # linux-headers and dkms are installed automatically by the gpu role.
 # NVLSM (InfiniBand subnet manager) version pin from the CUDA repo. Pinned because
 # NVIDIA's "latest" entry can transiently 404 — its Packages index lists a version
