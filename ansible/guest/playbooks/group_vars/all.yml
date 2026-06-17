@@ -41,14 +41,22 @@ k3s_version: v1.35.4+k3s1
 # Ubuntu major/minor version.
 ubuntu_major: "24"
 ubuntu_minor: "04"
+# Guest HWE kernel pin (Ubuntu <= 24 only). The build installs the rolling meta
+# linux-image-generic-hwe-<major>.<minor>, which tracks the latest HWE kernel and
+# would silently advance on every rebuild — changing the guest RTMR/measurement
+# baseline. Pinning it to an exact version makes the guest kernel reproducible and
+# bumps deliberate. Trade-off: opts out of automatic HWE kernel security updates.
+# MUST stay >= 6.16 (RTMR3 depends on the tsm-mr sysfs interface merged in 6.16).
+guest_hwe_kernel_version: "6.17.0-35.35~24.04.1"
 # CUDA version - leave as-is unless skipping CUDA entirely (skip_cuda: true) for providers with pre-installed drivers
 cuda_version: "13-2"
 # NVIDIA driver branch
-nvidia_version: "595"
-# Package version pin — 595 uses unversioned package names from the CUDA repo only;
+nvidia_version: "610"
+# Package version pin — 610 uses unversioned package names from the CUDA repo only
+# (same scheme as 595: nvidia-dkms-open, libnvidia-compute, nvidia-firmware, etc.);
 # all driver/lib packages are pinned to this single version string.
-nvidia_pkg_version: "595.71.05-1ubuntu1"
-# 595 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
+nvidia_pkg_version: "610.43.02-1ubuntu1"
+# 610 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
 # linux-headers and dkms are installed automatically by the gpu role.
 # NVLSM (InfiniBand subnet manager) version pin from the CUDA repo. Pinned because
 # NVIDIA's "latest" entry can transiently 404 — its Packages index lists a version

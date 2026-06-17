@@ -148,9 +148,9 @@
             DEBIAN_FRONTEND: noninteractive
             NEEDRESTART_SUSPEND: "y"
 
-        # 595 uses unversioned package names from the CUDA repo. All libs and driver
+        # 610 uses unversioned package names from the CUDA repo. All libs and driver
         # packages are pinned to nvidia_pkg_version. No prebuilt kernel modules exist
-        # for 595; DKMS compiles them at install time.
+        # for 610; DKMS compiles them at install time.
         - name: Install NVIDIA {{ nvidia_version }} libraries (unversioned, CUDA repo)
           ansible.builtin.apt:
             name:
