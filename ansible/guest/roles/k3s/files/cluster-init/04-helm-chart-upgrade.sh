@@ -1,35 +1,53 @@
 #!/bin/bash
-# 04-helm-chart-upgrade.sh: Generic multi-chart Helm upgrade dispatcher.
+# 04-helm-chart-upgrade.sh: Boot-time Helm chart reconciler.
 #
-# Loops through /etc/chutes/chart-versions/* to detect version drift against
-# installed Helm releases and apply upgrades. Charts with custom upgrade logic
-# (e.g. CRD migration) provide an override script in /etc/chutes/chart-upgrade-overrides/.
+# Each /etc/chutes/charts/<name>.conf is the single source of truth for one chart
+# (version + values + flags), git-tracked and measured into RTMR3 so it cannot be
+# tampered with. On every boot a chart is reconciled via `helm upgrade` when the
+# conf's content hash differs from the last-applied marker (or the release is in a
+# `failed` state). Unchanged confs are skipped, so there is no helm-revision churn.
+# Because the trigger is the conf hash, a VERSION bump and a values change are
+# handled identically — no separate "overrides" or "updates" mechanism needed.
 #
-# Runs every boot (no .completed marker). Charts with matching versions exit early.
-# Helm repos and HELM_*_HOME are pre-configured at build time by Ansible.
-set -euo pipefail
+# Markers live on the persisted storage volume so "applied" survives reboots and
+# image updates (/var/lib/rancher/k3s is bind-mounted from storage):
+#   /var/lib/rancher/k3s/init-markers/charts/<name>
+#
+# Conf fields (shell-sourced):
+#   RELEASE, NAMESPACE, CHART   (required)
+#   VERSION                     (REQUIRED — exact chart version to pin. Never resolved to
+#                                "latest" or the installed version: the measured spec must
+#                                fully determine what runs, so a third party auditing the
+#                                VM can reproduce it. A values-only change still pins the
+#                                same VERSION explicitly.)
+#   HELM_SET                    (space-separated key=value -> --set; for small overrides.
+#                                Prefer a values file: /etc/chutes/charts/values/<name>.yaml
+#                                is auto-detected and passed via -f. Both the conf and the
+#                                values file are hashed for the change-trigger.)
+#   EXTRA_FLAGS                 (extra helm CLI flags, e.g. --disable-openapi-validation)
+#   REUSE_VALUES                (non-empty -> --reuse-values)
+#   VERIFY                      (non-empty -> --verify --keyring <KEYRING_FILE>)
+#   REPO_NAME, REPO_URL         (optional; `helm repo add` before upgrade)
+#   FATAL                       ("true" -> a reconcile failure powers off the VM;
+#                                otherwise best-effort, logged, retried next boot)
+set -uo pipefail
 
 LOG_FILE="/var/log/helm-chart-upgrade.log"
-CHART_VERSIONS_DIR="/etc/chutes/chart-versions"
-CHART_CONFIGS_DIR="/etc/chutes/chart-configs"
-CHART_OVERRIDES_DIR="/etc/chutes/chart-upgrade-overrides"
+CHARTS_DIR="/etc/chutes/charts"
+MARKERS_DIR="/var/lib/rancher/k3s/init-markers/charts"
 KEYRING_FILE="/etc/chutes/helm-pubkey.gpg"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+export KUBECONFIG
 # HELM_*_HOME are set by k3s-post-start.service; no fallbacks for determinism
 
-export KUBECONFIG
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
 
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
-
-# Wait for admission controller webhook to be ready (avoids "context deadline exceeded"
-# for charts whose resources go through the webhook, e.g. chutes-miner-gpu).
+# Wait for admission controller webhook (charts whose resources go through it,
+# e.g. chutes-miner-gpu, otherwise fail with "context deadline exceeded").
 wait_for_admission_webhook() {
-    local max_attempts=30
-    local n=0
+    local max_attempts=30 n=0
     log "Waiting for admission webhook readiness..."
-    while [ $n -lt $max_attempts ]; do
+    while [ "$n" -lt "$max_attempts" ]; do
         if curl -sfk -o /dev/null "https://127.0.0.1:8443/health" 2>/dev/null; then
             log "Admission webhook is ready"
             return 0
@@ -37,137 +55,119 @@ wait_for_admission_webhook() {
         sleep 2
         n=$((n + 1))
     done
-    log "WARNING: Admission webhook did not become ready in $((max_attempts * 2))s, proceeding anyway"
+    log "WARNING: Admission webhook not ready in $((max_attempts * 2))s, proceeding anyway"
 }
 
-# Upgrade a single chart. Logs outcome; returns 0 on success (including no-op).
-upgrade_chart() {
-    local chart_name="$1"
-    local marker_file="$CHART_VERSIONS_DIR/$chart_name"
-    local config_file="$CHART_CONFIGS_DIR/${chart_name}.conf"
-    local override_script="$CHART_OVERRIDES_DIR/${chart_name}.sh"
+# Reconcile one chart conf. Returns 0 on success/skip, 1 on failure.
+reconcile_chart() {
+    local conf="$1"
+    local name marker
+    name="$(basename "$conf" .conf)"
+    marker="$MARKERS_DIR/$name"
 
-    if [ ! -f "$config_file" ]; then
-        log "[$chart_name] No config file at $config_file, skipping"
-        return 0
-    fi
-
-    # Load per-chart config: RELEASE, NAMESPACE, CHART, VERIFY, REUSE_VALUES
-    RELEASE="" NAMESPACE="" CHART="" VERIFY="" REUSE_VALUES=""
+    RELEASE="" NAMESPACE="" CHART="" VERSION="" HELM_SET="" EXTRA_FLAGS=""
+    REUSE_VALUES="" VERIFY="" REPO_NAME="" REPO_URL="" FATAL=""
     # shellcheck source=/dev/null
-    source "$config_file"
-
+    source "$conf"
     if [ -z "$RELEASE" ] || [ -z "$NAMESPACE" ] || [ -z "$CHART" ]; then
-        log "[$chart_name] Config missing required fields (RELEASE, NAMESPACE, CHART), skipping"
+        log "[$name] missing RELEASE/NAMESPACE/CHART — skipping"
         return 0
     fi
-
-    local expected_version
-    expected_version=$(tr -d '\n' < "$marker_file")
-
-    # Query installed release by name within its namespace
-    local helm_list_output helm_list_err helm_list_rc
-    helm_list_err=$(mktemp)
-    helm_list_rc=0
-    helm_list_output=$(helm list -n "$NAMESPACE" -o json 2>"$helm_list_err") || helm_list_rc=$?
-
-    if [ $helm_list_rc -ne 0 ]; then
-        log "[$chart_name] WARNING: helm list failed (rc=$helm_list_rc): $(cat "$helm_list_err")"
-        rm -f "$helm_list_err"
-        log "[$chart_name] Skipping upgrade due to helm list failure"
+    # VERSION is mandatory: never run helm without a pinned version (no "latest"),
+    # so the measured spec is fully reproducible for third-party audit.
+    if [ -z "$VERSION" ]; then
+        log "[$name] VERSION is required (pinned for reproducibility) — refusing to reconcile"
         return 1
     fi
-    rm -f "$helm_list_err"
 
-    local release_json
-    release_json=$(echo "$helm_list_output" \
-        | jq -r --arg r "$RELEASE" '.[] | select(.name == $r)' || true)
+    # Values come from values/<name>.yaml (preferred, readable/diffable) and/or
+    # HELM_SET. Hash the conf AND the values file together so a change to either
+    # triggers a reconcile.
+    local want_hash cur_hash status values_file
+    values_file="$CHARTS_DIR/values/$name.yaml"
+    want_hash="$( { cat "$conf"; [ -f "$values_file" ] && cat "$values_file"; } 2>/dev/null \
+        | sha256sum | awk '{print $1}')"
+    cur_hash="$(cat "$marker" 2>/dev/null || true)"
+    status="$(helm list -n "$NAMESPACE" -o json 2>/dev/null \
+        | jq -r --arg r "$RELEASE" '.[] | select(.name==$r) | .status // empty' 2>/dev/null || true)"
 
-    if [ -z "$release_json" ]; then
-        log "[$chart_name] WARNING: Release '$RELEASE' not found in namespace '$NAMESPACE'. Skipping (release must be pre-installed at image build time)."
-        log "[$chart_name] helm list returned: $helm_list_output"
+    # Reconcile a build-time install; never create. No marker on miss -> retries.
+    if [ -z "$status" ]; then
+        log "[$name] release '$RELEASE' not found in '$NAMESPACE' — skipping (retries next boot)"
         return 0
     fi
 
-    local chart_full installed_version release_status
-    chart_full=$(echo "$release_json" | jq -r '.chart // empty')
-    installed_version="${chart_full#${chart_name}-}"
-    release_status=$(echo "$release_json" | jq -r '.status // "deployed"')
-
-    # Normalize leading 'v' for comparison (marker may use 'v26.3.1', helm list returns '26.3.1')
-    local norm_installed norm_expected
-    norm_installed="${installed_version#v}"
-    norm_expected="${expected_version#v}"
-
-    if [ "$norm_installed" = "$norm_expected" ] && [ "$release_status" != "failed" ]; then
-        log "[$chart_name] Version matches (installed: $installed_version, status: $release_status), no upgrade needed"
+    if [ "$want_hash" = "$cur_hash" ] && [ "$status" != "failed" ]; then
+        log "[$name] spec unchanged (status=$status) — skipping"
         return 0
     fi
 
-    if [ "$release_status" = "failed" ]; then
-        log "[$chart_name] Release status is failed (installed: $installed_version), retrying upgrade"
-    else
-        log "[$chart_name] Version mismatch: installed=$installed_version expected=$expected_version, performing upgrade"
+    if [ -n "$REPO_NAME" ] && [ -n "$REPO_URL" ]; then
+        helm repo add "$REPO_NAME" "$REPO_URL" >/dev/null 2>&1 || true
+        helm repo update "$REPO_NAME" >/dev/null 2>&1 || helm repo update >/dev/null 2>&1 || true
     fi
 
-    # Delegate to override script if one exists for this chart
-    if [ -x "$override_script" ]; then
-        log "[$chart_name] Using custom upgrade script: $override_script"
-        "$override_script" "$expected_version" "$installed_version"
-        return $?
-    fi
-
-    # Default upgrade path: helm upgrade --install with flags from config
     if [ -n "$VERIFY" ] && [ ! -f "$KEYRING_FILE" ]; then
-        log "[$chart_name] ERROR: VERIFY is set but keyring not found at $KEYRING_FILE"
+        log "[$name] VERIFY set but keyring missing at $KEYRING_FILE — FAILED"
         return 1
     fi
 
-    local helm_args=(
-        upgrade --install "$RELEASE" "$CHART"
-        --namespace "$NAMESPACE"
-        --version "$expected_version"
-        --kubeconfig="$KUBECONFIG"
-    )
-    [ -n "$REUSE_VALUES" ] && helm_args+=(--reuse-values)
-    [ -n "$VERIFY" ] && helm_args+=(--verify --keyring "$KEYRING_FILE")
+    local args=(upgrade "$RELEASE" "$CHART" --namespace "$NAMESPACE" --kubeconfig="$KUBECONFIG")
+    [ -n "$VERSION" ] && args+=(--version "$VERSION")
+    [ -n "$REUSE_VALUES" ] && args+=(--reuse-values)
+    [ -n "$VERIFY" ] && args+=(--verify --keyring "$KEYRING_FILE")
+    [ -f "$values_file" ] && args+=(-f "$values_file")
+    local kv
+    for kv in $HELM_SET; do args+=(--set "$kv"); done
+    # EXTRA_FLAGS is intentionally word-split into separate flags.
+    # shellcheck disable=SC2206
+    [ -n "$EXTRA_FLAGS" ] && args+=($EXTRA_FLAGS)
 
-    log "[$chart_name] Running: helm ${helm_args[*]}"
-    helm "${helm_args[@]}"
+    log "[$name] reconciling (status=$status, version=$VERSION): helm ${args[*]}"
+    if helm "${args[@]}"; then
+        mkdir -p "$MARKERS_DIR"
+        printf '%s\n' "$want_hash" > "$marker"
+        log "[$name] reconciled; marker updated"
+        return 0
+    fi
+    log "[$name] helm upgrade FAILED"
+    return 1
+}
+
+# Read the FATAL field of a conf in isolation (no side effects on the caller).
+conf_is_fatal() {
+    ( set +u; FATAL=""; . "$1" >/dev/null 2>&1; [ "${FATAL:-}" = "true" ] )
 }
 
 main() {
-    if [ ! -d "$CHART_VERSIONS_DIR" ]; then
-        log "No chart versions directory at $CHART_VERSIONS_DIR, nothing to do"
+    if [ ! -d "$CHARTS_DIR" ]; then
+        log "No charts directory at $CHARTS_DIR, nothing to do"
         exit 0
     fi
 
-    # Refresh all repo indexes once before processing charts
     log "Refreshing Helm repo index..."
-    helm repo update
-
+    helm repo update >/dev/null 2>&1 || true
     wait_for_admission_webhook
 
-    local overall_failed=0
-    for marker_file in "$CHART_VERSIONS_DIR"/*; do
-        [ -f "$marker_file" ] || continue
-        local chart_name
-        chart_name=$(basename "$marker_file")
-        log "--- Processing chart: $chart_name ---"
-        if upgrade_chart "$chart_name"; then
-            log "[$chart_name] Done"
+    local nonfatal_failed=0 conf name
+    for conf in "$CHARTS_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        name="$(basename "$conf" .conf)"
+        log "--- Reconciling chart: $name ---"
+        if reconcile_chart "$conf"; then
+            log "[$name] OK"
+        elif conf_is_fatal "$conf"; then
+            log "FATAL: required chart $name failed to reconcile — powering off VM"
+            echo "CHART-RECONCILE-FAILED: $name" > /dev/kmsg 2>/dev/null || true
+            poweroff -f
         else
-            log "[$chart_name] FAILED"
-            overall_failed=$((overall_failed + 1))
+            log "[$name] FAILED (non-fatal; retries next boot)"
+            nonfatal_failed=$((nonfatal_failed + 1))
         fi
     done
 
-    if [ $overall_failed -gt 0 ]; then
-        log "Completed with $overall_failed chart upgrade failure(s)"
-        exit 1
-    fi
-
-    log "All chart upgrades completed successfully"
+    log "Chart reconcile complete ($nonfatal_failed non-fatal failure(s))"
+    exit 0
 }
 
 main "$@"

@@ -22,14 +22,31 @@
   args:
     executable: /bin/bash
 
+- name: Create chart values directory
+  ansible.builtin.file:
+    path: /etc/chutes/charts/values
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install GPU operator values file
+  ansible.builtin.copy:
+    src: charts/values/gpu-operator.yaml
+    dest: /etc/chutes/charts/values/gpu-operator.yaml
+    owner: root
+    group: root
+    mode: '0644'
+
+# Build-time install uses the same values file as the boot-time reconcile (single
+# source of truth). --disable-openapi-validation is NOT needed here (fresh install,
+# no CRD migration) — it only applies to cross-version upgrades on persisted nodes.
 - name: Install GPU Operator
   ansible.builtin.command: >
     helm upgrade --install gpu-operator nvidia/gpu-operator
     --namespace gpu-operator
     --version {{ gpu_operator_chart_version }}
-    --set driver.enabled=false
-    --set toolkit.enabled=false
-    --set operator.upgradeCRD=true
+    --values /etc/chutes/charts/values/gpu-operator.yaml
     --create-namespace
     --kubeconfig=/etc/rancher/k3s/k3s.yaml
   environment:
@@ -39,34 +56,23 @@
   register: helm_result
   changed_when: helm_result.rc == 0
 
-- name: Ensure chart metadata directories exist
+- name: Ensure chart specs directory exists
   ansible.builtin.file:
-    path: "{{ item }}"
+    path: /etc/chutes/charts
     state: directory
-    mode: '0755'
-  loop:
-    - /etc/chutes/chart-versions
-    - /etc/chutes/chart-configs
-    - /etc/chutes/chart-upgrade-overrides
-  when: helm_result.rc == 0
-
-- name: Write GPU operator chart version marker
-  ansible.builtin.copy:
-    content: "{{ gpu_operator_chart_version }}"
-    dest: /etc/chutes/chart-versions/gpu-operator
-    mode: '0644'
-  when: helm_result.rc == 0
-
-- name: Install GPU operator chart config
-  ansible.builtin.copy:
-    src: chart-configs/gpu-operator.conf
-    dest: /etc/chutes/chart-configs/gpu-operator.conf
-    mode: '0644'
-
-- name: Install GPU operator chart upgrade override script
-  ansible.builtin.copy:
-    src: chart-upgrade-overrides/gpu-operator.sh
-    dest: /etc/chutes/chart-upgrade-overrides/gpu-operator.sh
     owner: root
     group: root
     mode: '0755'
+  when: helm_result.rc == 0
+
+# Single source of truth for the GPU operator, reconciled at boot by
+# 04-helm-chart-upgrade.sh and measured into RTMR3. Replaces the old
+# chart-versions marker + chart-configs entry + chart-upgrade-overrides script.
+- name: Install GPU operator chart spec
+  ansible.builtin.template:
+    src: charts/gpu-operator.conf.j2
+    dest: /etc/chutes/charts/gpu-operator.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: helm_result.rc == 0

@@ -1,0 +1,15 @@
+# Desired state for the Chutes miner GPU chart (reconciled by 04-helm-chart-upgrade.sh).
+# Source of truth — git-tracked and measured into RTMR3. VERIFY enforces the signed
+# chart provenance; REUSE_VALUES preserves the per-node miner credentials set at boot
+# by 03-k3s-miner-credentials.sh. FATAL: the miner cannot run without this chart.
+RELEASE="chutes"
+NAMESPACE="chutes"
+CHART="chutes/chutes-miner-gpu"
+VERSION="{{ chutes_chart_version }}"
+REPO_NAME="chutes"
+REPO_URL="{{ chutes_helm_repo_url }}"
+HELM_SET=""
+EXTRA_FLAGS=""
+REUSE_VALUES="true"
+VERIFY="true"
+FATAL="true"

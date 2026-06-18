@@ -1,0 +1,17 @@
+# Chart identity for Prometheus (reconciled by 04-helm-chart-upgrade.sh).
+# Source of truth — git-tracked and measured into RTMR3. This is the spec that
+# reconciles the NodePort onto nodes whose persisted k3s storage predates it.
+# Values live in values/prometheus.yaml (auto-loaded via -f). VERSION is pinned from
+# prometheus_chart_version (required — never "latest" — so the measured spec is
+# reproducible/auditable). Non-FATAL: a metrics endpoint must never poweroff a node.
+RELEASE="prometheus"
+NAMESPACE="monitoring"
+CHART="prometheus-community/prometheus"
+VERSION="{{ prometheus_chart_version }}"
+REPO_NAME="prometheus-community"
+REPO_URL="https://prometheus-community.github.io/helm-charts"
+HELM_SET=""
+EXTRA_FLAGS=""
+REUSE_VALUES=""
+VERIFY=""
+FATAL=""

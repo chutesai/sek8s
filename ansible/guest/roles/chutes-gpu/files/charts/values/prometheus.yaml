@@ -1,0 +1,19 @@
+# Helm values for Prometheus (prometheus-community/prometheus).
+# Single source of truth — git-tracked and measured into RTMR3. Used by the
+# build-time install and passed via `-f` by 04-helm-chart-upgrade.sh at boot.
+# The server Service is a NodePort so metrics can be scraped; persistence is
+# disabled (ephemeral, backed by the node).
+server:
+  service:
+    type: NodePort
+    nodePort: 30090
+  persistentVolume:
+    enabled: false
+alertmanager:
+  persistentVolume:
+    enabled: false
+  persistence:
+    enabled: false
+prometheus-pushgateway:
+  persistentVolume:
+    enabled: false

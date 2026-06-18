@@ -1,0 +1,17 @@
+# Chart identity for the NVIDIA GPU Operator (reconciled by 04-helm-chart-upgrade.sh).
+# Source of truth — git-tracked and measured into RTMR3. Values live in
+# values/gpu-operator.yaml (auto-loaded via -f). FATAL: a failed reconcile powers off
+# the node (the GPU stack must be correct for the miner to function). EXTRA_FLAGS
+# carries the one command-level flag the old override script needed — helm does not
+# manage CRDs on upgrade (paired with operator.upgradeCRD in the values file).
+RELEASE="gpu-operator"
+NAMESPACE="gpu-operator"
+CHART="nvidia/gpu-operator"
+VERSION="{{ gpu_operator_chart_version }}"
+REPO_NAME="nvidia"
+REPO_URL="https://helm.ngc.nvidia.com/nvidia"
+HELM_SET=""
+EXTRA_FLAGS="--disable-openapi-validation"
+REUSE_VALUES=""
+VERIFY=""
+FATAL="true"
