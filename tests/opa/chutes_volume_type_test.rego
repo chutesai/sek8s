@@ -1,4 +1,4 @@
-# SEK8S-072: OPA tests for volume type allowlist in chutes namespace.
+# OPA tests for volume type allowlist in chutes namespace.
 # Prevents code injection via ConfigMap/Secret overlays on image filesystem.
 # Validated against live pod manifests from local/chutes-pods.yaml.
 # Run: make test-opa-policies

@@ -1,12 +1,20 @@
 #!/bin/bash
 # /usr/local/bin/k3s-init-scripts/98-clear-terminal-pods.sh
-# Clear terminal-phase pod tombstones (Failed/Succeeded) left in the API after a
-# reboot — crash/Error leftovers, graceful-shutdown tombstones, and Deployment pods
-# that exited and were replaced (e.g. the chutes agent).
+# Clear stale pod records left in the API after a reboot:
+#   - terminal-phase tombstones (Failed/Succeeded) — crash/Error leftovers,
+#     graceful-shutdown tombstones, and Deployment pods that exited and were
+#     replaced (e.g. the chutes agent); and
+#   - stuck pods from the previous boot the controller will not reconcile on its
+#     own: phase==Unknown, and pods with status.reason==NodeLost (e.g. an
+#     attestation-proxy DaemonSet pod orphaned by an ungraceful shutdown — the
+#     DaemonSet will not replace a pod it still believes exists, so the proxy
+#     stays down until the tombstone is removed). NodeLost should be rare on a
+#     single-node miner, but Unknown/NodeLost are cleared as a self-heal.
 #
 # Only pods owned by a workload controller that does NOT retain terminal pods itself
-# are deleted: ReplicaSet (Deployment), DaemonSet, StatefulSet. Their controllers
-# already created replacements, so the terminal object is pure tombstone.
+# are deleted: ReplicaSet (Deployment), DaemonSet, StatefulSet. For Failed/Succeeded
+# the controller already created a replacement (pure tombstone); for Unknown/NodeLost
+# deleting the stale object is what lets the controller create the replacement.
 #
 # This deliberately KEEPS:
 #   - Job/CronJob pods — retention is governed by the Job's own
@@ -14,6 +22,12 @@
 #   - operator-created one-shot pods not owned by the above controllers, e.g. the
 #     gpu-operator validators (nvidia-cuda-validator).
 #   - bare pods with no controller owner.
+#
+# Failed/Succeeded are deleted gracefully. Unknown/NodeLost are force-deleted
+# (--force --grace-period=0): the normal delete blocks on a kubelet/node that will
+# never confirm, and because this runs once early each boot, any such pod is a
+# leftover from a PREVIOUS boot whose containers are already gone — so force-delete
+# cannot orphan a running container.
 #
 # Runs every boot (no run-once marker), ordered just before 99-purge-kubeconfig.sh
 # so the admin kubeconfig is still present. terminated-pod-gc-threshold only caps
@@ -31,7 +45,7 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-log "Clearing terminal-phase pod tombstones left over from previous boot..."
+log "Clearing stale pod records left over from previous boot..."
 
 # If the API isn't reachable, skip quietly — never fail the boot for cosmetic cleanup.
 if ! kubectl get --raw='/readyz' >/dev/null 2>&1; then
@@ -39,27 +53,36 @@ if ! kubectl get --raw='/readyz' >/dev/null 2>&1; then
     exit 0
 fi
 
-# Select terminal-phase pods whose CONTROLLER owner is ReplicaSet/DaemonSet/StatefulSet.
-# field-selector can't match ownerReferences, so filter with jq.
+# Select stale pods (terminal phase, Unknown, or NodeLost) whose CONTROLLER owner is
+# ReplicaSet/DaemonSet/StatefulSet. field-selector can't match ownerReferences or
+# status.reason, so filter with jq. The trailing reason field drives force-vs-graceful.
 targets=$(kubectl get pods --all-namespaces -o json 2>/dev/null | jq -r '
     .items[]
-    | select(.status.phase == "Failed" or .status.phase == "Succeeded")
+    | select(.status.phase == "Failed" or .status.phase == "Succeeded"
+             or .status.phase == "Unknown" or .status.reason == "NodeLost")
     | select((.metadata.ownerReferences // [])
              | any(.controller == true
                    and (.kind == "ReplicaSet" or .kind == "DaemonSet" or .kind == "StatefulSet")))
-    | "\(.metadata.namespace) \(.metadata.name) \(.status.phase)"' 2>/dev/null)
+    | "\(.metadata.namespace) \(.metadata.name) \(.status.phase) \(.status.reason // "-")"' 2>/dev/null)
 
 if [ -z "$targets" ]; then
-    log "No workload-controller tombstones to clear"
+    log "No workload-controller pod records to clear"
     exit 0
 fi
 
-log "Deleting workload-controller tombstone pod(s):"
-while read -r ns name phase; do
+log "Deleting stale workload-controller pod(s):"
+while read -r ns name phase reason; do
     [ -n "$ns" ] && [ -n "$name" ] || continue
-    log "  ${ns}/${name} (${phase})"
-    kubectl delete pod "$name" -n "$ns" --ignore-not-found 2>&1 | tee -a "$LOG_FILE" || true
+    # Unknown/NodeLost won't delete gracefully (kubelet/node never confirms); force
+    # them. Safe here — at boot these are leftovers whose containers are already gone.
+    if [ "$phase" = "Unknown" ] || [ "$reason" = "NodeLost" ]; then
+        log "  ${ns}/${name} (${phase}/${reason}) — force"
+        kubectl delete pod "$name" -n "$ns" --ignore-not-found --force --grace-period=0 2>&1 | tee -a "$LOG_FILE" || true
+    else
+        log "  ${ns}/${name} (${phase})"
+        kubectl delete pod "$name" -n "$ns" --ignore-not-found 2>&1 | tee -a "$LOG_FILE" || true
+    fi
 done <<< "$targets"
 
-log "Pod tombstone cleanup complete"
+log "Stale pod cleanup complete"
 exit 0

@@ -3,7 +3,9 @@
 # reconciles the NodePort onto nodes whose persisted k3s storage predates it.
 # Values live in values/prometheus.yaml (auto-loaded via -f). VERSION is pinned from
 # prometheus_chart_version (required — never "latest" — so the measured spec is
-# reproducible/auditable). Non-FATAL: a metrics endpoint must never poweroff a node.
+# reproducible/auditable). Every chart is fatal (see reconciler header): determinism
+# of the attested node takes precedence — a node either converges to the measured
+# charts or powers off, with no best-effort exception for monitoring.
 RELEASE="prometheus"
 NAMESPACE="monitoring"
 CHART="prometheus-community/prometheus"
@@ -14,4 +16,3 @@ HELM_SET=""
 EXTRA_FLAGS=""
 REUSE_VALUES=""
 VERIFY=""
-FATAL=""

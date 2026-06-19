@@ -28,13 +28,27 @@
 #   REUSE_VALUES                (non-empty -> --reuse-values)
 #   VERIFY                      (non-empty -> --verify --keyring <KEYRING_FILE>)
 #   REPO_NAME, REPO_URL         (optional; `helm repo add` before upgrade)
-#   FATAL                       ("true" -> a reconcile failure powers off the VM;
-#                                otherwise best-effort, logged, retried next boot)
+#
+# Determinism: EVERY chart is fatal. The measured spec must fully determine what
+# runs on an attested node, so any chart that cannot be reconciled to its measured
+# spec — a failed upgrade, a missing/uninstalled release, or an unreadable helm/API
+# state — powers the VM off (fail closed) rather than letting it serve in a state
+# that diverges from what was measured. There is no "best effort" tier: a node is
+# either converged to the measured charts or it is down. Each chart gets a small
+# number of in-boot retries first (failures should be rare against the local k3s
+# cluster, and an unchanged spec is skipped without touching helm/network at all).
 set -uo pipefail
 
-LOG_FILE="/var/log/helm-chart-upgrade.log"
-CHARTS_DIR="/etc/chutes/charts"
-MARKERS_DIR="/var/lib/rancher/k3s/init-markers/charts"
+# Initial attempt + retries before a chart is declared fatal. (Overridable only to
+# keep the boot env's defaults — the boot service environment is fixed and measured.)
+RECONCILE_ATTEMPTS="${RECONCILE_ATTEMPTS:-3}"
+RECONCILE_RETRY_DELAY="${RECONCILE_RETRY_DELAY:-5}"
+
+# Paths default to the production locations; overridable so the reconciler can be
+# exercised in tests. Production boots with these unset, so the defaults apply.
+LOG_FILE="${LOG_FILE:-/var/log/helm-chart-upgrade.log}"
+CHARTS_DIR="${CHARTS_DIR:-/etc/chutes/charts}"
+MARKERS_DIR="${MARKERS_DIR:-/var/lib/rancher/k3s/init-markers/charts}"
 KEYRING_FILE="/etc/chutes/helm-pubkey.gpg"
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
@@ -66,12 +80,14 @@ reconcile_chart() {
     marker="$MARKERS_DIR/$name"
 
     RELEASE="" NAMESPACE="" CHART="" VERSION="" HELM_SET="" EXTRA_FLAGS=""
-    REUSE_VALUES="" VERIFY="" REPO_NAME="" REPO_URL="" FATAL=""
+    REUSE_VALUES="" VERIFY="" REPO_NAME="" REPO_URL=""
     # shellcheck source=/dev/null
     source "$conf"
+    # A measured conf missing required fields is a broken spec, not something to
+    # skip past — fail closed.
     if [ -z "$RELEASE" ] || [ -z "$NAMESPACE" ] || [ -z "$CHART" ]; then
-        log "[$name] missing RELEASE/NAMESPACE/CHART — skipping"
-        return 0
+        log "[$name] missing RELEASE/NAMESPACE/CHART in measured conf — FAILED"
+        return 1
     fi
     # VERSION is mandatory: never run helm without a pinned version (no "latest"),
     # so the measured spec is fully reproducible for third-party audit.
@@ -83,18 +99,28 @@ reconcile_chart() {
     # Values come from values/<name>.yaml (preferred, readable/diffable) and/or
     # HELM_SET. Hash the conf AND the values file together so a change to either
     # triggers a reconcile.
-    local want_hash cur_hash status values_file
+    local want_hash cur_hash status values_file list_out
     values_file="$CHARTS_DIR/values/$name.yaml"
     want_hash="$( { cat "$conf"; [ -f "$values_file" ] && cat "$values_file"; } 2>/dev/null \
         | sha256sum | awk '{print $1}')"
     cur_hash="$(cat "$marker" 2>/dev/null || true)"
-    status="$(helm list -n "$NAMESPACE" -o json 2>/dev/null \
+
+    # Distinguish "helm/API unreadable" (transient) from "release genuinely absent":
+    # both used to collapse to an empty status and a silent skip. Under determinism
+    # neither may pass — an unreadable state can't be confirmed converged, and a
+    # measured chart that isn't installed is a divergence from the measured spec.
+    if ! list_out="$(helm list -n "$NAMESPACE" -o json 2>/dev/null)"; then
+        log "[$name] could not read helm release state for namespace '$NAMESPACE' — FAILED"
+        return 1
+    fi
+    status="$(echo "$list_out" \
         | jq -r --arg r "$RELEASE" '.[] | select(.name==$r) | .status // empty' 2>/dev/null || true)"
 
-    # Reconcile a build-time install; never create. No marker on miss -> retries.
+    # Reconcile a build-time install; never create. A missing release means the node
+    # would run without a measured chart — fail closed.
     if [ -z "$status" ]; then
-        log "[$name] release '$RELEASE' not found in '$NAMESPACE' — skipping (retries next boot)"
-        return 0
+        log "[$name] release '$RELEASE' not installed in '$NAMESPACE' — measured chart absent — FAILED"
+        return 1
     fi
 
     if [ "$want_hash" = "$cur_hash" ] && [ "$status" != "failed" ]; then
@@ -134,11 +160,6 @@ reconcile_chart() {
     return 1
 }
 
-# Read the FATAL field of a conf in isolation (no side effects on the caller).
-conf_is_fatal() {
-    ( set +u; FATAL=""; . "$1" >/dev/null 2>&1; [ "${FATAL:-}" = "true" ] )
-}
-
 main() {
     if [ ! -d "$CHARTS_DIR" ]; then
         log "No charts directory at $CHARTS_DIR, nothing to do"
@@ -149,24 +170,34 @@ main() {
     helm repo update >/dev/null 2>&1 || true
     wait_for_admission_webhook
 
-    local nonfatal_failed=0 conf name
+    local conf name attempt ok
     for conf in "$CHARTS_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         name="$(basename "$conf" .conf)"
         log "--- Reconciling chart: $name ---"
-        if reconcile_chart "$conf"; then
-            log "[$name] OK"
-        elif conf_is_fatal "$conf"; then
-            log "FATAL: required chart $name failed to reconcile — powering off VM"
+
+        # Every chart is fatal. Retry a few times to absorb transients against the
+        # local k3s cluster, then power off rather than serve in a divergent state.
+        ok=0
+        for ((attempt = 1; attempt <= RECONCILE_ATTEMPTS; attempt++)); do
+            if reconcile_chart "$conf"; then
+                ok=1
+                break
+            fi
+            log "[$name] reconcile attempt $attempt/$RECONCILE_ATTEMPTS failed"
+            [ "$attempt" -lt "$RECONCILE_ATTEMPTS" ] && sleep "$RECONCILE_RETRY_DELAY"
+        done
+
+        if [ "$ok" -ne 1 ]; then
+            log "FATAL: chart $name failed to reconcile after $RECONCILE_ATTEMPTS attempts — powering off VM"
             echo "CHART-RECONCILE-FAILED: $name" > /dev/kmsg 2>/dev/null || true
             poweroff -f
-        else
-            log "[$name] FAILED (non-fatal; retries next boot)"
-            nonfatal_failed=$((nonfatal_failed + 1))
+            exit 1  # in case poweroff is async, never continue past a fatal failure
         fi
+        log "[$name] OK"
     done
 
-    log "Chart reconcile complete ($nonfatal_failed non-fatal failure(s))"
+    log "Chart reconcile complete — all measured charts converged"
     exit 0
 }
 

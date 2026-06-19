@@ -417,7 +417,7 @@ class AdmissionWebhookServer(WebServer):
         - Image digest pinning for whitelisted images with a cached verified
           digest (tag-only references are replaced with their digest).
         - automountServiceAccountToken: false for all pods in chutes namespace
-          (SEK8S-039: chute workloads have no reason to access the k8s API)
+          (chute workloads have no reason to access the k8s API)
         """
         try:
             request_data = await request.json()

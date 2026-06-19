@@ -1,4 +1,4 @@
-# OPA tests for SEK8S-024: Service restrictions in chutes namespace.
+# OPA tests for Service restrictions in chutes namespace.
 # Chute services must be NodePort type with chutes/chute label.
 # ExternalName services are blocked (traffic redirection attack).
 # Run: ./bin/opa test ansible/guest/roles/admission-controller/files/policies tests/opa -v
@@ -8,7 +8,7 @@ import future.keywords.if
 import future.keywords.in
 
 # =============================================================================
-# SEK8S-024: Block ExternalName services in chutes namespace
+# Block ExternalName services in chutes namespace
 # ExternalName services can redirect traffic to arbitrary internal services.
 # =============================================================================
 
@@ -33,7 +33,7 @@ test_deny_externalname_service_in_chutes if {
 }
 
 # =============================================================================
-# SEK8S-024: Block services without chutes/chute label in chutes namespace
+# Block services without chutes/chute label in chutes namespace
 # =============================================================================
 
 test_deny_service_without_chute_label_in_chutes if {
@@ -78,7 +78,7 @@ test_deny_service_without_labels_in_chutes if {
 }
 
 # =============================================================================
-# SEK8S-024: Allow legitimate chute services
+# Allow legitimate chute services
 # =============================================================================
 
 test_allow_chute_nodeport_service if {
@@ -113,7 +113,7 @@ test_allow_chute_nodeport_service if {
 }
 
 # =============================================================================
-# SEK8S-024: System namespaces should not be affected
+# System namespaces should not be affected
 # =============================================================================
 
 test_allow_service_in_system_namespace if {
