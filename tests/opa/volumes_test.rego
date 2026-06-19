@@ -1,5 +1,5 @@
 # OPA tests for hostPath volume restrictions (volumes.rego).
-# Covers SEK8S-001, SEK8S-021, SEK8S-053 regression prevention.
+# Covers regression prevention.
 # Run: make test-opa-policies
 package kubernetes.admission
 
@@ -7,7 +7,7 @@ import future.keywords.if
 import future.keywords.in
 
 # =============================================================================
-# SEK8S-001 regression: job-name label must NOT bypass hostPath restrictions
+# regression: job-name label must NOT bypass hostPath restrictions
 # =============================================================================
 
 test_deny_pod_with_job_name_label_and_hostpath if {
@@ -45,7 +45,7 @@ test_deny_pod_with_job_name_label_and_tmp_hostpath if {
 }
 
 # =============================================================================
-# SEK8S-021 regression: prefix-adjacent paths must be denied
+# regression: prefix-adjacent paths must be denied
 # =============================================================================
 
 test_deny_cache_evil_prefix_adjacent if {
@@ -243,7 +243,7 @@ test_deny_cache_hostpath_in_default_namespace if {
 }
 
 # =============================================================================
-# SEK8S-053 regression: agent hostPath requires correct image
+# regression: agent hostPath requires correct image
 # =============================================================================
 
 test_allow_agent_hostpath_with_correct_image if {
@@ -358,7 +358,7 @@ test_deny_root_hostpath_in_chutes if {
 }
 
 # =============================================================================
-# SEK8S-023: user-based exemptions replace namespace-based exclusions.
+# user-based exemptions replace namespace-based exclusions.
 # Miner must be denied hostPath in ALL namespaces; system users exempt.
 # =============================================================================
 

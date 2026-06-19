@@ -1,7 +1,7 @@
 """
 Unit tests for auth.py nonce validation in authorize().
 
-Covers SEK8S-080 (non-numeric nonce) and SEK8S-093 (future nonce rejection).
+Covers non-numeric nonce and future nonce rejection.
 The authorize() dependency is tested via a minimal FastAPI test app so that
 FastAPI's dependency injection handles Request/Header extraction correctly.
 
@@ -63,7 +63,7 @@ def _headers(nonce: str, hotkey: str = MINER_SS58, sig: str = DUMMY_SIG) -> dict
 
 
 # ---------------------------------------------------------------------------
-# SEK8S-080: non-numeric nonce must be rejected
+# non-numeric nonce must be rejected
 # ---------------------------------------------------------------------------
 
 
@@ -96,7 +96,7 @@ async def test_nonce_with_leading_text_rejected(auth_client):
 
 
 # ---------------------------------------------------------------------------
-# SEK8S-093: future nonce (> now + 5s) must be rejected
+# future nonce (> now + 5s) must be rejected
 # ---------------------------------------------------------------------------
 
 

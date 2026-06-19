@@ -3,7 +3,7 @@
 # manifests at cleanup (not build time). This ensures k3s never routes admission
 # requests during the build pipeline — the webhook doesn't exist until the image
 # is finalized. On first boot, k3s picks up the manifest and starts enforcing
-# policies. (SEK8S-009)
+# policies.
 #
 # admission_webhook_ca_bundle is set as a host fact during the admission-controller
 # role's setup-tls.yml and persists across plays.

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 import time
 import traceback
@@ -28,6 +29,21 @@ from pathlib import Path
 from typing import Optional
 
 from huggingface_hub import snapshot_download
+from huggingface_hub.errors import (
+    GatedRepoError,
+    HfHubHTTPError,
+    RepositoryNotFoundError,
+    RevisionNotFoundError,
+)
+
+try:  # XET error classes (huggingface_hub 1.x with XET enabled)
+    from huggingface_hub.errors import (
+        XetAuthorizationError,
+        XetDownloadError,
+        XetRefreshTokenError,
+    )
+except ImportError:  # pragma: no cover - older hub without XET
+    XetAuthorizationError = XetDownloadError = XetRefreshTokenError = ()
 from loguru import logger
 
 from sek8s.system_manager.cache.util import (
@@ -163,15 +179,54 @@ class DownloadProcess:
 _DOWNLOAD_MAX_RETRIES = 5
 _DOWNLOAD_RETRY_BASE_DELAY = 10
 
+# Errors that are NEVER transient: a gated/private repo or bad token, or a missing
+# repo/revision. Retrying these just wastes minutes and can never succeed.
+_NON_TRANSIENT_ERRORS = (
+    GatedRepoError,
+    RepositoryNotFoundError,
+    RevisionNotFoundError,
+    XetAuthorizationError,
+)
+# XET transport hiccups (token refresh, chunk fetch) ARE transient.
+_XET_TRANSIENT_ERRORS = (XetDownloadError, XetRefreshTokenError)
+
+# HF/CDN URLs embed short-lived credentials in the query string (e.g.
+# ?X-Amz-Signature=...); strip them before logging so they never hit the journal.
+_URL_QUERY_RE = re.compile(r"(https?://[^\s'\"]+?)\?[^\s'\"]*")
+
+
+def _redact_urls(text: str) -> str:
+    """Replace any URL query string with `?<redacted>` (drops presigned-URL creds)."""
+    return _URL_QUERY_RE.sub(r"\1?<redacted>", text)
+
+
+def _is_transient_download_error(exc: BaseException) -> bool:
+    """True only for transient *download-layer* failures worth retrying — chiefly a
+    CDN presigned-URL expiry (HTTP 403 on the file GET) or a XET transport hiccup.
+
+    Genuine authorization/availability errors (gated repo, bad/expired token → 401,
+    missing repo/revision → 404, XET auth) are NOT retried: classifying by typed
+    exception / status code instead of a substring match avoids retrying a hard
+    failure 5x (~150s) and avoids treating any message that merely contains "403"
+    as transient.
+    """
+    if isinstance(exc, _NON_TRANSIENT_ERRORS):
+        return False
+    if isinstance(exc, HfHubHTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status == 403
+    return isinstance(exc, _XET_TRANSIENT_ERRORS)
+
 
 def _snapshot_download_with_retry(repo_id: str, revision: str, cache_dir: str) -> None:
-    """Call snapshot_download with retries for transient CDN failures.
+    """Call snapshot_download with retries for transient download failures.
 
-    HuggingFace's CDN serves files via presigned URLs that expire after ~60
-    minutes.  For large models the download can outlast the URL TTL, producing
-    403 Forbidden errors from hf_transfer.  Retrying is safe because
-    snapshot_download resumes from the HF cache -- already-complete files are
-    skipped and partial blobs are re-fetched.
+    HuggingFace serves files via presigned URLs that expire after ~60 minutes. For
+    large models the download can outlast the URL TTL, producing 403 Forbidden
+    errors on the file GET. Retrying is safe because snapshot_download resumes from
+    the HF cache -- already-complete files are skipped and partial blobs re-fetched.
+    Only transient failures are retried (see _is_transient_download_error); genuine
+    auth/not-found errors are raised immediately.
     """
     for attempt in range(1, _DOWNLOAD_MAX_RETRIES + 1):
         try:
@@ -182,14 +237,13 @@ def _snapshot_download_with_retry(repo_id: str, revision: str, cache_dir: str) -
             )
             return
         except Exception as exc:
-            exc_text = str(exc)
-            is_transient = "403" in exc_text or "Forbidden" in exc_text
-            if not is_transient or attempt == _DOWNLOAD_MAX_RETRIES:
+            if not _is_transient_download_error(exc) or attempt == _DOWNLOAD_MAX_RETRIES:
                 raise
             delay = _DOWNLOAD_RETRY_BASE_DELAY * (2 ** (attempt - 1))
             print(
-                f"[download] Transient failure (attempt {attempt}/"
-                f"{_DOWNLOAD_MAX_RETRIES}), retrying in {delay}s: {exc_text}",
+                f"[download] Transient download failure (attempt {attempt}/"
+                f"{_DOWNLOAD_MAX_RETRIES}), retrying in {delay}s: "
+                f"{_redact_urls(str(exc))}",
                 file=sys.stderr,
             )
             time.sleep(delay)

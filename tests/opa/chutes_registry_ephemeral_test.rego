@@ -1,5 +1,5 @@
 # OPA tests for chutes namespace image registry allowlist and ephemeral container deny.
-# Covers SEK8S-101 (no ephemeral containers) and SEK8S-102/103 (registry allowlist).
+# Covers no ephemeral containers and registry allowlist.
 # Run locally: make test-opa-policies (or: opa test <policies-dir> tests/opa -v)
 package kubernetes.admission
 

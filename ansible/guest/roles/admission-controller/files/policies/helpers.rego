@@ -30,7 +30,7 @@ is_k3s_system_crd if {
 }
 
 # Check if this is a bootstrap operation (during initial setup).
-# Annotation-based bypasses removed (SEK8S-009): user-settable annotations
+# Annotation-based bypasses removed: user-settable annotations
 # allowed any miner to bypass CRD/webhook restrictions. The admission controller
 # is deployed after all other roles in chutes-miner-vm.yml, so build-time operations
 # complete before policies are active.

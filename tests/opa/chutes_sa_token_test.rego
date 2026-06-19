@@ -1,5 +1,5 @@
 # OPA tests for automountServiceAccountToken enforcement in chutes namespace.
-# SEK8S-039: defense-in-depth validation after mutating webhook sets the field.
+# defense-in-depth validation after mutating webhook sets the field.
 # Run locally: make test-opa-policies (or: opa test <policies-dir> tests/opa -v)
 package kubernetes.admission
 

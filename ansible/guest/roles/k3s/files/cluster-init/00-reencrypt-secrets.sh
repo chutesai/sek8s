@@ -35,18 +35,23 @@ STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
 ENCRYPTION_CONFIG="/run/chutes/k3s-encryption-config.yaml"
 K3S_CONFIG="/etc/rancher/k3s/config.yaml"
 
-# Returns 0 if every live secret in kine is encrypted at rest, 1 if any is still
-# plaintext. Reads state.db directly (offline), so it works even before k3s is up.
-verify_secrets_encrypted() {
+# Returns 0 if every live secret AND configmap in kine is encrypted at rest, 1 if
+# any is still plaintext. Both resource types are in the EncryptionConfiguration
+# and are re-encrypted below, so the marker must validate both — otherwise a
+# configmap that failed to seal would still write a "done" marker that the
+# self-validating check (which only ever re-reads these same rows) would honor.
+# Reads state.db directly (offline), so it works even before k3s is up.
+verify_resources_encrypted() {
     python3 - "$STATE_DB" <<'PYEOF'
 import sqlite3, sys
 conn = sqlite3.connect(sys.argv[1])
 plain = [n for (n, v) in conn.execute(
-    "SELECT name, value FROM kine k WHERE name LIKE '/registry/secrets/%' "
+    "SELECT name, value FROM kine k WHERE "
+    "(name LIKE '/registry/secrets/%' OR name LIKE '/registry/configmaps/%') "
     "AND id=(SELECT MAX(id) FROM kine WHERE name=k.name)")
     if b'k8s:enc:secretbox' not in bytes(v or b'')]
 conn.close()
-# Intentionally no detail logged — do not publicize which/whether secrets are
+# Intentionally no detail logged — do not publicize which/whether resources are
 # unencrypted. Caller logs a neutral message and acts on the exit code.
 sys.exit(1 if plain else 0)
 PYEOF
@@ -58,8 +63,8 @@ PYEOF
 # marker must not permanently skip re-encryption. If the marker is present but
 # secrets are still plaintext, clear it and re-run.
 if [[ -f "$MARKER" ]]; then
-    if [[ ! -f "$STATE_DB" ]] || verify_secrets_encrypted; then
-        log "Re-encryption marker present and secrets encrypted at rest — skipping"
+    if [[ ! -f "$STATE_DB" ]] || verify_resources_encrypted; then
+        log "Re-encryption marker present and secrets/configmaps encrypted at rest — skipping"
         exit 0
     fi
     log "Detected inconsistent secrets-encryption state — repairing"
@@ -165,7 +170,14 @@ print(json.dumps(d))
         fi
     done <<< "$items"
 
-    return "$failed"
+    # Return a boolean status, not the raw count: a count is an exit code that wraps
+    # mod 256, so e.g. exactly 256 failures would return 0 (read by the caller as
+    # success) and let the destructive purge/marker proceed with plaintext present.
+    if [[ $failed -gt 0 ]]; then
+        log "ERROR: $failed $resource_type failed to re-encrypt"
+        return 1
+    fi
+    return 0
 }
 
 if ! reencrypt_resource_type "secrets"; then
@@ -178,15 +190,15 @@ if ! reencrypt_resource_type "configmaps"; then
 fi
 log "All live records re-written through the active encryption provider"
 
-# Guard 3: verify secrets are actually encrypted AT REST before the destructive
-# purge or marking done. The rewrite only seals data if the apiserver is truly
-# encrypting; if it silently isn't, the live rows are still plaintext and we must
+# Guard 3: verify secrets AND configmaps are actually encrypted AT REST before the
+# destructive purge or marking done. The rewrite only seals data if the apiserver is
+# truly encrypting; if it silently isn't, the live rows are still plaintext and we must
 # NOT purge (it only deletes dead rows) or mark (which permanently skips re-encrypt).
-if [[ -f "$STATE_DB" ]] && ! verify_secrets_encrypted; then
-    log "ERROR: secrets-encryption state check failed after repair — not finalizing; will retry next boot"
+if [[ -f "$STATE_DB" ]] && ! verify_resources_encrypted; then
+    log "ERROR: secrets/configmaps encryption state check failed after repair — not finalizing; will retry next boot"
     exit 1
 fi
-log "Verified: all secrets encrypted at rest"
+log "Verified: all secrets and configmaps encrypted at rest"
 
 # Purge kine history and scrub old_value.
 #

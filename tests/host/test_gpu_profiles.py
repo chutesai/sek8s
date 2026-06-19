@@ -404,8 +404,18 @@ def test_match_gpu_model_disambiguates_b200_by_host_cpus():
     line = "0000:0d:00.0 3D controller [0302]: NVIDIA Corporation GB100 [B200] [10de:2901] (rev a1)"
     assert _match_gpu_model(line, host_cpus=192) == "B200"
     assert _match_gpu_model(line, host_cpus=288) == "B200_XEON6"
-    # No host_cpus: falls back to first match (B200)
-    assert _match_gpu_model(line) == "B200"
+
+
+def test_match_gpu_model_requires_cpu_count_to_disambiguate_shared_id():
+    """When multiple profiles share a device ID (B200 vs B200_XEON6, both 2901),
+    _match_gpu_model needs the host CPU count to select one. Without it, it must
+    raise rather than return an arbitrary (possibly wrong) profile."""
+    import pytest
+    from chutes.guest.detection import _match_gpu_model
+
+    line = "0000:0d:00.0 3D controller [0302]: NVIDIA Corporation GB100 [B200] [10de:2901] (rev a1)"
+    with pytest.raises(ValueError, match="refusing to guess a profile"):
+        _match_gpu_model(line)
 
 
 def test_match_gpu_model_raises_on_unknown_b200_cpu_count():

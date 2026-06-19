@@ -94,10 +94,14 @@ def _lspci_lines(vendor: str) -> list[str]:
 def _match_gpu_model(lspci_line: str, host_cpus: int | None = None) -> str | None:
     """Return the GPU_PROFILES key for an lspci line, or None.
 
-    Uses PCI device ID as the primary discriminant. When multiple profiles share
-    the same device ID (e.g. B200 and B200_XEON6 both use 2901), host_cpus must
-    match exactly. If no exact match is found a ValueError is raised listing the
-    known CPU counts so the operator knows what profile to add.
+    Uses PCI device ID as the primary discriminant. A profile must be an EXACT,
+    unambiguous match: when multiple profiles share the same device ID (e.g. B200
+    and B200_XEON6 both use 2901), host_cpus must select exactly one. If the
+    topology cannot be resolved to a single supported profile — no profile matches
+    the CPU count, or the CPU count is unavailable to disambiguate — a ValueError
+    is raised rather than guessing. An unsupported/undetermined topology has no
+    measurement baseline (MRTD/RTMR), so launching it with a guessed profile would
+    produce a VM that cannot attest; the caller must surface it instead.
     """
     device_id = _extract_device_id(lspci_line, _NVIDIA_VENDOR)
     if not device_id:
@@ -110,19 +114,33 @@ def _match_gpu_model(lspci_line: str, host_cpus: int | None = None) -> str | Non
         return matches[0][0]
 
     # Multiple profiles share this device ID — require an exact CPU count match.
-    if host_cpus is not None:
-        exact = [(name, p) for name, p in matches if p.host_cpus == host_cpus]
-        if len(exact) == 1:
-            return exact[0][0]
-        known = {name: p.host_cpus for name, p in matches}
+    known = {name: p.host_cpus for name, p in matches}
+    if host_cpus is None:
+        # No CPU count to disambiguate — refuse to guess. Returning the first match
+        # could select a profile whose guest config (and therefore measurements)
+        # does not correspond to this host.
         raise ValueError(
-            f"Device ID {device_id} matches multiple profiles {known} but none "
-            f"has host_cpus={host_cpus}. Add a new profile for this CPU topology."
+            f"Device ID {device_id} matches multiple profiles {known} but the host "
+            f"CPU count could not be determined to disambiguate. Unsupported or "
+            f"undetermined topology — refusing to guess a profile."
         )
+    exact = [(name, p) for name, p in matches if p.host_cpus == host_cpus]
+    if len(exact) == 1:
+        return exact[0][0]
+    raise ValueError(
+        f"Device ID {device_id} matches multiple profiles {known} but none "
+        f"has host_cpus={host_cpus}. Add a new profile for this CPU topology."
+    )
 
-    # No CPU count provided — can't disambiguate; return first match.
-    # This path should only be reached in tests or non-GPU-passthrough code paths.
-    return matches[0][0]
+
+def _is_known_gpu(lspci_line: str) -> bool:
+    """True if the lspci line is an NVIDIA GPU whose device ID matches a known
+    profile. Recognition only — does NOT resolve/disambiguate the exact profile,
+    so it never raises on a shared device ID (unlike _match_gpu_model)."""
+    device_id = _extract_device_id(lspci_line, _NVIDIA_VENDOR)
+    if not device_id:
+        return False
+    return any(p.matches_device_id(device_id) for p in GPU_PROFILES.values())
 
 
 def detect_nvidia_gpus() -> list[str]:
@@ -132,7 +150,7 @@ def detect_nvidia_gpus() -> list[str]:
         parts = line.strip().split()
         if not parts:
             continue
-        if _match_gpu_model(line) is not None:
+        if _is_known_gpu(line):
             devices.append(parts[0])
     return sorted(devices)
 

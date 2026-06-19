@@ -1,5 +1,5 @@
 # OPA tests for seccomp profile enforcement in chutes namespace.
-# SEK8S-042: No seccompProfile may be specified — containerd default is
+# No seccompProfile may be specified — containerd default is
 # user-workload.json set at VM build time. Any override weakens it.
 # Run locally: make test-opa-policies (or: opa test <policies-dir> tests/opa -v)
 package kubernetes.admission
