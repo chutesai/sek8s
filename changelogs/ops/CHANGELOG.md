@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.06.0] - 2026-06-13
+## [2026.06.0] - 2026-06-19
 
 ### Added
 - B300 Blackwell HGX GPU support for TDX VM launch (`B300Profile`: PCI device ID `3182`, 288 GiB HBM3e VRAM, 2-socket/192-vCPU topology).
@@ -23,6 +23,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - NVSwitch-based B200/B300 profiles now declare `requires_fabric_manager`; host setup starts (or restarts) `nvidia-fabricmanager.service` immediately rather than only enabling it, so the NVSwitch fabric is active before launch.
 - InfiniBand passthrough is now optional: a host whose profile supports IB passthrough but exposes no IB devices logs a note and skips passthrough instead of aborting the launch.
 - `benchmark-network.py`: removed `hf_transfer` scenario (deprecated in huggingface_hub 1.x).
+- GPU profile auto-detection now refuses to guess. `_match_gpu_model` raises a `ValueError` when a host's GPU topology cannot be resolved to exactly one supported profile — no profile matches the device ID + CPU count, or the CPU count is unavailable to disambiguate a shared device ID (e.g. B200 vs B200_XEON6) — instead of falling back to the first match. An unsupported/undetermined topology has no measurement baseline (MRTD/RTMR), so launching it with a guessed profile would produce a VM that cannot attest; the caller must surface the error. Added `_is_known_gpu` for recognition-only detection (used by `detect_nvidia_gpus`), which never raises on a shared device ID.
 
 ### Fixed
 - Host OOM-kill of the VM under load: the per-NUMA-node guest memory backends no longer set `prealloc=on`. Under TDX the guest's RAM is private memory served lazily from `guest_memfd`, so preallocating the memory-backend pinned a second full copy of pages the guest never uses as shared (~2× guest RAM), which OOM-killed QEMU as a pod warmed up. NUMA locality (`host-nodes=…,policy=bind`) is preserved. Affected all NUMA profiles (H200/B200/B300).
