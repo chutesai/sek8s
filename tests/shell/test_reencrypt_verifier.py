@@ -32,7 +32,9 @@ def _make_state_db(tmp_path, rows):
     """rows: list of (name, value_bytes). Builds a minimal kine table."""
     db = tmp_path / "state.db"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE kine (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, value BLOB)")
+    conn.execute(
+        "CREATE TABLE kine (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, value BLOB)"
+    )
     conn.executemany("INSERT INTO kine (name, value) VALUES (?, ?)", rows)
     conn.commit()
     conn.close()
@@ -50,40 +52,52 @@ def _run_verifier(db) -> int:
 
 
 ENC = b"k8s:enc:secretbox:v1:key1:" + b"\x00\x10ciphertext"
-PLAIN = b"{\"apiVersion\":\"v1\",\"kind\":\"Secret\"}"
+PLAIN = b'{"apiVersion":"v1","kind":"Secret"}'
 
 
 def test_all_encrypted_passes(tmp_path):
-    db = _make_state_db(tmp_path, [
-        ("/registry/secrets/default/a", ENC),
-        ("/registry/configmaps/default/b", ENC),
-    ])
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/a", ENC),
+            ("/registry/configmaps/default/b", ENC),
+        ],
+    )
     assert _run_verifier(db) == 0
 
 
 def test_plaintext_configmap_fails(tmp_path):
     # The regression: secret sealed, configmap plaintext -> must FAIL (exit 1).
-    db = _make_state_db(tmp_path, [
-        ("/registry/secrets/default/a", ENC),
-        ("/registry/configmaps/default/b", PLAIN),
-    ])
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/a", ENC),
+            ("/registry/configmaps/default/b", PLAIN),
+        ],
+    )
     assert _run_verifier(db) == 1
 
 
 def test_plaintext_secret_fails(tmp_path):
-    db = _make_state_db(tmp_path, [
-        ("/registry/secrets/default/a", PLAIN),
-        ("/registry/configmaps/default/b", ENC),
-    ])
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/a", PLAIN),
+            ("/registry/configmaps/default/b", ENC),
+        ],
+    )
     assert _run_verifier(db) == 1
 
 
 def test_only_latest_revision_considered(tmp_path):
     # An old plaintext row superseded by a newer encrypted row (higher id) is OK.
-    db = _make_state_db(tmp_path, [
-        ("/registry/secrets/default/a", PLAIN),  # old
-        ("/registry/secrets/default/a", ENC),    # newer, wins
-    ])
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/a", PLAIN),  # old
+            ("/registry/secrets/default/a", ENC),  # newer, wins
+        ],
+    )
     assert _run_verifier(db) == 0
 
 

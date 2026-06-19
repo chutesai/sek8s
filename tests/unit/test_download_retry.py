@@ -57,7 +57,10 @@ def test_revision_not_found_is_not_transient():
 def test_plain_exception_mentioning_403_is_not_transient():
     # Regression for the old substring classifier: an unrelated error whose message
     # merely contains "403" must NOT be retried.
-    assert _is_transient_download_error(ValueError("computed 403 bytes remaining")) is False
+    assert (
+        _is_transient_download_error(ValueError("computed 403 bytes remaining"))
+        is False
+    )
 
 
 def test_redact_strips_presigned_signature():

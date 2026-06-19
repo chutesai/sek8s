@@ -19,14 +19,21 @@ _FINDING_ID = re.compile(r"SEK8S-\d{3}")
 
 def _sensitive_exclusions():
     spec = (REPO / ".security-sensitive-paths").read_text().splitlines()
-    paths = [ln.strip().rstrip("/") for ln in spec if ln.strip() and not ln.strip().startswith("#")]
+    paths = [
+        ln.strip().rstrip("/")
+        for ln in spec
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
     return [f":(exclude){p}" for p in paths]
 
 
 def test_no_finding_ids_in_public_bound_files():
     files = subprocess.run(
         ["git", "ls-files", "--", ".", *_sensitive_exclusions()],
-        cwd=REPO, capture_output=True, text=True, check=True,
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split()
     offenders = []
     for rel in files:
@@ -38,5 +45,6 @@ def test_no_finding_ids_in_public_bound_files():
             offenders.append(rel)
     assert not offenders, (
         "audit finding IDs must not appear in public-bound files — keep the "
-        "finding/test mapping in the audit doc. Offending files: " + ", ".join(sorted(offenders))
+        "finding/test mapping in the audit doc. Offending files: "
+        + ", ".join(sorted(offenders))
     )

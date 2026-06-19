@@ -10,7 +10,9 @@ import hashlib
 
 SCRIPT = "ansible/guest/roles/k3s/files/cluster-init/04-helm-chart-upgrade.sh"
 
-CONF = 'RELEASE="testchart"\nNAMESPACE="testns"\nCHART="repo/testchart"\nVERSION="1.2.3"\n'
+CONF = (
+    'RELEASE="testchart"\nNAMESPACE="testns"\nCHART="repo/testchart"\nVERSION="1.2.3"\n'
+)
 
 STUB_HELM = """
 case "$1" in
@@ -70,7 +72,7 @@ def test_release_not_found_powers_off(shell):
 def test_helm_upgrade_failure_powers_off(shell):
     _, _, upgrade_rec, poweroff_rec, env = _setup(shell)
     env["HELM_LIST_STATUS"] = "deployed"  # release exists, spec changed -> upgrade
-    env["HELM_UPGRADE_RC"] = "1"          # upgrade fails every attempt
+    env["HELM_UPGRADE_RC"] = "1"  # upgrade fails every attempt
     res = shell.run(SCRIPT, env=env, require=("bash", "jq"))
     assert res.returncode == 1
     assert "poweroff" in poweroff_rec.read_text()
@@ -86,14 +88,16 @@ def test_unchanged_spec_skips_without_upgrade_or_poweroff(shell):
     env["HELM_LIST_STATUS"] = "deployed"
     res = shell.run(SCRIPT, env=env, require=("bash", "jq"))
     assert res.returncode == 0
-    assert upgrade_rec.read_text() == ""        # no helm upgrade
-    assert poweroff_rec.read_text() == ""       # no poweroff
+    assert upgrade_rec.read_text() == ""  # no helm upgrade
+    assert poweroff_rec.read_text() == ""  # no poweroff
 
 
 def test_missing_version_powers_off(shell):
     # A measured conf without a pinned VERSION is a broken spec -> fail closed.
     _, _, _, poweroff_rec, env = _setup(
-        shell, conf_text='RELEASE="testchart"\nNAMESPACE="testns"\nCHART="repo/testchart"\n')
+        shell,
+        conf_text='RELEASE="testchart"\nNAMESPACE="testns"\nCHART="repo/testchart"\n',
+    )
     env["HELM_LIST_STATUS"] = "deployed"
     res = shell.run(SCRIPT, env=env, require=("bash", "jq"))
     assert res.returncode == 1

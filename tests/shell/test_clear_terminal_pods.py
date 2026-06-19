@@ -11,28 +11,62 @@ import json
 
 SCRIPT = "ansible/guest/roles/k3s/files/cluster-init/98-clear-terminal-pods.sh"
 
-PODS = {"items": [
-    {"metadata": {"namespace": "kube-system", "name": "attproxy-nodelost",
-                  "ownerReferences": [{"controller": True, "kind": "DaemonSet"}]},
-     "status": {"phase": "Running", "reason": "NodeLost"}},
-    {"metadata": {"namespace": "kube-system", "name": "attproxy-unknown",
-                  "ownerReferences": [{"controller": True, "kind": "DaemonSet"}]},
-     "status": {"phase": "Unknown"}},
-    {"metadata": {"namespace": "chutes", "name": "agent-failed",
-                  "ownerReferences": [{"controller": True, "kind": "ReplicaSet"}]},
-     "status": {"phase": "Failed"}},
-    {"metadata": {"namespace": "chutes", "name": "agent-running",
-                  "ownerReferences": [{"controller": True, "kind": "ReplicaSet"}]},
-     "status": {"phase": "Running"}},
-    {"metadata": {"namespace": "chutes", "name": "job-succeeded",
-                  "ownerReferences": [{"controller": True, "kind": "Job"}]},
-     "status": {"phase": "Succeeded"}},
-    {"metadata": {"namespace": "default", "name": "bare-unknown"},
-     "status": {"phase": "Unknown"}},
-    {"metadata": {"namespace": "gpu", "name": "cuda-validator",
-                  "ownerReferences": [{"controller": True, "kind": "Pod"}]},
-     "status": {"phase": "Succeeded"}},
-]}
+PODS = {
+    "items": [
+        {
+            "metadata": {
+                "namespace": "kube-system",
+                "name": "attproxy-nodelost",
+                "ownerReferences": [{"controller": True, "kind": "DaemonSet"}],
+            },
+            "status": {"phase": "Running", "reason": "NodeLost"},
+        },
+        {
+            "metadata": {
+                "namespace": "kube-system",
+                "name": "attproxy-unknown",
+                "ownerReferences": [{"controller": True, "kind": "DaemonSet"}],
+            },
+            "status": {"phase": "Unknown"},
+        },
+        {
+            "metadata": {
+                "namespace": "chutes",
+                "name": "agent-failed",
+                "ownerReferences": [{"controller": True, "kind": "ReplicaSet"}],
+            },
+            "status": {"phase": "Failed"},
+        },
+        {
+            "metadata": {
+                "namespace": "chutes",
+                "name": "agent-running",
+                "ownerReferences": [{"controller": True, "kind": "ReplicaSet"}],
+            },
+            "status": {"phase": "Running"},
+        },
+        {
+            "metadata": {
+                "namespace": "chutes",
+                "name": "job-succeeded",
+                "ownerReferences": [{"controller": True, "kind": "Job"}],
+            },
+            "status": {"phase": "Succeeded"},
+        },
+        {
+            "metadata": {"namespace": "default", "name": "bare-unknown"},
+            "status": {"phase": "Unknown"},
+        },
+        {
+            "metadata": {
+                "namespace": "gpu",
+                "name": "cuda-validator",
+                "ownerReferences": [{"controller": True, "kind": "Pod"}],
+            },
+            "status": {"phase": "Succeeded"},
+        },
+    ]
+}
 
 STUB_KUBECTL = """
 if [ "$1" = "get" ] && [ "$2" = "--raw=/readyz" ]; then exit 0; fi
@@ -48,8 +82,11 @@ def _run(shell):
     record = shell.tmp / "deletes.txt"
     record.write_text("")
     shell.stub("kubectl", STUB_KUBECTL)
-    res = shell.run(SCRIPT, env={"PODS_JSON": str(pods_json), "RECORD": str(record)},
-                    require=("bash", "jq"))
+    res = shell.run(
+        SCRIPT,
+        env={"PODS_JSON": str(pods_json), "RECORD": str(record)},
+        require=("bash", "jq"),
+    )
     return res, record.read_text()
 
 
@@ -81,9 +118,15 @@ def test_api_unreachable_exits_zero_without_deleting(shell):
     record = shell.tmp / "deletes.txt"
     record.write_text("")
     # readyz fails -> script must skip cleanly and never power off the boot.
-    shell.stub("kubectl", 'if [ "$1" = "get" ] && [ "$2" = "--raw=/readyz" ]; then exit 1; fi\n'
-                          'if [ "$1" = "delete" ]; then echo "$*" >> "$RECORD"; fi\nexit 0\n')
-    res = shell.run(SCRIPT, env={"PODS_JSON": str(pods_json), "RECORD": str(record)},
-                    require=("bash",))
+    shell.stub(
+        "kubectl",
+        'if [ "$1" = "get" ] && [ "$2" = "--raw=/readyz" ]; then exit 1; fi\n'
+        'if [ "$1" = "delete" ]; then echo "$*" >> "$RECORD"; fi\nexit 0\n',
+    )
+    res = shell.run(
+        SCRIPT,
+        env={"PODS_JSON": str(pods_json), "RECORD": str(record)},
+        require=("bash",),
+    )
     assert res.returncode == 0
     assert record.read_text() == ""
