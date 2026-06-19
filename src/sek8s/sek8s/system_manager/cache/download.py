@@ -34,16 +34,10 @@ from huggingface_hub.errors import (
     HfHubHTTPError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
+    XetAuthorizationError,
+    XetDownloadError,
+    XetRefreshTokenError,
 )
-
-try:  # XET error classes (huggingface_hub 1.x with XET enabled)
-    from huggingface_hub.errors import (
-        XetAuthorizationError,
-        XetDownloadError,
-        XetRefreshTokenError,
-    )
-except ImportError:  # pragma: no cover - older hub without XET
-    XetAuthorizationError = XetDownloadError = XetRefreshTokenError = ()
 from loguru import logger
 
 from sek8s.system_manager.cache.util import (
@@ -237,7 +231,10 @@ def _snapshot_download_with_retry(repo_id: str, revision: str, cache_dir: str) -
             )
             return
         except Exception as exc:
-            if not _is_transient_download_error(exc) or attempt == _DOWNLOAD_MAX_RETRIES:
+            if (
+                not _is_transient_download_error(exc)
+                or attempt == _DOWNLOAD_MAX_RETRIES
+            ):
                 raise
             delay = _DOWNLOAD_RETRY_BASE_DELAY * (2 ** (attempt - 1))
             print(
