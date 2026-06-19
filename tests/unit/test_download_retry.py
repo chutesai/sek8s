@@ -22,10 +22,15 @@ from sek8s.system_manager.cache.download import (
 )
 
 
+def _fake_response(status: int) -> SimpleNamespace:
+    # huggingface_hub 1.x requires a real Response on HfHubHTTPError and reads
+    # .headers/.request during construction; this stub satisfies that and exposes
+    # the status_code the classifier inspects.
+    return SimpleNamespace(headers={}, request=None, status_code=status)
+
+
 def _http_error(status: int) -> HfHubHTTPError:
-    exc = HfHubHTTPError("http error")
-    exc.response = SimpleNamespace(status_code=status)
-    return exc
+    return HfHubHTTPError("http error", response=_fake_response(status))
 
 
 def test_cdn_403_is_transient():
@@ -43,15 +48,30 @@ def test_404_not_found_is_not_transient():
 def test_gated_repo_is_not_transient():
     # GatedRepoError is an HfHubHTTPError subclass (often 403) but is a hard auth
     # failure — retrying never succeeds, so it must not be treated as transient.
-    assert _is_transient_download_error(GatedRepoError("gated")) is False
+    assert (
+        _is_transient_download_error(
+            GatedRepoError("gated", response=_fake_response(403))
+        )
+        is False
+    )
 
 
 def test_repo_not_found_is_not_transient():
-    assert _is_transient_download_error(RepositoryNotFoundError("missing")) is False
+    assert (
+        _is_transient_download_error(
+            RepositoryNotFoundError("missing", response=_fake_response(404))
+        )
+        is False
+    )
 
 
 def test_revision_not_found_is_not_transient():
-    assert _is_transient_download_error(RevisionNotFoundError("bad-rev")) is False
+    assert (
+        _is_transient_download_error(
+            RevisionNotFoundError("bad-rev", response=_fake_response(404))
+        )
+        is False
+    )
 
 
 def test_plain_exception_mentioning_403_is_not_transient():

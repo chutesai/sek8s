@@ -34,9 +34,7 @@ from huggingface_hub.errors import (
     HfHubHTTPError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
-    XetAuthorizationError,
     XetDownloadError,
-    XetRefreshTokenError,
 )
 from loguru import logger
 
@@ -179,10 +177,9 @@ _NON_TRANSIENT_ERRORS = (
     GatedRepoError,
     RepositoryNotFoundError,
     RevisionNotFoundError,
-    XetAuthorizationError,
 )
 # XET transport hiccups (token refresh, chunk fetch) ARE transient.
-_XET_TRANSIENT_ERRORS = (XetDownloadError, XetRefreshTokenError)
+_XET_TRANSIENT_ERRORS = XetDownloadError
 
 # HF/CDN URLs embed short-lived credentials in the query string (e.g.
 # ?X-Amz-Signature=...); strip them before logging so they never hit the journal.
