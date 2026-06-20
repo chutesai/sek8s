@@ -1,0 +1,54 @@
+#!/bin/bash
+# cache-rm: privileged, path-restricted recursive remove for the HF cache.
+#
+# Granted to the system-manager service via sudoers (NOPASSWD) INSTEAD of bare
+# /usr/bin/rm. The system-manager cache code must delete per-chute cache dirs
+# that a chute pod (uid 1000) downloaded into and left non-group-writable, which
+# requires root. Handing system-manager unrestricted `sudo rm` would mean an RCE
+# in the FastAPI service (or any careless caller) gets root `rm -rf /anything`.
+# This wrapper bounds the privilege in the kernel/sudo layer: it only ever
+# removes a DIRECT child of the cache base, never the base itself, a deeper
+# subtree, or any path that resolves (via symlink) outside the cache.
+#
+# CACHE_BASE is hardcoded, not read from the environment, so it cannot be
+# redirected by a caller (sudo env_reset would strip it anyway). This file is
+# measured into RTMR3 so the binary the sudoers grant points at cannot be
+# swapped on the root image without changing the measurement.
+set -euo pipefail
+
+CACHE_BASE="/var/snap/cache"
+
+if [[ $# -ne 1 ]]; then
+    echo "usage: cache-rm <path-under-${CACHE_BASE}>" >&2
+    exit 2
+fi
+
+target="$1"
+if [[ -z "$target" ]]; then
+    echo "error: empty path" >&2
+    exit 2
+fi
+
+# Nothing to remove -> success (idempotent), without resolving a missing path.
+if [[ ! -e "$target" && ! -L "$target" ]]; then
+    exit 0
+fi
+
+# Canonicalize both the base and the target, resolving every symlink, so a
+# symlinked target cannot escape the cache and so the comparison holds even if
+# the base path itself contains symlinks.
+base="$(realpath -m -- "$CACHE_BASE")"
+resolved="$(realpath -e -- "$target")" || {
+    echo "error: cannot resolve path: $target" >&2
+    exit 1
+}
+
+# Must be a DIRECT child of the cache base (a single per-chute dir). This rejects
+# the base itself and any deeper subtree, matching the system-manager contract
+# that it only ever removes <cache_base>/<chute_id>.
+if [[ "$(dirname -- "$resolved")" != "$base" ]]; then
+    echo "error: refusing to remove '$resolved' (not a direct child of ${base})" >&2
+    exit 1
+fi
+
+exec rm -rf -- "$resolved"

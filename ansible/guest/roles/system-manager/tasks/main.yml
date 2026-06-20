@@ -121,6 +121,14 @@
     group: root
     mode: '0755'
 
+- name: Install cache-rm wrapper (restricts sudo rm to direct children of the HF cache base)
+  ansible.builtin.copy:
+    src: cache-rm
+    dest: /usr/local/bin/cache-rm
+    owner: root
+    group: root
+    mode: '0755'
+
 - name: Ensure k3s systemd drop-in directory exists
   ansible.builtin.file:
     path: /etc/systemd/system/k3s.service.d
@@ -172,12 +180,15 @@
     group: system-manager
     mode: '0640'
 
-- name: Allow system-manager to run shutdown, du, and rm (k3s-images-helper runs without sudo via containerd group)
+# cache-rm (not bare /usr/bin/rm) bounds the destructive grant to direct children
+# of the HF cache base, so an RCE in system-manager cannot `sudo rm -rf` arbitrary
+# root-owned paths. k3s-images-helper runs without sudo via the containerd group.
+- name: Allow system-manager to run shutdown, du, and the path-restricted cache-rm
   ansible.builtin.copy:
     content: |
       system-manager ALL=(ALL) NOPASSWD: /sbin/shutdown
       system-manager ALL=(ALL) NOPASSWD: /usr/bin/du
-      system-manager ALL=(ALL) NOPASSWD: /usr/bin/rm
+      system-manager ALL=(ALL) NOPASSWD: /usr/local/bin/cache-rm
     dest: /etc/sudoers.d/system-manager
     owner: root
     group: root
