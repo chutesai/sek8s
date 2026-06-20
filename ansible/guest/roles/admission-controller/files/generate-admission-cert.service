@@ -17,6 +17,9 @@ Before=admission-controller.service
 
 [Service]
 Type=oneshot
+# Optional debug flag (GENERATE_ADMISSION_CERT_DEBUG_MODE=true) written only on
+# debug builds; absent on production, where a failure powers the VM off.
+EnvironmentFile=-/etc/default/generate-admission-cert
 ExecStart=/usr/local/bin/generate-admission-cert
 RemainAfterExit=yes
 TimeoutStartSec=120

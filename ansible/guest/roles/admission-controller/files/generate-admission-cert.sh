@@ -48,9 +48,20 @@ WEBHOOK_MANIFESTS=(
     "${MANIFEST_DIR}/mutation-webhook.yaml"
 )
 
+# In production a fatal powers the VM off: the admission webhook cannot be
+# wired up, so the node must not run workloads. On debug builds
+# (GENERATE_ADMISSION_CERT_DEBUG_MODE=true, set via /etc/default/generate-admission-cert)
+# it logs and RETURNS so the VM stays up for troubleshooting — mirrors
+# rtmr3-verify / gpu-verify.
 fatal() {
     echo "generate-admission-cert: FATAL: $1" >&2
     echo "generate-admission-cert: FATAL: $1" > /dev/kmsg 2>/dev/null || true
+    if [ "${GENERATE_ADMISSION_CERT_DEBUG_MODE:-false}" = "true" ]; then
+        echo "generate-admission-cert: DEBUG MODE — would power off but continuing" >&2
+        return 0
+    fi
+    sleep 1
+    systemctl poweroff --force
     exit 1
 }
 
@@ -99,13 +110,18 @@ CA_BUNDLE="$(base64 -w0 "${CA_CERT}")"
 
 for manifest in "${WEBHOOK_MANIFESTS[@]}"; do
     if [ ! -f "${manifest}" ]; then
-        # The webhook manifests are deployed at image cleanup (after the build
-        # starts the admission controller, which pulls this service in via
-        # Wants=). During that build-time run the manifests do not exist yet —
-        # nothing to inject, the cert material is enough. At boot they always
-        # exist (baked + rsynced to storage), so injection happens then.
-        echo "generate-admission-cert: ${manifest} absent, skipping injection (build-time run?)"
-        continue
+        # At runtime the webhook manifests are ALWAYS present: baked into the
+        # image and rsynced to the storage volume by setup-storage-bind-mounts
+        # before this runs. A missing manifest means a broken image or boot
+        # sequence — fail closed rather than leave the webhook pointing at a
+        # placeholder CA the apiserver can never validate.
+        #
+        # This is not the build-time path: this script only runs at boot. The
+        # service Requires rtmr3-verify + setup-storage-bind-mounts, neither of
+        # which is installed yet when the build starts the admission controller
+        # for its health check, so generate-admission-cert never fires there.
+        fatal "webhook manifest not found: ${manifest}"
+        continue  # reached only in debug mode (fatal returned)
     fi
     # rsync -a does not replicate the +i immutable flag, but clear it defensively
     # in case a future rsync variant or manual chattr leaves it set.
@@ -114,9 +130,10 @@ for manifest in "${WEBHOOK_MANIFESTS[@]}"; do
         sed -i "s|${CA_BUNDLE_PLACEHOLDER}|${CA_BUNDLE}|g" "${manifest}"
         echo "generate-admission-cert: injected caBundle into ${manifest}"
     else
-        # No placeholder: the rsync reset didn't run or the service is being
-        # re-run within the same boot. Idempotent — leave the existing caBundle.
-        echo "generate-admission-cert: no placeholder in ${manifest}, skipping injection"
+        # No placeholder left: the service is being re-run within the same boot
+        # (rsync resets to the placeholder only across reboots). Idempotent —
+        # leave the already-injected caBundle in place.
+        echo "generate-admission-cert: no placeholder in ${manifest}, already injected (re-run), skipping"
     fi
 done
 
