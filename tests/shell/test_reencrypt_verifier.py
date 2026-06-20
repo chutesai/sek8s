@@ -29,13 +29,23 @@ def _verifier_src() -> str:
 
 
 def _make_state_db(tmp_path, rows):
-    """rows: list of (name, value_bytes). Builds a minimal kine table."""
+    """rows: list of (name, value_bytes) or (name, value_bytes, deleted).
+
+    Builds a minimal kine table including the `deleted` tombstone flag that the
+    real kine schema carries. `deleted` defaults to 0 (live) when omitted.
+    """
     db = tmp_path / "state.db"
     conn = sqlite3.connect(db)
     conn.execute(
-        "CREATE TABLE kine (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, value BLOB)"
+        "CREATE TABLE kine ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, "
+        "deleted INTEGER DEFAULT 0, value BLOB)"
     )
-    conn.executemany("INSERT INTO kine (name, value) VALUES (?, ?)", rows)
+    normalized = [(r[0], r[1], r[2] if len(r) > 2 else 0) for r in rows]
+    conn.executemany(
+        "INSERT INTO kine (name, value, deleted) VALUES (?, ?, ?)",
+        [(name, value, deleted) for (name, value, deleted) in normalized],
+    )
     conn.commit()
     conn.close()
     return db
@@ -104,3 +114,46 @@ def test_only_latest_revision_considered(tmp_path):
 def test_empty_db_passes(tmp_path):
     db = _make_state_db(tmp_path, [])
     assert _run_verifier(db) == 0
+
+
+def test_deleted_plaintext_tombstone_ignored(tmp_path):
+    # Regression for the fresh-volume poweroff bug: a build-time secret that was
+    # created then DELETED leaves a tombstone (deleted=1) whose value is the
+    # pre-encryption plaintext. The apiserver does not list deleted resources, so
+    # the online re-encrypt loop can never seal it. The verifier must NOT treat it
+    # as a live plaintext secret, or verification fails forever on a fresh volume.
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/live", ENC),
+            ("/registry/secrets/default/gone", PLAIN, 1),
+            ("/registry/configmaps/default/gone", PLAIN, 1),
+        ],
+    )
+    assert _run_verifier(db) == 0
+
+
+def test_deleted_empty_tombstone_ignored(tmp_path):
+    # A tombstone may carry a NULL/empty value rather than the prior plaintext.
+    # `bytes(v or b'')` turns that into b'', which fails the secretbox substring
+    # check — so without the deleted-row filter this would be a false positive.
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/live", ENC),
+            ("/registry/secrets/default/gone", None, 1),
+        ],
+    )
+    assert _run_verifier(db) == 0
+
+
+def test_live_plaintext_still_fails_when_tombstones_present(tmp_path):
+    # The deleted-row filter must not mask a genuinely plaintext LIVE secret.
+    db = _make_state_db(
+        tmp_path,
+        [
+            ("/registry/secrets/default/gone", PLAIN, 1),
+            ("/registry/secrets/default/live", PLAIN, 0),
+        ],
+    )
+    assert _run_verifier(db) == 1

@@ -11,11 +11,15 @@
 # false-success run cannot permanently skip re-encryption.
 #
 # Why this is needed:
-#   On first boot of a fresh VM, setup-storage-bind-mounts deletes the
-#   build-time state.db so k3s starts fresh with encryption from the first
-#   write.  On an upgrade from an image that did not have secrets encryption,
-#   state.db already exists with plaintext secrets.  This script detects that
-#   case and re-writes every secret through the active encryption provider.
+#   The guest image is built with k3s running but WITHOUT secrets encryption, so
+#   the baked-in state.db holds plaintext secrets and configmaps.  On first boot
+#   setup-storage-bind-mounts SYNCS that build-time state.db onto the fresh
+#   storage volume (it does NOT delete it), so a "fresh" VM starts k3s on the
+#   build-time plaintext data — exactly like an upgrade from an unencrypted
+#   image.  This script re-writes every live secret/configmap through the active
+#   encryption provider, then (in the purge step) scrubs plaintext left behind in
+#   dead rows and in the tombstone rows of resources that were created and
+#   deleted at build time.
 #
 # The EncryptionConfiguration has secretbox first, identity last:
 #   - Reads:  secretbox attempted first; identity fallback decrypts plaintext
@@ -23,17 +27,20 @@
 # So `kubectl replace` re-encrypts every secret in place without data loss.
 set -euo pipefail
 
+# All paths default to their production locations and are env-overridable so the
+# script can be exercised against an isolated k3s (--data-dir in a temp dir) by
+# the integration test. Production sets none of these, so defaults apply.
 MARKER="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}/reencrypt-secrets.done"
-LOG_FILE="/var/log/k3s-post-start.log"
+LOG_FILE="${LOG_FILE:-/var/log/k3s-post-start.log}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [00-reencrypt-secrets] $1" | tee -a "$LOG_FILE"
 }
 
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
-STATE_DB="/var/lib/rancher/k3s/server/db/state.db"
-ENCRYPTION_CONFIG="/run/chutes/k3s-encryption-config.yaml"
-K3S_CONFIG="/etc/rancher/k3s/config.yaml"
+STATE_DB="${STATE_DB:-/var/lib/rancher/k3s/server/db/state.db}"
+ENCRYPTION_CONFIG="${ENCRYPTION_CONFIG:-/run/chutes/k3s-encryption-config.yaml}"
+K3S_CONFIG="${K3S_CONFIG:-/etc/rancher/k3s/config.yaml}"
 
 # Returns 0 if every live secret AND configmap in kine is encrypted at rest, 1 if
 # any is still plaintext. Both resource types are in the EncryptionConfiguration
@@ -41,6 +48,14 @@ K3S_CONFIG="/etc/rancher/k3s/config.yaml"
 # configmap that failed to seal would still write a "done" marker that the
 # self-validating check (which only ever re-reads these same rows) would honor.
 # Reads state.db directly (offline), so it works even before k3s is up.
+#
+# Only LIVE rows are checked (kine.deleted = 0). A resource that was created and
+# deleted at build time leaves a tombstone row (deleted != 0) whose value is
+# empty or the pre-encryption plaintext; that row is NOT a live secret and the
+# online re-encrypt loop cannot touch it (the apiserver does not list deleted
+# resources), so counting it as "plaintext" here would make verification fail
+# forever on a fresh volume. The tombstone's plaintext is scrubbed in the purge
+# step below instead.
 verify_resources_encrypted() {
     python3 - "$STATE_DB" <<'PYEOF'
 import sqlite3, sys
@@ -48,6 +63,7 @@ conn = sqlite3.connect(sys.argv[1])
 plain = [n for (n, v) in conn.execute(
     "SELECT name, value FROM kine k WHERE "
     "(name LIKE '/registry/secrets/%' OR name LIKE '/registry/configmaps/%') "
+    "AND k.deleted = 0 "
     "AND id=(SELECT MAX(id) FROM kine WHERE name=k.name)")
     if b'k8s:enc:secretbox' not in bytes(v or b'')]
 conn.close()
@@ -223,9 +239,19 @@ dead = conn.execute(
     "DELETE FROM kine WHERE id NOT IN (SELECT MAX(id) FROM kine GROUP BY name)"
 ).rowcount
 nulled = conn.execute("UPDATE kine SET old_value = NULL").rowcount
+# Scrub plaintext left in the tombstone rows of build-time-deleted secrets and
+# configmaps. These rows survive the dead-row purge above (a deleted key's only
+# remaining row is the MAX(id) tombstone for that name) and their value may be
+# the pre-encryption plaintext. verify_resources_encrypted intentionally skips
+# them, so this is the only place that removes that plaintext from disk.
+scrubbed = conn.execute(
+    "UPDATE kine SET value = NULL WHERE deleted != 0 AND value IS NOT NULL AND "
+    "(name LIKE '/registry/secrets/%' OR name LIKE '/registry/configmaps/%')"
+).rowcount
 conn.commit()
 conn.close()
-print(f"Deleted {dead} dead rows, nulled old_value on {nulled} live rows")
+print(f"Deleted {dead} dead rows, nulled old_value on {nulled} live rows, "
+      f"scrubbed {scrubbed} deleted-resource tombstones")
 PYEOF
     then
         log "Kine purge complete — plaintext logically removed from state.db"
