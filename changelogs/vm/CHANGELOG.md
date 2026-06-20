@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.3.1] - 2026-06-19
+## [1.3.1] - 2026-06-20
 
 ### Added
 - `libnvidia-gpucomp` and `nvidia-persistenced` packages to guest NVIDIA driver install (required by B300 driver stack).
@@ -30,6 +30,7 @@ Version source of truth: `ansible/guest/VERSION`
 - Boot-time Helm chart reconcile (`04-helm-chart-upgrade.sh`) is now fail-closed for every chart. Removed the per-chart `FATAL` tier (and the `FATAL=` fields in the gpu-operator / chutes-miner-gpu / prometheus conf templates): any chart that cannot be reconciled to its measured spec — a failed upgrade, a missing/uninstalled release, an unreadable helm/API state, or a conf missing `RELEASE`/`NAMESPACE`/`CHART` — now powers the VM off (fail closed) instead of being skipped, so an attested node either converges to the measured charts or goes down. Prometheus/monitoring is no longer a best-effort exception. Each chart first gets a few in-boot retries (`RECONCILE_ATTEMPTS`, default 3; `RECONCILE_RETRY_DELAY`, default 5s) to absorb transients against the local cluster; an unchanged spec is still skipped without touching helm.
 - Boot-time pod cleanup (`98-clear-terminal-pods.sh`) now self-heals stuck pods, not just terminal tombstones. In addition to `Failed`/`Succeeded` pods it clears `phase=Unknown` and `status.reason=NodeLost` pods owned by a ReplicaSet/DaemonSet/StatefulSet. Unknown/NodeLost pods are force-deleted (`--force --grace-period=0`) since the kubelet/node never confirms a graceful delete — which lets the controller recreate e.g. an attestation-proxy DaemonSet pod orphaned by an ungraceful reboot instead of staying down until a manual `kubectl rollout restart`. This replaces the separate `05-attestation-proxy-recovery.sh`. Job/CronJob pods, operator one-shots, bare pods, and Running/Pending pods are left untouched; the script still always exits 0.
 - Boot-time at-rest re-encryption (`00-reencrypt-secrets.sh`) now covers **configmaps** as well as secrets — both are in the EncryptionConfiguration — and the "done" marker is only written after verifying both resource types are sealed.
+- Hardened the system-manager privileged-remove grant in the guest image. The sudoers rule no longer allows bare `/usr/bin/rm` (root `rm` with any arguments); it now allows only `/usr/local/bin/cache-rm`, a new path-restricted wrapper that refuses to remove anything that isn't a direct child of the HF cache base (rejecting the base itself, deeper subtrees, and symlink/`..` escapes). The wrapper is installed by the system-manager role and measured into RTMR3 (`tdx-measure-miner.conf`) so the root binary the grant points at cannot be swapped on the root image. Only the chutes-miner-vm build installs system-manager, so the wrapper is not present on (or measured in) the tee-gpu-vm image.
 
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots

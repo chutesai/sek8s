@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.3.1] - 2026-06-19
+## [0.3.1] - 2026-06-20
 
 ### Added
 - Retry logic in `download.py` for transient 403 errors caused by presigned CDN URL expiration on large model downloads (up to 5 retries with exponential backoff)
@@ -21,6 +21,11 @@ Version source of truth: `src/sek8s/VERSION`
 - System manager downloads now use throttled XET (`HF_XET_FIXED_DOWNLOAD_CONCURRENCY=16`, `TOKIO_WORKER_THREADS=8`) instead of disabled XET with httpx fallback — benchmarked at ~500 MB/s vs ~22 MB/s in TDX
 - Model-download retry classifier now keys on typed exceptions instead of substring matching. Replaced the old `"403"/"Forbidden" in str(exc)` check in `download.py` with `_is_transient_download_error`, which retries only genuine transient download-layer failures (CDN presigned-URL expiry → HTTP 403 on the file GET, and XET transport hiccups) and immediately raises hard auth/availability errors (gated repo, bad/expired token → 401, missing repo/revision → 404, XET auth). This avoids burning 5 retries (~150s) on a permanent failure and avoids treating any message that merely contains "403" as transient.
 - Removed internal audit finding-ID references (`SEK8S-NNN`) from public-bound source comments/docstrings; the finding↔test mapping now lives only in the sensitive audit doc, enforced by a new leak-guard test.
+- System-manager cache delete now routes its privileged remove through the path-restricted `/usr/local/bin/cache-rm` wrapper instead of `sudo rm`, and `HuggingFaceSnapshot.delete()` gained an in-code guard that refuses any target that isn't a direct child of the HF cache base (defense in depth alongside the wrapper and the router's UUID validation).
+
+### Fixed
+- System-manager cache delete (`DELETE /cache/{chute_id}`) returned HTTP 500 when a chute pod had downloaded model files directly into the shared cache: the partial blobs are owned by the pod (uid 1000) and not group-writable, so `shutil.rmtree` fails to unlink them. The privileged-remove fallback in `HuggingFaceSnapshot.delete()` only triggered on `EPERM` (errno 1), but the real failure is `EACCES` (errno 13); both are now handled.
+- Re-downloading a chute over a pod-owned partial failed mid-way with `PermissionError [Errno 13]` because the download subprocess cannot write a tmp blob into a pod-owned, non-group-writable directory (and cannot resume it). `start_download` now detects a tree containing entries owned by another process (`_has_foreign_entries`) and, **only when `force=true`**, clears it first. Without `force` the cache download endpoint returns HTTP 409 instead of silently discarding the partial — an INCOMPLETE pod-owned tree is indistinguishable from one a chute pod is still actively downloading.
 
 ## [0.3.0] - 2026-05-15
 
