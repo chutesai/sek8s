@@ -1,7 +1,9 @@
 ---
-# Installs generate-admission-cert.service, which runs every boot to produce a
-# fresh per-VM TLS server certificate signed by the stable build-time CA.
-# Runs After=rtmr3-verify (RTMR3 must be verified) and Before=admission-controller.
+# Installs generate-admission-cert.service, which runs every boot to mint a fresh
+# ephemeral per-VM CA + server certificate and inject the matching caBundle into
+# the webhook manifests. Nothing is baked into the measured root image. Runs
+# After=rtmr3-verify (RTMR3 verified against the placeholder manifests) and
+# Before=k3s (inject before k3s applies the webhook).
 
 - name: Install generate-admission-cert script
   ansible.builtin.copy:

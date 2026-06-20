@@ -1,13 +1,18 @@
 [Unit]
-Description=Generate per-VM admission controller TLS server certificate
+Description=Generate per-VM admission controller TLS material and inject webhook caBundle
 Documentation=file:/usr/local/bin/generate-admission-cert
-# Certs live on the storage bind-mount; must run after mounts are active and
-# after rtmr3-verify confirms RTMR3 integrity.
+# Certs and webhook manifests live on the storage bind-mount; must run after
+# mounts are active and after rtmr3-verify confirms RTMR3 integrity against the
+# placeholder manifests.
 After=setup-storage-bind-mounts.service
 After=rtmr3-verify.service
 Requires=setup-storage-bind-mounts.service
 Requires=rtmr3-verify.service
-# Must complete before the admission controller starts using the cert.
+# Must inject the real caBundle into the webhook manifests BEFORE k3s applies
+# them (setup-storage-bind-mounts evicted the addon tracking so k3s re-applies
+# on start), and complete before the admission controller starts serving.
+Before=k3s.service
+Before=k3s-agent.service
 Before=admission-controller.service
 
 [Service]

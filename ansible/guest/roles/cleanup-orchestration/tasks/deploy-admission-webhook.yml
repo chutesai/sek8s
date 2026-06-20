@@ -5,8 +5,10 @@
 # is finalized. On first boot, k3s picks up the manifest and starts enforcing
 # policies.
 #
-# admission_webhook_ca_bundle is set as a host fact during the admission-controller
-# role's setup-tls.yml and persists across plays.
+# The caBundle is rendered as a deterministic placeholder (__ADMISSION_CA_BUNDLE__)
+# so the measured root image is reproducible across builds. The real per-VM CA is
+# substituted into the storage copy at boot by generate-admission-cert, after
+# rtmr3-verify passes. See generate-admission-cert.sh.
 - name: Ensure K3s manifests directory exists
   ansible.builtin.file:
     path: /var/lib/rancher/k3s/server/manifests

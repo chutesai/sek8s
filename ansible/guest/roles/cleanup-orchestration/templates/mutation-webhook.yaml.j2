@@ -11,7 +11,11 @@ webhooks:
   - name: mutate.admission.local
     clientConfig:
       url: https://127.0.0.1:{{ admission_port | default(8443) }}/mutate
-      caBundle: {{ admission_webhook_ca_bundle }}
+      # Deterministic placeholder baked into the measured root image; the real
+      # base64(ca.crt) is injected into the storage copy at boot by
+      # generate-admission-cert, after rtmr3-verify passes. Do not template a
+      # real CA here — it would make RTMR3 drift every build.
+      caBundle: __ADMISSION_CA_BUNDLE__
     rules:
       - operations: ["CREATE", "UPDATE"]
         apiGroups: ["*"]

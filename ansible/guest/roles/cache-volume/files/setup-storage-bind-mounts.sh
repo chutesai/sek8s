@@ -65,7 +65,11 @@ always_sync_manifests() {
     fi
 }
 
-# Always sync admission controller certs so manifest caBundle and cert stay paired.
+# Sync the admission-controller certs dir from root to storage. Post-fix this
+# carries only the static openssl.cnf (server cert SANs) — the CA key/cert and
+# server cert are ephemeral, generated at boot by generate-admission-cert. The
+# --delete here clears any prior boot's ephemeral CA from storage so it is
+# regenerated fresh, and is harmless because nothing in this dir is measured.
 always_sync_admission_certs() {
     local src="/etc/admission-controller/certs"
     local dest="${STORAGE_BASE}/admission-controller-certs"

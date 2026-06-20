@@ -1,0 +1,24 @@
+---
+# Strip ephemeral admission-controller TLS material from the image before it is
+# sealed.
+#
+# The build starts the admission controller to validate readiness, which pulls
+# in generate-admission-cert (Wants=) and mints a throwaway CA + server cert
+# into /etc/admission-controller/certs on the root filesystem. That material is
+# ephemeral, unmeasured, and at runtime is shadowed by the (initially empty)
+# storage bind-mount over this directory — so the build copies are never used.
+#
+# Remove them so the sealed image carries no private key material on disk. Only
+# openssl.cnf (static server-cert SANs) is kept; generate-admission-cert
+# regenerates the CA + server cert into the storage volume on every boot.
+- name: Remove ephemeral admission TLS material baked during build
+  ansible.builtin.file:
+    path: "/etc/admission-controller/certs/{{ item }}"
+    state: absent
+  loop:
+    - ca.key
+    - ca.crt
+    - ca.srl
+    - server.key
+    - server.crt
+    - server.csr

@@ -1,5 +1,19 @@
 ---
-- name: Setup TLS certificates for admission webhook
+# Admission-controller TLS material is generated entirely at BOOT, never at
+# build time, so that none of it is baked into the measured root image.
+#
+# Why: the admission CA must be ephemeral per-VM (a third party builds the image
+# and audits its RTMR3 measurements, so we cannot ship a CA private key, and a
+# build-time CA would also make RTMR3 drift on every rebuild). generate-admission-cert
+# mints a fresh CA + server cert on every boot and injects the matching caBundle
+# into the webhook manifests after rtmr3-verify has confirmed the placeholder
+# manifests match the measurement. See:
+#   - files/generate-admission-cert.sh
+#   - cleanup-orchestration/templates/{validating,mutation}-webhook.yaml.j2 (placeholder caBundle)
+#
+# The only thing baked here is the OpenSSL config (server cert SANs) — static,
+# deterministic, and intentionally NOT measured.
+- name: Setup admission-controller TLS config
   block:
     - name: Ensure certs directory exists
       ansible.builtin.file:
@@ -8,33 +22,6 @@
         owner: root
         group: admission
         mode: '0750'
-
-    - name: Check if CA certificate already exists
-      ansible.builtin.stat:
-        path: /etc/admission-controller/certs/ca.crt
-      register: ca_cert_exists
-
-    - name: Generate CA private key
-      ansible.builtin.command:
-        cmd: >-
-          openssl genrsa -out /etc/admission-controller/certs/ca.key 4096
-        creates: /etc/admission-controller/certs/ca.key
-
-    - name: Generate CA certificate (self-signed, long-lived)
-      ansible.builtin.command:
-        cmd: >-
-          openssl req -new -x509
-          -key /etc/admission-controller/certs/ca.key
-          -out /etc/admission-controller/certs/ca.crt
-          -days 3650
-          -subj "/CN=admission-controller-ca"
-        creates: /etc/admission-controller/certs/ca.crt
-
-    # ── Initial server certificate (replaced each boot by generate-admission-cert)
-    # This build-time cert is only used if generate-admission-cert.service has
-    # not yet run (i.e. first boot before the service starts).  On every boot the
-    # service generates a fresh per-VM server cert signed by the CA above, so
-    # only the CA key/cert needs to be stable across reboots.
 
     - name: Create OpenSSL config for server certificate with SANs
       ansible.builtin.copy:
@@ -63,60 +50,3 @@
         owner: root
         group: root
         mode: '0644'
-
-    - name: Generate initial server private key
-      ansible.builtin.command:
-        cmd: openssl genrsa -out /etc/admission-controller/certs/server.key 4096
-        creates: /etc/admission-controller/certs/server.key
-
-    - name: Generate initial server CSR
-      ansible.builtin.command:
-        cmd: >-
-          openssl req -new
-          -key /etc/admission-controller/certs/server.key
-          -out /etc/admission-controller/certs/server.csr
-          -config /etc/admission-controller/certs/openssl.cnf
-        creates: /etc/admission-controller/certs/server.csr
-
-    - name: Generate initial server certificate (CA-signed)
-      ansible.builtin.command:
-        cmd: >-
-          openssl x509 -req -days 365
-          -in /etc/admission-controller/certs/server.csr
-          -CA /etc/admission-controller/certs/ca.crt
-          -CAkey /etc/admission-controller/certs/ca.key
-          -CAcreateserial
-          -out /etc/admission-controller/certs/server.crt
-          -extensions v3_req
-          -extfile /etc/admission-controller/certs/openssl.cnf
-        creates: /etc/admission-controller/certs/server.crt
-
-    - name: Remove CSR (not needed at runtime)
-      ansible.builtin.file:
-        path: /etc/admission-controller/certs/server.csr
-        state: absent
-
-    - name: Set certificate permissions
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        owner: root
-        group: "{{ item.group }}"
-        mode: "{{ item.mode }}"
-      loop:
-        - { path: /etc/admission-controller/certs/ca.key, mode: '0600', group: 'root' }
-        - { path: /etc/admission-controller/certs/ca.crt, mode: '0644', group: 'root' }
-        - { path: /etc/admission-controller/certs/server.key, mode: '0640', group: 'admission' }
-        - { path: /etc/admission-controller/certs/server.crt, mode: '0644', group: 'root' }
-
-    # ── Export CA cert as caBundle for webhook manifests ─────────────────────
-    # The CA cert (not the server cert) is embedded in webhook manifests so the
-    # k8s API server can verify the per-VM server cert generated at boot.
-
-    - name: Read CA certificate for webhook caBundle
-      ansible.builtin.slurp:
-        src: /etc/admission-controller/certs/ca.crt
-      register: webhook_ca_cert
-
-    - name: Store CA certificate fact for webhook manifest rendering
-      ansible.builtin.set_fact:
-        admission_webhook_ca_bundle: "{{ webhook_ca_cert.content }}"
