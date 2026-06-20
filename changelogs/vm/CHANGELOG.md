@@ -14,6 +14,11 @@ Version source of truth: `ansible/guest/VERSION`
 - `nvidia-modprobe` package to DKMS kernel module install (fixes module load on boot).
 - NVIDIA apt version pin (`/etc/apt/preferences.d/nvidia-version-pin`, `Pin-Priority: 1001`) locking all `nvidia-*`/`libnvidia-*` packages to `nvidia_pkg_version` so apt cannot pull a mismatched driver build.
 - New post-start step `98-clear-terminal-pods.sh` deletes terminal-phase pod tombstones (`Failed`/`Succeeded`) on every boot, ordered just before `99-purge-kubeconfig.sh` so it still has the admin kubeconfig. It deletes only pods whose **controller** owner is a `ReplicaSet` (Deployment), `DaemonSet`, or `StatefulSet` — controllers that already created replacements, so the terminal object is pure tombstone (e.g. the chutes agent, crash/Error leftovers, graceful-shutdown tombstones). It deliberately **keeps** Job/CronJob pods (retention governed by the Job's own history limits, e.g. `failed-chute-cleanup`), operator one-shot pods not owned by those controllers (e.g. gpu-operator `nvidia-cuda-validator`), and bare pods. The GC threshold below only caps growth and won't reap a sub-threshold handful, so this is what gives a clean slate each boot. Best-effort and always exits 0 (the post-start runner powers off the VM on any non-zero script).
+- `tests/integration/test_reencrypt_secrets_k3s.py`: opt-in (`SEK8S_K3S_IT=1`) end-to-end
+  test that drives the real script against a throwaway k3s, reproducing the fresh-volume
+  flow (unencrypted boot with a deleted-secret tombstone, then encrypted boot) and
+  asserting it finalizes. Added kine `deleted`-column tombstone regression cases to
+  `tests/shell/test_reencrypt_verifier.py`.
 
 ### Changed
 - System manager env: replaced `HF_HUB_DISABLE_XET=1` + `HF_HUB_ENABLE_HF_TRANSFER=1` with throttled XET tuning (`HF_XET_FIXED_DOWNLOAD_CONCURRENCY=16`, `TOKIO_WORKER_THREADS=8`)
@@ -34,6 +39,10 @@ Version source of truth: `ansible/guest/VERSION`
 - Admission-controller TLS is now fully ephemeral and generated per-VM at boot. `generate-admission-cert` mints a fresh CA + server cert on every boot and injects the matching `caBundle` into the webhook manifests. This makes RTMR3 reproducible across rebuilds — the build-time CA (random key, random serial, build-clock validity dates) was previously drifting the measurement on every build, along with the two webhook manifests that embed its `caBundle`. The CA/server cert that `setup-tls` still generates at build time is a throwaway used only for the build's admission-controller health check; it is stripped before the image is sealed.
 - Webhook manifests (`validating-webhook.yaml`, `mutation-webhook.yaml`) now bake a deterministic `caBundle: __ADMISSION_CA_BUNDLE__` placeholder. The real base64(ca.crt) is substituted into the storage (bind-mounted) copy at boot by `generate-admission-cert`, **after** `rtmr3-verify` confirms the placeholder copy still matches the measurement — so the live caBundle is never measured and injection never trips the RTMR3 integrity check. `generate-admission-cert.service` is reordered `Before=k3s.service` to land injection in the post-verify / pre-apply window.
 - `generate-admission-cert` now fails closed (powers the VM off) if a webhook manifest is missing at boot, rather than silently skipping injection and leaving the webhook pointing at the placeholder CA. Debug builds set `GENERATE_ADMISSION_CERT_DEBUG_MODE=true` (`/etc/default/generate-admission-cert`) to warn-and-continue for troubleshooting, mirroring `rtmr3-verify` / `gpu-verify`.
+- `00-reencrypt-secrets.sh` paths (`STATE_DB`, `ENCRYPTION_CONFIG`, `K3S_CONFIG`,
+  `LOG_FILE`) are now environment-overridable (production defaults unchanged) so the
+  script can be exercised against an isolated k3s in integration tests. Corrected the
+  stale header comment that claimed the build-time `state.db` is deleted on fresh boot.
 
 ### Fixed
 - Fix LUKS key confirmation on first boot: freshly provisioned volumes now set the KEY_ADDED flag so confirm_rotation sends rotated=true, preventing the API from discarding the applied passphrase and bricking the volume on subsequent boots
@@ -54,6 +63,12 @@ Version source of truth: `ansible/guest/VERSION`
 - Guest monitoring now exposes the in-VM Prometheus server on `NodePort` 30090 (`server.service.type=NodePort`, `server.service.nodePort=30090`) instead of the chart-default `ClusterIP`. The control-plane `chutes-monitoring` federating Prometheus scrapes each TEE VM at `<vm-ip>:30090/federate`, which requires the endpoint to be reachable from outside the guest cluster. The guest UFW rule for 30090 and the host NodePort range (30000–32767) were already in place; only the service type was missing.
 - Prometheus server Service reconciles to `NodePort` 30090 on nodes that kept their persisted k3s storage across an image update. It ships as a chart spec (`prometheus.conf`); the old version-drift mechanism could not apply a values-only change like this.
 - Re-encryption verifier returned the raw count of failed records as its exit status, which wraps mod 256: exactly 256 failures would have returned 0 (read as success) and allowed the destructive kine purge / "done" marker to proceed with plaintext rows still present. It now returns a boolean status.
+- Fixed `00-reencrypt-secrets.sh` powering off the VM on fresh storage volumes. The
+  at-rest verifier now ignores kine tombstone rows (`deleted != 0`) so that secrets
+  or configmaps created and deleted at build time — which the online re-encrypt loop
+  cannot reach because the apiserver no longer lists them — are not misread as live
+  plaintext. The purge step now also scrubs any plaintext left in those tombstone
+  values, preserving the no-plaintext-at-rest guarantee.
 
 ### Removed
 - Removed the attestation-proxy `wait-for-credentials` init container. It re-checked the miner-credentials secret with an in-pod `kubectl get secret`, which requires pod networking (flannel/kube-proxy) to be up — so when the API ClusterIP route wasn't ready yet (early on a fresh boot, or after a sandbox recreate) the call hung and the pod stuck in `Init:0/2`. The secret is already required by the main container via `secretKeyRef` (`MINER_SS58`, `optional: false`), which the kubelet injects over its own host-network API client with no dependency on pod networking — so the gate is preserved and the proxy now reaches Ready independent of pod-network readiness. (Supersedes the earlier `--request-timeout` mitigation, which only turned the hang into an endless retry without removing the pod-network dependency.)
