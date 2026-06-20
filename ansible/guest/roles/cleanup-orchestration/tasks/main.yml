@@ -22,6 +22,9 @@
 - name: Deploy admission webhook manifest
   ansible.builtin.include_tasks: deploy-admission-webhook.yml
 
+- name: Strip ephemeral admission TLS material before sealing
+  ansible.builtin.include_tasks: cleanup-admission-certs.yml
+
 - name: Cleanup attestation service
   ansible.builtin.include_tasks: cleanup-attestation-service.yml
 

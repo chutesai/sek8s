@@ -1,7 +1,9 @@
 ---
-# Installs generate-admission-cert.service, which runs every boot to produce a
-# fresh per-VM TLS server certificate signed by the stable build-time CA.
-# Runs After=rtmr3-verify (RTMR3 must be verified) and Before=admission-controller.
+# Installs generate-admission-cert.service, which runs every boot to mint a fresh
+# ephemeral per-VM CA + server certificate and inject the matching caBundle into
+# the webhook manifests. Nothing is baked into the measured root image. Runs
+# After=rtmr3-verify (RTMR3 verified against the placeholder manifests) and
+# Before=k3s (inject before k3s applies the webhook).
 
 - name: Install generate-admission-cert script
   ansible.builtin.copy:
@@ -15,6 +17,18 @@
   ansible.builtin.copy:
     src: generate-admission-cert.service
     dest: /etc/systemd/system/generate-admission-cert.service
+    owner: root
+    group: root
+    mode: '0644'
+
+# Debug builds only: warn-and-continue instead of powering off when the CA /
+# server cert / caBundle injection fails, so the VM stays up for troubleshooting.
+# Production builds ship no env file, so a failure powers the VM off (fail closed).
+- name: Write generate-admission-cert environment file (debug builds — warn only)
+  when: debug_build | default(false)
+  ansible.builtin.copy:
+    dest: /etc/default/generate-admission-cert
+    content: "GENERATE_ADMISSION_CERT_DEBUG_MODE=true\n"
     owner: root
     group: root
     mode: '0644'
