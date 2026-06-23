@@ -108,6 +108,54 @@ MEM_TOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
 MEM_TOTAL_GB=$(( MEM_TOTAL_KB / 1024 / 1024 ))
 
 # ---------------------------------------------------------------------------
+# OS release + derived QEMU -cpu args
+# Mirrors run-td (chutes/guest/__main__.py): the avx10 mask is gated purely on
+# the host's Ubuntu VERSION_ID. -cpu shapes the CPUID leaves the guest sees, so
+# two hosts on different OS releases launch the VM differently — capture it here
+# so a measurement divergence can be traced back to host OS drift.
+# ---------------------------------------------------------------------------
+OS_VERSION_ID=""
+if [[ -r /etc/os-release ]]; then
+    OS_VERSION_ID=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-}")
+fi
+if [[ "$OS_VERSION_ID" == "24.04" ]]; then
+    CPU_ARGS="host"
+else
+    CPU_ARGS="host,-avx10"
+fi
+
+# ---------------------------------------------------------------------------
+# Host QEMU version — a primary RTMR0 determinant.
+# QEMU generates the guest ACPI tables (SRAT/SLIT/DSDT) and TD HOB that TDVF
+# measures into RTMR0. Two hosts with a byte-identical launch command but
+# different QEMU builds (e.g. Ubuntu 25.10 → 10.1.0 vs 26.04 → 10.2.1) extend
+# DIFFERENT RTMR0s. Capture both the bare version and the full distro string.
+# ---------------------------------------------------------------------------
+QEMU_VERSION=""
+QEMU_VERSION_FULL=""
+if have qemu-system-x86_64; then
+    QEMU_VERSION_FULL=$(qemu-system-x86_64 --version 2>/dev/null | head -1 || true)
+    QEMU_VERSION=$(printf '%s' "$QEMU_VERSION_FULL" | grep -oP 'version \K[0-9]+(\.[0-9]+)*' || true)
+fi
+
+# ---------------------------------------------------------------------------
+# DMI baseboard + BIOS identity (world-readable sysfs — no root required)
+# Baseboard model and BIOS version pin down "identical" servers that may differ
+# in firmware/BIOS settings (e.g. Sub-NUMA Clustering) which reshape the guest
+# memory map and therefore RTMR0.
+# ---------------------------------------------------------------------------
+dmi() {
+    local f="/sys/class/dmi/id/$1"
+    [[ -r "$f" ]] && tr -d '\n' < "$f" || echo ""
+}
+BOARD_VENDOR=$(dmi board_vendor)
+BOARD_NAME=$(dmi board_name)
+BIOS_VENDOR=$(dmi bios_vendor)
+BIOS_VERSION=$(dmi bios_version)
+BIOS_DATE=$(dmi bios_date)
+PRODUCT_NAME=$(dmi product_name)
+
+# ---------------------------------------------------------------------------
 # NUMA nodes
 # ---------------------------------------------------------------------------
 NUMA_NODES=()
@@ -117,6 +165,19 @@ if [[ -d /sys/devices/system/node ]]; then
     done
 fi
 NUMA_NODE_COUNT=${#NUMA_NODES[@]}
+
+# numa_active gate — mirrors qemu.use_numa_topology(): profiles that request
+# guest NUMA topology (H200/B200/RTX) only get per-node memory backends + guest
+# SRAT/SLIT + PXB-PCIe grouping when the host has EXACTLY 2 NUMA nodes. Any other
+# count (e.g. Sub-NUMA Clustering → 4) falls back to a flat memory map + numactl
+# interleave. The two layouts emit DIFFERENT guest ACPI/memory tables, so they
+# extend DIFFERENT RTMR0 values. This is the most common cause of an otherwise
+# "identical" host pair attesting two different RTMR0s.
+if [[ $NUMA_NODE_COUNT -eq 2 ]]; then
+    NUMA_TOPOLOGY_ELIGIBLE="yes"
+else
+    NUMA_TOPOLOGY_ELIGIBLE="no"
+fi
 
 declare -A NUMA_CPULIST
 for n in "${NUMA_NODES[@]}"; do
@@ -185,6 +246,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Per-GPU VBIOS version, keyed by PCI BDF.
+# nvidia-smi enumerates GPUs in its own index order, which is not guaranteed to
+# match lspci's, so map by bus id rather than positional index. VBIOS does NOT
+# feed RTMR0 (it lives in the GPU/nvtrust attestation path) — captured here as
+# part of the GPU evidence picture, not as an RTMR0 differentiator.
+# ---------------------------------------------------------------------------
+declare -A VBIOS_BY_BDF
+if have nvidia-smi; then
+    while IFS=, read -r busid vbios; do
+        busid=$(echo "$busid" | tr -d ' ' | tr 'A-F' 'a-f')
+        [[ -z "$busid" ]] && continue
+        # nvidia-smi reports an 8-hex-digit domain (00000000:a1:00.0); lspci -Dnn
+        # uses 4 (0000:a1:00.0). Drop the high 4 digits to match GPU_BDFS.
+        norm=$(echo "$busid" | sed -E 's/^[0-9a-f]{4}([0-9a-f]{4}:)/\1/')
+        vbios=$(echo "$vbios" | tr -d ' ')
+        VBIOS_BY_BDF[$norm]="$vbios"
+    done < <(nvidia-smi --query-gpu=pci.bus_id,vbios_version --format=csv,noheader 2>/dev/null || true)
+fi
+
+# Full PCIe topology tree (device ordering / enumeration). Enumeration order
+# drives PXB-PCIe root-port assignment in run-td, which the guest sees as its
+# PCI bus layout — another RTMR0 input. No root required.
+PCI_TOPOLOGY=$(lspci -tv 2>/dev/null || true)
+
+# ---------------------------------------------------------------------------
 # Mellanox / ConnectX NIC detection
 # ---------------------------------------------------------------------------
 IB_CLASS_DEVICES=()
@@ -231,12 +317,18 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     printf '\033[1;37m  GPU Hardware Discovery Report — %s\033[0m\n' "$HOSTNAME_STR"
     bar
 
+    section "Host / Firmware Identity"
+    row "Product"        "${PRODUCT_NAME:-(unknown)}"
+    row "Baseboard"      "${BOARD_VENDOR:-?} ${BOARD_NAME:-?}"
+    row "BIOS"           "${BIOS_VENDOR:-?} ${BIOS_VERSION:-?} (${BIOS_DATE:-?})"
+    row "OS VERSION_ID"  "${OS_VERSION_ID:-(unknown)}"
+
     section "GPUs"
     row "Count"             "$GPU_COUNT"
     row "Unique device IDs" "${UNIQUE_DEVICE_IDS[*]:-none}"
     echo ""
     for i in "${!GPU_BDFS[@]}"; do
-        row "  GPU $i: ${GPU_BDFS[$i]}" "device=${GPU_DEVICE_IDS[$i]:-?}  numa=${GPU_NUMA_NODES[$i]}"
+        row "  GPU $i: ${GPU_BDFS[$i]}" "device=${GPU_DEVICE_IDS[$i]:-?}  numa=${GPU_NUMA_NODES[$i]}  vbios=${VBIOS_BY_BDF[${GPU_BDFS[$i]}]:-(n/a)}"
     done
     echo ""
     row "BAR size (Region 2)"       "${BAR_SIZE_MB:-(not detected)} MB"
@@ -265,6 +357,22 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     for i in "${!GPU_BDFS[@]}"; do
         row "    ${GPU_BDFS[$i]}" "node ${GPU_NUMA_NODES[$i]}"
     done
+
+    section "Launch Determinism (RTMR0-relevant)"
+    echo "  These values shape the guest memory map / ACPI tables that extend RTMR0."
+    echo "  Diff this section between two hosts to isolate an RTMR0 divergence."
+    echo ""
+    row "QEMU version"              "${QEMU_VERSION_FULL:-(qemu-system-x86_64 not found)}"
+    row "NUMA node count"           "$NUMA_NODE_COUNT"
+    row "Guest NUMA topology"       "$([[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]] \
+                                        && echo "ACTIVE (host has 2 nodes) → per-node memory backends + PXB-PCIe" \
+                                        || echo "FALLBACK (host has ${NUMA_NODE_COUNT} nodes, not 2) → flat map + numactl interleave")"
+    row "QEMU -cpu args"            "$CPU_ARGS  (avx10 gate: VERSION_ID=${OS_VERSION_ID:-?})"
+    row "SMP topology (vcpus-4)"    "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
+    if [[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]]; then
+        warn "Guest RAM (mem=GPU_count × profile.ram_per_gpu_gb) is profile-derived;"
+        warn "this script is profile-free — read it from run-td's launch log to confirm."
+    fi
 
     section "Mellanox / InfiniBand NICs"
     row "IB-class [0207] devices"   "${#IB_CLASS_DEVICES[@]}"
@@ -310,13 +418,50 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         printf -v "$_var" '%s' "$_out"
     }
 
+    # Escape an arbitrary string for embedding as a JSON string value.
+    # lspci -tv draws the tree with backslashes (\-) and spans multiple lines,
+    # so backslash, quote, and control chars must all be escaped.
+    json_escape() {
+        local _var="$1" s="$2"
+        s="${s//\\/\\\\}"
+        s="${s//\"/\\\"}"
+        s="${s//$'\t'/\\t}"
+        s="${s//$'\r'/}"
+        s="${s//$'\n'/\\n}"
+        printf -v "$_var" '%s' "$s"
+    }
+
     if [[ ${#GPU_BDFS[@]} -gt 0 ]]; then
         json_str_array gpu_bdfs_json "${GPU_BDFS[@]}"
         json_str_array gpu_ids_json  "${GPU_DEVICE_IDS[@]}"
         json_int_array gpu_numa_json "${GPU_NUMA_NODES[@]}"
+        gpu_vbios_ordered=()
+        for _b in "${GPU_BDFS[@]}"; do
+            gpu_vbios_ordered+=("${VBIOS_BY_BDF[$_b]:-}")
+        done
+        json_str_array gpu_vbios_json "${gpu_vbios_ordered[@]}"
     else
-        gpu_bdfs_json="[]"; gpu_ids_json="[]"; gpu_numa_json="[]"
+        gpu_bdfs_json="[]"; gpu_ids_json="[]"; gpu_numa_json="[]"; gpu_vbios_json="[]"
     fi
+
+    if [[ -n "$PCI_TOPOLOGY" ]]; then
+        json_escape _pci_topo_esc "$PCI_TOPOLOGY"
+        pci_topology_json="\"${_pci_topo_esc}\""
+    else
+        pci_topology_json="null"
+    fi
+    numa_eligible_json=$([[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]] && echo 'true' || echo 'false')
+
+    json_escape board_vendor_esc  "$BOARD_VENDOR"
+    json_escape board_name_esc    "$BOARD_NAME"
+    json_escape bios_vendor_esc   "$BIOS_VENDOR"
+    json_escape bios_version_esc  "$BIOS_VERSION"
+    json_escape bios_date_esc     "$BIOS_DATE"
+    json_escape product_name_esc  "$PRODUCT_NAME"
+    json_escape os_version_esc    "$OS_VERSION_ID"
+    json_escape cpu_args_esc      "$CPU_ARGS"
+    json_escape qemu_version_esc      "$QEMU_VERSION"
+    json_escape qemu_version_full_esc "$QEMU_VERSION_FULL"
 
     if [[ ${#UNIQUE_DEVICE_IDS[@]} -gt 0 ]]; then
         json_str_array uniq_ids_json "${UNIQUE_DEVICE_IDS[@]}"
@@ -363,14 +508,33 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
 {
   "hostname": "$(hostname)",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "host": {
+    "product_name": "${product_name_esc}",
+    "board_vendor": "${board_vendor_esc}",
+    "board_name": "${board_name_esc}",
+    "bios_vendor": "${bios_vendor_esc}",
+    "bios_version": "${bios_version_esc}",
+    "bios_date": "${bios_date_esc}",
+    "os_version_id": "${os_version_esc}"
+  },
+  "launch_determinism": {
+    "qemu_version": "${qemu_version_esc}",
+    "qemu_version_full": "${qemu_version_full_esc}",
+    "numa_node_count": ${NUMA_NODE_COUNT},
+    "numa_topology_eligible": ${numa_eligible_json},
+    "cpu_args": "${cpu_args_esc}",
+    "smp_topology": "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
+  },
   "gpu": {
     "pci_device_ids": ${uniq_ids_json},
     "bdfs": ${gpu_bdfs_json},
     "count": ${GPU_COUNT},
     "vram_gb": ${VRAM_GB:-null},
     "bar_size_mb": ${BAR_SIZE_MB:--1},
-    "numa_nodes": ${gpu_numa_json}
+    "numa_nodes": ${gpu_numa_json},
+    "vbios": ${gpu_vbios_json}
   },
+  "pci_topology": ${pci_topology_json},
   "cpu": {
     "total": ${CPU_TOTAL},
     "sockets": ${CPU_SOCKETS},
