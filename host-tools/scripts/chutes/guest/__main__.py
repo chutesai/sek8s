@@ -95,11 +95,15 @@ def launch_vm(args) -> int:
         # it never changes the VM.
         mem_gb = total_gpus * profile.ram_per_gpu_gb
         host_gb = detect_host_mem_gb()
-        if host_gb is not None and safe_vm_mem_gb(mem_gb, host_gb) < mem_gb:
+        safe_gb = safe_vm_mem_gb(mem_gb, host_gb) if host_gb is not None else mem_gb
+        if safe_gb < mem_gb:
             print(
-                f"Error: profile '{profile.name}' requires {mem_gb}G guest RAM but this "
-                f"host has only {host_gb}G — launching would OOM-kill the VM. The profile "
-                f"memory must fit the host (guest RAM is fixed for measurement determinism).",
+                f"Error: profile '{profile.name}' needs {mem_gb}G guest RAM, but only "
+                f"{safe_gb}G can be safely backed on this {host_gb}G host after reserving "
+                f"headroom for the host OS, TDX PAMT, page tables, and VFIO pinning. "
+                f"(TDX guest memory is pinned and unreclaimable, so an over-large guest "
+                f"OOM-kills the host instead of paging.) Guest RAM is fixed for measurement "
+                f"determinism and is never resized, so this host cannot run '{profile.name}'.",
                 file=sys.stderr,
             )
             return 1

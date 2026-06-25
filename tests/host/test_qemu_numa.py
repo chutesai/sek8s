@@ -19,18 +19,26 @@ from chutes.guest.qemu import (
 
 
 def test_safe_mem_clamps_when_request_exceeds_host():
-    # The dev-h200-tee OOM: 8x141=1128G requested on a ~1024G host.
-    # 12% reserve (>64G floor) -> int(1024*0.12)=122G reserved -> 902G safe.
-    assert safe_vm_mem_gb(1128, 1024) == 902
+    # 8x141=1128G requested on a ~1024G host genuinely doesn't fit.
+    # Flat 64G reserve -> 1024-64 = 960G safe, and 960 < 1128 so it clamps.
+    assert safe_vm_mem_gb(1128, 1024) == 960
 
 
 def test_safe_mem_unchanged_when_request_fits():
-    # 4x141=564G on a 1024G host fits under the 902G ceiling.
+    # 4x141=564G on a 1024G host fits under the 960G ceiling.
     assert safe_vm_mem_gb(564, 1024) == 564
 
 
-def test_safe_mem_floor_reserve_on_small_host():
-    # 256G host: 12% = 30G < 64G floor, so reserve the 64G floor -> 192G safe.
+def test_safe_mem_allows_profile_sized_guest_on_large_host():
+    # Regression: profiles size guest RAM as ~(host - 64G reserve) / gpus, so a
+    # B200_XEON6 guest (8x369=2952G) must be allowed on its ~3 TB host. The old
+    # 12% reserve (=362G on 3017G) wrongly clamped to 2655G and rejected it; a
+    # flat 64G reserve allows it (3017-64 = 2953 >= 2952).
+    assert safe_vm_mem_gb(2952, 3017) >= 2952
+
+
+def test_safe_mem_reserve_on_small_host():
+    # 256G host - flat 64G reserve -> 192G safe.
     assert safe_vm_mem_gb(256, 256) == 192
 
 

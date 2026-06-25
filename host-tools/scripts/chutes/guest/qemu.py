@@ -21,22 +21,30 @@ def _block_format(path: str | None) -> str:
 # TDX guest memory is pinned and unreclaimable, so the guest must leave the host
 # enough RAM for the host OS, the TDX PAMT, page tables, and VFIO DMA pinning --
 # otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
-# Reserve at least this fraction of host RAM, and never less than the floor.
-VM_MEM_RESERVE_FRACTION = 0.12
-VM_MEM_RESERVE_FLOOR_GB = 64
+#
+# This is a FLAT reserve, deliberately not a percentage. It must stay aligned with
+# how the GpuProfiles size guest RAM: each profile sets ram_per_gpu_gb so that
+# gpu_count * ram_per_gpu_gb ~= host_RAM - VM_MEM_RESERVE_GB (e.g. B200_XEON6:
+# "(3022 - 64) / 8 ~= 369"). A percentage reserve breaks that: 12% over-reserved
+# ~360 GB on a 3 TB host and wrongly rejected valid B200 / B200_XEON6 launches,
+# and any fraction would re-introduce the same mismatch once a host exceeds
+# (reserve / fraction). The only overhead that scales with size is the TDX PAMT
+# (~0.4% of guest), and 64 GB covers PAMT for guests up to ~16 TB, so a flat
+# reserve is safe well beyond current hardware. Revisit deliberately (and resize
+# the affected profiles) if a host ever needs more than this.
+VM_MEM_RESERVE_GB = 64
 
 
 def safe_vm_mem_gb(desired_gb: int, host_gb: int | None) -> int:
     """Clamp desired guest RAM (GB) to what the host can safely back.
 
     Returns ``desired_gb`` unchanged when host RAM is unknown or already leaves
-    enough headroom; otherwise caps it at ``host_gb`` minus a reserve. Never
-    returns a value below 1 GB or clamps upward.
+    enough headroom; otherwise caps it at ``host_gb`` minus VM_MEM_RESERVE_GB.
+    Never returns a value below 1 GB or clamps upward.
     """
     if not host_gb or host_gb <= 0:
         return desired_gb
-    reserve = max(VM_MEM_RESERVE_FLOOR_GB, int(host_gb * VM_MEM_RESERVE_FRACTION))
-    safe = host_gb - reserve
+    safe = host_gb - VM_MEM_RESERVE_GB
     if safe < 1:
         # Pathologically small host: can't help, leave the request as-is.
         return desired_gb
