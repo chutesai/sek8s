@@ -432,14 +432,20 @@ def _blacklist_gpu_drivers():
     """Blacklist nouveau and nvidia kernel modules on the host.
 
     GPUs on passthrough hosts must not be claimed by any driver — they are
-    bound to vfio-pci at VM launch time.  nouveau auto-loading is the most
-    common cause of GPU hangs during CC/PPCIe mode configuration.
+    bound to vfio-pci at VM launch time.  An auto-loaded GPU driver is the most
+    common cause of GPU hangs / vfio bind races during CC/PPCIe mode config.
+    This must include `nova_core`, the in-tree Rust NVIDIA driver present on
+    recent kernels (Ubuntu 25.10/26.04): it also matches the GPU's PCI ID and
+    will grab a card after the CC-mode reset re-enumerates it, leaving the
+    device on nova_core instead of vfio-pci.
     """
     blacklist_path = "/etc/modprobe.d/blacklist-gpu-host.conf"
     blacklist_content = (
         "# GPU drivers must not load on VFIO passthrough hosts.\n"
         "# GPUs are configured via nvidia-gpu-tools and bound to vfio-pci at launch.\n"
         "blacklist nouveau\n"
+        "blacklist nova_core\n"
+        "blacklist nvidiafb\n"
         "blacklist nvidia\n"
         "blacklist nvidia_drm\n"
         "blacklist nvidia_modeset\n"
@@ -458,16 +464,22 @@ def _blacklist_gpu_drivers():
         _run(["sudo", "update-initramfs", "-u"])
         print(f"  ✓ GPU driver blacklist installed ({blacklist_path})")
 
-    # Unload nouveau immediately if currently loaded (no reboot required)
+    # Unload any auto-loaded GPU driver immediately (no reboot required) so it
+    # releases the GPUs before launch. Only modules with no host-side dependents
+    # are unloaded here; the nvidia stack is left alone (fabric manager may have
+    # loaded it explicitly). rmmod is best-effort — if the module is still bound
+    # to devices the per-device unbind at launch handles it.
     result = subprocess.run(
         ["lsmod"],
         capture_output=True,
         text=True,
     )
-    if any(line.split()[0] == "nouveau" for line in result.stdout.splitlines()[1:]):
-        print("  Unloading nouveau module (currently loaded)...")
-        subprocess.run(["sudo", "rmmod", "nouveau"], check=False)
-        print("  ✓ nouveau unloaded")
+    loaded = {line.split()[0] for line in result.stdout.splitlines()[1:]}
+    for mod in ("nouveau", "nova_core", "nvidiafb"):
+        if mod in loaded:
+            print(f"  Unloading {mod} module (currently loaded)...")
+            subprocess.run(["sudo", "rmmod", mod], check=False)
+            print(f"  ✓ {mod} unloaded")
 
 
 def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
