@@ -2,8 +2,10 @@
 
 from unittest.mock import patch
 
+import pytest
 from chutes.guest.vfio import (
     _get_bound_driver,
+    bind_explicit_devices_to_vfio,
     has_stale_vfio_devices,
     pci_operations_wedged,
     unbind_stale_vfio_devices,
@@ -94,6 +96,47 @@ def test_unbind_warns_on_timeout(mock_driver, mock_write, capsys):
     assert "timed out" in captured.out
     assert mock_write.call_count == 1
     assert failed == 1
+
+
+# ---------------------------------------------------------------------------
+# bind_explicit_devices_to_vfio — verify each device actually bound
+# ---------------------------------------------------------------------------
+
+
+@patch("chutes.guest.vfio.load_vfio_modules")
+@patch("chutes.guest.vfio.bind_device_to_vfio")
+@patch("chutes.guest.vfio._is_vfio_bound", return_value=True)
+def test_bind_prints_success_when_all_bound(mock_bound, mock_bind, mock_load, capsys):
+    bind_explicit_devices_to_vfio(["0000:dc:00.0", "0000:dd:00.0"])
+    out = capsys.readouterr().out
+    assert "0000:dc:00.0 → vfio-pci" in out
+    assert "0000:dd:00.0 → vfio-pci" in out
+
+
+@patch("chutes.guest.vfio.load_vfio_modules")
+@patch("chutes.guest.vfio.bind_device_to_vfio")
+@patch("chutes.guest.vfio.time.sleep")
+@patch("chutes.guest.vfio._is_vfio_bound")
+def test_bind_succeeds_after_retry(mock_bound, mock_sleep, mock_bind, mock_load, capsys):
+    # Not bound on the first check (still settling after reset), bound on retry.
+    mock_bound.side_effect = [False, True, True]
+    bind_explicit_devices_to_vfio(["0000:dc:00.0"])
+    assert "0000:dc:00.0 → vfio-pci" in capsys.readouterr().out
+
+
+@patch("chutes.guest.vfio.load_vfio_modules")
+@patch("chutes.guest.vfio.bind_device_to_vfio")
+@patch("chutes.guest.vfio._is_vfio_bound", return_value=False)
+@patch("chutes.guest.vfio._get_bound_driver", return_value="nvidia")
+@patch("chutes.guest.vfio.time.sleep")
+@patch("chutes.guest.vfio.time.time", side_effect=[0, 0, 100])
+def test_bind_raises_when_device_never_binds(
+    mock_time, mock_sleep, mock_driver, mock_bound, mock_bind, mock_load
+):
+    # A device that never lands on vfio-pci must abort loudly (with its driver),
+    # not sail into a cryptic QEMU "couldn't open .../vfio-dev" failure.
+    with pytest.raises(RuntimeError, match=r"Failed to bind.*0000:dc:00.0.*driver=nvidia"):
+        bind_explicit_devices_to_vfio(["0000:dc:00.0"])
 
 
 # ---------------------------------------------------------------------------
