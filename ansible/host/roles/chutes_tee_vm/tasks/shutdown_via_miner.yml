@@ -29,3 +29,31 @@
   until: power_wait.rc != 0
   retries: "{{ (upgrade_powerdown_timeout_seconds | int) // 5 }}"
   delay: 5
+
+# If the guest is still alive after the graceful power-down window, escalate.
+# Proceeding now would march straight into a qcow2 write-lock collision when the
+# relaunch refreshes the config volume (qemu-nbd cannot lock an image a live
+# QEMU still holds). SIGTERM -> SIGKILL the chutes-td QEMU and re-check.
+- name: Force-stop guest if it did not power down gracefully
+  ansible.builtin.script:
+    executable: /bin/bash
+    cmd: stop_chutes_td.sh
+  register: _force_stop
+  failed_when: false
+  changed_when: power_wait.rc == 0
+  when: power_wait.rc == 0
+
+# A guest that survives SIGKILL is in uninterruptible (D) state and will keep
+# the image lock until reboot. Fail loudly with that instruction instead of
+# letting the relaunch fail later with a cryptic "Failed to get write lock".
+- name: Fail when guest could not be stopped (host reboot required)
+  ansible.builtin.fail:
+    msg: >-
+      The chutes-td guest did not power down gracefully and could not be killed
+      (SIGKILL ineffective — the QEMU process is stuck in uninterruptible D-state
+      from hung I/O). Its qcow2 image lock will block VM relaunch. Reboot
+      {{ inventory_hostname }} and re-run this playbook.
+      Details: {{ (_force_stop.stdout | default('')) ~ ' ' ~ (_force_stop.stderr | default('')) }}
+  when:
+    - power_wait.rc == 0
+    - _force_stop.rc | default(0) != 0

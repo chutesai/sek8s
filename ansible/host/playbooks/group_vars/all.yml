@@ -30,6 +30,11 @@ upgrade_drain_timeout: 600s
 upgrade_drain_timeout_seconds: 600
 upgrade_powerdown_timeout_seconds: 300
 upgrade_health_poll_seconds: 900
+# Max seconds to wait for a host to come back on SSH after a reboot triggered to
+# clear a wedged GPU/PCI passthrough subsystem before launching the VM. These
+# large-memory TDX/GPU hosts spend a long time in POST/memory-training and have
+# been observed to take >20 min to return on SSH, so this is set to 30 min.
+upgrade_reboot_timeout_seconds: 1800
 
 # OS upgrade path for upgrade-host.yml.
 # Maps current Ubuntu version -> next supported version via do-release-upgrade.
