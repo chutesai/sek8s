@@ -1,11 +1,12 @@
 ### Changed
 
-- `upgrade-guest.yml` now hashes the multi-GB base qcow2 at most once per run
-  (a single sha256 of the live image to decide whether an upgrade is needed, with
-  a clean no-op when already current so a host that is up to date never
-  re-downloads). When an upgrade is needed the image is fetched once and verified
-  by aria2 itself (`--checksum`). This removes the old 2-3 redundant `sha256sum`
-  passes.
+- `upgrade-guest.yml` no longer hashes the multi-GB base qcow2 to decide whether
+  a host needs upgrading. It reads `needs_upgrade` per server from
+  `chutes-miner tee maintenance-status --raw-json` and ends already-current hosts
+  immediately (no download, no hash), so running with no `--limit` safely walks
+  the whole fleet and only touches hosts behind the active window's target
+  version. When an upgrade is needed the image is fetched once and verified by
+  aria2 itself (`--checksum` against the repo-pinned `EXPECTED_BASE_SHA256`).
 
 ### Fixed
 
