@@ -92,10 +92,10 @@
   failed_when: false
   changed_when: false
 
-- name: Reboot host to clear wedged PCI subsystem (pre-flight)
-  ansible.builtin.reboot:
-    reboot_timeout: "{{ upgrade_reboot_timeout_seconds | default(1800) }}"
-    msg: "Rebooting to clear wedged GPU/PCI passthrough state before VM launch"
+# Forced (SysRq) reboot, not a graceful one: a wedged subsystem hangs
+# systemd-shutdown on the un-killable D-state tasks and the host never reboots.
+- name: Force-reboot host to clear wedged PCI subsystem (pre-flight)
+  ansible.builtin.include_tasks: force_reboot.yml
   when: _pci_wedged.rc == 0
 
 - name: Launch VM (reboot and retry once if the launch wedges the PCI subsystem)
@@ -138,10 +138,10 @@
           other than a PCI wedge — not retrying. stderr={{ _qlaunch.stderr | default('') }}
       when: not (_launch_pci_wedged | bool)
 
-    - name: Reboot host to clear wedged PCI subsystem (post-launch)
-      ansible.builtin.reboot:
-        reboot_timeout: "{{ upgrade_reboot_timeout_seconds | default(1800) }}"
-        msg: "Rebooting to clear wedged GPU/PCI passthrough state after failed VM launch"
+    # Forced (SysRq) reboot — see force_reboot.yml. A graceful reboot here is
+    # exactly what hangs the host in systemd-shutdown on the wedged D-state tasks.
+    - name: Force-reboot host to clear wedged PCI subsystem (post-launch)
+      ansible.builtin.include_tasks: force_reboot.yml
 
     - name: Retry VM launch after reboot
       ansible.builtin.command:

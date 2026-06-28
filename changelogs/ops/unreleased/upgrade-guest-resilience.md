@@ -26,4 +26,10 @@
   `run-td` fail with "SBR cannot run until the host is rebooted"). It pre-flight
   detects the wedge via `chutes.guest.vfio.pci_operations_wedged()`, and if the
   launch itself wedges the host it reboots, waits for SSH, and retries the launch
-  once. Tunable via `upgrade_reboot_timeout_seconds` (default 900).
+  once. Tunable via `upgrade_reboot_timeout_seconds` (default 1800).
+- The wedge-recovery reboot is now a forced kernel-level SysRq reboot
+  (`force_reboot.yml`) instead of a graceful one. A graceful reboot hangs
+  indefinitely in `systemd-shutdown` waiting for the wedged QEMU and other
+  un-killable D-state tasks (seen on the iLO console as "Waiting for process:
+  ... chutes-td ..."), leaving the host stuck mid-reboot. SysRq 's' then 'b'
+  syncs and reboots immediately, bypassing service/device shutdown.
