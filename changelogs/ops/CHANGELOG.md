@@ -3,6 +3,13 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.06.1] - 2026-06-30
+
+### Added
+- `discover-profile.sh`: **Launch Determinism (RTMR0-relevant)** section + JSON `launch_determinism` object — surfaces the host-derived inputs that reshape the guest memory map / ACPI tables and therefore RTMR0: the host **QEMU version** (`qemu_version` + full distro string — QEMU generates the guest ACPI tables and TD HOB that TDVF measures, so two hosts with byte-identical launch args but different QEMU builds, e.g. Ubuntu 25.10→10.1.0 vs 26.04→10.2.1, extend different RTMR0s), NUMA node count and the `numa_topology_eligible` gate (mirrors `qemu.use_numa_topology()` — guest NUMA topology only activates on exactly 2 host NUMA nodes; any other count, e.g. Sub-NUMA Clustering, falls back to a flat map + `numactl` interleave and extends a different RTMR0), the derived QEMU `-cpu` args (avx10 mask gated on `VERSION_ID`), and the SMP topology. Diffing this section between two hosts isolates an RTMR0 divergence.
+- `discover-profile.sh`: per-GPU VBIOS version (JSON `gpu.vbios`), mapped by PCI bus id so nvidia-smi index order cannot mislabel GPUs. (VBIOS feeds the GPU/nvtrust attestation path, not the TDX RTMRs.)
+- `discover-profile.sh`: full `lspci -tv` PCIe topology tree (JSON `pci_topology`) — enumeration order drives PXB-PCIe root-port assignment and thus the guest's PCI bus layout.
+
 ## [2026.06.0] - 2026-06-25
 
 ### Added
@@ -16,9 +23,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - `discover-profile.sh`: hardware discovery script that probes GPU topology, PCI BAR sizes, NUMA layout, CPU/memory configuration, and firmware paths — outputs a terminal report and JSON file with all values needed to verify or author a `GpuProfile` entry.
 - `benchmark-hf-downloads.py`: new TDX-focused benchmark comparing XET concurrency configurations.
 - `discover-profile.sh`: **Host / Firmware Identity** section + JSON `host` object — baseboard model and BIOS vendor/version/date read from world-readable `/sys/class/dmi/id/*` (no root), plus product name and OS `VERSION_ID`. Pins down "identical" servers that actually differ in firmware/BIOS settings.
-- `discover-profile.sh`: **Launch Determinism (RTMR0-relevant)** section + JSON `launch_determinism` object — surfaces the host-derived inputs that reshape the guest memory map / ACPI tables and therefore RTMR0: the host **QEMU version** (`qemu_version` + full distro string — QEMU generates the guest ACPI tables and TD HOB that TDVF measures, so two hosts with byte-identical launch args but different QEMU builds, e.g. Ubuntu 25.10→10.1.0 vs 26.04→10.2.1, extend different RTMR0s), NUMA node count and the `numa_topology_eligible` gate (mirrors `qemu.use_numa_topology()` — guest NUMA topology only activates on exactly 2 host NUMA nodes; any other count, e.g. Sub-NUMA Clustering, falls back to a flat map + `numactl` interleave and extends a different RTMR0), the derived QEMU `-cpu` args (avx10 mask gated on `VERSION_ID`), and the SMP topology. Diffing this section between two hosts isolates an RTMR0 divergence.
-- `discover-profile.sh`: per-GPU VBIOS version (JSON `gpu.vbios`), mapped by PCI bus id so nvidia-smi index order cannot mislabel GPUs. (VBIOS feeds the GPU/nvtrust attestation path, not the TDX RTMRs.)
-- `discover-profile.sh`: full `lspci -tv` PCIe topology tree (JSON `pci_topology`) — enumeration order drives PXB-PCIe root-port assignment and thus the guest's PCI bus layout.
 
 ### Changed
 - All GPU profiles now use `OVMF.inteltdx.fd` firmware (edk2-stable202605 Config-B, no Secure Boot). Addresses CVE-2025-2296 (legacy Linux loader disabled by default). Old `TDVF.fd` removed.
