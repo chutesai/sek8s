@@ -17,6 +17,7 @@ from chutes.guest.detection import (
     detect_nvidia_gpus,
     detect_profile,
     get_gpu_bdfs,
+    verify_host_qemu_supported,
 )
 from chutes.guest.gpu.profiles import GPU_PROFILES  # noqa: F401 — available for introspection
 from chutes.guest.passthrough import setup_passthrough
@@ -76,6 +77,12 @@ def stop_existing_vm():
 def launch_vm(args) -> int:
 
     print("Starting TDX VM...")
+
+    # Host-readiness gate (before profile resolution): the host QEMU build feeds
+    # the guest ACPI tables measured into RTMR0, so an unbaselined QEMU would
+    # attest with an RTMR0 we have no measurement for. Fail loud and early.
+    verify_host_qemu_supported()
+
     mem = DEFAULT_MEM
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"

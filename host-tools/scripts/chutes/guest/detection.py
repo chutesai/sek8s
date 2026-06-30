@@ -6,6 +6,7 @@ output and return BDF lists or model mappings without modifying system state.
 
 import os
 import glob
+import platform
 import re
 import subprocess
 
@@ -69,6 +70,83 @@ def detect_host_mem_gb() -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+# The QEMU build whose generated guest ACPI/topology has baselined RTMR0
+# measurements, keyed by the Ubuntu release that ships it. Each release ships one
+# QEMU; hosts must run that build. This pins the QEMU whose ACPI output we've
+# measured into RTMR0 AND enforces the host is on the release's security-patched
+# QEMU (no running an old QEMU on a new OS). Keep aligned with the supported host
+# OS releases (chutes.host.profiles) and the validator measurements; bump the
+# value for a release when its QEMU is rebaselined. Upstream version only —
+# distro "+ds-...ubuntuX.Y" SRU revisions do not move RTMR0.
+SUPPORTED_QEMU_BY_OS = {
+    "25.10": "10.1.0",
+    "26.04": "10.2.1",
+}
+
+
+def detect_os_version() -> str | None:
+    """Return the host OS VERSION_ID (e.g. '26.04') from /etc/os-release, or None."""
+    try:
+        return platform.freedesktop_os_release().get("VERSION_ID")
+    except (OSError, AttributeError):
+        return None
+
+
+def detect_qemu_version() -> str | None:
+    """Return the host qemu-system-x86_64 upstream version (e.g. '10.2.1'), or None."""
+    try:
+        out = subprocess.run(
+            ["qemu-system-x86_64", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    match = re.search(r"version (\d+(?:\.\d+)*)", out.stdout)
+    return match.group(1) if match else None
+
+
+def verify_host_qemu_supported() -> None:
+    """Raise ValueError unless the host runs its OS release's baselined QEMU.
+
+    QEMU generates the guest ACPI tables that TDX extends into RTMR0, so a host
+    on a different QEMU attests with an RTMR0 we have no measurement for. Each
+    supported Ubuntu release ships exactly one QEMU build, so we tie the expected
+    QEMU to the OS: this both pins the baselined RTMR0 and keeps hosts on the
+    release's security-patched QEMU. Run as a host-readiness gate before profile
+    resolution so the operator gets a clear error instead of a later 403.
+
+    Note: this is a proactive operator-facing check, not a security boundary —
+    the host controls its own QEMU. The real gate is the control-plane RTMR0
+    match; a QEMU change that didn't move RTMR0 is, by definition, not something
+    we can enforce from here.
+    """
+    qemu_version = detect_qemu_version()
+    if qemu_version is None:
+        raise ValueError(
+            "Could not determine the host QEMU version "
+            "(`qemu-system-x86_64 --version`). Install qemu-system-x86 and retry."
+        )
+    os_version = detect_os_version()
+    expected = SUPPORTED_QEMU_BY_OS.get(os_version)
+    if expected is None:
+        raise ValueError(
+            f"Host OS release {os_version!r} is not supported "
+            f"{list(SUPPORTED_QEMU_BY_OS)}. Supported releases ship a QEMU whose "
+            f"RTMR0 is baselined; run discover-profile.sh and send the output so "
+            f"Chutes can baseline this release."
+        )
+    if qemu_version != expected:
+        raise ValueError(
+            f"Host OS {os_version} ships (and we baseline) QEMU {expected}, but "
+            f"found QEMU {qemu_version}. A different QEMU generates different guest "
+            f"ACPI tables → a different TDX RTMR0 → rejected at attestation. Update "
+            f"to the release's QEMU (`sudo apt update && sudo apt full-upgrade`), or "
+            f"run discover-profile.sh and send the output to baseline {qemu_version}."
+        )
 
 
 # NVSwitch device ID (H100/H200 multi-GPU systems)
@@ -201,6 +279,59 @@ def get_gpu_bdfs() -> list[str] | None:
         return sorted(bdfs) if bdfs else None
     except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, RuntimeError):
         return None
+
+
+def _device_numa_layout(bdfs: list[str]) -> tuple[int, ...]:
+    """Per-device host NUMA node, in sorted-BDF order.
+
+    This is the order devices are added to the guest PCI topology, and on the
+    NUMA path each device attaches to the PXB-PCIe bridge for its host NUMA node
+    -- so this tuple captures the guest PXB grouping that feeds RTMR0. Unknown /
+    unreadable nodes are recorded as -1.
+    """
+    layout: list[int] = []
+    for bdf in sorted(bdfs):
+        try:
+            with open(f"/sys/bus/pci/devices/{bdf}/numa_node") as f:
+                layout.append(int(f.read().strip()))
+        except (OSError, ValueError):
+            layout.append(-1)
+    return tuple(layout)
+
+
+def host_topology_fingerprint(
+    profile: GpuProfile,
+    gpu_bdfs: list[str],
+    nvswitch_bdfs: list[str],
+    ib_bdfs: list[str],
+) -> tuple:
+    """Compute the host's RTMR0-impacting topology fingerprint.
+
+    RTMR0 is a function of the guest ACPI/PCI topology QEMU emits, which depends
+    on the runtime host topology (not just the profile). Every device we pass
+    through -- GPUs, NVSwitches, and InfiniBand VFs -- becomes a guest PCI device
+    that QEMU describes in the measured ACPI tables. On the NUMA path (profile
+    requests NUMA topology AND the host has exactly 2 NUMA nodes), each device
+    attaches to the PXB-PCIe bridge for its host NUMA node, so the per-device
+    ->NUMA layout drives the PXB grouping and is part of the fingerprint.
+    Otherwise the guest is flat (no PXB, host node count only affects host-side
+    numactl interleave), so device layout is irrelevant and the fingerprint
+    collapses to the device counts.
+
+    ``ib_bdfs`` are the IB PFs that will be passed through (one VF per PF, VF
+    inheriting the PF's NUMA node); empty for profiles that don't pass IB.
+
+    Same fingerprint => same RTMR0 for a given profile + QEMU + image.
+    """
+    node_count = detect_numa_node_count()
+    if profile.enable_numa_topology and node_count == 2:
+        return (
+            "numa",
+            _device_numa_layout(gpu_bdfs),
+            _device_numa_layout(nvswitch_bdfs),
+            _device_numa_layout(ib_bdfs),
+        )
+    return ("flat", len(gpu_bdfs), len(nvswitch_bdfs), len(ib_bdfs))
 
 
 def detect_nvswitches() -> list[str]:
@@ -378,6 +509,7 @@ def detect_profile() -> GpuProfile:
             f"Verify lscpu and add a new profile if this is a different server SKU."
         )
 
+    nvswitch_bdfs: list[str] = []
     if profile.should_passthrough_nvswitches(total_gpus):
         nvswitch_bdfs = detect_nvswitches()
         if not nvswitch_bdfs:
@@ -387,12 +519,33 @@ def detect_profile() -> GpuProfile:
                 f"Verify with: lspci -Dnn | grep '\\[0680\\]' | grep '10de'"
             )
 
+    ib_bdfs: list[str] = []
     if profile.should_passthrough_infiniband:
-        ib_pf_bdfs = detect_infiniband_pfs(exclude_bdfs=detect_cx7_bridge_pfs())
-        if not ib_pf_bdfs:
+        ib_bdfs = detect_infiniband_pfs(exclude_bdfs=detect_cx7_bridge_pfs())
+        if not ib_bdfs:
             print(
                 f"  Note: profile '{profile.name}' supports InfiniBand passthrough "
                 f"but no IB devices detected on this host — skipping IB passthrough."
+            )
+
+    # Topology hard-match: the host's RTMR0-impacting topology (NUMA path, and on
+    # the NUMA path the device->NUMA / PXB grouping) must be one we've baselined
+    # for this profile. The NUMA layout changes the guest ACPI and therefore
+    # RTMR0, so an unrecognised topology would attest with a measurement we don't
+    # have. An empty baselined set means the check is not yet enforced.
+    baselined = profile.baselined_topologies
+    if baselined:
+        fingerprint = host_topology_fingerprint(
+            profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs
+        )
+        if fingerprint not in baselined:
+            raise ValueError(
+                f"Host topology {fingerprint} is not baselined for profile "
+                f"'{profile.name}'. Known topologies: {sorted(baselined)}. The NUMA "
+                f"node count and device-to-NUMA wiring change the guest ACPI tables "
+                f"and therefore the TDX RTMR0, so this host would attest with an "
+                f"unbaselined RTMR0 and be rejected. Run discover-profile.sh and send "
+                f"the output so Chutes can baseline this topology."
             )
 
     return profile

@@ -162,6 +162,18 @@ class GpuProfile(ABC):
         return False
 
     @property
+    def baselined_topologies(self) -> set[tuple]:
+        """Host topology fingerprints that have baselined RTMR0 measurements.
+
+        Each entry is a ``detection.host_topology_fingerprint`` value. The host's
+        live fingerprint must be in this set or launch is refused (the topology
+        would attest with an unbaselined RTMR0). An EMPTY set means the check is
+        not enforced for this profile (no baseline yet). Keep in sync with the
+        validator's accepted measurements.
+        """
+        return set()
+
+    @property
     def enable_post_launch_tuning(self) -> bool:
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
         return False
@@ -264,6 +276,22 @@ class B200Profile(GpuProfile):
     def requires_fabric_manager(self) -> bool:
         return True
 
+    @property
+    def baselined_topologies(self) -> set[tuple]:
+        # B200 passes no NVSwitches through (host-side fabric manager), so the
+        # NVSwitch tuple (3rd element) is empty. It DOES pass IB VFs through (one
+        # per PF), so the IB->NUMA layout (4th element) is part of the fingerprint.
+        # am-b200-57 (b200-2.json) reference: 2 NUMA nodes, GPUs 4+4, 20 IB PFs.
+        #
+        # PROVISIONAL: the IB layout is DERIVED from PF bus position vs the GPU
+        # NUMA boundary (node0 GPUs <=0x6e, node1 GPUs >=0x8e; boundary PFs
+        # 6f->node0, 8d->node1 by adjacency) -> 12 on node 0, 8 on node 1. The
+        # pre-IB-capture reference JSON didn't record per-IB NUMA. Confirm against
+        # discover-profile.sh `nic.passthrough_numa_nodes` on a real host and
+        # correct this tuple if it differs.
+        ib_layout = (0,) * 12 + (1,) * 8
+        return {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ib_layout)}
+
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
 
@@ -297,6 +325,21 @@ class B200Xeon6Profile(B200Profile):
         # 2 sockets × 72 cores × 2 threads = 288.
         # Confirmed from discover-profile.sh on chutes-miner-gpu-0.
         return 288
+
+    @property
+    def baselined_topologies(self) -> set[tuple]:
+        # As with B200, IB VFs are passed through -> IB->NUMA layout (4th element)
+        # is part of the fingerprint.
+        return {
+            # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4, a single IB
+            # card (bus 0xab, 4 PFs) sitting in the node-1 GPU bus range
+            # (0x97-0xed) -> node 1. PROVISIONAL derivation (pre-IB-capture JSON);
+            # confirm via discover-profile.sh `nic.passthrough_numa_nodes`.
+            ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (1, 1, 1, 1)),
+            # Original Xeon6 reference (b200.json): SNC3 -> 6 nodes -> flat
+            # fallback (no PXB grouping). 8 GPUs, no NVSwitch, 4 IB PFs.
+            ("flat", 8, 0, 4),
+        }
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200 Xeon6)"
@@ -410,6 +453,22 @@ class H200Profile(GpuProfile):
         # before changing this value.
         return total_gpus == 8
 
+    @property
+    def baselined_topologies(self) -> set[tuple]:
+        # H200 does not pass InfiniBand through (should_passthrough_infiniband
+        # is False), so the IB tuple (4th element) is always empty.
+        return {
+            # Dell XE9680 (au18/au19): GPUs 4+4, NVSwitches on node 1 -- verified
+            # from the launched QEMU command (rp_nvsw* under pxb_numa1).
+            ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ()),
+            # KR6288 (ar6): GPUs 4+4, NVSwitches on node 0 -- confirmed by running
+            # quick-launch manually on the host; it attests and joins the network.
+            ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (0, 0, 0, 0), ()),
+            # gd-245 and any H200 host whose node count != 2 -> flat fallback
+            # (no PXB grouping): 8 GPUs + 4 NVSwitches.
+            ("flat", 8, 4, 0),
+        }
+
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
             return "PPCIe mode (8 GPUs, H200)"
@@ -458,6 +517,12 @@ class RTXPro6000Profile(GpuProfile):
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return False
+
+    @property
+    def baselined_topologies(self) -> set[tuple]:
+        # rtxpro6000 reference: 2 NUMA nodes, GPUs 4+4, no NVSwitch and no IB
+        # passthrough -> both trailing tuples empty.
+        return {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (RTX Pro 6000)"
