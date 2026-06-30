@@ -303,9 +303,13 @@ fi
 # NVSwitch detection
 # ---------------------------------------------------------------------------
 NVSWITCH_DEVICES=()
+NVSWITCH_NUMA_NODES=()
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
     NVSWITCH_DEVICES+=("$bdf")
+    # NVSwitch host NUMA node — on the 2-node NUMA launch path each device
+    # attaches to the PXB-PCIe bridge for its node, so this layout feeds RTMR0.
+    NVSWITCH_NUMA_NODES+=("$(pci_numa_node "$bdf")")
 done < <(lspci -Dnn | grep '\[0680\]' | grep '10de' || true)
 
 # ---------------------------------------------------------------------------
@@ -382,6 +386,7 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
 
     section "NVSwitches"
     row "NVSwitch devices" "${#NVSWITCH_DEVICES[@]}  (${NVSWITCH_DEVICES[*]:-none})"
+    row "NVSwitch NUMA nodes" "${NVSWITCH_NUMA_NODES[*]:-none}"
 
     echo ""
 fi
@@ -500,8 +505,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
 
     if [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]]; then
         json_str_array nvswitch_json "${NVSWITCH_DEVICES[@]}"
+        json_int_array nvswitch_numa_json "${NVSWITCH_NUMA_NODES[@]}"
     else
-        nvswitch_json="[]"
+        nvswitch_json="[]"; nvswitch_numa_json="[]"
     fi
 
     cat > "$OUT_FILE" <<JSON
@@ -562,7 +568,8 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
   "nvswitch": {
     "present": $( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'true' || echo 'false' ),
     "count": ${#NVSWITCH_DEVICES[@]},
-    "devices": ${nvswitch_json}
+    "devices": ${nvswitch_json},
+    "numa_nodes": ${nvswitch_numa_json}
   }
 }
 JSON
