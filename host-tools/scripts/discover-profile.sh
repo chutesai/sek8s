@@ -99,7 +99,6 @@ CPU_TOTAL=$(lscpu | awk '/^CPU\(s\):/ {print $2}')
 CPU_SOCKETS=$(lscpu | awk '/^Socket\(s\):/ {print $2}')
 CPU_CORES_PER_SOCKET=$(lscpu | awk '/^Core\(s\) per socket:/ {print $NF}')
 CPU_THREADS_PER_CORE=$(lscpu | awk '/^Thread\(s\) per core:/ {print $NF}')
-VCPUS=$(( CPU_TOTAL - 4 ))   # HOST_RESERVED_CPUS = 4
 
 # ---------------------------------------------------------------------------
 # Memory
@@ -344,8 +343,6 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Sockets"           "$CPU_SOCKETS"
     row "Cores per socket"  "$CPU_CORES_PER_SOCKET"
     row "Threads per core"  "$CPU_THREADS_PER_CORE"
-    row "vCPUs (cpus - 4)"  "$VCPUS"
-    row "SMP topology"      "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
 
     section "Memory"
     row "Total host RAM"           "${MEM_TOTAL_GB} GB"
@@ -372,7 +369,7 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
                                         && echo "ACTIVE (host has 2 nodes) → per-node memory backends + PXB-PCIe" \
                                         || echo "FALLBACK (host has ${NUMA_NODE_COUNT} nodes, not 2) → flat map + numactl interleave")"
     row "QEMU -cpu args"            "$CPU_ARGS  (avx10 gate: VERSION_ID=${OS_VERSION_ID:-?})"
-    row "SMP topology (vcpus-4)"    "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
+    row "Host CPU topology"         "sockets=${CPU_SOCKETS}, cores/socket=${CPU_CORES_PER_SOCKET}, threads/core=${CPU_THREADS_PER_CORE}"
     if [[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]]; then
         warn "Guest RAM (mem=GPU_count × profile.ram_per_gpu_gb) is profile-derived;"
         warn "this script is profile-free — read it from run-td's launch log to confirm."
@@ -529,7 +526,7 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "numa_node_count": ${NUMA_NODE_COUNT},
     "numa_topology_eligible": ${numa_eligible_json},
     "cpu_args": "${cpu_args_esc}",
-    "smp_topology": "${VCPUS},sockets=${CPU_SOCKETS},cores=$(( VCPUS / CPU_SOCKETS )),threads=1"
+    "host_cpu_topology": "sockets=${CPU_SOCKETS},cores_per_socket=${CPU_CORES_PER_SOCKET},threads_per_core=${CPU_THREADS_PER_CORE}"
   },
   "gpu": {
     "pci_device_ids": ${uniq_ids_json},
@@ -545,8 +542,7 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "total": ${CPU_TOTAL},
     "sockets": ${CPU_SOCKETS},
     "cores_per_socket": ${CPU_CORES_PER_SOCKET},
-    "threads_per_core": ${CPU_THREADS_PER_CORE},
-    "vcpus": ${VCPUS}
+    "threads_per_core": ${CPU_THREADS_PER_CORE}
   },
   "memory": {
     "total_gb": ${MEM_TOTAL_GB},

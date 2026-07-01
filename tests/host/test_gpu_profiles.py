@@ -249,10 +249,25 @@ def test_h200_uses_cc_mode_below_8_gpus():
 
 @pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
 def test_vcpus_reserves_cores_for_host(model_key):
-    """vcpus must be host_cpus minus the shared HOST_RESERVED_CPUS constant."""
+    """vcpus must be host_cpus minus the profile's per-profile reserve."""
     profile = GPU_PROFILES[model_key]
-    assert profile.vcpus == profile.host_cpus - HOST_RESERVED_CPUS
+    assert profile.vcpus == profile.host_cpus - profile.host_reserved_cpus
     assert profile.vcpus > 0
+
+
+@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
+def test_host_reserved_cpus_is_even(model_key):
+    """Reserve must be even so vcpus stays divisible across sockets."""
+    profile = GPU_PROFILES[model_key]
+    assert profile.host_reserved_cpus % 2 == 0
+
+
+def test_host_reserved_cpus_default_and_b200_override():
+    """Default reserve is HOST_RESERVED_CPUS; B200 family overrides to 16."""
+    assert GPU_PROFILES["H200"].host_reserved_cpus == HOST_RESERVED_CPUS
+    assert GPU_PROFILES["B300"].host_reserved_cpus == HOST_RESERVED_CPUS
+    assert GPU_PROFILES["B200"].host_reserved_cpus == 16
+    assert GPU_PROFILES["B200_XEON6"].host_reserved_cpus == 16
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +385,9 @@ def test_b200_xeon6_has_correct_cpu_topology():
     profile = GPU_PROFILES["B200_XEON6"]
     assert profile.host_cpus == 288
     assert profile.host_sockets == 2
-    assert profile.vcpus == 288 - HOST_RESERVED_CPUS
+    # Inherits B200's 16-CPU host reserve (not the default HOST_RESERVED_CPUS).
+    assert profile.host_reserved_cpus == 16
+    assert profile.vcpus == 288 - 16
     assert "sockets=2" in profile.smp_topology
     count = int(profile.smp_topology.split(",")[0])
     assert count == profile.vcpus

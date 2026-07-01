@@ -23,12 +23,22 @@ Map these to the profile properties:
 
     host_cpus    = CPU(s)                            → 128
     host_sockets = Socket(s)                         → 2
-    vcpus        = host_cpus - HOST_RESERVED_CPUS    → 124  (derived, no override needed)
+    vcpus        = host_cpus - host_reserved_cpus    → 124  (derived, no override needed)
     smp_topology = derived automatically from the above (no override needed)
 
-HOST_RESERVED_CPUS (currently 4) is the number of logical CPUs kept for the
-host OS. vcpus and smp_topology are computed from host_cpus and host_sockets
-automatically — only override them if the server has a non-standard layout.
+host_reserved_cpus is the number of logical CPUs kept for the host OS. It
+defaults to HOST_RESERVED_CPUS (4) and is a per-profile property so a GPU type
+with a heavier host workload can reserve more without shifting the vcpu count —
+and therefore RTMR0 — of unrelated profiles. B200/B200_XEON6 override it to 16
+because the host runs FabricManager alongside QEMU's iothreads and, under heavy
+NVLink/NCCL I/O, a thin reserve starves those threads (observed as
+cudaErrorNvlinkUncorrectable in the guest).
+
+Keep any override EVEN: vcpus must divide across host_sockets (2) for a clean
+-smp topology. Changing host_reserved_cpus changes vcpus → smp_topology →
+RTMR0, so any change requires re-baselining that profile's attestation policy.
+vcpus and smp_topology are otherwise computed automatically — only override
+host_cpus/host_sockets if the server has a non-standard layout.
 """
 
 from abc import ABC, abstractmethod
@@ -86,9 +96,20 @@ class GpuProfile(ABC):
         return 1
 
     @property
+    def host_reserved_cpus(self) -> int:
+        """Logical CPUs kept for the host OS (not handed to the guest).
+
+        Defaults to HOST_RESERVED_CPUS. Override per profile when the host
+        carries a heavier fixed workload (e.g. FabricManager on NVSwitch HGX
+        systems). Must be even so vcpus divides across host_sockets. Changing
+        it changes vcpus → smp_topology → RTMR0; re-baseline attestation.
+        """
+        return HOST_RESERVED_CPUS
+
+    @property
     def vcpus(self) -> int:
         """vCPUs allocated to the VM (host CPUs minus reserve)."""
-        return self.host_cpus - HOST_RESERVED_CPUS
+        return self.host_cpus - self.host_reserved_cpus
 
     @property
     def smp_topology(self) -> str:
@@ -209,6 +230,16 @@ class B200Profile(GpuProfile):
     @property
     def host_sockets(self) -> int:
         return 2
+
+    @property
+    def host_reserved_cpus(self) -> int:
+        # 16 logical (8 physical cores, 4/socket) → 176 vcpus, 88 cores/socket.
+        # The host runs FabricManager alongside QEMU's iothreads/vhost workers;
+        # the default reserve of 4 starves them under heavy NVLink/NCCL I/O,
+        # surfacing as cudaErrorNvlinkUncorrectable in the guest. The reserved
+        # cores also widen the gap the iothreads pin into (see post_launch.py).
+        # Inherited by B200Xeon6Profile. Even, so vcpus stays socket-divisible.
+        return 16
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]

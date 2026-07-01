@@ -3,6 +3,29 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.07.1] - 2026-07-01
+
+### Changed
+- **Per-profile host CPU reserve.** `HOST_RESERVED_CPUS` is no longer a single
+  global constant applied to every GPU profile. `GpuProfile` now exposes a
+  per-profile `host_reserved_cpus` property (default 4) that feeds
+  `vcpus = host_cpus - host_reserved_cpus`. This lets a GPU type with a heavier
+  fixed host workload reserve more cores without shifting the vcpu count — and
+  therefore the RTMR0 measurement — of unrelated profiles.
+
+### Fixed
+- **B200/B200_XEON6 reserve 16 host CPUs** (up from the default 4), leaving 176
+  vcpus on the 192-thread B200 (8 physical cores, 4/socket; clean 88 cores/socket
+  topology). The B200 host runs FabricManager alongside QEMU's iothread/vhost
+  workers; a thin 4-CPU reserve starved those threads under heavy NVLink/NCCL
+  I/O, which surfaced in the guest as `cudaErrorNvlinkUncorrectable` during
+  distributed init. The wider reserve also enlarges the CPU gap that QEMU
+  iothreads pin into (`post_launch.py`).
+  **Attestation impact:** changing B200/B200_XEON6 vcpus changes their `-smp`
+  topology and thus RTMR0. The B200 and B200_XEON6 attestation baselines must be
+  re-measured. H200, RTX_PRO_6000, and B300 keep the default reserve of 4 and are
+  byte-identical — no re-baseline needed for those.
+
 ## [2026.07.0] - 2026-07-01
 
 ### Changed
@@ -43,7 +66,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   un-killable D-state tasks (seen on the iLO console as "Waiting for process:
   ... chutes-td ..."), leaving the host stuck mid-reboot. SysRq 's' then 'b'
   syncs and reboots immediately, bypassing service/device shutdown.
-
 
 ## [2026.06.1] - 2026-06-30
 
