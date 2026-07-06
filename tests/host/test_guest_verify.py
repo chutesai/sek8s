@@ -64,6 +64,6 @@ def test_verify_target_os_skips_live_qemu_gate():
     # In --target-os mode the live-QEMU hygiene gate must NOT run (the upgrade
     # replaces QEMU), so even a raising gate doesn't block a registered combo.
     xeon6 = GPU_PROFILES["B200_XEON6"]
-    gd251_fp = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (1, 1, 1, 1))  # registered at 10.2.1
-    with _patch_verify(xeon6, gd251_fp, qemu_raises=True):
+    xeon6_fp = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())  # registered at 10.2.1 (no IB)
+    with _patch_verify(xeon6, xeon6_fp, qemu_raises=True):
         assert verify.verify_host(target_os="26.04") == verify.READY

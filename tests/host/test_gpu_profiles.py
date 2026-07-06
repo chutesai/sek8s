@@ -191,9 +191,10 @@ def test_h200_uses_ppcie_sbr_reset():
     assert args == ["--reset-with-sbr", "--reset-after-ppcie-mode-switch"]
 
 
-def test_b200_passes_through_infiniband():
-    """B200 HGX has separate CX7 NIC PFs (class 0207) for guest IB passthrough."""
-    assert GPU_PROFILES["B200"].should_passthrough_infiniband is True
+def test_b200_does_not_pass_through_infiniband():
+    """IB passthrough removed: it added no value and varied RTMR0 per NIC loadout;
+    guest networking is virtio-net (matching H200/B300)."""
+    assert GPU_PROFILES["B200"].should_passthrough_infiniband is False
 
 
 def test_b300_does_not_pass_through_infiniband():
@@ -400,11 +401,12 @@ def test_b200_xeon6_has_higher_ram_per_gpu_than_b200():
     )
 
 
-def test_b200_xeon6_inherits_cc_mode_and_ib_passthrough():
+def test_b200_xeon6_inherits_cc_mode_and_no_ib_passthrough():
     profile = GPU_PROFILES["B200_XEON6"]
     args = profile.get_cc_mode_args(8)
     assert any("--set-cc-mode=on" in a for a in args[0])
-    assert profile.should_passthrough_infiniband is True
+    # Inherits IB-passthrough=False from B200 (removed).
+    assert profile.should_passthrough_infiniband is False
     assert profile.should_passthrough_nvswitches(8) is False
 
 
@@ -561,15 +563,14 @@ def _patch_detection(
     nvswitch_bdfs=None,
     ib_pf_bdfs=None,
     gpu_bdfs=None,
-    fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (0,) * 12 + (1,) * 8),
+    fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ()),
 ):
     """Return a context manager stack that patches all detection side effects.
 
     ``fingerprint`` is what host_topology_fingerprint() returns; the default is
-    the B200 4+4 NUMA layout (GPUs 4+4, no NVSwitch, 20 IB PFs split 12/8) so
-    B200 resolution tests pass the topology hard-match. Profiles with a different
-    baselined IB/NVSwitch layout (e.g. B200_XEON6) pass an explicit ``fingerprint``.
-    Pass a non-baselined value to exercise the refusal path.
+    the B200 4+4 NUMA layout (GPUs 4+4, no NVSwitch, no IB passthrough) so B200
+    resolution tests pass the topology hard-match. Pass a non-baselined value to
+    exercise the refusal path.
     """
     from contextlib import ExitStack
     from unittest.mock import patch
@@ -633,9 +634,8 @@ def test_detect_profile_resolves_b200_xeon6_by_cpu_count():
         lspci_lines=_make_lspci_b200(),
         host_cpus=288,
         host_sockets=2,
-        ib_pf_bdfs=["0000:0e:00.0"],
-        # XEON6 baselines a single IB card on node 1, distinct from B200's default.
-        fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (1, 1, 1, 1)),
+        # XEON6 shares the no-IB B200 numa fingerprint; disambiguated by host_cpus.
+        fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ()),
     ):
         profile = detect_profile()
 
@@ -780,9 +780,8 @@ def test_detect_profile_raises_on_unbaselined_topology():
         lspci_lines=_make_lspci_b200(),
         host_cpus=192,
         host_sockets=2,
-        ib_pf_bdfs=["0000:0e:00.0"],
-        # not in B200 baseline (IB layout differs from the 12/8 split)
-        fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (1,) * 20),
+        # not in B200 baseline (GPU->NUMA layout differs from the 4+4 split)
+        fingerprint=("numa", (0, 1, 0, 1, 0, 1, 0, 1), (), ()),
     ):
         with pytest.raises(ValueError, match="not baselined for profile 'B200'"):
             detect_profile()

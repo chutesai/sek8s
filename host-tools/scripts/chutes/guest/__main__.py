@@ -78,9 +78,7 @@ def launch_vm(args) -> int:
 
     print("Starting TDX VM...")
 
-    # Host-readiness gate (before profile resolution): the host QEMU build feeds
-    # the guest ACPI tables measured into RTMR0, so an unbaselined QEMU would
-    # attest with an RTMR0 we have no measurement for. Fail loud and early.
+    # Fail early if the host QEMU isn't the one baselined for its OS (moves RTMR0).
     verify_host_qemu_supported()
 
     mem = DEFAULT_MEM

@@ -61,15 +61,10 @@
       ansible.builtin.meta: end_host
       when: _upgrade_hops | length == 0
 
-    # ── Pre-flight: will the VM relaunch AND re-attest AFTER the upgrade? ─────
-    # An OS upgrade changes the host QEMU (e.g. 25.10/10.1.0 -> 26.04/10.2.1),
-    # which moves RTMR0. Verify the host's topology has a REGISTERED measurement
-    # at the target OS's QEMU BEFORE we drain, so we never take a node offline
-    # that couldn't relaunch (or would 403 at attestation). Runs the same gates
-    # as launch (chutes.guest.verify) without starting a VM. rc: 0 ready,
-    # 1 blocked (won't relaunch), 2 no registered measurement for topology x QEMU.
-    # Set upgrade_preflight_override=true to proceed anyway (only when you are
-    # registering the measurements out-of-band).
+    # Pre-flight before draining: an OS upgrade changes QEMU (which moves RTMR0),
+    # so verify the target OS's topology x QEMU is baselined before we take the
+    # node offline. rc: 0 ready, 1 won't relaunch, 2 no measurement. Override with
+    # upgrade_preflight_override=true.
 
     - name: Pre-flight — verify host will relaunch/attest at the target OS
       ansible.builtin.command:

@@ -1,22 +1,11 @@
-"""Standalone host-readiness verification — the launch gates, without launching.
+"""Run the launch gates without launching a VM — use before an upgrade to confirm
+a node will relaunch and re-attest rather than going offline.
 
-Run this BEFORE upgrading a host so a drain + upgrade can't take a node offline
-that couldn't relaunch and re-attest afterwards. It runs the exact checks the
-launch path runs (``verify_host_qemu_supported`` + ``detect_profile``) plus a
-per-QEMU measurement advisory, but never starts a VM.
-
-Usage:
-    python3 -m chutes.guest.verify              # will this host relaunch as-is?
+    python3 -m chutes.guest.verify              # relaunch as-is?
     python3 -m chutes.guest.verify --target-os 26.04   # ... after an OS upgrade?
 
-Exit codes:
-    0  READY    — topology characterized AND a registered measurement exists for
-                  (topology x QEMU); the host should relaunch and attest.
-    1  BLOCKED  — a launch gate fails (QEMU wrong for OS, or topology not
-                  characterized). Do NOT upgrade; the VM would not relaunch.
-    2  WARNING  — launch gates pass, but no REGISTERED measurement exists for this
-                  (topology x QEMU). The VM would launch but 403 at attestation
-                  until Chutes registers the measurement. Do NOT upgrade yet.
+Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU or uncharacterized
+topology) · 2 WARNING (gates pass but no measurement for this topology x QEMU).
 """
 
 import argparse
@@ -41,12 +30,8 @@ WARNING = 2
 
 
 def _host_fingerprint(profile) -> tuple:
-    """Recompute the host's topology fingerprint for the resolved profile.
-
-    Mirrors the device gathering in ``detect_profile`` (which validated the
-    topology but does not return the fingerprint), using only the passthrough
-    sets the profile actually launches with.
-    """
+    """Recompute the fingerprint for the resolved profile (detect_profile doesn't
+    return it)."""
     gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
     total_gpus = len(gpu_bdfs)
     nvswitch_bdfs = (
@@ -62,9 +47,9 @@ def _host_fingerprint(profile) -> tuple:
 
 def verify_host(target_os: str | None = None) -> int:
     """Run the launch gates without launching; return one of READY/BLOCKED/WARNING."""
-    # ── Gate A: QEMU. Which QEMU's measurement matters?
+    # Gate A: which QEMU's measurement matters?
     if target_os is None:
-        # As-is: the host must be on the QEMU its current OS ships.
+        # As-is: host must be on the QEMU its current OS ships.
         try:
             verify_host_qemu_supported()
         except ValueError as exc:
@@ -72,8 +57,7 @@ def verify_host(target_os: str | None = None) -> int:
             return BLOCKED
         qemu_for_measurement = detect_qemu_version()
     else:
-        # Pre-upgrade: the upgrade WILL change QEMU, so we check the topology
-        # against the QEMU the target OS ships rather than the live one.
+        # Pre-upgrade: check against the target OS's QEMU (the upgrade replaces it).
         expected = SUPPORTED_QEMU_BY_OS.get(target_os)
         if expected is None:
             print(
@@ -88,14 +72,14 @@ def verify_host(target_os: str | None = None) -> int:
             f"the live QEMU is ignored because the upgrade replaces it."
         )
 
-    # ── Gate B: topology hard-match (the launch check; raises if uncharacterized).
+    # Gate B: topology hard-match (raises if uncharacterized).
     try:
         profile = detect_profile()
     except ValueError as exc:
         print(f"BLOCKED (topology): {exc}")
         return BLOCKED
 
-    # ── Advisory: is a measurement REGISTERED for (this topology x that QEMU)?
+    # Advisory: is there a measurement for this topology x QEMU?
     fingerprint = _host_fingerprint(profile)
     measured = profile.baselined_measurements
     if fingerprint in measured.get(qemu_for_measurement, set()):

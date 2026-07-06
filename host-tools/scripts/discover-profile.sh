@@ -295,9 +295,7 @@ if [[ ${#IB_CLASS_DEVICES[@]} -gt 0 ]]; then
             BRIDGE_PFS+=("$bdf")
         else
             PASSTHROUGH_CANDIDATES+=("$bdf")
-            # Host NUMA node of each passthrough IB PF — its VF inherits this node,
-            # and on the 2-node NUMA launch path attaches to that node's PXB-PCIe
-            # bridge, so this layout feeds RTMR0 (same role as GPU/NVSwitch NUMA).
+            # Diagnostic: host NUMA node per IB PF (feeds RTMR0 when IB is passed).
             PASSTHROUGH_NUMA_NODES+=("$(pci_numa_node "$bdf")")
         fi
     done
@@ -311,8 +309,7 @@ NVSWITCH_NUMA_NODES=()
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
     NVSWITCH_DEVICES+=("$bdf")
-    # NVSwitch host NUMA node — on the 2-node NUMA launch path each device
-    # attaches to the PXB-PCIe bridge for its node, so this layout feeds RTMR0.
+    # NVSwitch host NUMA node — drives PXB grouping, so feeds RTMR0.
     NVSWITCH_NUMA_NODES+=("$(pci_numa_node "$bdf")")
 done < <(lspci -Dnn | grep '\[0680\]' | grep '10de' || true)
 

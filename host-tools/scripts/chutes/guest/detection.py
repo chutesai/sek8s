@@ -72,13 +72,7 @@ def detect_host_mem_gb() -> int | None:
     return None
 
 
-# The QEMU build whose generated guest ACPI/topology has baselined RTMR0
-# measurements, keyed by the Ubuntu release that ships it. Each release ships one
-# QEMU; hosts must run that build. This pins the QEMU whose ACPI output we've
-# measured into RTMR0 AND enforces the host is on the release's security-patched
-# QEMU (no running an old QEMU on a new OS). Keep aligned with the supported host
-# OS releases (chutes.host.profiles) and the validator measurements; bump the
-# value for a release when its QEMU is rebaselined. Upstream version only —
+# Expected QEMU per Ubuntu release (each ships one build). Upstream version only;
 # distro "+ds-...ubuntuX.Y" SRU revisions do not move RTMR0.
 SUPPORTED_QEMU_BY_OS = {
     "25.10": "10.1.0",
@@ -110,19 +104,11 @@ def detect_qemu_version() -> str | None:
 
 
 def verify_host_qemu_supported() -> None:
-    """Raise ValueError unless the host runs its OS release's baselined QEMU.
+    """Raise ValueError unless the host runs its OS release's expected QEMU.
 
-    QEMU generates the guest ACPI tables that TDX extends into RTMR0, so a host
-    on a different QEMU attests with an RTMR0 we have no measurement for. Each
-    supported Ubuntu release ships exactly one QEMU build, so we tie the expected
-    QEMU to the OS: this both pins the baselined RTMR0 and keeps hosts on the
-    release's security-patched QEMU. Run as a host-readiness gate before profile
-    resolution so the operator gets a clear error instead of a later 403.
-
-    Note: this is a proactive operator-facing check, not a security boundary —
-    the host controls its own QEMU. The real gate is the control-plane RTMR0
-    match; a QEMU change that didn't move RTMR0 is, by definition, not something
-    we can enforce from here.
+    QEMU generates the guest ACPI measured into RTMR0, so a mismatched QEMU
+    attests with an RTMR0 we have no measurement for. Operator-facing pre-flight,
+    not a security boundary (the real gate is the control-plane RTMR0 match).
     """
     qemu_version = detect_qemu_version()
     if qemu_version is None:
@@ -282,13 +268,8 @@ def get_gpu_bdfs() -> list[str] | None:
 
 
 def _device_numa_layout(bdfs: list[str]) -> tuple[int, ...]:
-    """Per-device host NUMA node, in sorted-BDF order.
-
-    This is the order devices are added to the guest PCI topology, and on the
-    NUMA path each device attaches to the PXB-PCIe bridge for its host NUMA node
-    -- so this tuple captures the guest PXB grouping that feeds RTMR0. Unknown /
-    unreadable nodes are recorded as -1.
-    """
+    """Per-device host NUMA node in sorted-BDF order (the guest PXB grouping that
+    feeds RTMR0). Unknown/unreadable nodes recorded as -1."""
     layout: list[int] = []
     for bdf in sorted(bdfs):
         try:
@@ -305,24 +286,11 @@ def host_topology_fingerprint(
     nvswitch_bdfs: list[str],
     ib_bdfs: list[str],
 ) -> tuple:
-    """Compute the host's RTMR0-impacting topology fingerprint.
-
-    RTMR0 is a function of the guest ACPI/PCI topology QEMU emits, which depends
-    on the runtime host topology (not just the profile). Every device we pass
-    through -- GPUs, NVSwitches, and InfiniBand VFs -- becomes a guest PCI device
-    that QEMU describes in the measured ACPI tables. On the NUMA path (profile
-    requests NUMA topology AND the host has exactly 2 NUMA nodes), each device
-    attaches to the PXB-PCIe bridge for its host NUMA node, so the per-device
-    ->NUMA layout drives the PXB grouping and is part of the fingerprint.
-    Otherwise the guest is flat (no PXB, host node count only affects host-side
-    numactl interleave), so device layout is irrelevant and the fingerprint
-    collapses to the device counts.
-
-    ``ib_bdfs`` are the IB PFs that will be passed through (one VF per PF, VF
-    inheriting the PF's NUMA node); empty for profiles that don't pass IB.
-
-    Same fingerprint => same RTMR0 for a given profile + QEMU + image.
-    """
+    """RTMR0-impacting topology fingerprint of passed-through devices (GPUs,
+    NVSwitches, IB PFs). On the 2-node NUMA path, device->NUMA layout drives the
+    guest PXB grouping; otherwise the guest is flat and only counts matter.
+    ``ib_bdfs`` is empty for profiles that don't pass IB. Same fingerprint =>
+    same RTMR0 for a given profile + QEMU + image."""
     node_count = detect_numa_node_count()
     if profile.enable_numa_topology and node_count == 2:
         return (
@@ -528,11 +496,8 @@ def detect_profile() -> GpuProfile:
                 f"but no IB devices detected on this host — skipping IB passthrough."
             )
 
-    # Topology hard-match: the host's RTMR0-impacting topology (NUMA path, and on
-    # the NUMA path the device->NUMA / PXB grouping) must be one we've baselined
-    # for this profile. The NUMA layout changes the guest ACPI and therefore
-    # RTMR0, so an unrecognised topology would attest with a measurement we don't
-    # have. An empty baselined set means the check is not yet enforced.
+    # Topology hard-match: the live topology must be one we've baselined for this
+    # profile (it drives the guest ACPI and thus RTMR0). Empty set = not enforced.
     baselined = profile.baselined_topologies
     if baselined:
         fingerprint = host_topology_fingerprint(
@@ -541,11 +506,9 @@ def detect_profile() -> GpuProfile:
         if fingerprint not in baselined:
             raise ValueError(
                 f"Host topology {fingerprint} is not baselined for profile "
-                f"'{profile.name}'. Known topologies: {sorted(baselined)}. The NUMA "
-                f"node count and device-to-NUMA wiring change the guest ACPI tables "
-                f"and therefore the TDX RTMR0, so this host would attest with an "
-                f"unbaselined RTMR0 and be rejected. Run discover-profile.sh and send "
-                f"the output so Chutes can baseline this topology."
+                f"'{profile.name}'. Known: {sorted(baselined)}. This host would "
+                f"attest with an unbaselined RTMR0 and be rejected. Run "
+                f"discover-profile.sh and send the output to baseline it."
             )
 
     return profile

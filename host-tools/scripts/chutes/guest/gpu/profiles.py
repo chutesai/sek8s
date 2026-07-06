@@ -163,33 +163,17 @@ class GpuProfile(ABC):
 
     @property
     def baselined_measurements(self) -> dict[str, set[tuple]]:
-        """QEMU version -> topology fingerprints with a REGISTERED RTMR0 measurement.
+        """QEMU version -> known topology fingerprints (RTMR0 = f(topology, QEMU)).
 
-        RTMR0 = f(topology, QEMU): the same host wiring produces a different RTMR0
-        under a different QEMU (different guest ACPI). So a measurement is only
-        valid for a specific (topology x QEMU) pair. Each value is a set of
-        ``detection.host_topology_fingerprint`` tuples we've captured AND registered
-        at that QEMU version.
-
-        This is the authoritative-elsewhere fact (the measurements live in
-        chutes-ops, deployed to the validator via Argo); this map mirrors it so
-        ``chutes.guest.verify`` can warn, before an upgrade, that a (topology x
-        QEMU) combo has no registered measurement and would 403 at attestation.
-        Update it when new measurements are registered. An EMPTY dict means the
-        profile is not characterized yet.
+        verify-host uses the per-QEMU keys to flag a topology with no measurement
+        at a given QEMU. Empty dict = profile not characterized yet.
         """
         return {}
 
     @property
     def baselined_topologies(self) -> set[tuple]:
-        """Union of characterized topology fingerprints across all QEMU versions.
-
-        Used by the launch-time topology hard-match (``detect_profile``), which is
-        deliberately QEMU-agnostic: it refuses hardware we've never characterized,
-        but does not itself distinguish QEMU versions. The precise per-QEMU
-        "is this combo registered" check is verify-host's job, via
-        :attr:`baselined_measurements`. An empty union skips the launch check.
-        """
+        """Union of known fingerprints across QEMU versions, for the launch-time
+        hard-match (QEMU-agnostic). Empty union skips the check."""
         out: set[tuple] = set()
         for topos in self.baselined_measurements.values():
             out |= topos
@@ -283,7 +267,9 @@ class B200Profile(GpuProfile):
 
     @property
     def should_passthrough_infiniband(self) -> bool:
-        return True
+        # Off (like H200/B300): guest networking is virtio-net, NVLink fabric is
+        # host-side FM. Passing IB only made RTMR0 vary by NIC loadout.
+        return False
 
     @property
     def enable_numa_topology(self) -> bool:
@@ -300,23 +286,9 @@ class B200Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # B200 passes no NVSwitches through (host-side fabric manager), so the
-        # NVSwitch tuple (3rd element) is empty. It DOES pass IB VFs through (one
-        # per PF), so the IB->NUMA layout (4th element) is part of the fingerprint.
-        # am-b200-57 (b200-2.json) reference: 2 NUMA nodes, GPUs 4+4, 20 IB PFs.
-        #
-        # PROVISIONAL: the IB layout is DERIVED from PF bus position vs the GPU
-        # NUMA boundary (node0 GPUs <=0x6e, node1 GPUs >=0x8e; boundary PFs
-        # 6f->node0, 8d->node1 by adjacency) -> 12 on node 0, 8 on node 1. The
-        # pre-IB-capture reference JSON didn't record per-IB NUMA. Confirm against
-        # discover-profile.sh `nic.passthrough_numa_nodes` on a real host and
-        # correct this tuple if it differs.
-        #
-        # QEMU: chutes-ops teeMeasurements v1.3.1 registers standard B200 as
-        # `8xb200 [10.2.1]` -> keyed at 10.2.1 (am-b200-57's JSON predates qemu
-        # capture; the authoritative measurement is the source of truth here).
-        ib_layout = (0,) * 12 + (1,) * 8
-        return {"10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ib_layout)}}
+        # No NVSwitch and no IB passthrough -> both trailing tuples empty. Every
+        # B200 maps here regardless of NIC loadout. QEMU 10.2.1 (26.04).
+        return {"10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
@@ -354,19 +326,11 @@ class B200Xeon6Profile(B200Profile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # As with B200, IB VFs are passed through -> IB->NUMA layout (4th element)
-        # is part of the fingerprint.
-        # Mirrors chutes-ops teeMeasurements v1.3.1.
         return {
-            # gd-251 (b200-gd-251.json): captured on OS 26.04 / QEMU 10.2.1. SNC
-            # off -> 2 NUMA nodes -> NUMA path, GPUs 4+4, a single IB card (bus
-            # 0xab, 4 PFs) in the node-1 GPU bus range (0x97-0xed) -> node 1.
-            # PROVISIONAL IB derivation (pre-IB-capture JSON); confirm via
-            # discover-profile.sh `nic.passthrough_numa_nodes`.
-            "10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (1, 1, 1, 1))},  # 8xb200 [10.2.1, XEON6]
-            # Original Xeon6 reference (b200.json): SNC3 -> 6 nodes -> flat
-            # fallback (no PXB grouping). 8 GPUs, no NVSwitch, 4 IB PFs.
-            "10.1.0": {("flat", 8, 0, 4)},  # 8xb200 [10.1.0, XEON6, SNC3]
+            # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4.
+            "10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())},
+            # Xeon6 SNC3 -> 6 nodes -> flat fallback.
+            "10.1.0": {("flat", 8, 0, 0)},
         }
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -483,28 +447,14 @@ class H200Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # H200 does not pass InfiniBand through (should_passthrough_infiniband
-        # is False), so the IB tuple (4th element) is always empty. Mirrors
-        # chutes-ops teeMeasurements v1.3.1 (values/chutes-api/values.yaml);
-        # the source measurement name is noted on each entry.
-        # Dell XE9680 (au18/au19): GPUs 4+4, NVSwitches on node 1 -- verified from
-        # the launched QEMU command (rp_nvsw* under pxb_numa1).
-        dell_nvsw1 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ())
-        # KR6288 (ar6/ar4): GPUs 4+4, NVSwitches on node 0 -- confirmed on-host.
-        kr6288_nvsw0 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (0, 0, 0, 0), ())
-        # gd-245 / any H200 whose node count != 2 -> flat fallback (no PXB).
+        # No IB passthrough -> 4th tuple empty. Mirrors chutes-ops
+        # teeMeasurements; measurement name noted per entry. No 10.2.1 flat entry.
+        dell_nvsw1 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ())  # NVSwitches node 1
+        kr6288_nvsw0 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (0, 0, 0, 0), ())  # NVSwitches node 0
         flat = ("flat", 8, 4, 0)
         return {
-            "10.1.0": {
-                dell_nvsw1,    # 8xh200 [10.1.0]
-                kr6288_nvsw0,  # 8xh200 [10.1.0, NVSW0]
-                flat,          # 8xh200 [10.1.0-flat]
-            },
-            "10.2.1": {
-                dell_nvsw1,    # 8xh200 [10.2.1]
-                kr6288_nvsw0,  # 8xh200 [10.2.1, NVSW0]   (this is host ar4)
-                # NB: no 10.2.1 flat measurement is registered.
-            },
+            "10.1.0": {dell_nvsw1, kr6288_nvsw0, flat},
+            "10.2.1": {dell_nvsw1, kr6288_nvsw0},
         }
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -558,10 +508,7 @@ class RTXPro6000Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # rtxpro6000 reference: 2 NUMA nodes, GPUs 4+4, no NVSwitch and no IB
-        # passthrough -> both trailing tuples empty. chutes-ops `8xRTX_PRO_6000`
-        # (v1.3.1) is untagged; confirmed all RTX Pro hosts are on QEMU 10.1.0
-        # (none upgraded to 26.04 yet).
+        # GPUs 4+4, no NVSwitch/IB. All RTX Pro hosts on QEMU 10.1.0.
         return {"10.1.0": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())}}
 
     def describe_mode(self, total_gpus: int) -> str:
