@@ -2,6 +2,15 @@
 - name: Monitoring setup
   tags: monitoring
   block:
+    - name: Require a pinned Prometheus chart version (reproducibility)
+      ansible.builtin.assert:
+        that:
+          - prometheus_chart_version is defined
+          - prometheus_chart_version | length > 0
+        fail_msg: >-
+          prometheus_chart_version must be set to an exact chart version (no "latest").
+          Find one with `helm search repo prometheus-community/prometheus --versions`.
+
     - name: Add Prometheus Community Helm repository
       kubernetes.core.helm_repository:
         name: prometheus-community
@@ -15,14 +24,48 @@
     - name: Update Helm repositories
       shell: helm repo update
 
+    - name: Create chart values directory
+      ansible.builtin.file:
+        path: /etc/chutes/charts/values
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install Prometheus values file
+      ansible.builtin.copy:
+        src: charts/values/prometheus.yaml
+        dest: /etc/chutes/charts/values/prometheus.yaml
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Build-time install uses the same values file as the boot-time reconcile.
     - name: Install Prometheus
       shell: |
         helm upgrade --install prometheus prometheus-community/prometheus \
           --namespace monitoring \
+          --version {{ prometheus_chart_version | quote }} \
           --create-namespace \
-          --set server.persistentVolume.enabled=false \
-          --set alertmanager.persistentVolume.enabled=false \
-          --set prometheus-pushgateway.persistentVolume.enabled=false \
-          --set prometheus-server.persistentVolume.enabled=false \
-          --set alertmanager.persistence.enabled=false \
+          --values /etc/chutes/charts/values/prometheus.yaml \
           --kubeconfig=/etc/rancher/k3s/k3s.yaml
+
+    # Single source of truth for Prometheus, reconciled at boot by
+    # 04-helm-chart-upgrade.sh and measured into RTMR3. This is what reconciles the
+    # NodePort onto nodes whose persisted k3s storage predates it (the build-time
+    # install above never re-runs on a persisted node).
+    - name: Ensure chart specs directory exists
+      ansible.builtin.file:
+        path: /etc/chutes/charts
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install Prometheus chart spec
+      ansible.builtin.template:
+        src: charts/prometheus.conf.j2
+        dest: /etc/chutes/charts/prometheus.conf
+        owner: root
+        group: root
+        mode: '0644'

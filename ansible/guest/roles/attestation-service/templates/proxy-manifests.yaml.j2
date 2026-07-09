@@ -21,37 +21,6 @@ metadata:
   namespace: attestation-system
 
 ---
-# Role to allow reading miner-credentials and validator-auth secrets.
-# validator-auth is created at runtime by 03-k3s-validator-auth.sh (cluster-init)
-# and contains the per-VM ephemeral ALLOWED_VALIDATORS SS58 for attestation-proxy.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: secret-reader
-  namespace: attestation-system
-rules:
-- apiGroups: [""]
-  resources: ["secrets"]
-  resourceNames: ["miner-credentials", "validator-auth"]
-  verbs: ["get"]
-
----
-# Bind the role to the service account
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: attestation-proxy-secret-reader
-  namespace: attestation-system
-subjects:
-- kind: ServiceAccount
-  name: attestation-proxy
-  namespace: attestation-system
-roleRef:
-  kind: Role
-  name: secret-reader
-  apiGroup: rbac.authorization.k8s.io
-
----
 # Miner can get/list/watch/patch all deployments and daemonsets in all namespaces.
 # OPA restricts PATCH outside chutes to only spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"].
 apiVersion: rbac.authorization.k8s.io/v1
@@ -141,22 +110,23 @@ spec:
         supplementalGroups:
         - 987  # tdx-attest group GID
       initContainers:
-      - name: wait-for-credentials
+      # The attestation UDS is created by the host attestation-service (Type=simple),
+      # whose systemd "started" state is reached at process fork — before uvicorn binds
+      # the socket (~2s later). k3s orders After= that, so the proxy can start in the gap
+      # and fail its /health probe (503: unix socket unavailable). Gate on the real socket
+      # file here so the proxy only starts once the UDS is actually bound.
+      - name: wait-for-attestation-socket
         image: parachutes/kubectl:{{ kubectl_image_tag }}
         command:
         - /bin/sh
         - -c
         - |
-          echo "Waiting for miner-credentials and validator-auth secrets..."
-          until kubectl get secret miner-credentials -n attestation-system >/dev/null 2>&1; do
-            echo "miner-credentials not found, waiting 5s..."
+          echo "Waiting for attestation socket at /var/run/attestation/attestation.sock..."
+          until [ -S /var/run/attestation/attestation.sock ]; do
+            echo "Socket not found, waiting 5s..."
             sleep 5
           done
-          until kubectl get secret validator-auth -n attestation-system >/dev/null 2>&1; do
-            echo "validator-auth not found, waiting 5s..."
-            sleep 5
-          done
-          echo "All secrets found, proceeding with startup"
+          echo "Attestation socket found, proceeding with startup"
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
@@ -172,6 +142,10 @@ spec:
           requests:
             memory: "32Mi"
             cpu: "10m"
+        volumeMounts:
+        - name: attestation-socket
+          mountPath: /var/run/attestation
+          readOnly: true
       containers:
       - name: attestation-proxy
         image: parachutes/sek8s:{{ sek8s_image_tag }}
@@ -274,10 +248,10 @@ spec:
               - -k
               - -f
               - https://localhost:8443/health
-          initialDelaySeconds: 5
-          periodSeconds: 5
+          initialDelaySeconds: 10
+          periodSeconds: 10
           timeoutSeconds: 10
-          failureThreshold: 12
+          failureThreshold: 30
 
       volumes:
       - name: attestation-socket

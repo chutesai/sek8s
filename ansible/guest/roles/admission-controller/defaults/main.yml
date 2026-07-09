@@ -1,11 +1,5 @@
 # ansible/guest/roles/admission-controller/defaults/main.yml
 
-# Git repository settings
-admission_controller_repo: "https://github.com/rayonlabs/sek8s.git"
-admission_controller_version: "admission-controller"
-update_repository: true
-update_dependencies: false
-
 # OPA settings
 opa_version: "1.15.2"
 

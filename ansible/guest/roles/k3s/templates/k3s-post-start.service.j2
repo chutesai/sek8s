@@ -1,5 +1,5 @@
 [Unit]
-Description=k3s Cluster Initialization Scripts
+Description=k3s post-start setup scripts
 Documentation=man:k3s(1)
 Requires=k3s.service
 After=k3s.service
@@ -10,7 +10,7 @@ User=root
 Group=root
 
 # Main script that orchestrates all initialization scripts
-ExecStart=/usr/local/bin/k3s-cluster-init.sh
+ExecStart=/usr/local/bin/k3s-post-start.sh
 
 # Restart policy - only restart on failure, not on clean exit
 Restart=on-failure
@@ -42,6 +42,6 @@ ReadWritePaths=/var/lib/rancher/k3s /var/lib/chutes /var/log /etc/rancher/k3s
 # Logging
 StandardOutput=journal+console
 StandardError=journal+console
-SyslogIdentifier=k3s-cluster-init
+SyslogIdentifier=k3s-post-start
 
 [Install]

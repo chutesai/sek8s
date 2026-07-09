@@ -3,6 +3,108 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.07.1] - 2026-07-01
+
+### Changed
+- **Per-profile host CPU reserve.** `HOST_RESERVED_CPUS` is no longer a single
+  global constant applied to every GPU profile. `GpuProfile` now exposes a
+  per-profile `host_reserved_cpus` property (default 4) that feeds
+  `vcpus = host_cpus - host_reserved_cpus`. This lets a GPU type with a heavier
+  fixed host workload reserve more cores without shifting the vcpu count — and
+  therefore the RTMR0 measurement — of unrelated profiles.
+
+### Fixed
+- **B200/B200_XEON6 reserve 16 host CPUs** (up from the default 4), leaving 176
+  vcpus on the 192-thread B200 (8 physical cores, 4/socket; clean 88 cores/socket
+  topology). The B200 host runs FabricManager alongside QEMU's iothread/vhost
+  workers; a thin 4-CPU reserve starved those threads under heavy NVLink/NCCL
+  I/O, which surfaced in the guest as `cudaErrorNvlinkUncorrectable` during
+  distributed init. The wider reserve also enlarges the CPU gap that QEMU
+  iothreads pin into (`post_launch.py`).
+  **Attestation impact:** changing B200/B200_XEON6 vcpus changes their `-smp`
+  topology and thus RTMR0. The B200 and B200_XEON6 attestation baselines must be
+  re-measured. H200, RTX_PRO_6000, and B300 keep the default reserve of 4 and are
+  byte-identical — no re-baseline needed for those.
+
+## [2026.07.0] - 2026-07-01
+
+### Changed
+- `upgrade-guest.yml` no longer hashes the multi-GB base qcow2 to decide whether
+  a host needs upgrading. It reads `needs_upgrade` per server from
+  `chutes-miner tee maintenance-status --raw-json` and ends already-current hosts
+  immediately (no download, no hash), so running with no `--limit` safely walks
+  the whole fleet and only touches hosts behind the active window's target
+  version. When an upgrade is needed the image is fetched once and verified by
+  aria2 itself (`--checksum` against the repo-pinned `EXPECTED_BASE_SHA256`).
+
+### Fixed
+- Guest upgrade/remediation no longer marches into a cryptic
+  `qemu-nbd: Failed to get "write" lock` when the guest fails to power down.
+  `shutdown_via_miner.yml` now escalates SIGTERM→SIGKILL to a stuck `chutes-td`
+  QEMU (`stop_chutes_td.sh`) and, if it survives SIGKILL (uninterruptible
+  D-state), fails loudly instructing the operator to reboot the host.
+- `create-config.sh` now recovers a stale `qemu-nbd` holding the config image
+  (leftover from an interrupted run) and retries once, and otherwise reports the
+  remaining holders (lsof/fuser) instead of failing with an opaque lock error.
+- The force-evict path (`drain_and_shutdown.yml`, `force_upgrade=true`) and
+  `shutdown.yml` now auto-confirm the `sync-kubeconfig` "Continue? [y/N]" prompt
+  (`stdin: "y\n"`), matching the normal drain path. Previously these aborted with
+  `Aborted.` / non-zero return code.
+- VM launch (`launch_and_verify.yml`) now guards against a wedged GPU/PCI
+  passthrough subsystem (stuck vfio-pci/nvidia-gpu-tools D-state tasks that make
+  `run-td` fail with "SBR cannot run until the host is rebooted"). It pre-flight
+  detects the wedge via `chutes.guest.vfio.pci_operations_wedged()`, and if the
+  launch itself wedges the host it reboots, waits for SSH, and retries the launch
+  once. Tunable via `upgrade_reboot_timeout_seconds` (default 1800).
+- `chutes_vm_config` now reads the public interface from `ansible_facts.default_ipv4.interface`
+  instead of the injected `ansible_default_ipv4.interface` var, so public-interface
+  re-detection (and the bridge-network assert) still works when `inject_facts_as_vars`
+  is disabled.
+- The wedge-recovery reboot is now a forced kernel-level SysRq reboot
+  (`force_reboot.yml`) instead of a graceful one. A graceful reboot hangs
+  indefinitely in `systemd-shutdown` waiting for the wedged QEMU and other
+  un-killable D-state tasks (seen on the iLO console as "Waiting for process:
+  ... chutes-td ..."), leaving the host stuck mid-reboot. SysRq 's' then 'b'
+  syncs and reboots immediately, bypassing service/device shutdown.
+
+## [2026.06.1] - 2026-06-30
+
+### Added
+- `discover-profile.sh`: **Host / Firmware Identity** section + JSON `host` object — baseboard model and BIOS vendor/version/date read from world-readable `/sys/class/dmi/id/*` (no root), plus product name and OS `VERSION_ID`. Pins down "identical" servers that actually differ in firmware/BIOS settings.
+- `discover-profile.sh`: **Launch Determinism (RTMR0-relevant)** section + JSON `launch_determinism` object — surfaces the host-derived inputs that reshape the guest memory map / ACPI tables and therefore RTMR0: the host **QEMU version** (`qemu_version` + full distro string — QEMU generates the guest ACPI tables and TD HOB that TDVF measures, so two hosts with byte-identical launch args but different QEMU builds, e.g. Ubuntu 25.10→10.1.0 vs 26.04→10.2.1, extend different RTMR0s), NUMA node count and the `numa_topology_eligible` gate (mirrors `qemu.use_numa_topology()` — guest NUMA topology only activates on exactly 2 host NUMA nodes; any other count, e.g. Sub-NUMA Clustering, falls back to a flat map + `numactl` interleave and extends a different RTMR0), the derived QEMU `-cpu` args (avx10 mask gated on `VERSION_ID`), and the SMP topology. Diffing this section between two hosts isolates an RTMR0 divergence.
+- `discover-profile.sh`: per-GPU VBIOS version (JSON `gpu.vbios`), mapped by PCI bus id so nvidia-smi index order cannot mislabel GPUs. (VBIOS feeds the GPU/nvtrust attestation path, not the TDX RTMRs.)
+- `discover-profile.sh`: full `lspci -tv` PCIe topology tree (JSON `pci_topology`) — enumeration order drives PXB-PCIe root-port assignment and thus the guest's PCI bus layout.
+
+## [2026.06.0] - 2026-06-25
+
+### Added
+- B300 Blackwell HGX GPU support for TDX VM launch (`B300Profile`: PCI device ID `3182`, 288 GiB HBM3e VRAM, 2-socket/192-vCPU topology).
+- Per-profile TDVF firmware selection (`firmware_filename` property).
+- `use_ovmf_mmio_fw_cfg` profile property — B300 disables per-GPU fw_cfg MMIO hints in favour of OVMF auto-sized multi-TB MMIO window.
+- `get_sbr_reset_args()` profile method for Secondary Bus Reset recovery after CC-mode switch.
+- PCI wedge detection (`pci_operations_wedged()`, `wait_pci_operations_idle()`) — pre-flight and post-unbind checks abort with a clear message instead of hanging when the PCI subsystem is stuck in D-state.
+- Standalone host CPU tuning tool (`python -m chutes.host.tune apply|restore`, exposed as the `chutes-tune-host` / `chutes-restore-host` commands via the existing `setup-tdx-host` tool-symlink step), decoupled from VM launch — applied and reverted deliberately by the operator rather than automatically on every start/stop. Implements the NVIDIA Confidential Computing Deployment Guide (DU-12302-001) host-OS recommendation: CPU frequency governor → `performance` and C-states **C1E/C6** disabled, leaving the shallow `POLL`/`C1` states enabled for thermal headroom (it no longer disables every C-state, nor forces turbo/EPP). Pre-tuning values are snapshotted to `/var/lib/chutes/tdx-host-tuning-restore.sh`; re-running `apply` reapplies settings without overwriting the saved original state.
+- Automatic GPU profile detection from host PCI/sysfs topology, with multi-GPU host support — new `detect_host_cpus()`, `detect_host_sockets()`, and `detect_numa_node_count()` helpers read CPU count, socket count, and NUMA layout from sysfs to select and verify the correct `GpuProfile`.
+- `discover-profile.sh`: hardware discovery script that probes GPU topology, PCI BAR sizes, NUMA layout, CPU/memory configuration, and firmware paths — outputs a terminal report and JSON file with all values needed to verify or author a `GpuProfile` entry.
+- `benchmark-hf-downloads.py`: new TDX-focused benchmark comparing XET concurrency configurations.
+
+### Changed
+- All GPU profiles now use `OVMF.inteltdx.fd` firmware (edk2-stable202605 Config-B, no Secure Boot). Addresses CVE-2025-2296 (legacy Linux loader disabled by default). Old `TDVF.fd` removed.
+- `gpu-admin-tools` bumped to v2026.06.05 with hardened B300 PCI recovery.
+- B300 disables InfiniBand passthrough: all ConnectX-7 IB-class PFs are NVSwitch bridge devices managed by host-side Fabric Manager; guest networking uses virtio-net.
+- NVSwitch-based B200/B300 profiles now declare `requires_fabric_manager`; host setup starts (or restarts) `nvidia-fabricmanager.service` immediately rather than only enabling it, so the NVSwitch fabric is active before launch.
+- InfiniBand passthrough is now optional: a host whose profile supports IB passthrough but exposes no IB devices logs a note and skips passthrough instead of aborting the launch.
+- `benchmark-network.py`: removed `hf_transfer` scenario (deprecated in huggingface_hub 1.x).
+- GPU profile auto-detection now refuses to guess. `_match_gpu_model` raises a `ValueError` when a host's GPU topology cannot be resolved to exactly one supported profile — no profile matches the device ID + CPU count, or the CPU count is unavailable to disambiguate a shared device ID (e.g. B200 vs B200_XEON6) — instead of falling back to the first match. An unsupported/undetermined topology has no measurement baseline (MRTD/RTMR), so launching it with a guessed profile would produce a VM that cannot attest; the caller must surface the error. Added `_is_known_gpu` for recognition-only detection (used by `detect_nvidia_gpus`), which never raises on a shared device ID.
+- NUMA profiles (H200/B200/B300) now back guest RAM with one `memory-backend-ram` per host NUMA node, each bound via `host-nodes=…,policy=bind` for NUMA locality. These backends deliberately do **not** set `prealloc=on`: under TDX the guest's RAM is private memory served lazily from `guest_memfd`, so preallocating would pin a second full copy of pages the guest never uses as shared (~2× guest RAM) and OOM-kill QEMU as a pod warms up.
+
+### Fixed
+- VM launch now aborts with a clear error instead of OOM-killing the host when a profile's fixed guest RAM cannot physically fit (host RAM minus reserve). Guest RAM stays a fixed, profile-determined value (it feeds the guest ACPI tables and thus TDX measurements), so this check never resizes the VM.
+- Fabric Manager `PARTITION_RAIL_POLICY` is now set to the string `symmetric` required by FM 595+ instead of the numeric `1` that newer FM rejects (CC mode would otherwise stay silently disabled on Blackwell).
+- Pinned the Fabric Manager package to `595.71.05-0ubuntu0.26.04.1` (full distro-qualified version) to match the guest driver pin and stop apt from installing a mismatched build.
+- VM launch no longer rejects large-RAM profiles whose guest RAM actually fits. The `safe_vm_mem_gb` host-RAM reserve was 12% of host RAM, which on 2-3 TB GPU hosts reserved 240-360 GB — far more than the ~64 GB the `GpuProfile`s are sized against (`ram_per_gpu_gb ~= (host_RAM - 64) / gpus`). This wrongly aborted `B200_XEON6` (8x369=2952G on a 3017G host) and `B200` (8x243=1944G on a ~2 TB host) launches with a misleading "host has only NG" error. The reserve is now a flat 64 GB (`VM_MEM_RESERVE_GB`) matching the profiles' sizing convention, rather than a percentage — real host overhead (TDX PAMT ~0.4% of guest, page tables, host OS, QEMU) is well under 64 GB, which covers PAMT for guests up to ~16 TB. The abort message now reports the actual safe-backable size and the reason, instead of implying the host lacks RAM.
+- Host GPU-driver blacklist now also blocks `nova_core` (and `nvidiafb`). `nova_core` is the in-tree Rust NVIDIA driver shipped on recent kernels (Ubuntu 25.10/26.04); it matches the GPU PCI ID and was not blacklisted, so it could auto-load and re-claim a GPU after the CC/PPCIe-mode reset re-enumerated it — leaving the device on `nova_core` instead of vfio-pci and causing the launch-time bind failure on 26.04 hosts. `setup.py` now blacklists it and unloads it (and `nvidiafb`) immediately alongside `nouveau`.
+- GPU passthrough now verifies each device actually bound to vfio-pci before launching QEMU. `bind_explicit_devices_to_vfio` previously printed success unconditionally and never read back, so a GPU that failed to bind — still re-enumerating after its CC/PPCIe-mode reset, dropped to D3 when power control was restored to auto, or re-claimed by the nvidia driver — sailed through to a cryptic `qemu-system-x86_64: vfio ...: couldn't open .../vfio-dev: No such file or directory` failure. It now polls each device until it exposes a `vfio-dev` cdev (re-probing stragglers, which also re-unbinds a driver that re-grabbed the device), and aborts with a clear, actionable error naming the unbound device(s) and their current driver if any never bind.
 
 ## [2026.05.3] - 2026-06-10
 

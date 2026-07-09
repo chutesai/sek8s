@@ -1,0 +1,34 @@
+---
+# Forcefully reboot a host whose PCI/GPU passthrough subsystem is wedged.
+#
+# A graceful reboot (ansible.builtin.reboot / systemctl reboot) goes through
+# systemd-shutdown, which waits for every process to exit before rebooting. When
+# the GPU/PCI subsystem is wedged, the QEMU guest (chutes-td) and anything that
+# touched the wedged devices are stuck in uninterruptible D-state and can never
+# be killed — so systemd-shutdown hangs forever and the host never reboots
+# (observed in the iLO console: "Waiting for process: ... chutes-td ...").
+#
+# SysRq 'b' calls the kernel's emergency_restart() directly, bypassing service
+# and device shutdown, so it reboots even when device_shutdown would hang. We
+# enable SysRq, fire an emergency sync ('s') to limit filesystem damage, then
+# boot ('b'). The s/sleep/b sequence is backgrounded with nohup so the abrupt
+# disconnect doesn't look like a task failure.
+#
+# Expects: upgrade_reboot_timeout_seconds (max seconds to wait for SSH to return).
+
+- name: Trigger immediate SysRq reboot (PCI wedge recovery)
+  ansible.builtin.shell: |
+    set -eu
+    echo 1 > /proc/sys/kernel/sysrq
+    nohup bash -c 'echo s > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger' \
+      >/dev/null 2>&1 &
+  args:
+    executable: /bin/bash
+  changed_when: true
+
+- name: Wait for host to return on SSH after forced reboot
+  ansible.builtin.wait_for_connection:
+    # Give the box time to actually go down before polling, otherwise the first
+    # probe succeeds against the still-up host a moment before SysRq fires.
+    delay: 30
+    timeout: "{{ upgrade_reboot_timeout_seconds | default(1800) }}"

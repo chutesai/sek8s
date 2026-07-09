@@ -494,6 +494,13 @@ setup_storage() {
             log_failure_msg "Failed to format storage"
             return 1
         fi
+        # Freshly formatted with the promoted next→current passphrase: mark the key as
+        # applied this boot so confirm_rotation sends rotated=true. Without this the API
+        # would keep the old/null current and discard the passphrase we just formatted
+        # with, bricking the volume on the next boot. No rotation slot was added
+        # (STORAGE_KEY_NEXT is now empty), so finalize_rotation's slot cleanup is guarded
+        # off for this case.
+        STORAGE_KEY_ADDED=1
         log_success_msg "Storage encrypted and formatted"
     fi
 
@@ -577,6 +584,9 @@ setup_cache() {
             log_failure_msg "Failed to format cache"
             return 1
         fi
+        # See storage note above: mark fresh-format key applied so rotated=true is sent,
+        # preventing the API from discarding the passphrase we just formatted with.
+        CACHE_KEY_ADDED=1
         log_success_msg "Cache encrypted and formatted"
     fi
 
@@ -606,8 +616,13 @@ finalize_rotation() {
     local confirmed="$1"
     local f_auth slot
 
+    # The [ -n "$*_KEY_NEXT" ] guards distinguish a real rotation (next passphrase added
+    # as a new slot alongside the current one → OLD_SLOTS populated) from a fresh-format
+    # boot (KEY_ADDED=1 was set to send rotated=true, but the volume has a single slot and
+    # NEXT was promoted to empty). A fresh volume has no old slot to kill or added slot to
+    # revert, so it correctly skips both branches.
     if [ "$confirmed" = "1" ]; then
-        if [ "$STORAGE_KEY_ADDED" = "1" ]; then
+        if [ "$STORAGE_KEY_ADDED" = "1" ] && [ -n "$STORAGE_KEY_NEXT" ]; then
             f_auth=$(write_key_file "$STORAGE_KEY_NEXT")
             for slot in $STORAGE_OLD_SLOTS; do
                 if ! cryptsetup luksKillSlot --key-file="$f_auth" \
@@ -619,7 +634,7 @@ finalize_rotation() {
             shred_key_file "$f_auth"
             log_success_msg "Storage key rotation complete"
         fi
-        if [ "$CACHE_KEY_ADDED" = "1" ]; then
+        if [ "$CACHE_KEY_ADDED" = "1" ] && [ -n "$CACHE_KEY_NEXT" ]; then
             f_auth=$(write_key_file "$CACHE_KEY_NEXT")
             for slot in $CACHE_OLD_SLOTS; do
                 if ! cryptsetup luksKillSlot --key-file="$f_auth" \
@@ -632,13 +647,13 @@ finalize_rotation() {
             log_success_msg "Cache key rotation complete"
         fi
     else
-        if [ "$STORAGE_KEY_ADDED" = "1" ]; then
+        if [ "$STORAGE_KEY_ADDED" = "1" ] && [ -n "$STORAGE_KEY_NEXT" ]; then
             log_begin_msg "Reverting storage key slot (confirm failed)"
             luks_remove_key "$STORAGE_DEVICE" "$STORAGE_KEY_NEXT" \
                 && log_success_msg "Storage key slot reverted" \
                 || handle_failure "storage key slot rollback failed"
         fi
-        if [ "$CACHE_KEY_ADDED" = "1" ]; then
+        if [ "$CACHE_KEY_ADDED" = "1" ] && [ -n "$CACHE_KEY_NEXT" ]; then
             log_begin_msg "Reverting cache key slot (confirm failed)"
             luks_remove_key "$CACHE_DEVICE" "$CACHE_KEY_NEXT" \
                 && log_success_msg "Cache key slot reverted" \

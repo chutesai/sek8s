@@ -1,0 +1,11 @@
+# Helm values for the NVIDIA GPU Operator.
+# Single source of truth — git-tracked and measured into RTMR3. Used by the
+# build-time install and passed via `-f` by 04-helm-chart-upgrade.sh at boot.
+# Driver and toolkit are host-managed (pre-installed in the image); upgradeCRD lets
+# helm migrate the operator CRDs across chart versions on persisted clusters.
+driver:
+  enabled: false
+toolkit:
+  enabled: false
+operator:
+  upgradeCRD: true

@@ -1,5 +1,5 @@
-# OPA tests for SEK8S-005 (effective_deny / template check gaps) and
-# SEK8S-006 (initContainer / ephemeralContainer capability gaps).
+# OPA tests for effective_deny / template check gaps and
+# initContainer / ephemeralContainer capability gaps.
 # Run: ./bin/opa test ansible/guest/roles/admission-controller/files/policies tests/opa -v
 package kubernetes.admission
 
@@ -7,7 +7,7 @@ import future.keywords.if
 import future.keywords.in
 
 # =============================================================================
-# SEK8S-005: Deployment template must be checked for hostNetwork/hostPID/hostIPC
+# Deployment template must be checked for hostNetwork/hostPID/hostIPC
 # Currently Pod-only in pods.rego; miner can bypass via Deployment.
 # =============================================================================
 
@@ -104,7 +104,7 @@ test_deny_job_with_hostnetwork_in_template if {
 }
 
 # =============================================================================
-# SEK8S-006: initContainer and ephemeralContainer capability checks
+# initContainer and ephemeralContainer capability checks
 # Currently only regular containers are checked in pods.rego.
 # =============================================================================
 
@@ -168,7 +168,7 @@ test_deny_deployment_initcontainer_with_dangerous_capability if {
 }
 
 # =============================================================================
-# SEK8S-010: Capability check must block both SYS_ADMIN (k8s format) and
+# Capability check must block both SYS_ADMIN (k8s format) and
 # CAP_SYS_ADMIN (legacy prefix). Prior to fix, only CAP_ prefixed was checked
 # meaning the standard k8s format bypassed the policy entirely.
 # =============================================================================
@@ -225,7 +225,7 @@ test_allow_pod_safe_capability if {
 }
 
 # =============================================================================
-# SEK8S-014: allowPrivilegeEscalation must be blocked on all resource types
+# allowPrivilegeEscalation must be blocked on all resource types
 # and all container types (containers, initContainers, ephemeralContainers).
 # Prior to fix, only template-based Deployment/StatefulSet/DaemonSet/ReplicaSet
 # containers were checked — direct Pods, Jobs, and init/ephemeral containers
@@ -371,7 +371,7 @@ test_allow_pod_without_privilege_escalation if {
 }
 
 # =============================================================================
-# SEK8S-005 / miner_restart: miner CAN restart any Deployment/DaemonSet
+# miner_restart: miner CAN restart any Deployment/DaemonSet
 # =============================================================================
 
 test_allow_miner_restart_deployment_outside_chutes if {
@@ -427,7 +427,7 @@ test_allow_miner_restart_daemonset_in_kube_system if {
 }
 
 # =============================================================================
-# SEK8S-005 / miner_restart: miner CANNOT modify other properties
+# miner_restart: miner CANNOT modify other properties
 # =============================================================================
 
 test_deny_miner_inject_annotation_alongside_restart_outside_chutes if {
@@ -624,7 +624,7 @@ test_allow_miner_re_restart_with_new_timestamp if {
 }
 
 # =============================================================================
-# SEK8S-005 / miner_restart: system controller CAN fully update
+# miner_restart: system controller CAN fully update
 # =============================================================================
 
 test_allow_system_controller_full_update_outside_chutes if {
@@ -656,7 +656,7 @@ test_allow_system_controller_full_update_outside_chutes if {
 }
 
 # =============================================================================
-# SEK8S-023: kube-system namespace must be policy-enforced.
+# kube-system namespace must be policy-enforced.
 # The webhook previously excluded kube-system via namespaceSelector, creating a
 # blind spot where the miner had unrestricted patch on deployments/daemonsets.
 # =============================================================================
@@ -735,7 +735,7 @@ test_allow_privileged_ephemeral_container_for_system_user if {
 }
 
 # =============================================================================
-# SEK8S-023: user-based exemptions replace namespace-based exclusions.
+# user-based exemptions replace namespace-based exclusions.
 # Miner must be denied in ALL namespaces including kube-system.
 # System/controller users and system:masters are exempt.
 # =============================================================================

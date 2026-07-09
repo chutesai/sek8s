@@ -78,7 +78,13 @@ async def get_cache_manager(request: Request) -> CacheManager:
 )
 async def download(
     request: DownloadRequest,
-    force: bool = Query(False, description="Re-download if already present"),
+    force: bool = Query(
+        False,
+        description=(
+            "Re-download if already present, and discard a partial download "
+            "owned by another process (e.g. a chute pod) before re-downloading"
+        ),
+    ),
     mgr: CacheManager = Depends(get_cache_manager),
     _auth: bool = Depends(authorize(allow_miner=True, purpose="cache")),
 ) -> CacheDownloadResponse:
@@ -105,7 +111,10 @@ async def download(
         raise HTTPException(status_code=502, detail="Validator did not return repo_id")
     revision = info.revision or "main"
 
-    await chute.start_download(repo_id, revision)
+    try:
+        await chute.start_download(repo_id, revision, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     return CacheDownloadResponse(chute_id=chute_id, status=CacheDownloadStatus.STARTED)
 
 

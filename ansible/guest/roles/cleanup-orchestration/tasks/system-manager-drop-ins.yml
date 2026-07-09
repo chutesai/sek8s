@@ -16,3 +16,11 @@
     owner: root
     group: root
     mode: "0644"
+
+- name: Copy system-manager cache volume drop-in
+  ansible.builtin.copy:
+    src: files/system-manager.service.d/cache-volume.conf
+    dest: /etc/systemd/system/system-manager.service.d/cache-volume.conf
+    owner: root
+    group: root
+    mode: "0644"

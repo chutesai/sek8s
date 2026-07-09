@@ -151,11 +151,21 @@
         path: /usr/bin/vim
         priority: 1
 
-    - name: Install HWE kernel and headers
+    - name: Pin HWE kernel meta to {{ guest_hwe_kernel_version }} (reproducible guest kernel / RTMR baseline)
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/hwe-kernel-pin
+        content: |
+          Package: linux-image-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }} linux-headers-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+          Pin: version {{ guest_hwe_kernel_version }}
+          Pin-Priority: 1001
+        mode: "0644"
+      when: ubuntu_major | int <= 24
+
+    - name: Install HWE kernel and headers (pinned)
       ansible.builtin.apt:
         name:
-          - linux-image-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
-          - linux-headers-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}
+          - linux-image-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}={{ guest_hwe_kernel_version }}
+          - linux-headers-generic-hwe-{{ ubuntu_major }}.{{ ubuntu_minor }}={{ guest_hwe_kernel_version }}
         state: present
         update_cache: false
       when: ubuntu_major | int <= 24

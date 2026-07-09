@@ -184,7 +184,7 @@ class AdmissionConfig(ServerConfig):
 
     # Namespace policies - expects JSON object from environment.
     # All namespaces default to enforce; OPA rules handle user-based
-    # exemptions for system/controller users (SEK8S-023).
+    # exemptions for system/controller users.
     namespace_policies: Dict[str, NamespacePolicy] = Field(
         default={
             "default": NamespacePolicy(mode="enforce", exempt=False),

@@ -1,12 +1,12 @@
 #!/bin/bash
-# /usr/local/bin/k3s-cluster-init.sh
-# k3s-cluster-init: Run multiple cluster initialization scripts with individual tracking
+# /usr/local/bin/k3s-post-start.sh
+# k3s-post-start: Run the post-start step scripts (after k3s is up) with individual tracking
 set -e
 
 # Configuration
 SCRIPT_DIR="${SCRIPT_DIR:-/usr/local/bin/k3s-init-scripts}"
 MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
-LOG_FILE="${LOG_FILE:-/var/log/k3s-cluster-init.log}"
+LOG_FILE="${LOG_FILE:-/var/log/k3s-post-start.log}"
 MAX_SCRIPT_TIMEOUT="${MAX_SCRIPT_TIMEOUT:-300}"  # 5 minutes per script
 export MARKER_DIR  # Scripts may use this for run-once behavior
 
@@ -170,7 +170,7 @@ get_script_list() {
 
 # Main execution
 main() {
-    log "Starting k3s cluster initialization"
+    log "Starting k3s post-start setup"
     log "Script directory: $SCRIPT_DIR"
     log "Marker directory: $MARKER_DIR"
     log "Max script timeout: ${MAX_SCRIPT_TIMEOUT}s"
@@ -231,7 +231,7 @@ main() {
             failed_scripts=$((failed_scripts + 1))
             if is_security_critical "$script_name"; then
                 log "FATAL: script $script_name failed — powering off VM"
-                echo "CLUSTER-INIT-FAILURE: $script_name" > /dev/kmsg 2>/dev/null || true
+                echo "POST-START-FAILURE: $script_name" > /dev/kmsg 2>/dev/null || true
                 sleep 5
                 poweroff -f
             fi
@@ -245,7 +245,7 @@ main() {
     done <<< "$scripts"
     
     # Final summary
-    log "=== Cluster Initialization Summary ==="
+    log "=== Post-start Summary ==="
     log "Total scripts: $total_scripts"
     log "Successful: $successful_scripts"
     log "Failed: $failed_scripts"
@@ -257,9 +257,9 @@ main() {
         systemd-notify --ready
         exit 0
     else
-        log "FATAL: $failed_scripts script(s) failed during cluster init — powering off VM"
+        log "FATAL: $failed_scripts script(s) failed during post-start — powering off VM"
         notify_systemd "FATAL: $failed_scripts failures"
-        echo "CLUSTER-INIT-FAILED: $failed_scripts script(s)" > /dev/kmsg 2>/dev/null || true
+        echo "POST-START-FAILED: $failed_scripts script(s)" > /dev/kmsg 2>/dev/null || true
         sleep 5
         poweroff -f
     fi

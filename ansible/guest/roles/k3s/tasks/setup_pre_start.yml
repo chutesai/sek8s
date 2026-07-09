@@ -1,18 +1,18 @@
 ---
 # This role just creates the service - cleanup role adds the dependency
 
-- name: Create k3s-config-init script
+- name: Create k3s-pre-start script
   ansible.builtin.copy:
-    src: files/k3s-config-init.sh
-    dest: /usr/local/bin/k3s-config-init.sh
+    src: files/k3s-pre-start.sh
+    dest: /usr/local/bin/k3s-pre-start.sh
     owner: root
     group: root
     mode: '0755'
 
-- name: Create k3s-config-init systemd service
+- name: Create k3s-pre-start systemd service
   ansible.builtin.copy:
-    src: files/k3s-config-init.service
-    dest: /etc/systemd/system/k3s-config-init.service
+    src: files/k3s-pre-start.service
+    dest: /etc/systemd/system/k3s-pre-start.service
     owner: root
     group: root
     mode: '0644'
@@ -25,8 +25,8 @@
     daemon_reload: yes
 
 # Keep service disabled for build, cleanup will enable for first boot
-- name: Disable k3s-config-init service
+- name: Disable k3s-pre-start service
   ansible.builtin.systemd:
-    name: k3s-config-init
+    name: k3s-pre-start
     enabled: no
     state: stopped

@@ -851,11 +851,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "Re-download if already present",
+              "description": "Re-download if already present, and discard a partial download owned by another process (e.g. a chute pod) before re-downloading",
               "default": false,
               "title": "Force"
             },
-            "description": "Re-download if already present"
+            "description": "Re-download if already present, and discard a partial download owned by another process (e.g. a chute pod) before re-downloading"
           },
           {
             "name": "X-Chutes-Hotkey",

@@ -108,6 +108,15 @@
       ansible.builtin.apt:
         update_cache: true
 
+    - name: Pin all NVIDIA/libnvidia packages to {{ nvidia_pkg_version }}
+      ansible.builtin.copy:
+        dest: /etc/apt/preferences.d/nvidia-version-pin
+        content: |
+          Package: nvidia-* libnvidia-*
+          Pin: version {{ nvidia_pkg_version }}
+          Pin-Priority: 1001
+        mode: "0644"
+
     - name: GPU Setup Tasks
       when:
         - manage_nvidia_drivers | default(true) | bool
@@ -153,6 +162,8 @@
               - libnvidia-extra={{ nvidia_pkg_version }}
               - libnvidia-fbc1={{ nvidia_pkg_version }}
               - libnvidia-gl={{ nvidia_pkg_version }}
+              - libnvidia-gpucomp={{ nvidia_pkg_version }}
+              - nvidia-persistenced={{ nvidia_pkg_version }}
             install_recommends: false
             state: present
           environment:
@@ -166,6 +177,7 @@
               - nvidia-kernel-source-open={{ nvidia_pkg_version }}
               - nvidia-kernel-common={{ nvidia_pkg_version }}
               - nvidia-firmware={{ nvidia_pkg_version }}
+              - nvidia-modprobe={{ nvidia_pkg_version }}
             install_recommends: false
             state: present
           environment:
@@ -349,7 +361,9 @@
             name:
               - infiniband-diags
               - rdma-core
-              - nvlsm
+              # Pinned via nvlsm_version: NVIDIA's "latest" can 404 when the
+              # Packages index lists a version before its .deb is uploaded.
+              - "nvlsm={{ nvlsm_version }}"
             state: present
 
         # NVSHMEM: GPU-to-GPU communication over PCIe/NVLink/InfiniBand.
@@ -460,6 +474,24 @@
   tags:
     - gpu-device-setup
   block:
+    # Defensive: guards against residual state on a REUSED build node, not a bug in
+    # this pipeline. On a clean rootfs nothing creates an empty daemon.json — docker.io
+    # ships none, and nvidia-ctk happily starts from an absent file. But nvidia-ctk
+    # reads daemon.json before editing and aborts with "unable to load config for
+    # runtime docker: EOF" when the file is 0 bytes / invalid JSON. That happens when a
+    # prior run on the same long-lived build VM was interrupted mid-write (a shell
+    # redirect truncates the target to 0 bytes before the writer runs). Normalize to
+    # valid JSON here so the step is idempotent across rebuilds. TODO: revisit — the
+    # real ordering smell is that admission-controller (which guarantees a valid
+    # daemon.json) runs after the gpu role that first depends on it.
+    - name: Ensure /etc/docker/daemon.json is valid JSON before nvidia-ctk
+      ansible.builtin.shell: |
+        mkdir -p /etc/docker
+        if [ ! -s /etc/docker/daemon.json ] || ! python3 -c "import json,sys; json.load(open('/etc/docker/daemon.json'))" 2>/dev/null; then
+          printf '{}\n' > /etc/docker/daemon.json
+        fi
+      changed_when: false
+
     - name: Configure NVIDIA Container Toolkit for Docker
       ansible.builtin.shell: |
         nvidia-ctk runtime configure --runtime=docker --set-as-default

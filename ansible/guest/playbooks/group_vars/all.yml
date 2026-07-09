@@ -24,6 +24,11 @@ system_packages:
   - ca-certificates
   - gnupg-agent
   - software-properties-common
+  - cryptsetup
+  - dhcpcd-base
+  - openssl
+  - xfsprogs
+  - e2fsprogs
 
 # Networking configuration (used by all)
 k3s_api_port: "6443"
@@ -36,15 +41,33 @@ k3s_version: v1.35.4+k3s1
 # Ubuntu major/minor version.
 ubuntu_major: "24"
 ubuntu_minor: "04"
+# Guest HWE kernel pin (Ubuntu <= 24 only). The build installs the rolling meta
+# linux-image-generic-hwe-<major>.<minor>, which tracks the latest HWE kernel and
+# would silently advance on every rebuild — changing the guest RTMR/measurement
+# baseline. Pinning it to an exact version makes the guest kernel reproducible and
+# bumps deliberate. Trade-off: opts out of automatic HWE kernel security updates.
+# MUST stay >= 6.16 (RTMR3 depends on the tsm-mr sysfs interface merged in 6.16).
+guest_hwe_kernel_version: "6.17.0-35.35~24.04.1"
 # CUDA version - leave as-is unless skipping CUDA entirely (skip_cuda: true) for providers with pre-installed drivers
 cuda_version: "13-2"
 # NVIDIA driver branch
 nvidia_version: "595"
-# Package version pin — 595 uses unversioned package names from the CUDA repo only;
-# all driver/lib packages are pinned to this single version string.
+# Package version pin — 595 uses unversioned package names from the CUDA repo only
+# (nvidia-dkms-open, libnvidia-compute, nvidia-firmware, etc.); all driver/lib
+# packages are pinned to this single version string.
+# Reverted from 610.43.02: 610 fails NVLink fabric registration under TNVL on HGX
+# H200 PPCIe (only 1/8 GPUs reach Fabric=Completed -> CUDA 802). Back to 595.71.05,
+# the driver the last *stable* release also shipped. The crash-after-hours on the
+# most recent 595.71.05 build is NOT a driver-version regression (the prior release
+# ran the same 595.71.05 fine) — it is being chased as an upstream package drift:
+# same version string, changed bytes / drifted unpinned dep from the CUDA repo.
 nvidia_pkg_version: "595.71.05-1ubuntu1"
 # 595 requires DKMS for kernel modules (no prebuilt linux-modules-nvidia-*-open).
 # linux-headers and dkms are installed automatically by the gpu role.
+# NVLSM (InfiniBand subnet manager) version pin from the CUDA repo. Pinned because
+# NVIDIA's "latest" entry can transiently 404 — its Packages index lists a version
+# before the matching .deb is uploaded. Bump to the newest version whose .deb resolves.
+nvlsm_version: "2025.10.12-1"
 # Flag to skip the cuda install entirely, if the provider already has cuda 12.x+ installed (note some chutes will not work unless 12.6+)
 skip_cuda: false
 # Flag to enable/disable IPv6. Some hosts may require IPv6 to be on.

@@ -13,6 +13,14 @@ import sys
 
 from chutes.host.profiles import APTRepo, HostProfile, PPA
 
+# Fabric Manager version must match the NVIDIA driver version in the guest
+# image.  FM communicates with GPU firmware shared between host and guest;
+# version mismatches cause NVLink initialization failures and Xid errors.
+# Keep in sync with nvidia_version / nvidia_pkg_version in
+# ansible/guest/playbooks/group_vars/all.yml.
+FM_DRIVER_BRANCH = "595"
+FM_PKG_VERSION = "595.71.05-0ubuntu0.26.04.1"
+
 
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
@@ -273,8 +281,11 @@ def _grub_update_cmdline(additions: list[str]):
 
 
 
-def _detect_b200_gpus() -> bool:
-    """Return True if any B200 GPUs are present on this host."""
+_BLACKWELL_HGX_GPU_IDS = ("10de:2901", "10de:3182")  # B200, B300
+
+
+def _detect_blackwell_hgx_gpus() -> bool:
+    """Return True if any B200/B300 GPUs are present on this host."""
     try:
         output = subprocess.run(
             ["lspci", "-Dnn"],
@@ -282,17 +293,21 @@ def _detect_b200_gpus() -> bool:
             text=True,
             timeout=15,
         )
-        return any("10de:2901" in line for line in output.stdout.splitlines())
+        return any(
+            gpu_id in line
+            for line in output.stdout.splitlines()
+            for gpu_id in _BLACKWELL_HGX_GPU_IDS
+        )
     except (subprocess.TimeoutExpired, OSError):
         return False
 
 
 def _setup_host_fabric_manager():
-    """Install and configure Fabric Manager for B200 hosts.
+    """Install and configure Fabric Manager for B200/B300 HGX hosts.
 
-    B200 NVSwitches are not visible as PCIe devices — they are managed by
+    Blackwell NVSwitches are not visible as PCIe devices — they are managed by
     Fabric Manager through ConnectX-7 bridge PFs on the host.  This function
-    is a no-op on non-B200 hosts (GPU detection is cheap).
+    is a no-op on non-Blackwell HGX hosts (GPU detection is cheap).
 
     Packages installed:
     - nvidia-fabricmanager: manages the NVSwitch fabric
@@ -303,18 +318,18 @@ def _setup_host_fabric_manager():
     Configuration applied:
     - /etc/modules-load.d/ib_umad.conf: autoload ib_umad at boot
     - fabricmanager.cfg: PARTITION_RAIL_POLICY=symmetric (required for CC mode)
-    - nvidia-fabricmanager.service: enabled
+    - nvidia-fabricmanager.service: enabled and started immediately
     """
-    if not _detect_b200_gpus():
-        print("  No B200 GPUs detected — skipping host Fabric Manager setup")
+    if not _detect_blackwell_hgx_gpus():
+        print("  No B200/B300 GPUs detected — skipping host Fabric Manager setup")
         return
 
-    print("  B200 GPUs detected — installing host Fabric Manager stack...")
+    print("  B200/B300 GPUs detected — installing host Fabric Manager stack...")
 
     # ib_umad must be loaded before fabricmanager starts so it can open
     # the InfiniBand management datagram interface to the CX7 bridge PFs.
     ib_umad_conf = "/etc/modules-load.d/ib_umad.conf"
-    ib_umad_content = "# Required for B200 Fabric Manager CX7 bridge communication\nib_umad\n"
+    ib_umad_content = "# Required for B200/B300 Fabric Manager CX7 bridge communication\nib_umad\n"
     already_current = False
     if os.path.exists(ib_umad_conf):
         with open(ib_umad_conf) as f:
@@ -330,52 +345,107 @@ def _setup_host_fabric_manager():
 
     # Install host-side FM stack.  The CUDA apt repo is expected to be
     # configured already (same repo used by nvidia-gpu-tools setup).
+    #
+    # Use the version-pinned package (nvidia-fabricmanager-NNN) to avoid
+    # conflicts with other FM versions and ensure FM matches the guest driver.
+    # The unversioned nvidia-fabricmanager metapackage pulls the latest version
+    # which can conflict with an already-installed pinned version and may not
+    # match the guest driver.
+    fm_pkg = f"nvidia-fabricmanager-{FM_DRIVER_BRANCH}"
+    fm_pkg_pinned = f"{fm_pkg}={FM_PKG_VERSION}"
+
+    # Abort if a mismatched FM version is installed — apt will fail with a
+    # Conflicts error otherwise.  We don't auto-remove to keep setup safe
+    # for clean hosts; the operator must remove the old package manually.
+    try:
+        dpkg_out = subprocess.run(
+            ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
+            capture_output=True, text=True, timeout=10,
+        )
+        stale_fm = [
+            line.split()[1]
+            for line in dpkg_out.stdout.splitlines()
+            if line.startswith("ii")
+            and line.split()[1].startswith("nvidia-fabricmanager")
+            and line.split()[1] != fm_pkg
+        ]
+        if stale_fm:
+            raise RuntimeError(
+                f"Mismatched Fabric Manager package(s) installed: {', '.join(stale_fm)}\n"
+                f"Required: {fm_pkg_pinned}\n"
+                f"Please remove the old package(s) first:\n"
+                f"  sudo apt remove -y {' '.join(stale_fm)}\n"
+                f"Then re-run setup."
+            )
+    except (subprocess.TimeoutExpired, OSError, IndexError):
+        pass
+
+    # Pin to the exact version — matches how the Ansible guest role pins
+    # nvidia packages via /etc/apt/preferences.d/nvidia-version-pin.
     _run(["apt", "install", "--yes", "--allow-downgrades",
-          "nvidia-fabricmanager",
+          fm_pkg_pinned,
           "nvlsm",
           "libibumad3",
           "infiniband-diags",
           ])
-    print("  ✓ Fabric Manager packages installed")
+    print(f"  ✓ Fabric Manager {FM_PKG_VERSION} installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
-    # Blackwell MPT CC mode (asymmetric is the default, which disables CC).
+    # Blackwell MPT CC mode (greedy is the default, which disables CC).
+    # FM 595+ requires the string "symmetric" (older versions used numeric "1").
     fm_cfg = "/usr/share/nvidia/nvswitch/fabricmanager.cfg"
     if os.path.exists(fm_cfg):
         with open(fm_cfg) as f:
             original = f.read()
         updated = re.sub(
             r"^PARTITION_RAIL_POLICY\s*=.*$",
-            "PARTITION_RAIL_POLICY=1",
+            "PARTITION_RAIL_POLICY=symmetric",
             original,
             flags=re.MULTILINE,
         )
         if "PARTITION_RAIL_POLICY" not in original:
-            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=1\n"
+            updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=symmetric\n"
         if updated != original:
             _write_system_file(fm_cfg, updated)
-            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to 1 (symmetric)")
+            print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to symmetric")
         else:
             print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
     else:
         print(f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly")
 
+    # Check if already running before enable/start to avoid unnecessary restarts.
+    already_running = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
+        check=False,
+    ).returncode == 0
+
     _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
-    print("  ✓ nvidia-fabricmanager.service enabled")
+    if already_running:
+        print("  nvidia-fabricmanager.service already running — restarting to pick up config changes")
+        _run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
+    else:
+        _run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
+    print("  ✓ nvidia-fabricmanager.service enabled and running")
 
 
 def _blacklist_gpu_drivers():
     """Blacklist nouveau and nvidia kernel modules on the host.
 
     GPUs on passthrough hosts must not be claimed by any driver — they are
-    bound to vfio-pci at VM launch time.  nouveau auto-loading is the most
-    common cause of GPU hangs during CC/PPCIe mode configuration.
+    bound to vfio-pci at VM launch time.  An auto-loaded GPU driver is the most
+    common cause of GPU hangs / vfio bind races during CC/PPCIe mode config.
+    This must include `nova_core`, the in-tree Rust NVIDIA driver present on
+    recent kernels (Ubuntu 25.10/26.04): it also matches the GPU's PCI ID and
+    will grab a card after the CC-mode reset re-enumerates it, leaving the
+    device on nova_core instead of vfio-pci.
     """
     blacklist_path = "/etc/modprobe.d/blacklist-gpu-host.conf"
     blacklist_content = (
         "# GPU drivers must not load on VFIO passthrough hosts.\n"
         "# GPUs are configured via nvidia-gpu-tools and bound to vfio-pci at launch.\n"
         "blacklist nouveau\n"
+        "blacklist nova_core\n"
+        "blacklist nvidiafb\n"
         "blacklist nvidia\n"
         "blacklist nvidia_drm\n"
         "blacklist nvidia_modeset\n"
@@ -394,16 +464,22 @@ def _blacklist_gpu_drivers():
         _run(["sudo", "update-initramfs", "-u"])
         print(f"  ✓ GPU driver blacklist installed ({blacklist_path})")
 
-    # Unload nouveau immediately if currently loaded (no reboot required)
+    # Unload any auto-loaded GPU driver immediately (no reboot required) so it
+    # releases the GPUs before launch. Only modules with no host-side dependents
+    # are unloaded here; the nvidia stack is left alone (fabric manager may have
+    # loaded it explicitly). rmmod is best-effort — if the module is still bound
+    # to devices the per-device unbind at launch handles it.
     result = subprocess.run(
         ["lsmod"],
         capture_output=True,
         text=True,
     )
-    if any(line.split()[0] == "nouveau" for line in result.stdout.splitlines()[1:]):
-        print("  Unloading nouveau module (currently loaded)...")
-        subprocess.run(["sudo", "rmmod", "nouveau"], check=False)
-        print("  ✓ nouveau unloaded")
+    loaded = {line.split()[0] for line in result.stdout.splitlines()[1:]}
+    for mod in ("nouveau", "nova_core", "nvidiafb"):
+        if mod in loaded:
+            print(f"  Unloading {mod} module (currently loaded)...")
+            subprocess.run(["sudo", "rmmod", mod], check=False)
+            print(f"  ✓ {mod} unloaded")
 
 
 def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
@@ -585,8 +661,8 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
     _blacklist_gpu_drivers()
 
-    # 5c. Host Fabric Manager for B200 (no-op on non-B200 hosts)
-    print("\nStep 5c: Configuring host Fabric Manager (B200 only)...")
+    # 5c. Host Fabric Manager for B200/B300 (no-op on other SKUs)
+    print("\nStep 5c: Configuring host Fabric Manager (B200/B300)...")
     _setup_host_fabric_manager()
 
     # 6. QGS vsock mode

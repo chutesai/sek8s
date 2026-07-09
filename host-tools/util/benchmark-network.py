@@ -7,18 +7,16 @@ Scenarios (use --scenarios to choose which to run):
   1. raw          Direct HTTP via aria2c (or wget). No Python HF library.
                   Baseline: measures raw network throughput.
 
-  2. hf           huggingface_hub with default backend (Python requests).
+  2. hf           huggingface_hub with default httpx backend (XET disabled).
                   Same path as chute cold-start model download.
 
-  3. hf_transfer  huggingface_hub with HF_HUB_ENABLE_HF_TRANSFER=1.
-  4. hf_fast     huggingface_hub + patch (no progress, 64MB chunks).
+  3. hf_fast     huggingface_hub + patch (no progress, 64MB chunks).
                   Tests if GIL/buffer size is the bottleneck.
 
 All scenarios download the same N largest .safetensors files for a fair comparison.
 
 Interpretation:
   - raw fast, hf slow        → TDX + Python/HF overhead
-  - raw fast, hf_transfer fast → hf_transfer may help in production
   - all slow                 → network/NAT bottleneck
 
 Usage:
@@ -46,7 +44,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-SCENARIOS = ("raw", "hf", "hf_transfer", "hf_fast")
+SCENARIOS = ("raw", "hf", "hf_fast")
 
 
 def _apply_hf_performance_patch(chunk_size_mb: int = 64) -> None:
@@ -149,19 +147,15 @@ def run_hf_download(
     cache_dir: Path,
     dest_dir: Path,
     files_only: list[tuple[str, int]] | None = None,
-    use_hf_transfer: bool = False,
 ) -> dict:
-    """Download via huggingface_hub. use_hf_transfer=True sets HF_HUB_ENABLE_HF_TRANSFER=1."""
+    """Download via huggingface_hub (XET disabled, httpx backend)."""
     try:
         from huggingface_hub import hf_hub_download, snapshot_download
     except ImportError:
         return {"elapsed": 0, "bytes": 0, "mbps": 0, "error": "huggingface_hub not installed; pip install huggingface_hub"}
 
     os.environ["HF_HOME"] = str(cache_dir)
-    if use_hf_transfer:
-        os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-    elif "HF_HUB_ENABLE_HF_TRANSFER" in os.environ:
-        del os.environ["HF_HUB_ENABLE_HF_TRANSFER"]
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     start = time.perf_counter()
@@ -271,32 +265,18 @@ def main():
             shutil.rmtree(scenario_dir, ignore_errors=True)
 
         elif scenario == "hf":
-            print("[hf] huggingface_hub (default, Python requests)")
+            print("[hf] huggingface_hub (httpx, XET disabled)")
             dest = scenario_dir / "files"
             cache = scenario_dir / "cache"
             hf_result = run_hf_download(
                 args.repo_id, args.revision, cache, dest,
-                files_only=hf_files, use_hf_transfer=False,
+                files_only=hf_files,
             )
             results["hf"] = hf_result
             if "error" in hf_result:
                 print(f"  ERROR: {hf_result['error']}")
             else:
                 print(f"  {hf_result['mbps']:.2f} MB/s | {hf_result['elapsed']:.1f}s")
-
-        elif scenario == "hf_transfer":
-            print("[hf_transfer] huggingface_hub + HF_HUB_ENABLE_HF_TRANSFER=1 (aria2c backend)")
-            dest = scenario_dir / "files"
-            cache = scenario_dir / "cache"
-            ht_result = run_hf_download(
-                args.repo_id, args.revision, cache, dest,
-                files_only=hf_files, use_hf_transfer=True,
-            )
-            results["hf_transfer"] = ht_result
-            if "error" in ht_result:
-                print(f"  ERROR: {ht_result['error']}")
-            else:
-                print(f"  {ht_result['mbps']:.2f} MB/s | {ht_result['elapsed']:.1f}s")
 
         elif scenario == "hf_fast":
             print(f"[hf_fast] huggingface_hub + patch (no progress, {args.chunk_size}MB chunks)")
@@ -305,7 +285,7 @@ def main():
             cache = scenario_dir / "cache"
             fast_result = run_hf_download(
                 args.repo_id, args.revision, cache, dest,
-                files_only=hf_files, use_hf_transfer=False,
+                files_only=hf_files,
             )
             results["hf_fast"] = fast_result
             if "error" in fast_result:
@@ -325,7 +305,7 @@ def main():
 
     if "raw" in results and "error" not in results.get("raw", {}):
         raw_mbps = results["raw"]["mbps"]
-        for other in ("hf", "hf_transfer", "hf_fast"):
+        for other in ("hf", "hf_fast"):
             if other in results and "error" not in results.get(other, {}):
                 ratio = results[other]["mbps"] / raw_mbps if raw_mbps > 0 else 0
                 print(f"\n  {other}/raw: {ratio:.2f}x")

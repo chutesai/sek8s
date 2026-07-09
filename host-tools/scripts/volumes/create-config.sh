@@ -272,6 +272,51 @@ cleanup() {
 
 trap cleanup EXIT
 
+_image_real_path() {
+    readlink -f "$1" 2>/dev/null || echo "$1"
+}
+
+# Disconnect stale qemu-nbd exports of the target image left behind by an
+# interrupted run. A long-lived qemu-nbd on the config image is always stale:
+# the running VM opens the qcow2 with qemu-system directly, never via qemu-nbd.
+# Returns 0 if at least one stale holder was cleared (retry worthwhile), else 1.
+recover_stale_nbd_lock() {
+    local target="$1" real base cleared=1 pid line dev
+    real=$(_image_real_path "$target")
+    base=$(basename "$target")
+    while read -r pid line; do
+        [[ -z "$pid" ]] && continue
+        dev=$(grep -oE '/dev/nbd[0-9]+' <<<"$line" | head -1 || true)
+        print_warning "Clearing stale qemu-nbd (pid $pid${dev:+, $dev}) holding $base"
+        if [[ -n "$dev" ]]; then
+            qemu-nbd --disconnect "$dev" &>/dev/null || true
+        fi
+        kill "$pid" 2>/dev/null || true
+        cleared=0
+    done < <(pgrep -af qemu-nbd 2>/dev/null | awk -v r="$real" -v b="$base" 'index($0, r) || index($0, b) {print $1" "$0}')
+    [[ $cleared -eq 0 ]] && sleep 1
+    return $cleared
+}
+
+# Report what still holds the image open so the operator can act, distinguishing
+# a stale tool from a live guest VM that must be stopped (or the host rebooted).
+report_image_holders() {
+    local target="$1" real
+    real=$(_image_real_path "$target")
+    print_error "Something is still holding $target open (qcow2 write lock)."
+    if command -v lsof &>/dev/null; then
+        print_info "Open file handles (lsof):"
+        lsof -- "$real" 2>/dev/null || lsof 2>/dev/null | grep -F "$(basename "$target")" || true
+    elif command -v fuser &>/dev/null; then
+        print_info "Open file handles (fuser):"
+        fuser -v "$real" 2>&1 || true
+    fi
+    print_info ""
+    print_info "If a qemu-system / qemu-kvm process is listed, the guest VM is still running."
+    print_info "Stop it first (./quick-launch.sh --clean). If it will not die (D-state),"
+    print_info "reboot the host before retrying."
+}
+
 if [ "$EXISTING_VOLUME" = true ]; then
     print_info ""
     print_info "Updating existing config volume (replace files in place)..."
@@ -298,11 +343,19 @@ else
 fi
 
 if ! qemu-nbd --connect="$NBD_DEVICE" "$OUTPUT_PATH"; then
-    print_error "Failed to connect qcow2 to NBD device"
-    if [ "$EXISTING_VOLUME" != true ]; then
-        rm -f "$OUTPUT_PATH"
+    # Most common cause: a previous run left a stale qemu-nbd holding the image
+    # (write-lock collision). Try to clear it and reconnect once before failing.
+    print_warning "NBD connect failed — checking for a stale lock on $OUTPUT_PATH"
+    if recover_stale_nbd_lock "$OUTPUT_PATH" && qemu-nbd --connect="$NBD_DEVICE" "$OUTPUT_PATH"; then
+        print_success "Recovered stale lock and connected"
+    else
+        print_error "Failed to connect qcow2 to NBD device"
+        report_image_holders "$OUTPUT_PATH"
+        if [ "$EXISTING_VOLUME" != true ]; then
+            rm -f "$OUTPUT_PATH"
+        fi
+        exit 1
     fi
-    exit 1
 fi
 
 sleep 1

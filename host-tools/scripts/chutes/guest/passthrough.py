@@ -15,14 +15,16 @@ from chutes.guest.detection import (
 )
 from chutes.guest.gpu.profiles import GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
-from chutes.guest.qemu import PciTopologyState
+from chutes.guest.qemu import NumaPciTopologyState, PciTopologyState, use_numa_topology
 from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
     has_stale_vfio_devices,
     install_udev_rules,
+    pci_operations_wedged,
     unbind_non_vfio_drivers,
     unbind_stale_vfio_devices,
+    wait_pci_operations_idle,
 )
 
 _gpu_tools_cmd: str | None = None
@@ -56,6 +58,35 @@ def _run_gpu_tools(*args: str):
             f'(args: {args}). GPU hardware may be wedged — a host reboot is '
             f'likely required to recover PCIe state.'
         )
+
+
+def _check_fabric_manager(profile: GpuProfile):
+    """Raise if Fabric Manager is required by the profile but not running.
+
+    FM must be active before CC mode SBR so GPUs properly re-initialize their
+    NVLink connections to the NVSwitches after each reset. Without FM, some
+    GPUs may be left mid-initialization and appear as ERR! in the guest.
+    """
+    if not profile.requires_fabric_manager:
+        return
+    try:
+        result = subprocess.run(
+            ['systemctl', 'is-active', 'nvidia-fabricmanager'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.stdout.strip() == 'active':
+            return
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    raise RuntimeError(
+        f'nvidia-fabricmanager is not running (required for {profile.name}). '
+        'The NVSwitch fabric will not initialize properly without it, causing '
+        'GPU ERR! states in the guest.\n'
+        'Run host setup to install and start it:\n'
+        '  python3 host-tools/scripts/chutes/host/setup.py'
+    )
 
 
 def _scripts_dir() -> str:
@@ -142,14 +173,44 @@ def _prepare_devices(
     if ib_devices:
         all_devices.extend(ib_devices)
 
+    if pci_operations_wedged():
+        raise RuntimeError(
+            'PCI operations are wedged (uninterruptible D-state tasks from a '
+            'previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in '
+            'this state — reboot the host, then retry quick-launch.'
+        )
+
+    _check_fabric_manager(profile)
+
     if has_stale_vfio_devices(all_devices):
         print('  Stale vfio-pci devices detected from previous session')
         print('  Unbinding stale vfio-pci devices (no SBR needed for clean shutdown)...')
-        unbind_stale_vfio_devices(all_devices)
+        unbind_failed = unbind_stale_vfio_devices(all_devices)
 
-        if has_stale_vfio_devices(all_devices):
-            print('  Some devices could not be unbound — escalating to SBR reset...')
-            _run_gpu_tools('--reset-with-sbr', '--reset-after-ppcie-mode-switch')
+        if pci_operations_wedged():
+            print('  Waiting for in-flight vfio unbind(s) to finish...')
+            if not wait_pci_operations_idle(timeout_secs=90):
+                raise RuntimeError(
+                    'vfio-pci unbind wedged the PCI subsystem (D-state tasks). '
+                    'SBR cannot run until the host is rebooted.'
+                )
+
+        needs_sbr = (
+            unbind_failed > 0
+            or has_stale_vfio_devices(all_devices)
+        )
+        if needs_sbr:
+            if pci_operations_wedged():
+                raise RuntimeError(
+                    'vfio-pci unbind wedged the PCI subsystem (D-state tasks). '
+                    'SBR cannot run until the host is rebooted.'
+                )
+            sbr_args = profile.get_sbr_reset_args()
+            print(
+                '  Some devices could not be unbound — escalating to SBR reset '
+                f'({profile.name}: {" ".join(sbr_args)})...'
+            )
+            _run_gpu_tools(*sbr_args)
             print(f'  Waiting {SBR_SETTLE_SECS}s for devices to re-initialize after SBR...')
             time.sleep(SBR_SETTLE_SECS)
             print('  Verifying device responsiveness...')
@@ -192,19 +253,37 @@ def _build_pci_topology(
     profile: GpuProfile,
 ):
     """Add GPU, NVSwitch, and IB devices to the QEMU PCI topology."""
-    topo = PciTopologyState()
+    if use_numa_topology(profile.enable_numa_topology):
+        print('  PCI topology: NUMA-local PXB-PCIe bridges')
+        topo = NumaPciTopologyState()
+    else:
+        topo = PciTopologyState()
 
     print(f'  Adding {len(gpus)} GPU(s) to PCI topology...')
+    if profile.use_ovmf_mmio_fw_cfg:
+        mmio_note = f'fw_cfg BAR hint {profile.bar_size_mb} MB per GPU'
+    else:
+        mmio_note = (
+            f'OVMF auto-sizes MMIO window (no fw_cfg; '
+            f'~{profile.bar_size_mb} MB BAR per {profile.name} GPU)'
+        )
+    print(f'    MMIO: {mmio_note}')
     for i, gpu in enumerate(gpus):
-        bar_size = profile.bar_size_mb
-        print(f'    GPU {gpu}: {profile.name} detected, using {bar_size} MB BAR')
+        bar_kwargs: dict = {}
+        if profile.use_ovmf_mmio_fw_cfg:
+            bar_kwargs = {
+                'bar_size_mb': profile.bar_size_mb,
+                'bar_index': i + 1,
+            }
+            print(f'    GPU {gpu}: {profile.name}, BAR fw_cfg {profile.bar_size_mb} MB')
+        else:
+            print(f'    GPU {gpu}: {profile.name}')
         topo.add_device(
             cmd,
             host_bdf=gpu,
             rp_id=f'rp{i + 1}',
             chassis=i + 1,
-            bar_size_mb=bar_size,
-            bar_index=i + 1,
+            **bar_kwargs,
         )
 
     if nvswitches_for_vm:

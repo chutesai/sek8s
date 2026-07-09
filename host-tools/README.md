@@ -16,10 +16,10 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 
 | Ubuntu | GPU SKU      | GPU count | Status              | Notes |
 |--------|--------------|-----------|---------------------|-------|
-| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [B200 notes](#b200-notes). |
+| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
+| 26.04  | B300         | 8         | Validated           | Same Blackwell HGX architecture as B200. See [Blackwell HGX notes](#blackwell-hgx-notes). |
 | 25.10  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
 | 25.10  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
-| 26.04  | —            | —         | Profile only        | Profile exists; not yet end-to-end validated. |
 | 25.04  | —            | —         | EOL                 | No profile. Run `upgrade-host.yml` to advance to 25.10. |
 
 Print the canonical matrix from the repo:
@@ -28,14 +28,14 @@ cd host-tools/scripts
 ./setup-tdx-host --topology-matrix
 ```
 
-#### B200 notes
+#### Blackwell HGX notes (B200 / B300)
 
-B200 uses a different NVSwitch architecture from H100/H200. Key differences that affect host setup:
+B200 and B300 use a different NVSwitch architecture from H100/H200. Key differences that affect host setup:
 
-- **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `setup-tdx-host` when B200 GPUs are detected. The guest's Fabric Manager is masked.
+- **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `setup-tdx-host` when B200 or B300 GPUs are detected. The guest's Fabric Manager is masked.
 - **CX7 NVSwitch bridge PFs stay on the host**: ConnectX-7 devices acting as the host interface to NVSwitches (identified by `SMDL=SW_MNG` in PCIe VPD) are excluded from VFIO passthrough. Regular CX7 NIC PFs are still passed through normally.
 - **Encrypted NVLink (MPT CC mode)**: NVLink traffic between GPUs and the host Fabric Manager is encrypted, so host-side FM does not compromise the zero-trust security model.
-- **`nvidia-open` driver**: Required on both host and guest for B200 (already the default in the guest image).
+- **`nvidia-open` driver**: Required on both host and guest for Blackwell (already the default in the guest image).
 
 ---
 
@@ -199,9 +199,21 @@ cd /opt/intel/sgx-dcap-pccs && npm install && systemctl restart pccs
 Caused by non-interactive install skipping the `npm install` post-install step.
 
 **GPU stuck or unhealthy**
+
+If `quick-launch` or `chutes-reset-gpus` hangs, check for wedged PCI tasks:
 ```bash
-chutes-reset-gpus                                          # all GPUs
-sudo nvidia-gpu-tools --reset-with-sbr --gpu-bdf=<bdf>    # single GPU
+ps aux | awk '$8 ~ /D/ && /nvidia-gpu-tools|vfio-pci\/unbind/'
+```
+When that shows D-state processes, **reboot the host** before retrying — SBR cannot run while those are stuck.
+
+B200/B300 use CC mode (not PPCIe); use CC-mode SBR flags:
+```bash
+chutes-reset-gpus    # auto-selects flags from detected GPU type
+sudo nvidia-gpu-tools --reset-with-sbr --reset-after-cc-mode-switch --gpu-bdf=<bdf>
+```
+H200 8-GPU PPCIe configs:
+```bash
+sudo nvidia-gpu-tools --reset-with-sbr --reset-after-ppcie-mode-switch --gpu-bdf=<bdf>
 ```
 
 **TDX not initialized after reboot**

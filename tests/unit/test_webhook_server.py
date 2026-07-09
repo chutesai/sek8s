@@ -478,7 +478,7 @@ def test_mutate_job_update_still_patches(client):
 
 
 def test_mutate_invalid_json(client):
-    """SEK8S-047: Invalid JSON on /mutate returns 400 (not allowed=true)."""
+    """Invalid JSON on /mutate returns 400 (not allowed=true)."""
     resp = client.post(
         "/mutate", data="not json", headers={"Content-Type": "application/json"}
     )

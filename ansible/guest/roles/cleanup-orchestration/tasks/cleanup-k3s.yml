@@ -149,19 +149,19 @@
     - name: Remove cache seed markers
       ansible.builtin.shell: rm -f /var/snap/containerd/.seeded*
 
-    - name: Clear k3s cluster init markers
+    - name: Clear k3s post-start markers
       ansible.builtin.shell:
         cmd: rm -f /var/lib/rancher/k3s/init-markers/*
         removes: /var/lib/rancher/k3s/init-markers
 
-    - name: Check if k3s-cluster-init ran
+    - name: Check if k3s-post-start ran
       ansible.builtin.stat:
-        path: /var/log/k3s-cluster-init.log
+        path: /var/log/k3s-post-start.log
       register: cluster_init_log
 
     - name: Debug
       ansible.builtin.debug:
-        msg: "Cluster init log exists = {{ cluster_init_log.stat.exists }}"
+        msg: "Post-start log exists = {{ cluster_init_log.stat.exists }}"
 
     - name: Keep k3s enabled but not started
       ansible.builtin.systemd:
@@ -170,26 +170,26 @@
         state: stopped
         daemon_reload: yes
 
-    - name: Set k3s-config-init service for first boot
+    - name: Set k3s-pre-start service for first boot
       ansible.builtin.systemd:
-        name: k3s-config-init
+        name: k3s-pre-start
         enabled: yes
         state: stopped
 
-    - name: Set k3s-cluster-init service for first boot
+    - name: Set k3s-post-start service for first boot
       ansible.builtin.systemd:
-        name: k3s-cluster-init
+        name: k3s-post-start
         enabled: yes
         state: stopped
 
-    - name: Check if k3s-cluster-init ran
+    - name: Check if k3s-post-start ran
       ansible.builtin.stat:
-        path: /var/log/k3s-cluster-init.log
+        path: /var/log/k3s-post-start.log
       register: cluster_init_log
 
     - name: Debug
       ansible.builtin.debug:
-        msg: "Cluster init log exists = {{ cluster_init_log.stat.exists }}"
+        msg: "Post-start log exists = {{ cluster_init_log.stat.exists }}"
   rescue:
     - name: k3s cleanup failure
       ansible.builtin.debug:

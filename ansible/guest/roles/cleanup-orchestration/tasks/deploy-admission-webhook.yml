@@ -3,10 +3,12 @@
 # manifests at cleanup (not build time). This ensures k3s never routes admission
 # requests during the build pipeline — the webhook doesn't exist until the image
 # is finalized. On first boot, k3s picks up the manifest and starts enforcing
-# policies. (SEK8S-009)
+# policies.
 #
-# admission_webhook_ca_bundle is set as a host fact during the admission-controller
-# role's setup-tls.yml and persists across plays.
+# The caBundle is rendered as a deterministic placeholder (__ADMISSION_CA_BUNDLE__)
+# so the measured root image is reproducible across builds. The real per-VM CA is
+# substituted into the storage copy at boot by generate-admission-cert, after
+# rtmr3-verify passes. See generate-admission-cert.sh.
 - name: Ensure K3s manifests directory exists
   ansible.builtin.file:
     path: /var/lib/rancher/k3s/server/manifests
@@ -58,7 +60,7 @@
     attributes: '+i'
 
 # Authorization webhook kubeconfig — read by kube-apiserver at startup via
-# --authorization-webhook-config-file (added by k3s-config-init.sh on first
+# --authorization-webhook-config-file (added by k3s-pre-start.sh on first
 # boot).  Deployed at cleanup alongside the admission webhooks so it doesn't
 # exist during the build pipeline.
 - name: Deploy authorization webhook kubeconfig

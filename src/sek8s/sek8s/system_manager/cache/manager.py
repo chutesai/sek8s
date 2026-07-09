@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import os
 import shutil
 import time
 from pathlib import Path
@@ -23,6 +25,11 @@ from .util import (
     fetch_repo_total_size,
     verify_cache,
 )
+
+# Path-restricted privileged remove wrapper (sudoers grants this, not bare rm).
+# It enforces that its target is a direct child of the HF cache base. Installed
+# by the system-manager Ansible role and measured into RTMR3.
+CACHE_RM_HELPER = "/usr/local/bin/cache-rm"
 
 
 class HuggingFaceSnapshot:
@@ -281,11 +288,66 @@ class HuggingFaceSnapshot:
     # Download lifecycle
     # ------------------------------------------------------------------
 
-    async def start_download(self, repo_id: str, revision: str) -> None:
-        """Prepare directories, create a DownloadProcess, and start it."""
+    def _has_foreign_entries(self) -> bool:
+        """True if any entry under ``self.path`` is owned by a different uid.
+
+        A chute pod (uid 1000) can download directly into the shared cache,
+        creating blob dirs/files that the system-manager user neither owns nor
+        can write into (the pod umask leaves them non-group-writable). Our
+        download subprocess cannot write a tmp blob into such a dir — it fails
+        with ``PermissionError: [Errno 13]`` — and resuming is impossible. The
+        tree must be cleared before a fresh download. Short-circuits on the
+        first foreign entry; any stat error is treated as "foreign" (clearing a
+        tree we can't even stat is the safe choice).
+        """
+        uid = os.getuid()
+        try:
+            if os.lstat(self.path).st_uid != uid:
+                return True
+            for p in self.path.rglob("*"):
+                try:
+                    if os.lstat(p).st_uid != uid:
+                        return True
+                except OSError:
+                    return True
+        except OSError:
+            return True
+        return False
+
+    async def start_download(
+        self, repo_id: str, revision: str, *, force: bool = False
+    ) -> None:
+        """Prepare directories, create a DownloadProcess, and start it.
+
+        Raises:
+            ValueError: if the cache dir holds entries owned by another process
+                (likely an active or purged chute-pod download) and ``force`` is
+                not set. We cannot tell a stalled partial from one a pod is still
+                writing, so clearing it is gated behind explicit ``force``.
+        """
         self.repo_id = repo_id
         self.revision = revision
         self._scan_cache = None
+
+        # A tree we don't own (e.g. a chute pod downloaded directly) can be
+        # neither written nor resumed into by our download subprocess, so it must
+        # be cleared before a fresh download. But an INCOMPLETE pod-owned tree is
+        # indistinguishable from one a pod is *actively* downloading (our
+        # is_in_progress only tracks our own subprocess), so require force before
+        # discarding it — otherwise we could wipe a live download.
+        if self.path.exists() and self._has_foreign_entries():
+            if not force:
+                raise ValueError(
+                    "Cache dir contains files owned by another process (likely a "
+                    "chute pod download, possibly still active); retry with "
+                    "force=true to discard the partial and re-download."
+                )
+            logger.warning(
+                "force=true: clearing chute_id={} cache dir owned by another user "
+                "(likely a chute pod) before re-download",
+                self.chute_id,
+            )
+            await self.delete()
 
         self.path.mkdir(parents=True, exist_ok=True)
         chmod_if_owned(self.path, 0o2775)  # nosec B103
@@ -520,19 +582,34 @@ class HuggingFaceSnapshot:
             raise PermissionError(
                 f"Path {path} is not under cache_base {cache_base}"
             ) from None
+        # Defense in depth: only ever delete a direct child of cache_base (a
+        # single per-chute dir). This rejects path == cache_base (e.g. an empty
+        # chute_id, which relative_to() would accept as ".") and any nested path,
+        # so neither shutil.rmtree nor the privileged `sudo rm -rf` below can be
+        # pointed at the cache root or a deeper subtree.
+        if path.parent != cache_base:
+            logger.error("Refusing to delete non-direct-child of cache_base: {}", path)
+            raise PermissionError(
+                f"Path {path} is not a direct child of cache_base {cache_base}"
+            )
         try:
             shutil.rmtree(path)
         except OSError as e:
-            if e.errno != 1:  # EPERM
+            if e.errno not in (errno.EACCES, errno.EPERM):
                 raise
             logger.info(
-                "rmtree failed (likely dir owned by pod 1000:1000), trying sudo rm for chute_id={}",
+                "rmtree failed ({}; likely dir owned by pod 1000:1000), trying {} for chute_id={}",
+                e.strerror,
+                CACHE_RM_HELPER,
                 self.chute_id,
             )
+            # Use the path-restricted cache-rm wrapper rather than bare `sudo rm`:
+            # the sudoers grant points only at this helper, which independently
+            # enforces that the target is a direct child of the cache base, so a
+            # compromised system-manager cannot delete arbitrary root-owned paths.
             proc = await asyncio.create_subprocess_exec(
                 "sudo",
-                "rm",
-                "-rf",
+                CACHE_RM_HELPER,
                 str(path),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -540,7 +617,7 @@ class HuggingFaceSnapshot:
             _, stderr = await proc.communicate()
             if proc.returncode != 0:
                 err_msg = stderr.decode("utf-8", errors="replace").strip()
-                logger.error("sudo rm -rf failed for {}: {}", path, err_msg)
+                logger.error("{} failed for {}: {}", CACHE_RM_HELPER, path, err_msg)
                 raise OSError(
                     e.errno, f"Failed to delete cache dir: {err_msg}", str(path)
                 ) from e

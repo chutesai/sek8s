@@ -72,19 +72,93 @@
       Run upgrade-guest.yml to download and promote the correct image before launching.
   when: _launch_actual_sha.stdout.split()[0] != (_launch_expected_sha.stdout | trim)
 
-- name: Launch VM via quick-launch.sh
+# ── PCI passthrough wedge guard ──────────────────────────────────────────────
+# GPU passthrough hosts occasionally wedge the PCI subsystem: a vfio-pci unbind
+# or nvidia-gpu-tools task gets stuck in uninterruptible D-state, after which any
+# SBR/CC-mode op (and therefore VM launch) fails with "SBR cannot run until the
+# host is rebooted". Only a reboot clears it. We detect this up front, and again
+# if the launch itself wedges the host, rebooting and waiting for SSH to return
+# before (re)trying the launch. chutes.guest.vfio.pci_operations_wedged() is the
+# same predicate run-td uses internally (scans ps for D-state vfio/gpu-tools).
+
+- name: Pre-flight — detect a wedged PCI subsystem
   ansible.builtin.command:
     chdir: "{{ sek8s_remote_host_tools }}/scripts"
     argv:
-      - ./quick-launch.sh
-      - "{{ chutes_config_remote_path }}"
-  register: _qlaunch
-  changed_when: true
+      - python3
+      - -c
+      - "import sys; from chutes.guest.vfio import pci_operations_wedged; sys.exit(0 if pci_operations_wedged() else 1)"
+  register: _pci_wedged
+  failed_when: false
+  changed_when: false
 
-- name: Fail with quick-launch diagnostics
-  ansible.builtin.fail:
-    msg: "quick-launch.sh failed (rc={{ _qlaunch.rc }}). stderr={{ _qlaunch.stderr | default('') }}"
-  when: _qlaunch.rc != 0
+# Forced (SysRq) reboot, not a graceful one: a wedged subsystem hangs
+# systemd-shutdown on the un-killable D-state tasks and the host never reboots.
+- name: Force-reboot host to clear wedged PCI subsystem (pre-flight)
+  ansible.builtin.include_tasks: force_reboot.yml
+  when: _pci_wedged.rc == 0
+
+- name: Launch VM (reboot and retry once if the launch wedges the PCI subsystem)
+  block:
+    - name: Launch VM via quick-launch.sh
+      ansible.builtin.command:
+        chdir: "{{ sek8s_remote_host_tools }}/scripts"
+        argv:
+          - ./quick-launch.sh
+          - "{{ chutes_config_remote_path }}"
+      register: _qlaunch
+      changed_when: true
+  rescue:
+    # Authoritative signal: the D-state tasks that wedge the PCI subsystem persist
+    # until reboot, so re-running the predicate after the failure tells us directly
+    # whether a reboot would help. Fall back to matching run-td's error text.
+    - name: Re-check PCI wedge state after launch failure
+      ansible.builtin.command:
+        chdir: "{{ sek8s_remote_host_tools }}/scripts"
+        argv:
+          - python3
+          - -c
+          - "import sys; from chutes.guest.vfio import pci_operations_wedged; sys.exit(0 if pci_operations_wedged() else 1)"
+      register: _post_wedge
+      failed_when: false
+      changed_when: false
+
+    - name: Classify launch failure (recoverable PCI wedge vs. other)
+      ansible.builtin.set_fact:
+        _launch_pci_wedged: >-
+          {{ (_post_wedge.rc == 0) or
+             ('wedged' in (_qlaunch.stderr | default(''))) or
+             ('SBR cannot run' in (_qlaunch.stderr | default(''))) or
+             ('may need host reboot' in (_qlaunch.stdout | default(''))) }}
+
+    - name: Fail when the launch error is not a recoverable PCI wedge
+      ansible.builtin.fail:
+        msg: >-
+          quick-launch.sh failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
+          other than a PCI wedge — not retrying. stderr={{ _qlaunch.stderr | default('') }}
+      when: not (_launch_pci_wedged | bool)
+
+    # Forced (SysRq) reboot — see force_reboot.yml. A graceful reboot here is
+    # exactly what hangs the host in systemd-shutdown on the wedged D-state tasks.
+    - name: Force-reboot host to clear wedged PCI subsystem (post-launch)
+      ansible.builtin.include_tasks: force_reboot.yml
+
+    - name: Retry VM launch after reboot
+      ansible.builtin.command:
+        chdir: "{{ sek8s_remote_host_tools }}/scripts"
+        argv:
+          - ./quick-launch.sh
+          - "{{ chutes_config_remote_path }}"
+      register: _qlaunch_retry
+      changed_when: true
+      failed_when: false
+
+    - name: Fail if launch still fails after reboot
+      ansible.builtin.fail:
+        msg: >-
+          quick-launch.sh still failing after a reboot to clear the PCI wedge
+          (rc={{ _qlaunch_retry.rc }}). stderr={{ _qlaunch_retry.stderr | default('') }}
+      when: _qlaunch_retry.rc != 0
 
 - name: Poll node health until VM is registered and healthy
   ansible.builtin.command:

@@ -1,20 +1,25 @@
 monitoring_namespace: monitoring
 
 # Chutes chart version from the chutes Helm repo (chutes/chutes-miner-gpu).
-# Pinned for reproducible builds. The marker file at /etc/chutes/chart-versions/chutes-miner-gpu
-# is derived from this; both define the expected chart version from one release to the next.
+# Pinned for reproducible builds. Rendered into /etc/chutes/charts/chutes-miner-gpu.conf,
+# the single source of truth reconciled at boot by 04-helm-chart-upgrade.sh.
 # Override in group_vars or host_vars for debug images (e.g. 0.1.0-dev.1).
 chutes_chart_version: "0.3.0"
 
 # GPU Operator chart version from the NVIDIA Helm repo (nvidia/gpu-operator).
-# Pinned for reproducible builds. The marker file at /etc/chutes/chart-versions/gpu-operator
-# is written after a successful install so the boot-time upgrade script can detect drift.
-gpu_operator_chart_version: "v26.3.1"
+# Pinned for reproducible builds. Rendered into /etc/chutes/charts/gpu-operator.conf,
+# reconciled at boot by 04-helm-chart-upgrade.sh (a hash change triggers the upgrade).
+gpu_operator_chart_version: "v26.3.2"
+
+# Prometheus chart version from the prometheus-community Helm repo
+# /etc/chutes/charts/prometheus.conf (reconciled at boot). Find a version to pin with
+# `helm search repo prometheus-community/prometheus --versions`
+prometheus_chart_version: "29.12.0"
 
 # Helm repo URL for chutes-miner charts (used at build time and inherited by boot script).
 chutes_helm_repo_url: "https://chutesai.github.io/chutes-miner"
 
-# Helm paths; must match k3s role defaults for cluster-init service.
+# Helm paths; must match k3s role defaults for post-start service.
 # On root volume (VM-version-specific); not on storage so no sync needed.
 helm_config_home: /var/lib/chutes/helm-config
 helm_cache_home: /var/lib/chutes/helm-cache

@@ -63,6 +63,8 @@
           - "{{ chutes_kubeconfig_path }}"
           - --miner-api
           - "{{ chutes_miner_api }}"
+        # sync-kubeconfig prompts "Continue? [y/N]" before overwriting; auto-confirm.
+        stdin: "y\n"
       delegate_to: localhost
       become: false
 

@@ -1,5 +1,5 @@
 # OPA tests for envFrom restriction in chutes namespace.
-# SEK8S-044: envFrom bypasses the env var allowlist by bulk-injecting all
+# envFrom bypasses the env var allowlist by bulk-injecting all
 # keys from a ConfigMap/Secret. Block it entirely — all env vars must use
 # explicit env[] entries which are validated against the allowlist.
 # Run locally: make test-opa-policies (or: opa test <policies-dir> tests/opa -v)

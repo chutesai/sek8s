@@ -1,0 +1,25 @@
+---
+# Graceful node shutdown support. The kubelet's shutdownGracePeriod itself is
+# written into the runtime kubelet config-dir by k3s-pre-start.sh (because
+# /etc/rancher/k3s is an initially-empty bind mount). This task only installs the
+# logind drop-in so the kubelet's shutdown inhibitor is allowed to delay poweroff
+# long enough to drain pods.
+#
+# The matching pre-k3s cleanup of stale CNI/sandbox runtime state lives in
+# k3s-pre-start.sh (the existing pre-k3s hook) — no separate service.
+
+- name: Ensure systemd logind drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/logind.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install logind graceful-shutdown drop-in
+  ansible.builtin.copy:
+    src: logind-graceful-shutdown.conf
+    dest: /etc/systemd/logind.conf.d/10-k3s-graceful-shutdown.conf
+    owner: root
+    group: root
+    mode: '0644'

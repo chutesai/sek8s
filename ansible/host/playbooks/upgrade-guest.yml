@@ -1,6 +1,14 @@
 ---
-# Staged base image download, maintenance, drain, shutdown, log wait, cutover, relaunch.
+# Staged base image download, maintenance, drain, shutdown, cutover, relaunch.
 # Controller: chutes-miner, kubectl. chutes-miner --name comes from chutes_tee_server_name (group_vars/all.yml; override via tee_server_name in host_vars).
+#
+# Idempotency / cost: the playbook never hashes the multi-GB qcow2 to decide what
+# to do. It asks the control plane (chutes-miner tee maintenance-status) whether
+# each server needs the active upgrade window's target version; already-current
+# hosts end immediately — no download, no hash. When an upgrade IS needed the new
+# image is fetched once and verified by aria2 itself (--checksum against the
+# repo-pinned EXPECTED_BASE_SHA256), which is then trusted at launch. So running
+# with no --limit safely walks the whole fleet and only touches hosts behind.
 #
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
 #
@@ -34,6 +42,49 @@
     - role: host_tools
 
   tasks:
+    # Idempotency without hashing the multi-GB image: ask the control plane which
+    # version each server runs and whether it needs the active upgrade window's
+    # target. Already-current hosts end here — no API churn, no download, no hash.
+    - name: Query TEE maintenance status (per-server versions)
+      ansible.builtin.command:
+        argv:
+          - chutes-miner
+          - tee
+          - maintenance-status
+          - --hotkey
+          - "{{ chutes_hotkey_path }}"
+          - --raw-json
+      delegate_to: localhost
+      become: false
+      register: _maint_status
+      changed_when: false
+
+    - name: Resolve this host's server record from maintenance status
+      ansible.builtin.set_fact:
+        _server_record: >-
+          {{ (_maint_status.stdout | from_json).servers
+             | selectattr('name', 'equalto', chutes_tee_server_name)
+             | list | first | default({}) }}
+        _target_version: >-
+          {{ (_maint_status.stdout | from_json).active_window.target_measurement_version
+             | default('') }}
+
+    - name: Report upgrade decision
+      ansible.builtin.debug:
+        msg: >-
+          {{ chutes_tee_server_name }}: version={{ _server_record.version | default('unknown') }},
+          target={{ _target_version | default('?') }},
+          needs_upgrade={{ _server_record.needs_upgrade | default('unknown (server not found)') }}
+
+    # Skip only when the control plane explicitly says this server does not need
+    # the upgrade. If the server is missing from the response (needs_upgrade
+    # undefined), fall through and upgrade rather than silently skipping.
+    - name: End host when already at the target version
+      ansible.builtin.meta: end_host
+      when:
+        - _server_record.needs_upgrade is defined
+        - not (_server_record.needs_upgrade | bool)
+
     - name: Read EXPECTED_BASE_SHA256 from synced quick-launch.sh
       ansible.builtin.shell: |
         set -euo pipefail
@@ -47,72 +98,30 @@
       ansible.builtin.set_fact:
         upgrade_expected_sha: "{{ expected_sha_raw.stdout | trim }}"
 
-    - name: Stat current default base image
-      ansible.builtin.stat:
-        path: "{{ upgrade_default_base_image }}"
-        get_checksum: false
-      register: cur_base_stat
+    - name: Require a non-empty expected SHA
+      ansible.builtin.assert:
+        that:
+          - upgrade_expected_sha | length == 64
+        fail_msg: >-
+          Could not read EXPECTED_BASE_SHA256 from quick-launch.sh
+          (got '{{ upgrade_expected_sha }}'). Ensure host_tools synced the repo.
 
-    - name: SHA256 of current default base image
-      ansible.builtin.command:
-        argv:
-          - sha256sum
-          - "{{ upgrade_default_base_image }}"
-      register: cur_sha_out
-      changed_when: false
-      when: cur_base_stat.stat.exists
+    - name: Ensure base-images directory exists
+      ansible.builtin.file:
+        path: /var/lib/chutes/base-images
+        state: directory
+        mode: "0755"
 
-    - name: Set current image SHA fact
-      ansible.builtin.set_fact:
-        upgrade_current_sha: "{{ (cur_sha_out.stdout.split()[0]) if cur_base_stat.stat.exists else '' }}"
-
-    - name: Stat staged image
-      ansible.builtin.stat:
-        path: "{{ staged_image_path }}"
-        get_checksum: false
-      register: staged_stat
-
-    - name: SHA256 of staged image when present
-      ansible.builtin.command:
-        argv:
-          - sha256sum
-          - "{{ staged_image_path }}"
-      register: staged_sha_cmd
-      changed_when: false
-      when: staged_stat.stat.exists
-
-    - name: Set staged SHA fact
-      ansible.builtin.set_fact:
-        upgrade_staged_sha: "{{ (staged_sha_cmd.stdout.split()[0]) if staged_stat.stat.exists else '' }}"
-
-    - name: No-op when default image already matches expected and no staged file
-      ansible.builtin.debug:
-        msg: "Base image already at expected SHA256; nothing to upgrade."
-      when:
-        - upgrade_current_sha == upgrade_expected_sha
-        - not staged_stat.stat.exists
-
-    - name: End when already upgraded
-      ansible.builtin.meta: end_host
-      when:
-        - upgrade_current_sha == upgrade_expected_sha
-        - not staged_stat.stat.exists
-
-    - name: Remove stray staged file when default image already matches expected
+    # Reached only for hosts the control plane flagged needs_upgrade (the no-op
+    # ended the run above otherwise). Start from a clean staged path for a
+    # deterministic fresh download; aria2's --checksum verifies the completed file
+    # and exits non-zero on mismatch, replacing the old separate sha256sum pass.
+    - name: Remove any stale staged image from a prior run
       ansible.builtin.file:
         path: "{{ staged_image_path }}"
         state: absent
-      when:
-        - upgrade_current_sha == upgrade_expected_sha
-        - staged_stat.stat.exists
 
-    - name: End after cleaning stray staged artifact
-      ansible.builtin.meta: end_host
-      when:
-        - upgrade_current_sha == upgrade_expected_sha
-        - staged_stat.stat.exists
-
-    - name: Download staged base image when missing or checksum wrong
+    - name: Download and verify staged base image
       ansible.builtin.command:
         argv:
           - aria2c
@@ -122,53 +131,35 @@
           - "16"
           - -k
           - 1M
+          - "--checksum=sha-256={{ upgrade_expected_sha }}"
           - -d
           - /var/lib/chutes/base-images
           - -o
           - "{{ upgrade_staged_basename }}"
           - "{{ upgrade_base_image_url }}"
-      when: upgrade_staged_sha != upgrade_expected_sha
       register: aria_dl
       changed_when: true
-
-    - name: Re-stat staged image
-      ansible.builtin.stat:
-        path: "{{ staged_image_path }}"
-        get_checksum: false
-      register: staged_stat
-
-    - name: SHA256 staged image after download
-      ansible.builtin.command:
-        argv:
-          - sha256sum
-          - "{{ staged_image_path }}"
-      register: staged_sha_cmd
-      changed_when: false
-      failed_when: staged_sha_cmd.rc != 0
-
-    - name: Refresh staged SHA fact
-      ansible.builtin.set_fact:
-        upgrade_staged_sha: "{{ staged_sha_cmd.stdout.split()[0] }}"
-
-    - name: Verify staged image matches quick-launch expectation
-      ansible.builtin.assert:
-        that:
-          - upgrade_staged_sha == upgrade_expected_sha
-        fail_msg: >-
-          Staged image checksum {{ upgrade_staged_sha }} != expected {{ upgrade_expected_sha }}.
-          Delete {{ staged_image_path }} and re-run.
 
     - name: Drain pods and shut down guest
       ansible.builtin.include_role:
         name: chutes_tee_vm
         tasks_from: drain_and_shutdown.yml
 
+    # Lightweight existence check only (get_checksum: false) so the backup step
+    # below is a no-op on a host that has no current base image yet.
+    - name: Stat current default base image
+      ansible.builtin.stat:
+        path: "{{ upgrade_default_base_image }}"
+        get_checksum: false
+      register: cur_base_stat
+
     - name: Backup current base qcow2 by date
       ansible.builtin.command:
         argv:
           - mv
           - "{{ upgrade_default_base_image }}"
-          - "/var/lib/chutes/base-images/tdx-guest-{{ ansible_date_time.date }}.qcow2"
+          - "/var/lib/chutes/base-images/tdx-guest-{{ ansible_facts.date_time.date }}.qcow2"
+      when: cur_base_stat.stat.exists
 
     - name: Promote staged image to default path
       ansible.builtin.command:
@@ -182,6 +173,7 @@
         name: chutes_tee_vm
         tasks_from: launch_and_verify.yml
       vars:
-        # Image was just verified above — pass SHA so launch_and_verify skips recompute.
+        # aria2 already verified the staged image == expected SHA before promotion,
+        # so launch_and_verify can skip recomputing the hash of the multi-GB image.
         _prevalidated_base_sha: "{{ upgrade_expected_sha }}"
       when: relaunch_vm | bool

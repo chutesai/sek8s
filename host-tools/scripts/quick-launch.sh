@@ -17,7 +17,7 @@ run_create_config() {
 # VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
 # Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
 # --------------------------------------------------------------------
-EXPECTED_BASE_SHA256="1d53800f1c18e353ce43bbad886f3b38555b7fc38c3362b04af30d11a16f7b46"
+EXPECTED_BASE_SHA256="2df7256a248b246ae532b74601e376a455ad8af98202e56deb91b623fce3b88a"
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
@@ -226,6 +226,11 @@ Runtime:
   --foreground
   --network-type [tap|user]
   --ephemeral               Use ephemeral per-VM image in /tmp/ (discarded on reboot)
+
+Host CPU tuning is a separate, operator-driven step (decoupled from launch):
+  sudo chutes-tune-host      Apply NVIDIA-recommended tuning
+                             (governor=performance, disable C1E/C6)
+  sudo chutes-restore-host   Revert to the saved settings
 
 Resource sizing is fixed inside run-td to preserve RTMR determinism.
 

@@ -2,7 +2,7 @@
 helm_version: v3.20.2 # noqa var-naming[no-role-prefix]
 k3s_version: v1.35.4+k3s1
 k3s_server_location: /var/lib/rancher/k3s
-# Helm paths for cluster-init (must match setup_chutes.yml).
+# Helm paths for post-start (must match setup_chutes.yml).
 # On root volume (VM-version-specific); not on storage so no sync needed.
 helm_config_home: /var/lib/chutes/helm-config
 helm_cache_home: /var/lib/chutes/helm-cache
@@ -14,6 +14,12 @@ k3s_extra_server_args: ""
 k3s_server_config_yaml: |-
   write-kubeconfig-mode: "0600"
   encryption-provider-config: /run/chutes/k3s-encryption-config.yaml
+  # Bound terminal-phase pods (Completed/Error and graceful-shutdown tombstones);
+  # default is 12500 so on a single node they never get reaped. NOTE: k3s-pre-start.sh
+  # regenerates config.yaml at boot and is the authoritative runtime source — keep this
+  # in sync with the kube-controller-manager-arg written there.
+  kube-controller-manager-arg:
+    - "terminated-pod-gc-threshold=50"
   disable:
     - traefik
     - servicelb

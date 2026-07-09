@@ -1,8 +1,8 @@
 #!/bin/bash
-# 99-purge-kubeconfig.sh — runs last in every cluster-init sequence.
+# 99-purge-kubeconfig.sh — runs last in every post-start sequence.
 #
 # The k3s admin kubeconfig at /etc/rancher/k3s/k3s.yaml is bind-mounted from
-# the storage volume (/cache/storage/rancher-config/k3s.yaml).  All cluster-init
+# the storage volume (/cache/storage/rancher-config/k3s.yaml).  All post-start
 # scripts that need kubectl/helm have already completed by the time this script
 # runs (alphabetical order places it last).  Deleting the file here ensures it
 # does not persist on the cold storage volume between VM sessions.
@@ -15,10 +15,10 @@
 #
 # This gives a second, post-init attestation checkpoint to complement the
 # initramfs purge performed in setup_storage.  Together they certify that the
-# kubeconfig was absent both before cluster-init started and after it finished.
+# kubeconfig was absent both before post-start started and after it finished.
 set -euo pipefail
 
-LOG_FILE="/var/log/k3s-cluster-init.log"
+LOG_FILE="/var/log/k3s-post-start.log"
 KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
 TDX_RTMR_EXTEND="/usr/local/bin/tdx-rtmr-extend"
 

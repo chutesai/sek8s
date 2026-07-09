@@ -90,7 +90,7 @@ class TestAdmissionConfig:
         assert config.debug is False
 
     def test_default_namespace_policies_all_enforce(self):
-        """All default namespace policies must use enforce mode (SEK8S-023).
+        """All default namespace policies must use enforce mode.
 
         OPA user-based exemptions (is_system_or_controller_user) handle
         system controllers; namespace-level warn mode is a security bypass.
@@ -276,7 +276,7 @@ class TestOPAConfig:
         assert config.opa_decision_logs is False
         assert not hasattr(
             config, "opa_diagnostic_addr"
-        ), "SEK8S-036: diagnostic address removed — no production use case"
+        ), "diagnostic address removed — no production use case"
 
     def test_opa_config_env_override(self):
         """Test OPA config environment overrides."""

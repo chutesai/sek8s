@@ -54,10 +54,10 @@
     chutes_guest_vm_ip: "{{ (_existing_config.content | b64decode | from_yaml).network.vm_ip }}"
     # Always re-detect the public interface from the current default route so a
     # NIC rename after an OS upgrade doesn't propagate a stale interface name.
-    # ansible_default_ipv4.interface is populated by the standard gather_facts.
+    # ansible_facts.default_ipv4.interface is populated by the standard gather_facts.
     # Fall back to the config value only when the Ansible fact is unavailable.
     chutes_guest_public_interface: >-
-      {{ ansible_default_ipv4.interface
+      {{ ansible_facts.default_ipv4.interface
          | default((_existing_config.content | b64decode | from_yaml).network.public_interface) }}
   when:
     - _config_stat.stat.exists
@@ -102,7 +102,7 @@
       ansible.builtin.set_fact:
         chutes_guest_vm_ip: "{{ (chutes_manual_net.stdout | trim | from_json).vm_ip }}"
         chutes_guest_bridge_ip: "{{ (chutes_manual_net.stdout | trim | from_json).bridge_ip }}"
-        chutes_guest_public_interface: "{{ chutes_public_interface | default(ansible_default_ipv4.interface | default('')) }}"
+        chutes_guest_public_interface: "{{ chutes_public_interface | default(ansible_facts.default_ipv4.interface | default('')) }}"
 
     - name: Require chutes_public_interface when default IPv4 fact missing
       ansible.builtin.assert:
@@ -110,7 +110,7 @@
           - chutes_guest_public_interface is defined
           - chutes_guest_public_interface | length > 0
         fail_msg: >-
-          Set chutes_public_interface when using chutes_guest_bridge_network and this host has no ansible_default_ipv4.interface.
+          Set chutes_public_interface when using chutes_guest_bridge_network and this host has no ansible_facts.default_ipv4.interface.
 
 - name: Prefer explicit chutes_public_interface over detected
   when: chutes_public_interface is defined and chutes_public_interface | length > 0

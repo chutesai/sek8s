@@ -1,0 +1,14 @@
+# Shell Environment
+
+Poetry is installed at `~/.local/bin/poetry`, not in the project virtualenv.
+
+Before running **any** shell command that uses `poetry`, `make`, or tools from `.venv/`, prepend the PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The Makefile already exports this, so `make` targets work out of the box. But if you call `poetry` directly (e.g., `poetry install`, `poetry lock`), you must either:
+
+- Use the full path: `/home/kyle/.local/bin/poetry`
+- Or export PATH first in the same shell invocation

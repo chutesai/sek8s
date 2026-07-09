@@ -1,4 +1,4 @@
-# SEK8S-073: OPA tests for ConfigMap mutation restriction in chutes namespace.
+# OPA tests for ConfigMap mutation restriction in chutes namespace.
 # Only system/controller users may create, update, or delete ConfigMaps.
 # Run: make test-opa-policies
 package kubernetes.admission

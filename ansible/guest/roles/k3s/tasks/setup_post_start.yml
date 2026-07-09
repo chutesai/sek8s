@@ -12,19 +12,19 @@
     - /var/lib/rancher/k3s/credentials
     - /var/log
 
-- name: Install k3s cluster initialization script
+- name: Install k3s post-start script
   copy:
-    src: k3s-cluster-init.sh
-    dest: /usr/local/bin/k3s-cluster-init.sh
+    src: k3s-post-start.sh
+    dest: /usr/local/bin/k3s-post-start.sh
     owner: root
     group: root
     mode: '0755'
     backup: yes
 
-- name: Install k3s cluster initialization service
+- name: Install k3s post-start service
   ansible.builtin.template:
-    src: k3s-cluster-init.service.j2
-    dest: /etc/systemd/system/k3s-cluster-init.service
+    src: k3s-post-start.service.j2
+    dest: /etc/systemd/system/k3s-post-start.service
     owner: root
     group: root
     mode: '0644'
@@ -48,8 +48,8 @@
     daemon_reload: yes
 
 # Keep service disabled for build, cleanup will enable for first boot
-- name: Disable k3s-cluster-init service
+- name: Disable k3s-post-start service
   ansible.builtin.systemd:
-    name: k3s-cluster-init
+    name: k3s-post-start
     enabled: no
     state: stopped
