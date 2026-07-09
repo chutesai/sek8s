@@ -43,6 +43,8 @@ host_cpus/host_sockets if the server has a non-standard layout.
 
 from abc import ABC, abstractmethod
 
+from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
+
 HOST_RESERVED_CPUS = 4
 
 
@@ -162,19 +164,21 @@ class GpuProfile(ABC):
         return False
 
     @property
-    def baselined_measurements(self) -> dict[str, set[tuple]]:
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
         """QEMU version -> known topology fingerprints (RTMR0 = f(topology, QEMU)).
 
-        verify-host uses the per-QEMU keys to flag a topology with no measurement
-        at a given QEMU. Empty dict = profile not characterized yet.
+        Fingerprints are NumaTopology / FlatTopology value types (see
+        gpu/topology.py). verify-host uses the per-QEMU keys to flag a topology
+        with no measurement at a given QEMU. Empty dict = profile not
+        characterized yet.
         """
         return {}
 
     @property
-    def baselined_topologies(self) -> set[tuple]:
+    def baselined_topologies(self) -> set[TopologyFingerprint]:
         """Union of known fingerprints across QEMU versions, for the launch-time
         hard-match (QEMU-agnostic). Empty union skips the check."""
-        out: set[tuple] = set()
+        out: set[TopologyFingerprint] = set()
         for topos in self.baselined_measurements.values():
             out |= topos
         return out
@@ -285,10 +289,10 @@ class B200Profile(GpuProfile):
         return True
 
     @property
-    def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # No NVSwitch and no IB passthrough -> both trailing tuples empty. Every
-        # B200 maps here regardless of NIC loadout. QEMU 10.2.1 (26.04).
-        return {"10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())}}
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No NVSwitch and no IB passthrough -> only gpu_nodes set. Every B200 maps
+        # here regardless of NIC loadout. QEMU 10.2.1 (26.04).
+        return {"10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
@@ -325,12 +329,12 @@ class B200Xeon6Profile(B200Profile):
         return 288
 
     @property
-    def baselined_measurements(self) -> dict[str, set[tuple]]:
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
         return {
             # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4.
-            "10.2.1": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())},
+            "10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
             # Xeon6 SNC3 -> 6 nodes -> flat fallback.
-            "10.1.0": {("flat", 8, 0, 0)},
+            "10.1.0": {FlatTopology(gpu_count=8)},
         }
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -446,15 +450,24 @@ class H200Profile(GpuProfile):
         return total_gpus == 8
 
     @property
-    def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # No IB passthrough -> 4th tuple empty. Mirrors chutes-ops
-        # teeMeasurements; measurement name noted per entry. No 10.2.1 flat entry.
-        dell_nvsw1 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ())  # NVSwitches node 1
-        kr6288_nvsw0 = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (0, 0, 0, 0), ())  # NVSwitches node 0
-        flat = ("flat", 8, 4, 0)
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No IB passthrough -> ib_nodes empty. Mirrors chutes-ops teeMeasurements.
+        # The two NUMA fingerprints differ only in which host NUMA node the four
+        # NVSwitches attach to (chassis-dependent); GPUs are always 4+4.
+        nvswitch_on_node1 = NumaTopology(  # e.g. Dell XE9680
+            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(1, 1, 1, 1)
+        )
+        nvswitch_on_node0 = NumaTopology(  # e.g. KR6288
+            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 0, 0, 0)
+        )
         return {
-            "10.1.0": {dell_nvsw1, kr6288_nvsw0, flat},
-            "10.2.1": {dell_nvsw1, kr6288_nvsw0},
+            # No 10.2.1 flat entry (no flat-path H200 baselined at 10.2.1 yet).
+            "10.1.0": {
+                nvswitch_on_node1,
+                nvswitch_on_node0,
+                FlatTopology(gpu_count=8, nvswitch_count=4),
+            },
+            "10.2.1": {nvswitch_on_node1, nvswitch_on_node0},
         }
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -507,9 +520,20 @@ class RTXPro6000Profile(GpuProfile):
         return False
 
     @property
-    def baselined_measurements(self) -> dict[str, set[tuple]]:
-        # GPUs 4+4, no NVSwitch/IB. All RTX Pro hosts on QEMU 10.1.0.
-        return {"10.1.0": {("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())}}
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No NVSwitch/IB -> only gpu_nodes / gpu_count set. Two host shapes,
+        # distinguished purely by NUMA node count:
+        #   - 2 NUMA nodes -> guest-NUMA path, GPUs 4+4.
+        #   - >2 NUMA nodes (e.g. 4) -> flat fallback; only GPU count matters.
+        # QEMU 10.2.1 = Ubuntu 26.04 (confirmed by discover-profile); the 10.1.0
+        # entry covers RTX hosts still on 25.10.
+        return {
+            "10.1.0": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
+            "10.2.1": {
+                NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
+                FlatTopology(gpu_count=8),
+            },
+        }
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (RTX Pro 6000)"

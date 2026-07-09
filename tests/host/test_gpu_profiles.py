@@ -10,6 +10,7 @@ from chutes.guest.gpu.profiles import (
     GpuProfile,
     resolve_profile,
 )
+from chutes.guest.gpu.topology import FlatTopology, NumaTopology
 
 # ---------------------------------------------------------------------------
 # matches_device_id: case-insensitive matching logic
@@ -563,7 +564,7 @@ def _patch_detection(
     nvswitch_bdfs=None,
     ib_pf_bdfs=None,
     gpu_bdfs=None,
-    fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ()),
+    fingerprint=NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
 ):
     """Return a context manager stack that patches all detection side effects.
 
@@ -635,11 +636,42 @@ def test_detect_profile_resolves_b200_xeon6_by_cpu_count():
         host_cpus=288,
         host_sockets=2,
         # XEON6 shares the no-IB B200 numa fingerprint; disambiguated by host_cpus.
-        fingerprint=("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ()),
+        fingerprint=NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
     ):
         profile = detect_profile()
 
     assert profile is GPU_PROFILES["B200_XEON6"]
+
+
+@pytest.mark.parametrize(
+    "numa_count,fingerprint",
+    [
+        (2, NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))),  # 2 NUMA nodes
+        (4, FlatTopology(gpu_count=8)),  # 4 NUMA nodes -> flat fallback
+    ],
+)
+def test_detect_profile_accepts_baselined_rtx_topologies(numa_count, fingerprint):
+    """Both RTX Pro 6000 host shapes (2-node NUMA and 4-node flat) are baselined
+    and must pass the launch-time topology hard-match."""
+    from chutes.guest.detection import detect_profile
+
+    rtx_lines = [
+        f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA "
+        f"[RTX PRO 6000 Blackwell Server Edition] [10de:2bb5] (rev a1)"
+        for i in range(8)
+    ]
+    bdfs = [f"0000:{i:02x}:00.0" for i in range(8)]
+    with _patch_detection(
+        lspci_lines=rtx_lines,
+        host_cpus=128,
+        host_sockets=2,
+        numa_count=numa_count,
+        gpu_bdfs=bdfs,
+        fingerprint=fingerprint,
+    ):
+        profile = detect_profile()
+
+    assert profile is GPU_PROFILES["RTX_PRO_6000"]
 
 
 def test_detect_profile_raises_on_socket_mismatch():
@@ -714,7 +746,9 @@ def test_topology_fingerprint_numa_path_includes_device_layout():
             side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ()],
         ):
             fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
-    assert fp == ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ())
+    assert fp == NumaTopology(
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(1, 1, 1, 1)
+    )
 
 
 def test_topology_fingerprint_flat_when_not_two_numa_nodes():
@@ -725,7 +759,7 @@ def test_topology_fingerprint_flat_when_not_two_numa_nodes():
     profile = GPU_PROFILES["H200"]
     with patch("chutes.guest.detection.detect_numa_node_count", return_value=4):
         fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
-    assert fp == ("flat", 8, 4, 0)
+    assert fp == FlatTopology(gpu_count=8, nvswitch_count=4)
 
 
 def test_topology_fingerprint_flat_when_profile_disables_numa():
@@ -737,7 +771,7 @@ def test_topology_fingerprint_flat_when_profile_disables_numa():
     profile = GPU_PROFILES["B300"]
     with patch("chutes.guest.detection.detect_numa_node_count", return_value=2):
         fp = host_topology_fingerprint(profile, ["g"] * 8, [], [])
-    assert fp == ("flat", 8, 0, 0)
+    assert fp == FlatTopology(gpu_count=8)
 
 
 def test_topology_fingerprint_includes_ib_layout_on_numa_path():
@@ -757,11 +791,13 @@ def test_topology_fingerprint_includes_ib_layout_on_numa_path():
             side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (), (0, 0, 1, 1)],
         ):
             fp = host_topology_fingerprint(profile, gpus, [], ib)
-    assert fp == ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), (0, 0, 1, 1))
+    assert fp == NumaTopology(
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), ib_nodes=(0, 0, 1, 1)
+    )
 
 
 def test_topology_fingerprint_ib_count_on_flat_path():
-    # On the flat path only device counts matter; IB count is the 4th element.
+    # On the flat path only device counts matter; IB count is the ib_count field.
     from unittest.mock import patch
 
     from chutes.guest.detection import host_topology_fingerprint
@@ -769,7 +805,7 @@ def test_topology_fingerprint_ib_count_on_flat_path():
     profile = GPU_PROFILES["B200"]
     with patch("chutes.guest.detection.detect_numa_node_count", return_value=6):
         fp = host_topology_fingerprint(profile, ["g"] * 8, [], ["i"] * 4)
-    assert fp == ("flat", 8, 0, 4)
+    assert fp == FlatTopology(gpu_count=8, ib_count=4)
 
 
 def test_detect_profile_raises_on_unbaselined_topology():
@@ -781,7 +817,7 @@ def test_detect_profile_raises_on_unbaselined_topology():
         host_cpus=192,
         host_sockets=2,
         # not in B200 baseline (GPU->NUMA layout differs from the 4+4 split)
-        fingerprint=("numa", (0, 1, 0, 1, 0, 1, 0, 1), (), ()),
+        fingerprint=NumaTopology(gpu_nodes=(0, 1, 0, 1, 0, 1, 0, 1)),
     ):
         with pytest.raises(ValueError, match="not baselined for profile 'B200'"):
             detect_profile()

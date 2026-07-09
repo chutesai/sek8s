@@ -12,6 +12,7 @@ import subprocess
 
 from chutes.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
+from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
 
 _NVIDIA_VENDOR = '10de'
 _MELLANOX_VENDOR = '15b3'
@@ -285,21 +286,24 @@ def host_topology_fingerprint(
     gpu_bdfs: list[str],
     nvswitch_bdfs: list[str],
     ib_bdfs: list[str],
-) -> tuple:
+) -> TopologyFingerprint:
     """RTMR0-impacting topology fingerprint of passed-through devices (GPUs,
     NVSwitches, IB PFs). On the 2-node NUMA path, device->NUMA layout drives the
-    guest PXB grouping; otherwise the guest is flat and only counts matter.
-    ``ib_bdfs`` is empty for profiles that don't pass IB. Same fingerprint =>
-    same RTMR0 for a given profile + QEMU + image."""
+    guest PXB grouping (NumaTopology); otherwise the guest is flat and only counts
+    matter (FlatTopology). ``ib_bdfs`` is empty for profiles that don't pass IB.
+    Same fingerprint => same RTMR0 for a given profile + QEMU + image."""
     node_count = detect_numa_node_count()
     if profile.enable_numa_topology and node_count == 2:
-        return (
-            "numa",
-            _device_numa_layout(gpu_bdfs),
-            _device_numa_layout(nvswitch_bdfs),
-            _device_numa_layout(ib_bdfs),
+        return NumaTopology(
+            gpu_nodes=_device_numa_layout(gpu_bdfs),
+            nvswitch_nodes=_device_numa_layout(nvswitch_bdfs),
+            ib_nodes=_device_numa_layout(ib_bdfs),
         )
-    return ("flat", len(gpu_bdfs), len(nvswitch_bdfs), len(ib_bdfs))
+    return FlatTopology(
+        gpu_count=len(gpu_bdfs),
+        nvswitch_count=len(nvswitch_bdfs),
+        ib_count=len(ib_bdfs),
+    )
 
 
 def detect_nvswitches() -> list[str]:

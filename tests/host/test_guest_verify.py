@@ -4,9 +4,12 @@ from unittest.mock import patch
 
 from chutes.guest import verify
 from chutes.guest.gpu.profiles import GPU_PROFILES
+from chutes.guest.gpu.topology import FlatTopology, NumaTopology
 
 # ar6 topology: registered for H200 at QEMU 10.1.0 (see baselined_measurements).
-_H200_AR6_FP = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (0, 0, 0, 0), ())
+_H200_AR6_FP = NumaTopology(
+    gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 0, 0, 0)
+)
 
 
 def _patch_verify(profile, fingerprint, qemu="10.1.0", qemu_raises=False):
@@ -55,7 +58,7 @@ def test_verify_warns_when_no_measurement_at_target_qemu():
     # H200 flat is registered at QEMU 10.1.0 (8xh200 [10.1.0-flat]) but there is
     # no 10.2.1 flat measurement -> upgrading a flat host to 26.04 (QEMU 10.2.1)
     # passes the launch gates but would 403 at attestation.
-    h200_flat = ("flat", 8, 4, 0)
+    h200_flat = FlatTopology(gpu_count=8, nvswitch_count=4)
     with _patch_verify(GPU_PROFILES["H200"], h200_flat):
         assert verify.verify_host(target_os="26.04") == verify.WARNING
 
@@ -64,6 +67,6 @@ def test_verify_target_os_skips_live_qemu_gate():
     # In --target-os mode the live-QEMU hygiene gate must NOT run (the upgrade
     # replaces QEMU), so even a raising gate doesn't block a registered combo.
     xeon6 = GPU_PROFILES["B200_XEON6"]
-    xeon6_fp = ("numa", (0, 0, 0, 0, 1, 1, 1, 1), (), ())  # registered at 10.2.1 (no IB)
+    xeon6_fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))  # registered at 10.2.1 (no IB)
     with _patch_verify(xeon6, xeon6_fp, qemu_raises=True):
         assert verify.verify_host(target_os="26.04") == verify.READY
