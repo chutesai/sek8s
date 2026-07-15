@@ -317,10 +317,8 @@ def build_base_cmd(
         '-bios', firmware,
         '-nodefaults',
         '-vga', 'none',
-        # Override host SMBIOS so TDVF measures identical data into RTMR0
-        # regardless of the physical motherboard/BIOS. Without this, different
-        # server hardware produces different RTMR0 values via fw_cfg
-        # etc/smbios/smbios-tables.
+        # Pin SMBIOS identity so per-server motherboard differences don't shift
+        # RTMR0 within a profile. Must match extract-acpi.sh.
         '-smbios', 'type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000',
         '-smbios', 'type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0',
         '-smbios', 'type=3,manufacturer=Chutes,version=1.0,serial=0',

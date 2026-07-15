@@ -178,6 +178,7 @@ echo
 # Use KVM and the same memory-backend topology as run-td,
 # but do NOT attach the encrypted guest root disk. We also do
 # NOT need -object tdx-guest; ACPI comes from the machine model.
+# SMBIOS flags below must match qemu.py so the golden RTMR0 aligns with runtime.
 timeout 20 qemu-system-x86_64 \
   -accel kvm \
   -object memory-backend-memfd,id=ram0,size="$MEM" \

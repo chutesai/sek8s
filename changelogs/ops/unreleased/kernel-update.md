@@ -9,9 +9,12 @@
   and rejects metapackages (e.g. `linux-image-generic`) at startup.
 - `_get_kernel_version()` in host setup now handles pinned kernel package names
   directly instead of requiring `apt show` resolution via Depends.
-- Override host SMBIOS in QEMU launch with static values (`-smbios type=1,2,3`)
-  so that RTMR0 is deterministic across different server hardware. QEMU 10.x
-  passes host SMBIOS data to the guest via fw_cfg, which TDVF measures into
-  RTMR0 — different motherboards/BIOS versions produced different RTMR0 values.
-- Apply the same SMBIOS override in `extract-acpi.sh` for consistent
-  measurement extraction.
+- Pin SMBIOS type 1/2/3 (system/baseboard/chassis identity) to static values in
+  the QEMU launch. TDVF folds the fw_cfg `etc/smbios/smbios-tables` blob into
+  RTMR0, so motherboard-identity fields previously made two servers of the same
+  profile produce different RTMR0 values; pinning them removes that per-server
+  drift. This does not make RTMR0 host-independent — type 4/17 (processor/memory)
+  tables still vary with `-smp`/`-m`/topology, absorbed by the per-profile
+  measurement baseline, and type 0 (BIOS) is not overridden.
+- Apply the same SMBIOS pinning in `extract-acpi.sh` so the extracted golden
+  RTMR0 matches what is launched.
