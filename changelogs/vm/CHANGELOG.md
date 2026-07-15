@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-05-30
+## [1.4.0] - 2026-07-15
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -79,6 +79,10 @@ Version source of truth: `ansible/guest/VERSION`
   `tdx-luks.conf` for `fetch-signing-keys` (signing keys bundle fetch) and post-boot services
   (system-manager).
 - Attestation proxy init container migrated from `bitnami/kubectl:latest` (unsigned, unpinned) to `parachutes/kubectl` (cosign-signed with `dockerhub.pub`). Removed the `require_signature: false` exception for `bitnami/kubectl` from the cosign registry config and removed `bitnami` from the OPA registry allowlist.
+- Bump VM version to 1.3.1 for new RTMR0 measurements. The guest image is
+  unchanged; RTMR0 changes because QEMU now pins SMBIOS type 1/2/3 identity to
+  static values, removing per-server motherboard drift from RTMR0 within a
+  profile. Topology-driven variance (type 4/17) is still absorbed per-profile.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
@@ -86,6 +90,7 @@ Version source of truth: `ansible/guest/VERSION`
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
 - `cosign_chutes_public_key_path`, `cosign_dockerhub_public_key_path`, and `helm_chart_public_key_path` inventory variables removed. Build machines now only require the root PGP public key (`root_signing_key_path`).
+
 ## [1.3.1] - 2026-06-20
 
 ### Added
