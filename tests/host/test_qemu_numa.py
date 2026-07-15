@@ -112,6 +112,34 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
     assert "prealloc" not in flat
 
 
+def test_build_base_cmd_pins_smbios_identity(tmp_path):
+    """SMBIOS type 1/2/3 identity is pinned so per-server motherboard
+    differences don't shift RTMR0 within a profile. These values must stay in
+    sync with guest-tools/scripts/extract-acpi.sh."""
+    img = tmp_path / "disk.qcow2"
+    img.write_bytes(b"")
+    with patch("chutes.guest.qemu.host_numa_nodes", return_value=[0]):
+        cmd = build_base_cmd(
+            mem="512G",
+            smp_topology="94,sockets=1,cores=94,threads=1",
+            process_name="chutes-td",
+            cpu_args="host,-avx10",
+            firmware="/tmp/TDVF.fd",
+            img_path=str(img),
+            foreground=True,
+            pidfile="/tmp/pid",
+            logfile="/tmp/log",
+            enable_numa_topology=False,
+        )
+    flat = " ".join(cmd)
+    assert (
+        "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,"
+        "uuid=00000000-0000-0000-0000-000000000000" in flat
+    )
+    assert "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0" in flat
+    assert "type=3,manufacturer=Chutes,version=1.0,serial=0" in flat
+
+
 def test_append_numa_memory_splits_remainder_on_last_node():
     cmd: list[str] = []
     _append_numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1])

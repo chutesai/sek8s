@@ -178,6 +178,7 @@ echo
 # Use KVM and the same memory-backend topology as run-td,
 # but do NOT attach the encrypted guest root disk. We also do
 # NOT need -object tdx-guest; ACPI comes from the machine model.
+# SMBIOS flags below must match qemu.py so the golden RTMR0 aligns with runtime.
 timeout 20 qemu-system-x86_64 \
   -accel kvm \
   -object memory-backend-memfd,id=ram0,size="$MEM" \
@@ -190,6 +191,9 @@ timeout 20 qemu-system-x86_64 \
   -nographic \
   -serial none \
   -monitor none \
+  -smbios type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000 \
+  -smbios type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0 \
+  -smbios type=3,manufacturer=Chutes,version=1.0,serial=0 \
   -object iommufd,id=iommufd0 \
   "${DEV_OPTS[@]}" \
   -no-reboot \

@@ -317,6 +317,11 @@ def build_base_cmd(
         '-bios', firmware,
         '-nodefaults',
         '-vga', 'none',
+        # Pin SMBIOS identity so per-server motherboard differences don't shift
+        # RTMR0 within a profile. Must match extract-acpi.sh.
+        '-smbios', 'type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000',
+        '-smbios', 'type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0',
+        '-smbios', 'type=3,manufacturer=Chutes,version=1.0,serial=0',
     ])
 
     if foreground:

@@ -4,7 +4,7 @@ Tests focus on behavioral contracts, registry integrity, and setup
 orchestration logic (mocking all subprocess/OS calls).
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from chutes.host.profiles import (
@@ -133,9 +133,9 @@ def test_2510_has_intel_sgx_repo():
     assert "download.01.org" in intel_repos[0].uri
 
 
-def test_2510_uses_generic_kernel():
+def test_2510_pins_kernel_package():
     profile = Ubuntu2510Profile()
-    assert profile.kernel_package == "linux-image-generic"
+    assert profile.kernel_package == "linux-image-6.17.0-35-generic"
 
 
 def test_2510_enables_kvm_intel_tdx():
@@ -201,9 +201,9 @@ def test_2604_has_intel_sgx_repo():
     assert "download.01.org" in intel_repos[0].uri
 
 
-def test_2604_uses_generic_kernel():
+def test_2604_pins_kernel_package():
     profile = Ubuntu2604Profile()
-    assert profile.kernel_package == "linux-image-generic"
+    assert profile.kernel_package == "linux-image-6.17.0-35-generic"
 
 
 def test_2604_enables_kvm_intel_tdx():
@@ -246,22 +246,12 @@ def test_resolve_profile_auto_detect_unsupported(mock_detect):
 # ---------------------------------------------------------------------------
 
 
-@patch("chutes.host.setup.subprocess.run")
-def test_get_kernel_version_parses_depends(mock_run):
-    mock_run.return_value = MagicMock(
-        stdout=(
-            "Package: linux-image-generic\n"
-            "Version: 6.17.0.15.16\n"
-            "Depends: linux-image-6.17.0-15-generic, linux-modules-6.17.0-15-generic\n"
-        )
-    )
-    assert _get_kernel_version("linux-image-generic") == "6.17.0-15-generic"
+def test_get_kernel_version_parses_pinned_package():
+    assert _get_kernel_version("linux-image-6.17.0-35-generic") == "6.17.0-35-generic"
 
 
-@patch("chutes.host.setup.subprocess.run")
-def test_get_kernel_version_raises_on_no_match(mock_run):
-    mock_run.return_value = MagicMock(stdout="Package: something\nVersion: 1.0\n")
-    with pytest.raises(RuntimeError, match="Could not determine kernel version"):
+def test_get_kernel_version_rejects_metapackage():
+    with pytest.raises(ValueError, match="must be a pinned version"):
         _get_kernel_version("linux-image-generic")
 
 
