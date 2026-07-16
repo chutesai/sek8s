@@ -30,16 +30,15 @@ def resolve_to_full_ref(
     if not image:
         raise HTTPException(status_code=400, detail="image is required")
 
-    # Full ref: has registry (host with . or : or localhost) before first /
+    # Full ref: has a registry host (contains a . or :) before the first /
     if "/" in image:
         first = image.split("/")[0]
-        if "." in first or ":" in first or first == "localhost":
+        if "." in first or ":" in first:
             return image  # Already full ref
 
     # Short form: org/repo:tag or repo:tag
     # Resolve using the registry.chutes.ai hostname — chute workloads always
     # reference images with that hostname, so short-form refs must expand to it.
-    # localhost / 127.0.0.1 entries are never used for short-form resolution.
     registry = None
     for r in allowed_registries:
         if "registry.chutes.ai" in r.lower():

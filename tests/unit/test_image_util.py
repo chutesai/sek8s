@@ -22,12 +22,6 @@ def test_resolve_full_ref_returned_unchanged():
     assert resolve_to_full_ref(ref, ALLOWED) == ref
 
 
-def test_resolve_full_ref_with_localhost():
-    """localhost is treated as a registry (has no dot but equals 'localhost')."""
-    ref = "localhost:30500/chutes/myrepo:latest"
-    assert resolve_to_full_ref(ref, ALLOWED) == ref
-
-
 def test_resolve_short_repo_tag():
     """repo:tag expands to registry/default_org/repo:tag."""
     assert resolve_to_full_ref("myrepo:v1", ALLOWED) == f"{REGISTRY}/chutes/myrepo:v1"
@@ -63,7 +57,7 @@ def test_resolve_empty_raises_400():
 def test_resolve_no_registry_hostname_in_allowed_raises_500():
     """If no registry.chutes.ai hostname is in allowed_registries, short-form fails."""
     with pytest.raises(HTTPException) as exc_info:
-        resolve_to_full_ref("myrepo:v1", ["localhost:30500"])
+        resolve_to_full_ref("myrepo:v1", ["docker.io"])
     assert exc_info.value.status_code == 500
     assert "registry.chutes.ai" in exc_info.value.detail
 

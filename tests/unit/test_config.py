@@ -84,7 +84,7 @@ class TestAdmissionConfig:
             "docker.io",
             "gcr.io",
             "quay.io",
-            "localhost:30500",
+            "registry.chutes.ai",
         ]
         assert config.enforcement_mode == "enforce"
         assert config.debug is False

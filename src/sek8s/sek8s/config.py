@@ -168,7 +168,7 @@ class AdmissionConfig(ServerConfig):
 
     # Registry allowlist - expects JSON array from environment
     allowed_registries: List[str] = Field(
-        default=["docker.io", "gcr.io", "quay.io", "localhost:30500"],
+        default=["docker.io", "gcr.io", "quay.io", "registry.chutes.ai"],
         alias="ALLOWED_REGISTRIES",
         description="JSON array of allowed registries",
     )

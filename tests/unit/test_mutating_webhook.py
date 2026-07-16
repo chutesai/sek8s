@@ -36,7 +36,7 @@ def config():
     return AdmissionConfig(
         opa_url="http://localhost:8181",
         opa_timeout=5.0,
-        allowed_registries=["docker.io", "gcr.io", "quay.io", "localhost:30500"],
+        allowed_registries=["docker.io", "gcr.io", "quay.io", "registry.chutes.ai"],
         enforcement_mode="enforce",
     )
 
