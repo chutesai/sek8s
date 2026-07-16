@@ -172,6 +172,21 @@
         apply:
           tags: signing-keys
 
+- name: Install VM mTLS initramfs cert lifecycle
+  hosts: vm
+  become: true
+  tags:
+    - vm-tls
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: VM TLS
+      ansible.builtin.include_role:
+        name: vm-tls
+        apply:
+          tags: vm-tls
+
 - name: Setup system manager service (status + cache)
   hosts: vm
   become: true

@@ -1,0 +1,51 @@
+---
+# vm-tls — installs setup_vm_tls, the initramfs init-bottom script
+# (PREREQ=setup_storage) that owns the full VM mTLS cert lifecycle: CA
+# generation, validator registration, proxy server cert, registry client cert,
+# and CA key deletion — all within the RTMR2-measured initramfs before
+# pivot_root.
+#
+# This role runs against hosts: vm (like signing-keys and rtmr3-measure) and
+# installs the script onto the live VM filesystem. The "update initramfs"
+# handler rebuilds the running image's initramfs; the LUKS role (later, on
+# hosts: host) also runs update-initramfs in a chroot of the final image and
+# picks the on-disk script up automatically. Ordering the role BEFORE the luks
+# role in the playbook keeps the script present when that chroot rebuild runs.
+
+- name: Install setup_vm_tls initramfs script
+  ansible.builtin.copy:
+    src: initramfs/setup_vm_tls
+    dest: /etc/initramfs-tools/scripts/init-bottom/setup_vm_tls
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+# containerd reads registry mTLS certs directly from /run/chutes/registry-tls
+# (configured in registries.yaml). cosign, however, resolves client certs via
+# the Docker certs.d convention, so symlink the initramfs-generated leaf cert
+# into /etc/docker/certs.d/registry.chutes.ai/ (cosign expects client.cert /
+# client.key filenames). The symlink targets are on tmpfs and only resolve at
+# runtime once setup_vm_tls has minted the leaf cert.
+
+- name: Create docker certs.d directory for registry.chutes.ai
+  ansible.builtin.file:
+    path: /etc/docker/certs.d/registry.chutes.ai
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create client.cert symlink for cosign mTLS
+  ansible.builtin.file:
+    src: /run/chutes/registry-tls/client.crt
+    dest: /etc/docker/certs.d/registry.chutes.ai/client.cert
+    state: link
+    force: true
+
+- name: Create client.key symlink for cosign mTLS
+  ansible.builtin.file:
+    src: /run/chutes/registry-tls/client.key
+    dest: /etc/docker/certs.d/registry.chutes.ai/client.key
+    state: link
+    force: true

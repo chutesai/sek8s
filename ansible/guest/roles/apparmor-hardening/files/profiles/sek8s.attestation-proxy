@@ -1,0 +1,76 @@
+# vim: ft=apparmor
+# sek8s.attestation-proxy — AppArmor profile for the attestation-proxy container.
+# Applied via Kubernetes annotation (not auto-attached).
+#
+# Posture: default-deny, explicit allowlist only.
+# /run/chutes/ is never granted — the proxy reads its TLS certs only via the
+# volume-mounted path /etc/ssl/host-certs/. No deny rules are needed because
+# what is not allowed is denied by omission.
+
+abi <abi/4.0>,
+
+profile sek8s.attestation-proxy flags=(enforce) {
+  include <abstractions/base>
+  include <abstractions/nameservice>
+  include <abstractions/python>
+
+  # Python interpreter and venv
+  /opt/sek8s/venv/bin/python3{,.*} mrix,
+  /opt/sek8s/venv/** r,
+  /opt/sek8s/src/** r,
+
+  # Proxy server TLS certs
+  /etc/ssl/host-certs/server.crt r,
+  /etc/ssl/host-certs/server.key r,
+
+  # System CA bundle for outbound TLS verification
+  /etc/ssl/certs/ r,
+  /etc/ssl/certs/** r,
+
+  # Service config (read-only)
+  /etc/attestation-service/ r,
+  /etc/attestation-service/** r,
+
+  # Attestation unix socket (host-side attestation service)
+  /var/run/attestation/ r,
+  /var/run/attestation/** rw,
+
+  # Bittensor data dir (emptyDir mount in k8s pod)
+  /home/chutes/.bittensor/ rw,
+  /home/chutes/.bittensor/** rwlk,
+
+  # Temp dir (emptyDir mount in k8s pod)
+  /tmp/ r,
+  /tmp/** rwlk,
+
+  # System libraries
+  /usr/lib/** rm,
+  /usr/local/lib/** rm,
+  /etc/ld.so.cache r,
+  /etc/ld.so.conf r,
+  /etc/ld.so.conf.d/ r,
+  /etc/ld.so.conf.d/** r,
+
+  # Minimal /proc access for the process itself
+  @{PROC}/@{pid}/fd/ r,
+  @{PROC}/@{pid}/maps r,
+  @{PROC}/@{pid}/status r,
+  @{PROC}/sys/kernel/ngroups_max r,
+  @{PROC}/sys/kernel/overflowgid r,
+  @{PROC}/sys/kernel/overflowuid r,
+  /dev/null rw,
+  /dev/urandom r,
+
+  # Logging
+  /dev/log w,
+  /run/systemd/journal/socket w,
+  /run/systemd/journal/dev-log w,
+
+  # Network for proxy operations (TLS + attestation socket)
+  network inet stream,
+  network inet dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  network unix stream,
+  network unix dgram,
+}

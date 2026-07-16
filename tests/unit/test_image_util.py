@@ -9,7 +9,7 @@ from sek8s.system_manager.images.util import (
     validate_image_ref,
 )
 
-REGISTRY = "localregistry.chutes.ai:30500"
+REGISTRY = "registry.chutes.ai"
 ALLOWED = [REGISTRY]
 
 
@@ -60,12 +60,12 @@ def test_resolve_empty_raises_400():
     assert exc_info.value.status_code == 400
 
 
-def test_resolve_no_localregistry_in_allowed_raises_500():
-    """If no localregistry hostname is in allowed_registries, short-form fails."""
+def test_resolve_no_registry_hostname_in_allowed_raises_500():
+    """If no registry.chutes.ai hostname is in allowed_registries, short-form fails."""
     with pytest.raises(HTTPException) as exc_info:
         resolve_to_full_ref("myrepo:v1", ["localhost:30500"])
     assert exc_info.value.status_code == 500
-    assert "localregistry.chutes.ai" in exc_info.value.detail
+    assert "registry.chutes.ai" in exc_info.value.detail
 
 
 def test_resolve_empty_allowed_list_raises_500():
@@ -97,8 +97,8 @@ def test_is_registry_allowed_localhost_not_in_restricted_list():
 def test_is_registry_allowed_partial_match_not_sufficient():
     """Partial substring is not a match."""
     assert (
-        is_registry_allowed("localregistry.chutes.ai", ALLOWED) is False
-    )  # missing port
+        is_registry_allowed("registry.chutes.ai.evil.com", ALLOWED) is False
+    )  # superstring, not an exact match
 
 
 # ── validate_image_ref ─────────────────────────────────────────────────────────

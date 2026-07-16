@@ -28,6 +28,7 @@
     - sek8s.system-manager
     - sek8s.setup-cache
     - sek8s.deny-sensitive-default
+    - sek8s.attestation-proxy
 
 # ── Systemd drop-ins: apply named profiles to services ───────────────────
 # system-manager and setup-cache need their own permissive profiles

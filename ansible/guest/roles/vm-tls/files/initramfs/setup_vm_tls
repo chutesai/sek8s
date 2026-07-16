@@ -1,0 +1,300 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-bottom/setup_vm_tls
+#
+# Generates the per-boot VM root CA, signs both leaf certs (attestation proxy
+# server cert + registry mTLS client cert), and deletes the CA private key —
+# all within the RTMR2-measured initramfs, before pivot_root.
+#
+# Domain: VM mTLS certificate lifecycle only.
+# Block devices, LUKS, and k3s encryption config are out of scope — see
+# setup_storage.
+#
+# Ordering: PREREQ="setup_storage" — runs in init-bottom AFTER setup_storage,
+# which itself runs after rtmr3-measure (setup_storage PREREQ="rtmr3-measure").
+# setup_storage's confirm_rotation() deletes the ephemeral luks mTLS client
+# cert (/tmp/client_cert.pem, /tmp/client_key.pem, /run/chutes/cert-hash), so
+# by the time this script runs that cert is gone. This script therefore uses
+# its OWN freshly-minted ca.crt/ca.key as the mTLS client credential for the
+# attestation-ca PUT — it must not depend on the luks cert.
+#
+# VM_NAME and HOTKEY are read from /run/chutes/{vm-name,hotkey}, written by
+# fetch_key_and_unlock (init-premount). TDX_BASE_URL / TDX_TIMEOUT come from
+# /etc/tdx-luks.conf (same source used by fetch_key_and_unlock and
+# setup_storage). openssl/jq/curl/base64/sha256sum/tdx-quote-generator are all
+# copied into the initramfs by the luks fetch_key hook.
+
+PREREQ="setup_storage"
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+[ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
+
+# ── Runtime values written to tmpfs by earlier initramfs stages ──────────────
+
+VM_NAME=$(cat /run/chutes/vm-name 2>/dev/null | tr -d '\n')
+HOTKEY=$(cat /run/chutes/hotkey 2>/dev/null | tr -d '\n')
+
+if [ -z "$VM_NAME" ]; then
+    log_failure_msg "setup_vm_tls: VM name not found in /run/chutes/vm-name"
+    sleep 10; poweroff -f
+fi
+if [ -z "$HOTKEY" ]; then
+    log_failure_msg "setup_vm_tls: hotkey not found in /run/chutes/hotkey"
+    sleep 10; poweroff -f
+fi
+if [ -z "$TDX_BASE_URL" ]; then
+    log_failure_msg "setup_vm_tls: TDX_BASE_URL not set in /etc/tdx-luks.conf"
+    sleep 10; poweroff -f
+fi
+
+# ── Cleanup on any exit ───────────────────────────────────────────────────────
+#
+# Ensures ca.key is never left on tmpfs if the script exits early for any
+# reason (failure, signal).  Also removes scratch CSR/config files.
+
+cleanup() {
+    rm -f /run/chutes/vm-root-ca/ca.key /run/chutes/vm-root-ca/ca.srl \
+          /tmp/proxy_server.cnf /tmp/proxy_server.csr \
+          /tmp/registry_client.csr /tmp/registry_client_ext.cnf \
+          /tmp/attestation_ca_quote.bin
+}
+trap cleanup EXIT INT TERM
+
+# ── Failure handler ───────────────────────────────────────────────────────────
+
+on_failure() {
+    log_failure_msg "VM TLS setup failed: $1"
+    echo "SETUP-VM-TLS-FAILED: $1" > /dev/kmsg 2>/dev/null || true
+    sleep 10
+    poweroff -f
+}
+
+# ── CA generation and validator registration ──────────────────────────────────
+
+setup_vm_ca() {
+    local run_dir="/run/chutes/vm-root-ca"
+
+    log_begin_msg "Generating per-boot VM root CA"
+    mkdir -m 700 -p "$run_dir"
+
+    # Fresh CA each boot — lives in TDX-encrypted DRAM only, never touches disk.
+    if ! openssl genrsa -out "${run_dir}/ca.key" 4096 2>/dev/null; then
+        log_failure_msg "Failed to generate VM root CA key"
+        return 1
+    fi
+    if ! openssl req -new -x509 \
+            -key "${run_dir}/ca.key" \
+            -subj "/O=chutes/OU=sek8s/CN=sek8s-vm-root-ca" \
+            -days 1 \
+            -out "${run_dir}/ca.crt" 2>/dev/null; then
+        log_failure_msg "Failed to generate VM root CA cert"
+        return 1
+    fi
+    chmod 600 "${run_dir}/ca.key"
+    chmod 644 "${run_dir}/ca.crt"
+    log_success_msg "VM root CA generated"
+
+    # Register with validator on every boot (idempotent upsert, TDX-attested).
+    log_begin_msg "Registering VM root CA with validator"
+
+    local ca_pub_hash
+    ca_pub_hash=$(openssl x509 -in "${run_dir}/ca.crt" -pubkey -noout \
+        | openssl pkey -pubin -outform DER \
+        | sha256sum | awk '{print $1}')
+
+    local quote_file="/tmp/attestation_ca_quote.bin"
+    if ! /usr/bin/tdx-quote-generator \
+            --report-data "$ca_pub_hash" --hex \
+            -o "$quote_file" 2>/dev/null; then
+        log_failure_msg "Failed to generate TDX quote for CA registration"
+        return 1
+    fi
+    local quote_b64
+    quote_b64=$(base64 -w 0 < "$quote_file")
+    rm -f "$quote_file"
+
+    local cert_pem_json
+    cert_pem_json=$(jq -Rs . < "${run_dir}/ca.crt")
+
+    # Uses ca.crt/ca.key as the mTLS client credential: the validator receives a
+    # connection where the TLS client cert IS the cert being registered, proving
+    # key possession in the same handshake. The ephemeral luks client cert has
+    # already been deleted by setup_storage/confirm_rotation, so it is NOT used
+    # here. The validator's own server cert chains to a public CA (system bundle).
+    local http_code
+    http_code=$(curl -s -w "%{http_code}" \
+        -X PUT \
+        -H "X-Chutes-Hotkey: $HOTKEY" \
+        -H "Content-Type: application/json" \
+        --max-time "${TDX_TIMEOUT:-30}" \
+        --cacert /etc/ssl/certs/ca-certificates.crt \
+        --cert  "${run_dir}/ca.crt" \
+        --key   "${run_dir}/ca.key" \
+        -d "{\"cert_pem\":${cert_pem_json},\"quote\":\"${quote_b64}\"}" \
+        -o /dev/null \
+        "${TDX_BASE_URL}/servers/${VM_NAME}/attestation-ca")
+
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        log_success_msg "VM root CA registered (HTTP $http_code)"
+        return 0
+    fi
+
+    log_failure_msg "VM root CA registration failed (HTTP $http_code)"
+    return 1
+}
+
+# ── Leaf cert: attestation proxy server ──────────────────────────────────────
+
+generate_proxy_server_cert() {
+    local ca_dir="/run/chutes/vm-root-ca"
+    local tls_dir="/run/chutes/proxy-tls"
+    local real_root="${rootmnt:-/root}"
+
+    log_begin_msg "Generating attestation proxy server certificate"
+
+    # Resolve the tdx-attest GID from the real root's /etc/group so we can set
+    # ownership correctly without hard-coding a numeric GID.
+    local tdx_attest_gid
+    tdx_attest_gid=$(grep "^tdx-attest:" "${real_root}/etc/group" 2>/dev/null \
+                     | cut -d: -f3)
+    if [ -z "$tdx_attest_gid" ]; then
+        log_failure_msg "Could not resolve tdx-attest GID from ${real_root}/etc/group"
+        return 1
+    fi
+
+    mkdir -m 750 -p "$tls_dir"
+    chown "0:${tdx_attest_gid}" "$tls_dir"
+
+    if ! openssl genrsa -out "${tls_dir}/server.key" 2048 2>/dev/null; then
+        log_failure_msg "Failed to generate proxy server key"
+        return 1
+    fi
+
+    # Static SANs are sufficient: validators authenticate the proxy via the
+    # TDX-attested VM root CA, not the SAN.  The CA is the trust anchor.
+    local openssl_cnf="/tmp/proxy_server.cnf"
+    cat > "$openssl_cnf" << 'EOF'
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = attestation-service
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = attestation-service
+DNS.2 = localhost
+IP.1 = 127.0.0.1
+IP.2 = ::1
+EOF
+
+    local csr="/tmp/proxy_server.csr"
+    if ! openssl req -new \
+            -key "${tls_dir}/server.key" \
+            -out "$csr" \
+            -config "$openssl_cnf" 2>/dev/null; then
+        log_failure_msg "Failed to generate proxy server CSR"
+        return 1
+    fi
+
+    if ! openssl x509 -req -days 1 \
+            -in "$csr" \
+            -CA "${ca_dir}/ca.crt" \
+            -CAkey "${ca_dir}/ca.key" \
+            -set_serial 1 \
+            -out "${tls_dir}/server.crt" \
+            -extensions v3_req \
+            -extfile "$openssl_cnf" 2>/dev/null; then
+        log_failure_msg "Failed to sign proxy server certificate"
+        return 1
+    fi
+
+    chown "0:${tdx_attest_gid}" "${tls_dir}/server.key" "${tls_dir}/server.crt"
+    chmod 640 "${tls_dir}/server.key" "${tls_dir}/server.crt"
+
+    log_success_msg "Attestation proxy server certificate generated"
+    return 0
+}
+
+# ── Leaf cert: registry mTLS client ──────────────────────────────────────────
+
+generate_registry_client_cert() {
+    local ca_dir="/run/chutes/vm-root-ca"
+    local tls_dir="/run/chutes/registry-tls"
+
+    log_begin_msg "Generating registry mTLS client certificate"
+
+    mkdir -m 700 -p "$tls_dir"
+
+    if ! openssl genrsa -out "${tls_dir}/client.key" 2048 2>/dev/null; then
+        log_failure_msg "Failed to generate registry client key"
+        return 1
+    fi
+
+    local csr="/tmp/registry_client.csr"
+    if ! openssl req -new \
+            -key "${tls_dir}/client.key" \
+            -subj "/O=chutes/OU=sek8s/CN=sek8s-vm-registry-client" \
+            -out "$csr" 2>/dev/null; then
+        log_failure_msg "Failed to generate registry client CSR"
+        return 1
+    fi
+
+    # Use a separate ext file instead of process substitution (POSIX sh).
+    local ext_cnf="/tmp/registry_client_ext.cnf"
+    printf 'extendedKeyUsage=clientAuth\n' > "$ext_cnf"
+
+    if ! openssl x509 -req -days 1 \
+            -in "$csr" \
+            -CA "${ca_dir}/ca.crt" \
+            -CAkey "${ca_dir}/ca.key" \
+            -set_serial 2 \
+            -extfile "$ext_cnf" \
+            -out "${tls_dir}/client.crt" 2>/dev/null; then
+        log_failure_msg "Failed to sign registry client certificate"
+        return 1
+    fi
+
+    chmod 600 "${tls_dir}/client.key"
+    chmod 644 "${tls_dir}/client.crt"
+
+    log_success_msg "Registry mTLS client certificate generated"
+    return 0
+}
+
+# ── CA key deletion ───────────────────────────────────────────────────────────
+
+delete_vm_ca_key() {
+    local ca_dir="/run/chutes/vm-root-ca"
+
+    log_begin_msg "Deleting VM root CA private key"
+    rm -f "${ca_dir}/ca.key" "${ca_dir}/ca.srl"
+    log_success_msg "VM root CA private key deleted — key never existed in userspace"
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+log_begin_msg "Starting VM TLS setup"
+
+if ! setup_vm_ca; then
+    on_failure "VM root CA setup failed"
+fi
+
+if ! generate_proxy_server_cert; then
+    on_failure "Proxy server certificate generation failed"
+fi
+
+if ! generate_registry_client_cert; then
+    on_failure "Registry mTLS client certificate generation failed"
+fi
+
+delete_vm_ca_key
+
+log_success_msg "VM TLS setup completed"

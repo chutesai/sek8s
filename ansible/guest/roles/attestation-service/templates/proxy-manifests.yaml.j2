@@ -100,6 +100,8 @@ spec:
     metadata:
       labels:
         app: attestation-proxy
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/attestation-proxy: localhost/sek8s.attestation-proxy
     spec:
       serviceAccountName: attestation-proxy
       tolerations:
@@ -199,6 +201,11 @@ spec:
               key: allowed-validators
         - name: OPENBLAS_NUM_THREADS
           value: '1'
+        # The external port (8443) presents the initramfs-minted server cert
+        # (mounted from /run/chutes/proxy-tls via host-certs), which the
+        # validator pins to this VM's registered attestation CA. Validators
+        # authenticate with signed request headers, not a client cert, so
+        # client-cert mTLS (MTLS_REQUIRED) is intentionally NOT enabled here.
         securityContext:
           runAsNonRoot: true
           runAsUser: 1000
@@ -260,7 +267,11 @@ spec:
           type: Directory
       - name: host-certs
         hostPath:
-          path: /etc/attestation-service/certs
+          # Proxy server cert (server.{key,crt}) is minted in the RTMR2-measured
+          # initramfs by setup_vm_tls (vm-tls role) and written to this tmpfs
+          # path, signed by the per-boot VM root CA. Replaces the old userspace
+          # setup-tls-certs.sh generator that wrote /etc/attestation-service/certs.
+          path: /run/chutes/proxy-tls
           type: Directory
       - emptyDir:
           sizeLimit: 50Mi
