@@ -15,7 +15,7 @@
 # cert (/tmp/client_cert.pem, /tmp/client_key.pem, /run/chutes/cert-hash), so
 # by the time this script runs that cert is gone. This script therefore uses
 # its OWN freshly-minted ca.crt/ca.key as the mTLS client credential for the
-# attestation-ca PUT — it must not depend on the luks cert.
+# vm-root-ca PUT — it must not depend on the luks cert.
 #
 # VM_NAME and HOTKEY are read from /run/chutes/{vm-name,hotkey}, written by
 # fetch_key_and_unlock (init-premount). TDX_BASE_URL / TDX_TIMEOUT come from
@@ -57,7 +57,7 @@ cleanup() {
     rm -f /run/chutes/vm-root-ca/ca.key /run/chutes/vm-root-ca/ca.srl \
           /tmp/proxy_server.cnf /tmp/proxy_server.csr \
           /tmp/registry_client.csr /tmp/registry_client_ext.cnf \
-          /tmp/attestation_ca_quote.bin
+          /tmp/vm_root_ca_quote.bin
 }
 trap cleanup EXIT INT TERM
 
@@ -103,7 +103,7 @@ setup_vm_ca() {
         | openssl pkey -pubin -outform DER \
         | sha256sum | awk '{print $1}')
 
-    local quote_file="/tmp/attestation_ca_quote.bin"
+    local quote_file="/tmp/vm_root_ca_quote.bin"
     if ! /usr/bin/tdx-quote-generator \
             --report-data "$ca_pub_hash" --hex \
             -o "$quote_file" 2>/dev/null; then
@@ -133,7 +133,7 @@ setup_vm_ca() {
         --key   "${run_dir}/ca.key" \
         -d "{\"cert_pem\":${cert_pem_json},\"quote\":\"${quote_b64}\"}" \
         -o /dev/null \
-        "${TDX_BASE_URL}/servers/${VM_NAME}/attestation-ca")
+        "${TDX_BASE_URL}/servers/${VM_NAME}/vm-root-ca")
 
     if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
         log_success_msg "VM root CA registered (HTTP $http_code)"

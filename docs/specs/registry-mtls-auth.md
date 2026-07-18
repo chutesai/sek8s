@@ -45,7 +45,7 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
   - `ansible/guest/roles/attestation-service/files/service-init/setup-tls-certs.sh`
     — the userspace proxy-cert generator, superseded by initramfs generation.
 - **External dependencies** (out of scope for this repo, required before rollout):
-  - `chutes-api`: new `PUT /servers/{vm_name}/attestation-ca` endpoint
+  - `chutes-api`: new `PUT /servers/{vm_name}/vm-root-ca` endpoint
   - `chutes-api`: dual-auth registry backend (mTLS path + legacy miner-header path)
   - `chutes-miner` chart: remove registry DaemonSet/Service/ConfigMap after
     migration completes (NOT part of this change)
@@ -76,7 +76,7 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
   the final `luks/confirm` call completes. `setup_vm_tls` runs after that
   (`PREREQ="setup_storage"`), so it CANNOT reuse the luks cert. It therefore
   mints its own `ca.crt`/`ca.key` and uses them as the mTLS client credential for
-  the `PUT /servers/{name}/attestation-ca` call — the validator receives a
+  the `PUT /servers/{name}/vm-root-ca` call — the validator receives a
   connection where the TLS client cert IS the cert being registered, proving key
   possession and identity in a single handshake.
 
@@ -127,12 +127,12 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
 
 ## API Changes
 
-- **New endpoint (external — chutes-api)**: `PUT /servers/{vm_name}/attestation-ca`
+- **New endpoint (external — chutes-api)**: `PUT /servers/{vm_name}/vm-root-ca`
   - Auth: `X-Chutes-Hotkey: <miner_hotkey>` header + mTLS client cert (the CA cert itself)
   - Body: `{ "cert_pem": "<PEM string>", "quote": "<base64 TDX quote>" }`
   - Quote REPORTDATA: `SHA256(ca_pubkey_der)` — binds the CA cert to the TDX measurement
   - Behavior: verify TDX quote (same RTMR3 checks as `POST /servers`), upsert
-    `attestation_ca_pubkey` on the server record for `(miner_hotkey, vm_name)`
+    `vm_root_ca_cert` on the server record for `(miner_hotkey, vm_name)`
   - Idempotent: same CA cert on repeat calls is a no-op; a changed CA cert (new
     storage volume) updates the record
 
@@ -140,10 +140,10 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
   - nginx: `ssl_verify_client optional_no_ca` on `registry.chutes.ai`; pass cert
     via `proxy_set_header X-Client-Cert $ssl_client_cert`; strip incoming
     `X-Client-Cert` from external requests
-  - Backend logic: if `attestation_ca_pubkey` stored for the requesting VM →
+  - Backend logic: if `vm_root_ca_cert` stored for the requesting VM →
     verify client cert signed by that CA; else → verify legacy miner auth headers
 
-- **Schema changes**: None in this repo. chutes-api adds `attestation_ca_pubkey`
+- **Schema changes**: None in this repo. chutes-api adds `vm_root_ca_cert`
   to server records.
 
 ---
@@ -153,7 +153,7 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
 Success =
 
 1. A VM boots, generates its VM root CA, and registers `ca.crt` with the
-   validator via `PUT /servers/{name}/attestation-ca` before k3s starts.
+   validator via `PUT /servers/{name}/vm-root-ca` before k3s starts.
 2. On every boot, a leaf `clientAuth` cert is generated and placed at
    `/run/chutes/registry-tls/client.{crt,key}` (tmpfs).
 3. containerd pulls images from `registry.chutes.ai` using the leaf cert for
@@ -210,7 +210,7 @@ Success =
 ## Rollout Notes
 
 - **External prerequisites before deploying this VM image**:
-  1. chutes-api: `PUT /servers/{vm_name}/attestation-ca` endpoint live
+  1. chutes-api: `PUT /servers/{vm_name}/vm-root-ca` endpoint live
   2. chutes-api: registry backend dual-auth logic deployed
   3. `registry.chutes.ai` nginx: `ssl_verify_client optional_no_ca` +
      `X-Client-Cert` header pass-through

@@ -27,11 +27,13 @@ from sek8s.validators.registry import RegistryValidator
 @pytest.fixture
 def config():
     """Create test configuration."""
+    # Aliased pydantic-settings fields must be constructed via their env alias;
+    # field-name kwargs are silently ignored (see no-populate-by-name rationale).
     return AdmissionConfig(
-        opa_url="http://localhost:8181",
-        opa_timeout=5.0,
-        allowed_registries=["docker.io", "gcr.io", "quay.io", "registry.chutes.ai"],
-        enforcement_mode="enforce",
+        OPA_URL="http://localhost:8181",
+        OPA_TIMEOUT=5.0,
+        ALLOWED_REGISTRIES=["docker.io", "gcr.io", "quay.io", "registry.chutes.ai"],
+        ENFORCEMENT_MODE="enforce",
     )
 
 

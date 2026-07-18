@@ -3,7 +3,7 @@
 - `vm-tls` role with `setup_vm_tls`, an initramfs `init-bottom` script
   (`PREREQ=setup_storage`) that owns the full VM mTLS cert lifecycle — per-boot
   4096-bit VM root CA generation, validator registration
-  (`PUT /servers/{vm_name}/attestation-ca`, TDX-attested, mTLS using the CA cert
+  (`PUT /servers/{vm_name}/vm-root-ca`, TDX-attested, mTLS using the CA cert
   itself as the client credential), attestation-proxy server cert, registry mTLS
   client cert, and `ca.key` deletion — all within the RTMR2-measured initramfs
   before `pivot_root`. `ca.key` never exists in userspace.
