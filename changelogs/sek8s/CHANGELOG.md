@@ -10,7 +10,14 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-05-29
+## [0.4.0] - 2026-07-18
+
+### Added
+- `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
+  Both derive their uvicorn arguments from a single `_uvicorn_kwargs()` source of
+  truth, so every server honours its full TLS/mTLS/bind config regardless of how
+  it is hosted (single-server process via `run()`, or several servers sharing one
+  event loop via `serve()`).
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -23,6 +30,14 @@ Version source of truth: `src/sek8s/VERSION`
 - `resolve_to_full_ref` registry-matching predicate updated from `.localregistry.chutes.ai` (dot-prefix, validator-scoped) to `localregistry.chutes.ai` (bare hostname) to reflect the static registry change.
 - `AdmissionConfig.chutes_public_key_path` default updated from `/etc/admission-controller/cosign/chutes.pub` to `/run/chutes/signing-keys/cosign/chutes.pub`.
 - `AdmissionConfig.dockerhub_public_key_path` default updated from `/etc/admission-controller/cosign/dockerhub.pub` to `/run/chutes/signing-keys/cosign/dockerhub.pub`.
+- Registry defaults moved from `localregistry.chutes.ai:30500` to
+  `registry.chutes.ai`: `ImageConfig.image_pull_allowed_registries`,
+  `AdmissionConfig.allowed_registries`, and the `chutes_public_key_path`
+  description in `config.py`.
+- `resolve_to_full_ref` (`system_manager/images/util.py`) resolves short-form
+  image refs against `registry.chutes.ai` and drops the now-unused
+  `localhost` / `127.0.0.1` special-casing for full-ref detection.
+
 ## [0.3.1] - 2026-06-20
 
 ### Added

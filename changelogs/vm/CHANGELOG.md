@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-07-15
+## [1.4.0] - 2026-07-18
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -33,6 +33,21 @@ Version source of truth: `ansible/guest/VERSION`
   - `/root/.bashrc`, `/root/.bash_profile`, `/root/.profile`
 - `tdx-measure-gpu.conf` aligned to the same measurement tiers as `tdx-measure-miner.conf`: systemd unit dirs, ld.so config, modprobe, sysctl, profile, environment, fstab, crontabs, init scripts, root shell startup files, and the `/usr/local/bin`, `/usr/local/sbin`, `/usr/bin`, `/usr/sbin`, `/usr/local/lib` binary tiers.
 - `ansible/guest/roles/signing-keys/` — new role for root-of-trust PGP key installation and initramfs key-fetch machinery.
+- `vm-tls` role with `setup_vm_tls`, an initramfs `init-bottom` script
+  (`PREREQ=setup_storage`) that owns the full VM mTLS cert lifecycle — per-boot
+  4096-bit VM root CA generation, validator registration
+  (`PUT /servers/{vm_name}/vm-root-ca`, TDX-attested, mTLS using the CA cert
+  itself as the client credential), attestation-proxy server cert, registry mTLS
+  client cert, and `ca.key` deletion — all within the RTMR2-measured initramfs
+  before `pivot_root`. `ca.key` never exists in userspace.
+- Attestation proxy server cert (`/run/chutes/proxy-tls/server.{key,crt}`) and
+  registry mTLS client cert (`/run/chutes/registry-tls/client.{key,crt}`)
+  generated on tmpfs each boot; containerd reads the client cert for direct mTLS
+  pulls from `registry.chutes.ai`, and cosign reads it via
+  `/etc/docker/certs.d/registry.chutes.ai/` symlinks.
+- `sek8s.attestation-proxy` AppArmor profile confining the proxy container to
+  its required paths; added to the apparmor-hardening install/verify wiring and
+  to the RTMR3 measurement chain (`tdx-measure-miner.conf`).
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -83,6 +98,25 @@ Version source of truth: `ansible/guest/VERSION`
   unchanged; RTMR0 changes because QEMU now pins SMBIOS type 1/2/3 identity to
   static values, removing per-server motherboard drift from RTMR0 within a
   profile. Topology-driven variance (type 4/17) is still absorbed per-profile.
+- Private registry pull auth moves from miner-hotkey-scoped (nginx proxy
+  DaemonSet on NodePort 30500 at `localregistry.chutes.ai:30500`) to per-VM mTLS
+  against `registry.chutes.ai`. Only an attested VM presenting a CA-signed client
+  cert can pull. Backward compatibility is DUAL-AUTH and lives server-side (the
+  validator/registry): old VMs keep the legacy miner-proxy path, new VMs present
+  a client cert. The guest image carries no dual-path code.
+- `registries.yaml.j2`: replaced the `localregistry.chutes.ai:30500` local-proxy
+  mirror with a `configs: "registry.chutes.ai"` mTLS block pointing at the
+  initramfs-written tmpfs client cert/key (no insecure-registry, no NodePort).
+- `proxy-manifests.yaml.j2`: `host-certs` hostPath moved from
+  `/etc/attestation-service/certs` to `/run/chutes/proxy-tls`; added the
+  attestation-proxy AppArmor annotation.
+- `cosign-registries.json.j2`, `opa-config-data.json.j2`, admission
+  `allowed_registries`, and system-manager `IMAGE_PULL_ALLOWED_REGISTRIES`
+  updated from `localregistry.chutes.ai:30500` to `registry.chutes.ai`. Removed
+  the `allow_http` / `allow_insecure` cosign flags now that pulls use real TLS.
+- `configure-cosign.yml`: removed the `127.0.0.1 localregistry.chutes.ai`
+  `/etc/hosts` alias and the `insecure-registries` Docker daemon config that
+  supported the old local proxy.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
@@ -90,6 +124,17 @@ Version source of truth: `ansible/guest/VERSION`
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
 - `cosign_chutes_public_key_path`, `cosign_dockerhub_public_key_path`, and `helm_chart_public_key_path` inventory variables removed. Build machines now only require the root PGP public key (`root_signing_key_path`).
+- `setup-tls-certs.sh` userspace proxy-cert generator and its wiring in
+  `attestation-service-init.service` / `install-attestation-init-service.yml`.
+  The proxy server cert is now minted in the initramfs by `setup_vm_tls`.
+
+### Notes
+- This change alters the RTMR3 measurement baseline (new AppArmor profile, edited
+  service configs) and adds an RTMR2-measured initramfs script; measurement
+  re-baselining is handled at release time.
+- The chutes-miner chart registry DaemonSet/Service is intentionally NOT removed
+  in this change — that retirement is a later, separate step gated on full fleet
+  migration.
 
 ## [1.3.1] - 2026-06-20
 
