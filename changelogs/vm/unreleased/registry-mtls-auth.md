@@ -15,22 +15,8 @@
 - `sek8s.attestation-proxy` AppArmor profile confining the proxy container to
   its required paths; added to the apparmor-hardening install/verify wiring and
   to the RTMR3 measurement chain (`tdx-measure-miner.conf`).
-- `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
-  Both derive their uvicorn arguments from a single `_uvicorn_kwargs()` source of
-  truth, so every server honours its full TLS/mTLS/bind config regardless of how
-  it is hosted.
 
 ### Changed
-
-- `sek8s-common` `WebServer`: the attestation proxy now runs its two ports via
-  the shared `WebServer.serve()` instead of a bespoke `run_server_async()` that
-  hand-rolled a `uvicorn.Config` and silently dropped `mtls_required` /
-  `client_ca_path` / `require_tls`. No more dead/ignored server config.
-- The attestation proxy external port (8443) presents the initramfs-minted,
-  CA-signed server cert; the validator pins it to the VM's registered CA and
-  authenticates with signed request headers. Client-cert mTLS (`MTLS_REQUIRED`)
-  is intentionally NOT enabled on the proxy — it is not how validators
-  authenticate — so the config no longer sets it.
 
 - Private registry pull auth moves from miner-hotkey-scoped (nginx proxy
   DaemonSet on NodePort 30500 at `localregistry.chutes.ai:30500`) to per-VM mTLS
@@ -45,10 +31,9 @@
   `/etc/attestation-service/certs` to `/run/chutes/proxy-tls`; added the
   attestation-proxy AppArmor annotation.
 - `cosign-registries.json.j2`, `opa-config-data.json.j2`, admission
-  `allowed_registries`, system-manager `IMAGE_PULL_ALLOWED_REGISTRIES`, and
-  `resolve_to_full_ref` / `ImageConfig` default updated from
-  `localregistry.chutes.ai:30500` to `registry.chutes.ai`. Removed the
-  `allow_http` / `allow_insecure` cosign flags now that pulls use real TLS.
+  `allowed_registries`, and system-manager `IMAGE_PULL_ALLOWED_REGISTRIES`
+  updated from `localregistry.chutes.ai:30500` to `registry.chutes.ai`. Removed
+  the `allow_http` / `allow_insecure` cosign flags now that pulls use real TLS.
 - `configure-cosign.yml`: removed the `127.0.0.1 localregistry.chutes.ai`
   `/etc/hosts` alias and the `insecure-registries` Docker daemon config that
   supported the old local proxy.
@@ -61,9 +46,9 @@
 
 ### Notes
 
-- The chutes-miner chart registry DaemonSet/Service is intentionally NOT removed
-  in this change — that retirement is a later, separate step gated on full fleet
-  migration.
 - This change alters the RTMR3 measurement baseline (new AppArmor profile, edited
   service configs) and adds an RTMR2-measured initramfs script; measurement
   re-baselining is handled at release time.
+- The chutes-miner chart registry DaemonSet/Service is intentionally NOT removed
+  in this change — that retirement is a later, separate step gated on full fleet
+  migration.
