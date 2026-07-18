@@ -104,7 +104,7 @@ class ImageConfig(AuthConfig):
     """Configuration for the images router (k3s/containerd image management)."""
 
     image_pull_allowed_registries: List[str] = Field(
-        default_factory=lambda: ["localregistry.chutes.ai:30500"],
+        default_factory=lambda: ["registry.chutes.ai"],
         alias="IMAGE_PULL_ALLOWED_REGISTRIES",
         description="JSON array or comma-separated list of allowed registries for image pull",
     )
@@ -168,7 +168,7 @@ class AdmissionConfig(ServerConfig):
 
     # Registry allowlist - expects JSON array from environment
     allowed_registries: List[str] = Field(
-        default=["docker.io", "gcr.io", "quay.io", "localhost:30500"],
+        default=["docker.io", "gcr.io", "quay.io", "registry.chutes.ai"],
         alias="ALLOWED_REGISTRIES",
         description="JSON array of allowed registries",
     )
@@ -210,7 +210,7 @@ class AdmissionConfig(ServerConfig):
     chutes_public_key_path: Path = Field(
         default=Path("/run/chutes/signing-keys/cosign/chutes.pub"),
         alias="CHUTES_PUBLIC_KEY_PATH",
-        description="Path to cosign public key for localregistry image signing enforcement",
+        description="Path to cosign public key for registry.chutes.ai image signing enforcement",
     )
     dockerhub_public_key_path: Path = Field(
         default=Path("/run/chutes/signing-keys/cosign/dockerhub.pub"),

@@ -17,12 +17,12 @@ def resolve_to_full_ref(
 ) -> str:
     """Resolve short form (repo:tag or org/repo:tag) to full registry ref.
 
-    Since pulls are restricted to localregistry.chutes.ai, the registry can be inferred.
+    Since pulls are restricted to registry.chutes.ai, the registry can be inferred.
     - repo:tag       -> {registry}/{default_org}/repo:tag
     - org/repo:tag   -> {registry}/org/repo:tag
     - Full ref       -> returned as-is (validated against allowed list by caller)
 
-    Chute workloads always reference images via localregistry.chutes.ai (the hostname
+    Chute workloads always reference images via registry.chutes.ai (the hostname
     baked into manifests at build time). Short-form refs must expand to that same
     hostname so the ref matches what k8s pods use.
     """
@@ -30,25 +30,24 @@ def resolve_to_full_ref(
     if not image:
         raise HTTPException(status_code=400, detail="image is required")
 
-    # Full ref: has registry (host with . or : or localhost) before first /
+    # Full ref: has a registry host (contains a . or :) before the first /
     if "/" in image:
         first = image.split("/")[0]
-        if "." in first or ":" in first or first == "localhost":
+        if "." in first or ":" in first:
             return image  # Already full ref
 
     # Short form: org/repo:tag or repo:tag
-    # Resolve using the localregistry hostname — chute workloads always reference
-    # images with that hostname, so short-form refs must expand to it.
-    # localhost / 127.0.0.1 entries are never used for short-form resolution.
+    # Resolve using the registry.chutes.ai hostname — chute workloads always
+    # reference images with that hostname, so short-form refs must expand to it.
     registry = None
     for r in allowed_registries:
-        if "localregistry.chutes.ai" in r.lower():
+        if "registry.chutes.ai" in r.lower():
             registry = r
             break
     if registry is None:
         raise HTTPException(
             status_code=500,
-            detail="allowed_registries must include the registry hostname (localregistry.chutes.ai); "
+            detail="allowed_registries must include the registry hostname (registry.chutes.ai); "
             "chute workloads resolve to that URL at build time",
         )
     if "/" in image:

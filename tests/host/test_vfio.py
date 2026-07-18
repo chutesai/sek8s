@@ -117,7 +117,9 @@ def test_bind_prints_success_when_all_bound(mock_bound, mock_bind, mock_load, ca
 @patch("chutes.guest.vfio.bind_device_to_vfio")
 @patch("chutes.guest.vfio.time.sleep")
 @patch("chutes.guest.vfio._is_vfio_bound")
-def test_bind_succeeds_after_retry(mock_bound, mock_sleep, mock_bind, mock_load, capsys):
+def test_bind_succeeds_after_retry(
+    mock_bound, mock_sleep, mock_bind, mock_load, capsys
+):
     # Not bound on the first check (still settling after reset), bound on retry.
     mock_bound.side_effect = [False, True, True]
     bind_explicit_devices_to_vfio(["0000:dc:00.0"])
@@ -135,7 +137,9 @@ def test_bind_raises_when_device_never_binds(
 ):
     # A device that never lands on vfio-pci must abort loudly (with its driver),
     # not sail into a cryptic QEMU "couldn't open .../vfio-dev" failure.
-    with pytest.raises(RuntimeError, match=r"Failed to bind.*0000:dc:00.0.*driver=nvidia"):
+    with pytest.raises(
+        RuntimeError, match=r"Failed to bind.*0000:dc:00.0.*driver=nvidia"
+    ):
         bind_explicit_devices_to_vfio(["0000:dc:00.0"])
 
 

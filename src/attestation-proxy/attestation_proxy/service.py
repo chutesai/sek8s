@@ -435,30 +435,6 @@ class InternalProxyServer(BaseProxyServer):
         logger.info(f"Internal server routes configured (port {INTERNAL_PORT})")
 
 
-async def run_server_async(
-    server_instance: BaseProxyServer, port: int, config: AttestationProxyConfig
-):
-    """Run a server using uvicorn.Server for async support"""
-    import uvicorn
-
-    server_name = server_instance.server_name
-    logger.info(f"[{server_name}] Preparing to start on {config.bind_address}:{port}")
-
-    uvicorn_config = uvicorn.Config(
-        server_instance.app,
-        host=config.bind_address,
-        port=port,
-        ssl_keyfile=config.tls_key_path,
-        ssl_certfile=config.tls_cert_path,
-        log_level="debug" if config.debug else "info",
-    )
-    server = uvicorn.Server(uvicorn_config)
-
-    logger.info(f"[{server_name}] Starting uvicorn server on port {port}")
-    await server.serve()
-    logger.info(f"[{server_name}] Server stopped on port {port}")
-
-
 def run():
     """Main entry point."""
     try:
@@ -489,9 +465,12 @@ def run():
         async def run_both():
             try:
                 logger.info("Launching both servers concurrently...")
+                # Each server runs via the shared WebServer.serve(), so both
+                # ports honour their own full config (TLS/mTLS/bind) — no
+                # per-call-site uvicorn wiring that could drop a setting.
                 await asyncio.gather(
-                    run_server_async(external_server, EXTERNAL_PORT, external_config),
-                    run_server_async(internal_server, INTERNAL_PORT, internal_config),
+                    external_server.serve(),
+                    internal_server.serve(),
                 )
             except Exception as e:
                 logger.exception(f"Error running servers: {e}")

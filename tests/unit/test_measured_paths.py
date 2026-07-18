@@ -36,4 +36,6 @@ def test_privileged_boot_paths_are_measured():
         "/etc/opa/policies",
     }
     missing = required - measured
-    assert not missing, f"security-critical paths missing from RTMR3 measured list: {sorted(missing)}"
+    assert (
+        not missing
+    ), f"security-critical paths missing from RTMR3 measured list: {sorted(missing)}"
