@@ -86,19 +86,18 @@ def test_use_numa_topology_falls_back_for_non_dual_node():
 def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
-    with patch("chutes.guest.qemu.host_numa_nodes", return_value=[0, 1]):
-        cmd = build_base_cmd(
-            mem="1024G",
-            smp_topology="188,sockets=2,cores=94,threads=1",
-            process_name="chutes-td",
-            cpu_args="host,-avx10",
-            firmware="/tmp/TDVF.fd",
-            img_path=str(img),
-            foreground=True,
-            pidfile="/tmp/pid",
-            logfile="/tmp/log",
-            enable_numa_topology=True,
-        )
+    cmd = build_base_cmd(
+        mem="1024G",
+        smp_topology="188,sockets=2,cores=94,threads=1",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware="/tmp/TDVF.fd",
+        img_path=str(img),
+        foreground=True,
+        pidfile="/tmp/pid",
+        logfile="/tmp/log",
+        host_nodes=[0, 1],
+    )
     flat = " ".join(cmd)
     assert "memory-backend-ram,id=mem-node0" in flat
     assert "memory-backend-ram,id=mem-node1" in flat
@@ -118,19 +117,18 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
     sync with guest-tools/scripts/extract-acpi.sh."""
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
-    with patch("chutes.guest.qemu.host_numa_nodes", return_value=[0]):
-        cmd = build_base_cmd(
-            mem="512G",
-            smp_topology="94,sockets=1,cores=94,threads=1",
-            process_name="chutes-td",
-            cpu_args="host,-avx10",
-            firmware="/tmp/TDVF.fd",
-            img_path=str(img),
-            foreground=True,
-            pidfile="/tmp/pid",
-            logfile="/tmp/log",
-            enable_numa_topology=False,
-        )
+    cmd = build_base_cmd(
+        mem="512G",
+        smp_topology="94,sockets=1,cores=94,threads=1",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware="/tmp/TDVF.fd",
+        img_path=str(img),
+        foreground=True,
+        pidfile="/tmp/pid",
+        logfile="/tmp/log",
+        host_nodes=[],
+    )
     flat = " ".join(cmd)
     assert (
         "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,"

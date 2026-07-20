@@ -155,9 +155,9 @@ class PciTopologyState:
         self,
         cmd: list[str],
         host_bdf: str,
+        *,
         rp_id: str,
         chassis: int,
-        *,
         bar_size_mb: int | None = None,
         bar_index: int | None = None,
     ):
@@ -165,7 +165,7 @@ class PciTopologyState:
 
         Args:
             cmd: QEMU command list to extend.
-            host_bdf: PCI BDF of the host device.
+            host_bdf: host PCI BDF of the device passed through on this root port.
             rp_id: Root port identifier (e.g. 'rp1', 'rp_nvsw1').
             chassis: Chassis number for the root port.
             bar_size_mb: Optional MMIO BAR size hint (fw_cfg opt/ovmf/X-PciMmio64Mb).
@@ -232,20 +232,26 @@ class NumaPciTopologyState:
         self,
         cmd: list[str],
         host_bdf: str,
+        *,
         rp_id: str,
         chassis: int,
-        *,
+        numa_node: int,
         bar_size_mb: int | None = None,
         bar_index: int | None = None,
     ):
-        """Add a vfio-pci device under the PXB for its host NUMA node."""
-        numa_node = read_pci_numa_node(host_bdf)
+        """Add a vfio-pci device on a PCIe root port under the PXB for numa_node.
+
+        numa_node is the device's host NUMA node, resolved by the caller (from
+        sysfs for the launch path, from a topology fingerprint for offline
+        measurement); < 0 (NUMA_NO_NODE — no affinity) falls back to flat
+        placement.
+        """
         if numa_node < 0:
             self._flat.add_device(
                 cmd,
                 host_bdf,
-                rp_id,
-                chassis,
+                rp_id=rp_id,
+                chassis=chassis,
                 bar_size_mb=bar_size_mb,
                 bar_index=bar_index,
             )
@@ -281,13 +287,19 @@ def build_base_cmd(
     foreground: bool,
     pidfile: str,
     logfile: str,
-    enable_numa_topology: bool = False,
+    host_nodes: list[int],
     pci_pinning: PcieRootPinning | None = None,
 ) -> list[str]:
-    """Build the base QEMU command (TDX, firmware, CPU, memory, boot disk)."""
-    numa_enabled = use_numa_topology(enable_numa_topology)
+    """Build the base QEMU command (TDX, firmware, CPU, memory, boot disk).
+
+    Pure: reads no live hardware. ``host_nodes`` is the explicit guest-NUMA node
+    list, fully resolved by the caller — the launcher from sysfs
+    (``host_numa_nodes()`` gated by ``use_numa_topology``), the measurement
+    adapter from a topology fingerprint. A guest-NUMA topology is built when it
+    names >= 2 nodes; ``[]`` builds a flat guest.
+    """
+    numa_enabled = len(host_nodes) >= 2
     pinning = pci_pinning or PcieRootPinning(numa_enabled)
-    host_nodes = host_numa_nodes() if numa_enabled else []
 
     cmd = [
         'qemu-system-x86_64',

@@ -15,7 +15,12 @@ from chutes.guest.detection import (
 )
 from chutes.guest.gpu.profiles import GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
-from chutes.guest.qemu import NumaPciTopologyState, PciTopologyState, use_numa_topology
+from chutes.guest.qemu import (
+    NumaPciTopologyState,
+    PciTopologyState,
+    read_pci_numa_node,
+    use_numa_topology,
+)
 from chutes.guest.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
@@ -253,11 +258,20 @@ def _build_pci_topology(
     profile: GpuProfile,
 ):
     """Add GPU, NVSwitch, and IB devices to the QEMU PCI topology."""
-    if use_numa_topology(profile.enable_numa_topology):
+    numa = use_numa_topology(profile.enable_numa_topology)
+    if numa:
         print('  PCI topology: NUMA-local PXB-PCIe bridges')
         topo = NumaPciTopologyState()
     else:
         topo = PciTopologyState()
+
+    def _add(host_bdf, rp_id, chassis, **bar):
+        # On the NUMA path, resolve the device's node from sysfs here and pass it
+        # as placement; add_device no longer reads sysfs, so offline measurement
+        # generation can supply the node from a topology fingerprint instead.
+        if numa:
+            bar['numa_node'] = read_pci_numa_node(host_bdf)
+        topo.add_device(cmd, host_bdf=host_bdf, rp_id=rp_id, chassis=chassis, **bar)
 
     print(f'  Adding {len(gpus)} GPU(s) to PCI topology...')
     if profile.use_ovmf_mmio_fw_cfg:
@@ -278,33 +292,17 @@ def _build_pci_topology(
             print(f'    GPU {gpu}: {profile.name}, BAR fw_cfg {profile.bar_size_mb} MB')
         else:
             print(f'    GPU {gpu}: {profile.name}')
-        topo.add_device(
-            cmd,
-            host_bdf=gpu,
-            rp_id=f'rp{i + 1}',
-            chassis=i + 1,
-            **bar_kwargs,
-        )
+        _add(gpu, f'rp{i + 1}', i + 1, **bar_kwargs)
 
     if nvswitches_for_vm:
         print(f'  Adding {len(nvswitches_for_vm)} NVSwitch(es) to PCI topology...')
     for j, nvsw in enumerate(nvswitches_for_vm):
-        topo.add_device(
-            cmd,
-            host_bdf=nvsw,
-            rp_id=f'rp_nvsw{j + 1}',
-            chassis=len(gpus) + j + 1,
-        )
+        _add(nvsw, f'rp_nvsw{j + 1}', len(gpus) + j + 1)
 
     if ib_devices:
         print(f'  Adding {len(ib_devices)} InfiniBand device(s) to PCI topology...')
     for k, ib_dev in enumerate(ib_devices):
-        topo.add_device(
-            cmd,
-            host_bdf=ib_dev,
-            rp_id=f'rp_ib{k + 1}',
-            chassis=len(gpus) + len(nvswitches_for_vm) + k + 1,
-        )
+        _add(ib_dev, f'rp_ib{k + 1}', len(gpus) + len(nvswitches_for_vm) + k + 1)
 
     print(
         f'  Passthrough configured: {len(gpus)} GPU(s), '

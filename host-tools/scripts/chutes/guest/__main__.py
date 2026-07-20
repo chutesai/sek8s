@@ -146,7 +146,7 @@ def launch_vm(args) -> int:
         foreground=args.foreground,
         pidfile=PIDFILE,
         logfile=LOGFILE,
-        enable_numa_topology=profile_wants_numa,
+        host_nodes=host_numa_nodes() if numa_active else [],
         pci_pinning=pci_pinning,
     )
 
