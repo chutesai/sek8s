@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import chutes.guest.__main__ as guest_main
 
 
+@patch("chutes.guest.__main__.verify_host_qemu_supported")
 @patch("chutes.guest.__main__.subprocess.run")
 @patch("chutes.guest.__main__.setup_passthrough")
 @patch("chutes.guest.__main__.add_vsock")
@@ -21,6 +22,7 @@ def test_launch_vm_returns_qemu_nonzero(
     _mock_vsock,
     _mock_pt,
     mock_run,
+    _mock_qemu_check,
 ):
     from argparse import Namespace
 

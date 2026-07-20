@@ -276,6 +276,7 @@ IB_CLASS_DEVICES=()
 ETH_CLASS_DEVICES=()
 BRIDGE_PFS=()
 PASSTHROUGH_CANDIDATES=()
+PASSTHROUGH_NUMA_NODES=()
 
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
@@ -294,6 +295,8 @@ if [[ ${#IB_CLASS_DEVICES[@]} -gt 0 ]]; then
             BRIDGE_PFS+=("$bdf")
         else
             PASSTHROUGH_CANDIDATES+=("$bdf")
+            # Diagnostic: host NUMA node per IB PF (feeds RTMR0 when IB is passed).
+            PASSTHROUGH_NUMA_NODES+=("$(pci_numa_node "$bdf")")
         fi
     done
 fi
@@ -306,8 +309,7 @@ NVSWITCH_NUMA_NODES=()
 while IFS= read -r line; do
     bdf=$(echo "$line" | awk '{print $1}')
     NVSWITCH_DEVICES+=("$bdf")
-    # NVSwitch host NUMA node — on the 2-node NUMA launch path each device
-    # attaches to the PXB-PCIe bridge for its node, so this layout feeds RTMR0.
+    # NVSwitch host NUMA node — drives PXB grouping, so feeds RTMR0.
     NVSWITCH_NUMA_NODES+=("$(pci_numa_node "$bdf")")
 done < <(lspci -Dnn | grep '\[0680\]' | grep '10de' || true)
 
@@ -380,6 +382,7 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Ethernet-class [0200]"     "${#ETH_CLASS_DEVICES[@]}"
     row "Bridge PFs (SMDL=SW_MNG)"  "${BRIDGE_PFS[*]:-none}"
     row "IB passthrough candidates" "${PASSTHROUGH_CANDIDATES[*]:-none}"
+    row "IB passthrough NUMA nodes" "${PASSTHROUGH_NUMA_NODES[*]:-none}"
 
     section "NVSwitches"
     row "NVSwitch devices" "${#NVSWITCH_DEVICES[@]}  (${NVSWITCH_DEVICES[*]:-none})"
@@ -496,8 +499,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
 
     if [[ ${#PASSTHROUGH_CANDIDATES[@]} -gt 0 ]]; then
         json_str_array passthru_json "${PASSTHROUGH_CANDIDATES[@]}"
+        json_int_array passthru_numa_json "${PASSTHROUGH_NUMA_NODES[@]}"
     else
-        passthru_json="[]"
+        passthru_json="[]"; passthru_numa_json="[]"
     fi
 
     if [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]]; then
@@ -559,7 +563,8 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "eth_class_count": ${#ETH_CLASS_DEVICES[@]},
     "ib_devices": ${ib_json},
     "bridge_pfs": ${bridge_json},
-    "passthrough_candidates": ${passthru_json}
+    "passthrough_candidates": ${passthru_json},
+    "passthrough_numa_nodes": ${passthru_numa_json}
   },
   "nvswitch": {
     "present": $( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'true' || echo 'false' ),
