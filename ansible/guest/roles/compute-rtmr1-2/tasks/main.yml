@@ -1,0 +1,36 @@
+---
+# compute-rtmr1-2 — Compute expected RTMR1/RTMR2 (direct boot) from the finalized qcow2.
+#
+# Runs on the host after compute-rtmr3 and before the luks step, while the image
+# is still plaintext. RTMR1/RTMR2 are version-level (topology-independent), so they
+# are pinned here at build time rather than captured from a boot — and they must
+# come from the PROD image (the debug image's initrd differs). See compute-rtmr1-2.sh.
+#
+# Output: <final_img_path without extension>.rtmr1 and .rtmr2  (bare uppercase hex)
+#
+# Prerequisites on the build host: libguestfs-tools (guestfish) + the tdx-measure
+# fork binary (virtee/tdx-measure). Point tdx_measure_bin at it if not on PATH.
+
+- name: Check guestfish is available
+  ansible.builtin.command: which guestfish
+  changed_when: false
+  register: rtmr1_2_guestfish_check
+  failed_when: rtmr1_2_guestfish_check.rc != 0
+
+- name: Compute RTMR1/RTMR2 from final image (direct boot)
+  ansible.builtin.command: >-
+    {{ repo_root }}/guest-tools/scripts/compute-rtmr1-2.sh {{ final_img_path }}
+  environment:
+    TDX_MEASURE_BIN: "{{ tdx_measure_bin | default('tdx-measure') }}"
+  register: rtmr1_2_compute
+  changed_when: false
+
+- name: Show RTMR1/RTMR2 computation output
+  ansible.builtin.debug:
+    msg: "{{ rtmr1_2_compute.stderr_lines }}"
+
+- name: Show RTMR1/RTMR2 output file locations
+  ansible.builtin.debug:
+    msg:
+      - "RTMR1 written to {{ final_img_path | splitext | first }}.rtmr1"
+      - "RTMR2 written to {{ final_img_path | splitext | first }}.rtmr2"

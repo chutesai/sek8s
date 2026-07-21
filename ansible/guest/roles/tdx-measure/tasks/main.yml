@@ -1,0 +1,50 @@
+---
+# tdx-measure — Provision the virtee/tdx-measure fork binary on the build host.
+#
+# compute-rtmr1-2 needs the fork's CLI to compute RTMR1/RTMR2. This role clones
+# the fork (only if absent — an existing checkout is used as-is) and builds it
+# with cargo, then sets the `tdx_measure_bin` fact to the built binary. Runs in
+# user space (invoke with become: false): rust toolchains and the build tree are
+# per-user.
+#
+# Skip entirely by setting `tdx_measure_bin` to a prebuilt binary. Note: cloning a
+# fresh copy of the (private) fork needs git credentials; the default src dir is a
+# sibling checkout so local-dev builds reuse what's already there and never clone.
+
+- name: Provision tdx-measure from source (skipped when tdx_measure_bin is preset)
+  when: (tdx_measure_bin | default('')) | length == 0
+  block:
+    - name: Ensure git is available
+      ansible.builtin.command: which git
+      changed_when: false
+      register: _tdxm_git
+      failed_when: _tdxm_git.rc != 0
+
+    - name: Ensure cargo is available
+      ansible.builtin.command: which cargo
+      changed_when: false
+      register: _tdxm_cargo
+      failed_when: _tdxm_cargo.rc != 0
+
+    - name: Clone the tdx-measure fork if not already checked out
+      # update: false — never disturb an existing checkout (a dev's working tree
+      # may have local changes); only clone when the dir is missing.
+      ansible.builtin.git:
+        repo: "{{ tdx_measure_repo_url }}"
+        dest: "{{ tdx_measure_src_dir }}"
+        version: "{{ tdx_measure_ref }}"
+        update: false
+
+    - name: Build the tdx-measure CLI (release)
+      ansible.builtin.command:
+        cmd: cargo build --release
+        chdir: "{{ tdx_measure_src_dir }}/cli"
+      changed_when: true
+
+    - name: Point tdx_measure_bin at the freshly built binary
+      ansible.builtin.set_fact:
+        tdx_measure_bin: "{{ tdx_measure_src_dir }}/cli/target/release/tdx-measure"
+
+- name: Report the tdx-measure binary in use
+  ansible.builtin.debug:
+    msg: "tdx-measure: {{ tdx_measure_bin | default('tdx-measure (PATH)') }}"

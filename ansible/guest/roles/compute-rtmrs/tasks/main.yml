@@ -1,0 +1,26 @@
+---
+# compute-rtmrs — Compute all expected build-time RTMRs (1, 2, 3) from the
+# finalized image, before LUKS encryption (while it is still plaintext).
+#
+# One step for callers, composing the per-register components (each also usable
+# on its own — e.g. tee-gpu-vm.yml uses compute-rtmr3 directly):
+#   - compute-rtmr3   : SHA-384 simulation of the guest's rtmr3-measure extend chain
+#   - tdx-measure     : provision the fork binary (the RTMR1/2 engine)
+#   - compute-rtmr1-2 : RTMR1/RTMR2 via tdx-measure (direct boot, --runtime-only)
+#
+# All three are version-level and emitted as <image>.rtmr1/.rtmr2/.rtmr3.
+# Invoke from a become: true play (guestmount/guestfish need root); the
+# tdx-measure provisioning drops to user space itself.
+
+- name: Compute RTMR3 (guest runtime-measure simulation)
+  ansible.builtin.include_role:
+    name: compute-rtmr3
+
+- name: Provision the tdx-measure fork binary (user space)
+  ansible.builtin.include_role:
+    name: tdx-measure
+  become: false
+
+- name: Compute RTMR1/RTMR2 (direct boot, via tdx-measure)
+  ansible.builtin.include_role:
+    name: compute-rtmr1-2

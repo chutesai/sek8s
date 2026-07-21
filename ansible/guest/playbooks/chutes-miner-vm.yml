@@ -389,15 +389,15 @@
       ansible.builtin.include_role:
         name: finalize-vm-image
 
-- name: Compute expected RTMR3 from final image
+- name: Compute expected RTMRs from final image
   hosts: host
   become: true
   tags:
-    - compute-rtmr3
+    - compute-rtmrs
   tasks:
-    - name: Compute RTMR3
+    - name: Compute RTMR1/RTMR2/RTMR3
       ansible.builtin.include_role:
-        name: compute-rtmr3
+        name: compute-rtmrs
 
 - name: Encrypt disk
   hosts: host
