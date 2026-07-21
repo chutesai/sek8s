@@ -18,6 +18,7 @@ from chutes.guest.gpu.tools import ensure_gpu_tools_available
 from chutes.guest.qemu import (
     NumaPciTopologyState,
     PciTopologyState,
+    QemuCommand,
     read_pci_numa_node,
     use_numa_topology,
 )
@@ -251,13 +252,13 @@ def _prepare_devices(
 
 
 def _build_pci_topology(
-    cmd: list[str],
+    cmd: QemuCommand,
     gpus: list[str],
     nvswitches_for_vm: list[str],
     ib_devices: list[str],
     profile: GpuProfile,
 ):
-    """Add GPU, NVSwitch, and IB devices to the QEMU PCI topology."""
+    """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology."""
     numa = use_numa_topology(profile.enable_numa_topology)
     if numa:
         print('  PCI topology: NUMA-local PXB-PCIe bridges')
@@ -311,8 +312,8 @@ def _build_pci_topology(
     )
 
 
-def setup_passthrough(cmd: list[str]):
-    """Detect passthrough devices, prepare and bind them on the host, extend cmd for QEMU."""
+def setup_passthrough(cmd: QemuCommand):
+    """Detect passthrough devices, prepare and bind them on the host, extend the QemuCommand."""
     gpus = get_gpu_bdfs()
     if not gpus:
         gpus = detect_nvidia_gpus()
@@ -358,7 +359,7 @@ def setup_passthrough(cmd: list[str]):
     print(f'  Mode: {profile.describe_mode(total_gpus)}')
 
     _prepare_devices(gpus, nvswitches, ib_devices, profile)
-    cmd.extend(['-object', 'iommufd,id=iommufd0'])
+    cmd.objects.append('iommufd,id=iommufd0')
 
     nvswitches_for_vm = (
         nvswitches

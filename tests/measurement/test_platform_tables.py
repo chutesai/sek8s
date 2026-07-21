@@ -10,7 +10,7 @@ import pytest
 
 from chutes.guest.gpu.profiles import GPU_PROFILES
 from chutes.guest.gpu.topology import FlatTopology, NumaTopology
-from platform_tables import spec_to_metadata
+from platform_tables import MeasurementMetadata
 from topology_spec import build_topology_spec
 
 _FW = "/opt/ovmf/OVMF.fd"
@@ -21,7 +21,7 @@ def _md(model, fingerprint, **kw):
     spec = build_topology_spec(
         profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
     )
-    return spec_to_metadata(spec, profile, acpi_tables="/out/acpi.bin", **kw)
+    return MeasurementMetadata(spec, profile, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
 def _rtx_numa():

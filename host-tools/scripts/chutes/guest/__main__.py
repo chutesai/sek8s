@@ -188,7 +188,7 @@ def launch_vm(args) -> int:
 
     print("Launching QEMU...")
     result = subprocess.run(
-        launch_prefix + qemu_cmds,
+        launch_prefix + qemu_cmds.to_args(),
         stderr=subprocess.STDOUT,
     )
     if result.returncode != 0:

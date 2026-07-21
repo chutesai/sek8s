@@ -26,7 +26,7 @@ def _synth(profile, fingerprint):
     spec = build_topology_spec(
         profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
     )
-    return build_qemu_command(spec)
+    return build_qemu_command(spec).to_args()
 
 
 def _topology_args(cmd):
@@ -77,7 +77,7 @@ def _live_cmd(profile, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None):
             ib_devices=ib or [],
             profile=profile,
         )
-    return cmd
+    return cmd.to_args()
 
 
 def _bdfs(n, start=1):

@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 from chutes.guest.qemu import (
     PcieRootPinning,
+    QemuCommand,
     _append_numa_memory,
     _parse_mem_mib,
     add_volumes,
@@ -12,6 +13,21 @@ from chutes.guest.qemu import (
     safe_vm_mem_gb,
     use_numa_topology,
 )
+
+
+def _empty_cmd() -> QemuCommand:
+    """A minimal QemuCommand for exercising a single builder in isolation."""
+    return QemuCommand(
+        mem="1G",
+        smp_topology="1",
+        cpu_args="host",
+        machine="q35",
+        firmware="/x",
+        process_name="t",
+        foreground=True,
+        logfile="/l",
+        pidfile="/p",
+    )
 
 # ---------------------------------------------------------------------------
 # safe_vm_mem_gb — clamp guest RAM to host capacity (TDX mem is unreclaimable)
@@ -98,7 +114,7 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
         logfile="/tmp/log",
         host_nodes=[0, 1],
     )
-    flat = " ".join(cmd)
+    flat = " ".join(cmd.to_args())
     assert "memory-backend-ram,id=mem-node0" in flat
     assert "memory-backend-ram,id=mem-node1" in flat
     assert "host-nodes=0,policy=bind" in flat
@@ -129,7 +145,7 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
         logfile="/tmp/log",
         host_nodes=[],
     )
-    flat = " ".join(cmd)
+    flat = " ".join(cmd.to_args())
     assert (
         "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,"
         "uuid=00000000-0000-0000-0000-000000000000" in flat
@@ -139,17 +155,17 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
 
 
 def test_append_numa_memory_splits_remainder_on_last_node():
-    cmd: list[str] = []
+    cmd = _empty_cmd()
     _append_numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1])
-    assert "size=768M" in " ".join(cmd)
-    assert "size=769M" in " ".join(cmd)
+    assert "size=768M" in " ".join(cmd.objects)
+    assert "size=769M" in " ".join(cmd.objects)
 
 
 def test_config_volume_uses_explicit_virtio_blk_not_legacy_if_virtio(tmp_path):
     config = tmp_path / "config.qcow2"
     config.write_bytes(b"")
     pinning = PcieRootPinning(True)
-    cmd: list[str] = []
+    cmd = _empty_cmd()
     add_volumes(
         cmd,
         config_volume=str(config),
@@ -157,7 +173,7 @@ def test_config_volume_uses_explicit_virtio_blk_not_legacy_if_virtio(tmp_path):
         storage_volume=None,
         pci_pinning=pinning,
     )
-    flat = " ".join(cmd)
+    flat = " ".join(cmd.drives + cmd.devices)
     assert "if=virtio" not in flat
     assert "virtio-config" in flat
     assert "virtio-blk-pci,drive=virtio-config,bus=pcie.0" in flat

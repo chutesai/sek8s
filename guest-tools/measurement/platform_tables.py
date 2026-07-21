@@ -1,15 +1,14 @@
-"""Turn a measurement ``MachineSpec`` into tdx-measure metadata.
+"""tdx-measure metadata for offline ACPI generation, from a QemuCommand.
 
-The shared ``build_qemu_command`` produces the *launch* command (real machine,
-vfio endpoints, drive-backed emulated devices). The offline ACPI dumper needs a
-slightly different command that yields the **same measured ACPI** without any
-hardware. This module runs the spec through ``build_qemu_command`` and rewrites
-the result — the single measurement-side place that knows how a launch command
-maps to a dump command:
+The shared ``build_qemu_command`` yields a structured ``QemuCommand`` (the launch
+command). The offline ACPI dumper needs a slightly different command that yields
+the **same measured ACPI** without hardware. ``MeasurementMetadata`` is a view
+over that ``QemuCommand`` + the GPU profile that reads its fields directly — no
+command re-parsing, so it can't drift from the shared builder — and applies the
+dump-side rewrites:
 
-  - **machine**: drop ``confidential-guest-support=tdx`` and run the plain q35
-    (``smm=off,pic=off``) the patched dumper QEMU expects; drop the tdx-guest
-    object.
+  - **machine**: run plain q35 (``smm=off,pic=off``); drop the tdx-guest object
+    (not carried over — the dumper QEMU has no confidential-guest support).
   - **memory**: ``reserve=off`` on every backend (maps any-size guest RAM on a
     small host without allocating it) and strip host-nodes/policy binding.
   - **emulated devices**: replace the boot disk with backing-free slot-fillers so
@@ -25,9 +24,12 @@ present (validated against box-028). Imports the shared VM lib from
 """
 
 import re
+from dataclasses import dataclass
+from functools import cached_property
 
 from chutes.guest.command import MachineSpec, build_qemu_command
 from chutes.guest.gpu.profiles import GpuProfile, PciBar
+from chutes.guest.qemu import QemuCommand
 
 # NVIDIA vendor; all supported GPUs report class 0x0302 (3D controller). The
 # stub impersonates this identity so the generated ACPI matches a real device.
@@ -43,12 +45,6 @@ _DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
 # (device-type agnostic), so backing-free fillers reproduce them.
 _EMULATED_SLOTS = range(0x2, 0x8)
 
-# Launch-only QEMU flags the dumper drops: those taking a value (skipped whole)
-# and bare toggles (skipped alone). -machine is rewritten; -serial is re-added
-# as a metadata field.
-_DROP_VALUE_FLAGS = frozenset({"-machine", "-name", "-drive", "-vga", "-serial", "-pidfile"})
-_BARE_FLAGS = frozenset({"-nodefaults", "-nographic", "-daemonize"})
-
 
 def _bars_arg(bars: list[PciBar]) -> str:
     """Format a BAR layout as the pci-bar-stub ``bars=`` value (``;``-separated)."""
@@ -59,130 +55,103 @@ def _bars_arg(bars: list[PciBar]) -> str:
     return ";".join(parts)
 
 
-def _rewrite_object(obj: str) -> str | None:
-    """Rewrite a ``-object`` value for the dumper; None drops it."""
-    if '"qom-type":"tdx-guest"' in obj or "qom-type=tdx-guest" in obj:
-        return None  # no confidential-guest support in the dumper QEMU
-    if obj.startswith("memory-backend-ram"):
-        # Host NUMA binding is launch-only; reserve=off maps the (possibly multi-
-        # TB) backend without allocating it. See the reserve=off finding.
-        obj = re.sub(r",host-nodes=\d+", "", obj)
-        obj = obj.replace(",policy=bind", "")
-        if "reserve=" not in obj:
-            obj += ",reserve=off"
-    return obj
+def _reserve_off(backend: str) -> str:
+    """Strip host-NUMA binding and add reserve=off to a memory-backend object."""
+    backend = re.sub(r",host-nodes=\d+", "", backend)
+    backend = backend.replace(",policy=bind", "")
+    if "reserve=" not in backend:
+        backend += ",reserve=off"
+    return backend
 
 
-def _swap_endpoint(dev: str, profile: GpuProfile) -> str:
-    """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` with the GPU's BARs."""
-    bus = re.search(r"bus=([^,]+)", dev)
-    if not bus:
-        raise ValueError(f"vfio-pci device without a bus=: {dev!r}")
-    rp = bus.group(1)
-    if not re.fullmatch(r"rp\d+", rp):
-        # NVSwitch (rp_nvsw*) / InfiniBand (rp_ib*) are passthrough devices too;
-        # their BARs also shape the DSDT and need their own captured layout.
-        raise NotImplementedError(
-            f"endpoint on {rp!r} has no BAR layout yet — capture "
-            f"lspci -vvvnn for that device type and extend the profile "
-            f"(only GPU BARs are modeled today)"
+@dataclass
+class MeasurementMetadata:
+    """The tdx-measure ``ImageConfig`` for offline dumping a spec's ACPI.
+
+    Build from a measurement ``MachineSpec`` + its ``GpuProfile``; ``to_dict()``
+    is the metadata JSON. Reads the shared ``QemuCommand``'s structured fields —
+    no re-parsing — so it stays tied to the real launch command.
+    """
+
+    spec: MachineSpec
+    profile: GpuProfile
+    acpi_tables: str
+    with_smbios: bool = True
+
+    @cached_property
+    def cmd(self) -> QemuCommand:
+        return build_qemu_command(self.spec)
+
+    @property
+    def objects(self) -> list[str]:
+        # Only the memory-backends (cmd.objects); the tdx-guest object lives in
+        # cmd.tdx_guest and is simply not carried over.
+        return [_reserve_off(o) for o in self.cmd.objects]
+
+    @property
+    def devices(self) -> list[str]:
+        """Fillers for slots 0x2-0x7, then the passthrough topology with stubbed BARs."""
+        out = [f"virtio-rng-pci,bus=pcie.0,addr={s:#x}" for s in _EMULATED_SLOTS]
+        for dev in self.cmd.devices:
+            if dev.startswith("virtio-blk-pci,drive=virtio-disk0"):
+                continue  # boot disk — replaced by the slot-fillers above
+            if dev.startswith("vfio-pci"):
+                out.append(self._swap_endpoint(dev))
+            else:
+                out.append(dev)  # pxb-pcie / pcie-root-port
+        return out
+
+    def _swap_endpoint(self, dev: str) -> str:
+        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` with the GPU's BARs."""
+        bus = re.search(r"bus=([^,]+)", dev)
+        if not bus:
+            raise ValueError(f"vfio-pci device without a bus=: {dev!r}")
+        rp = bus.group(1)
+        if not re.fullmatch(r"rp\d+", rp):
+            # NVSwitch (rp_nvsw*) / InfiniBand (rp_ib*) are passthrough devices
+            # too; their BARs also shape the DSDT and need their own captured
+            # layout.
+            raise NotImplementedError(
+                f"endpoint on {rp!r} has no BAR layout yet — capture "
+                f"lspci -vvvnn for that device type and extend the profile "
+                f"(only GPU BARs are modeled today)"
+            )
+        if not self.profile.pci_bars:
+            raise ValueError(
+                f"profile {self.profile.name!r} has no pci_bars — run "
+                f"discover-profile.sh on a host with this GPU and add the "
+                f"layout before generating"
+            )
+        device_id = int(self.profile.pci_device_ids[0], 16)
+        return (
+            f"pci-bar-stub,bus={rp},bars={_bars_arg(self.profile.pci_bars)},"
+            f"vendor={_NVIDIA_VENDOR:#06x},device={device_id:#06x},class={_GPU_CLASS:#06x}"
         )
-    if not profile.pci_bars:
-        raise ValueError(
-            f"profile {profile.name!r} has no pci_bars — run discover-profile.sh "
-            f"on a host with this GPU and add the layout before generating"
-        )
-    device_id = int(profile.pci_device_ids[0], 16)
-    return (
-        f"pci-bar-stub,bus={rp},bars={_bars_arg(profile.pci_bars)},"
-        f"vendor={_NVIDIA_VENDOR:#06x},device={device_id:#06x},class={_GPU_CLASS:#06x}"
-    )
 
+    @property
+    def smbios(self) -> list[str]:
+        return self.cmd.smbios if self.with_smbios else []
 
-def _rewrite_devices(devices: list[str], profile: GpuProfile) -> list[str]:
-    """Fillers for slots 0x2-0x7, then the passthrough topology with stubbed BARs."""
-    fillers = [f"virtio-rng-pci,bus=pcie.0,addr={s:#x}" for s in _EMULATED_SLOTS]
-    out: list[str] = list(fillers)
-    for dev in devices:
-        if dev.startswith("virtio-blk-pci,drive=virtio-disk0"):
-            continue  # boot disk — replaced by the slot-fillers above
-        if dev.startswith("vfio-pci"):
-            out.append(_swap_endpoint(dev, profile))
-        else:
-            out.append(dev)  # pxb-pcie / pcie-root-port
-    return out
-
-
-def spec_to_metadata(
-    spec: MachineSpec,
-    profile: GpuProfile,
-    *,
-    acpi_tables: str,
-    with_smbios: bool = True,
-) -> dict:
-    """Build the tdx-measure ``ImageConfig`` dict for ``spec`` (offline dump)."""
-    args = build_qemu_command(spec)
-
-    machine = _DUMP_MACHINE
-    cpu = accel = memory = bios = smp = ""
-    objects: list[str] = []
-    numa: list[str] = []
-    smbios: list[str] = []
-    devices: list[str] = []
-    fw_cfg: list[str] = []
-
-    i, n = 0, len(args)
-    while i < n:
-        a = args[i]
-        if a in _BARE_FLAGS or not a.startswith("-"):
-            i += 1  # bare toggle, or the leading "qemu-system-x86_64"
-            continue
-        val = args[i + 1] if i + 1 < n else ""
-        if a == "-accel":
-            accel = val
-        elif a == "-m":
-            memory = val
-        elif a == "-smp":
-            smp = val
-        elif a == "-cpu":
-            cpu = val
-        elif a == "-bios":
-            bios = val
-        elif a == "-object":
-            obj = _rewrite_object(val)
-            if obj is not None:
-                objects.append(obj)
-        elif a == "-numa":
-            numa.append(val)
-        elif a == "-smbios":
-            smbios.append(val)
-        elif a == "-device":
-            devices.append(val)
-        elif a == "-fw_cfg":
-            fw_cfg.append(val)
-        elif a not in _DROP_VALUE_FLAGS:
-            raise ValueError(f"platform_tables: unhandled QEMU flag {a!r}")
-        i += 2
-
-    cpus = int(smp.split(",", 1)[0]) if smp else 0
-    return {
-        "boot_config": {
-            "cpus": cpus,
-            "memory": memory,
-            "bios": bios,
-            "acpi_tables": acpi_tables,
-            "qemu": {
-                "machine": machine,
-                "cpu": cpu,
-                "accel": accel,
-                "smp": smp,
-                "objects": objects,
-                "numa": numa,
-                "smbios": smbios if with_smbios else [],
-                "serial": ["null"],  # adds COM1 to the DSDT
-                "devices": _rewrite_devices(devices, profile),
-                "fw_cfg": fw_cfg,
+    def to_dict(self) -> dict:
+        cmd = self.cmd
+        return {
+            "boot_config": {
+                "cpus": int(cmd.smp_topology.split(",", 1)[0]),
+                "memory": cmd.mem,
+                "bios": cmd.firmware,
+                "acpi_tables": self.acpi_tables,
+                "qemu": {
+                    "machine": _DUMP_MACHINE,
+                    "cpu": cmd.cpu_args,
+                    "accel": cmd.accel,
+                    "smp": cmd.smp_topology,
+                    "objects": self.objects,
+                    "numa": cmd.numa,
+                    "smbios": self.smbios,
+                    "serial": ["null"],  # adds COM1 to the DSDT
+                    "devices": self.devices,
+                    "fw_cfg": cmd.fw_cfg,
+                },
             },
-        },
-        "direct": {"kernel": "/dev/null", "initrd": "/dev/null", "cmdline": ""},
-    }
+            "direct": {"kernel": "/dev/null", "initrd": "/dev/null", "cmdline": ""},
+        }

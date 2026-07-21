@@ -15,7 +15,12 @@ PCI-topology state machines).
 
 from dataclasses import dataclass, field
 
-from chutes.guest.qemu import NumaPciTopologyState, PciTopologyState, build_base_cmd
+from chutes.guest.qemu import (
+    NumaPciTopologyState,
+    PciTopologyState,
+    QemuCommand,
+    build_base_cmd,
+)
 
 
 @dataclass(frozen=True)
@@ -61,8 +66,8 @@ class MachineSpec:
     logfile: str = "/dev/null"
 
 
-def build_qemu_command(spec: MachineSpec) -> list[str]:
-    """Turn a ``MachineSpec`` into the base + PCI-topology QEMU command."""
+def build_qemu_command(spec: MachineSpec) -> QemuCommand:
+    """Turn a ``MachineSpec`` into a base + PCI-topology ``QemuCommand``."""
     cmd = build_base_cmd(
         mem=spec.mem,
         smp_topology=spec.smp_topology,

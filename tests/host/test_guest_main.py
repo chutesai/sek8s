@@ -3,6 +3,19 @@
 from unittest.mock import MagicMock, patch
 
 import chutes.guest.__main__ as guest_main
+from chutes.guest.qemu import QemuCommand
+
+_FAKE_CMD = QemuCommand(
+    mem="1G",
+    smp_topology="1",
+    cpu_args="host",
+    machine="q35",
+    firmware="/x",
+    process_name="t",
+    foreground=True,
+    logfile="/l",
+    pidfile="/p",
+)
 
 
 @patch("chutes.guest.__main__.verify_host_qemu_supported")
@@ -11,10 +24,7 @@ import chutes.guest.__main__ as guest_main
 @patch("chutes.guest.__main__.add_vsock")
 @patch("chutes.guest.__main__.add_volumes")
 @patch("chutes.guest.__main__.build_network")
-@patch(
-    "chutes.guest.__main__.build_base_cmd",
-    return_value=["qemu-system-x86_64", "-version"],
-)
+@patch("chutes.guest.__main__.build_base_cmd", return_value=_FAKE_CMD)
 def test_launch_vm_returns_qemu_nonzero(
     _mock_base,
     _mock_net,
