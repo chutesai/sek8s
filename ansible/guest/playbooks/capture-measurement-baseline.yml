@@ -70,6 +70,20 @@
         remote_src: true
         mode: "0644"
 
+    - name: Copy the direct-boot artifacts alongside the working copy
+      # The launcher direct-boots and resolves <work-image-base>.{vmlinuz,initrd,cmdline}
+      # next to the qcow2 (staged by the build's stage-boot-artifacts), so they must
+      # travel with the /tmp copy or the launch fails with "artifacts missing".
+      ansible.builtin.copy:
+        src: "{{ (measurement_source_image | splitext | first) + '.' + item }}"
+        dest: "{{ (measurement_work_image | splitext | first) + '.' + item }}"
+        remote_src: true
+        mode: "0644"
+      loop:
+        - vmlinuz
+        - initrd
+        - cmdline
+
     - name: Install capture dependencies (sshpass)
       ansible.builtin.apt:
         name:
@@ -184,7 +198,12 @@
           changed_when: true
           failed_when: false
 
-        - name: Remove the throwaway working image
+        - name: Remove the throwaway working image + boot artifacts
           ansible.builtin.file:
-            path: "{{ measurement_work_image }}"
+            path: "{{ item }}"
             state: absent
+          loop:
+            - "{{ measurement_work_image }}"
+            - "{{ (measurement_work_image | splitext | first) + '.vmlinuz' }}"
+            - "{{ (measurement_work_image | splitext | first) + '.initrd' }}"
+            - "{{ (measurement_work_image | splitext | first) + '.cmdline' }}"
