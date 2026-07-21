@@ -168,10 +168,23 @@
             mode: "0755"
 
         - name: Unpack the artifact bundle into measurements/<version>/
+          # --strip-components=1 drops the tarball's baseline_capture/ prefix so the
+          # blobs land directly in measurements/<version>/ (not a nested subdir).
           ansible.builtin.unarchive:
             src: /tmp/baseline_capture.tar.gz
             dest: "{{ _baseline_dir }}/"
             remote_src: true
+            extra_opts:
+              - --strip-components=1
+
+        - name: Verify the CC event log was actually captured
+          # The whole point of the capture is the CCEL (the RTMR0 baseline). If the
+          # guest kernel didn't expose data/CCEL, the capture "succeeds" but yields
+          # an unusable baseline — fail loudly here instead of shipping a bad fixture.
+          ansible.builtin.stat:
+            path: "{{ _baseline_dir }}/ccel_data.bin"
+          register: _ccel_stat
+          failed_when: (not _ccel_stat.stat.exists) or (_ccel_stat.stat.size | int) == 0
 
         - name: Write baseline metadata
           ansible.builtin.copy:
@@ -180,7 +193,7 @@
               {
                 "version": "{{ vm_version }}",
                 "build_env": "{{ build_env }}",
-                "boot_method": "grub",
+                "boot_method": "direct",
                 "source_image": "{{ measurement_source_image }}",
                 "gpus": false
               }
