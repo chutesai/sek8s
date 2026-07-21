@@ -87,8 +87,11 @@ faithful function of the documented inputs.
 
 `guest-tools/measurement/`:
 
-- **`extract-measurements.sh`** — capture a guest's CC event log and the platform
-  tables it measures.
+- **`capture-measurement-artifacts.sh`** — capture a guest's CC event log and the
+  platform tables it measures (the inputs for offline reproduction). Requires TDX
+  hardware, since the CCEL only exists there.
+- **`extract-measurements.sh`** — report a running guest's live measurements from a
+  fresh quote (MRTD + RTMR0-3); verification, not reproduction.
 - **`ccel_replay.py`** — parse the event log, replay the RTMR chains, and verify
   them against known-good values (`--expect`) or compare two captures (`diff`).
 - **`utils/`** — diagnostics (per-table ACPI byte-diff; event-log preimage

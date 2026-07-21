@@ -12,11 +12,18 @@ Design + rationale: [`docs/specs/offline-rtmr0-measurement.md`](../../docs/specs
 
 ## Tools
 
-- **`extract-measurements.sh`** — run inside a (debug) guest to capture its
-  `data/CCEL` event log plus the fw_cfg ACPI/SMBIOS preimages
-  (`etc/acpi/tables`, `etc/table-loader`, `etc/acpi/rsdp`, `etc/smbios/*`) and
-  `/sys/firmware/dmi/tables/*`. These are the inputs the offline recompute and
-  the `#14` matcher consume.
+- **`capture-measurement-artifacts.sh`** — run inside a (debug) guest to capture
+  the artifacts needed to *reproduce* measurements offline: its `data/CCEL` event
+  log plus the fw_cfg ACPI/SMBIOS preimages (`etc/acpi/tables`, `etc/table-loader`,
+  `etc/acpi/rsdp`, `etc/smbios/*`), `/sys/firmware/dmi/tables/*`, and the kernel
+  cmdline. These are the inputs the offline recompute and the `#14` matcher consume.
+  Driven unattended by `ansible/host/playbooks/capture-measurement-baseline.yml`.
+  **Note:** the CCEL only exists on TDX hardware, so this bundle requires a
+  TDX-capable host once per image version (RTMR1/2/3 + MRTD are reproducible
+  offline without it; a fully CCEL-free RTMR0 is the Phase-2 goal).
+- **`extract-measurements.sh`** — run inside a guest to *report* its live
+  measurements: generates a fresh TDX quote and decodes MRTD + RTMR0-3 from it.
+  Verification/inspection of a running VM — distinct from the artifact capture above.
 - **`ccel_replay.py`** — CC event-log parser + SHA-384 RTMR replay, with `diff`
   (constant-vs-varying events across two CCELs) and `--expect` (verify a replay
   against known-good `chutes-ops` values, no quote needed). The validated oracle.
@@ -33,7 +40,9 @@ Diagnostics / one-off helpers live in **`utils/`**:
 Planned (per the spec's generator design): `arg_synth.py` (synthesize a
 topology's QEMU args from a `discover-profile` JSON), `acpi_source.py`
 (pluggable generated-vs-captured ACPI/SMBIOS source), `generate-measurements`
-(splice + replay → full `teeMeasurements` block), and `baselines/<version>/`.
+(splice + replay → full `teeMeasurements` block). Captured baselines and
+generated outputs live in the top-level `measurements/<version>/` (data, kept
+separate from this tooling dir).
 
 ## External dependency: `virtee/tdx-measure` (forked)
 

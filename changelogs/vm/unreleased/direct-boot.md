@@ -1,5 +1,13 @@
 ### Added
 
+- `ansible/guest/playbooks/capture-measurement-baseline.yml`: local build+publish
+  step that captures the offline-measurement baseline from the freshly-built debug
+  image. Runs on the build server (not a fleet host), copies the built
+  `image/<env>/<version>-debug.qcow2` to `/tmp` so the publishable artifact is never
+  mutated, TDX-boots the copy via host-tools quick-launch, captures the CCEL +
+  fw_cfg ACPI/SMBIOS preimages (the RTMR0 inputs), unpacks into the top-level
+  `measurements/<version>/`, and tears down. RTMR1/2/3 are computed from the prod
+  image at build time, not captured here.
 - `guest-tools/measurement/ccel_replay.py`: parser and SHA-384 replay for the TDX CC
   event log (`/sys/firmware/acpi/tables/data/CCEL`). Reconstructs each RTMR from
   the TCG_PCR_EVENT2 records and cross-checks against a live quote, discovering
@@ -29,9 +37,16 @@
 
 ### Changed
 
-- `guest-tools/measurement/extract-measurements.sh`: also capture the CC event-log data blob
-  (`/sys/firmware/acpi/tables/data/CCEL`) alongside the CCEL ACPI table, plus the
-  fw_cfg ACPI/SMBIOS preimages (`etc/acpi/tables`, `etc/table-loader`,
-  `etc/acpi/rsdp`, `etc/smbios/smbios-tables`, `etc/smbios/smbios-anchor`) and
-  `/sys/firmware/dmi/tables/*`, so the RTMR0 ACPI (#11-13) and SMBIOS (#14) events
-  can be reproduced/validated offline.
+- `guest-tools/measurement/`: split the two conflated concerns that lived in
+  `extract-measurements.sh` into separate tools.
+  - **`capture-measurement-artifacts.sh`** (new) — captures the artifacts needed to
+    *reproduce* measurements offline: the CC event-log data blob
+    (`/sys/firmware/acpi/tables/data/CCEL`) + CCEL table, the fw_cfg ACPI/SMBIOS
+    preimages (`etc/acpi/tables`, `etc/table-loader`, `etc/acpi/rsdp`,
+    `etc/smbios/smbios-tables`, `etc/smbios/smbios-anchor`), `/sys/firmware/dmi/tables/*`,
+    and the kernel cmdline, bundled as a single `.tar.gz`. Hardened for unattended
+    use (driven by the Stage-B capture playbook): `set -uo pipefail`, absolute
+    output dir, per-source guards. Note: the CCEL only exists on TDX hardware, so
+    this bundle still requires a TDX host once per image version.
+  - **`extract-measurements.sh`** — repurposed to *report* a running guest's live
+    measurements: generates a fresh TDX quote and decodes MRTD + RTMR0-3 from it.
