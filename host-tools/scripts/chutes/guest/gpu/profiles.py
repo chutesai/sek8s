@@ -42,10 +42,31 @@ host_cpus/host_sockets if the server has a non-standard layout.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
 
 HOST_RESERVED_CPUS = 4
+
+
+@dataclass(frozen=True)
+class PciBar:
+    """One PCI Base Address Register: index, size, and type.
+
+    Read from ``lspci -vvvnn`` (the ``Region N:`` lines, plus the Physical
+    Resizable BAR block for the current VRAM size). ``kind`` is
+    ``m32``/``m64``/``p32``/``p64`` — (m)em non-prefetchable / (p)refetchable,
+    32- or 64-bit addressing. A 64-bit BAR consumes two BAR slots, so a card
+    with three 64-bit BARs reports them at indices 0/2/4.
+
+    Offline measurement generation reproduces these BARs with a ``pci-bar-stub``
+    device so the guest DSDT's MMIO windows match a real passthrough launch
+    without the hardware present.
+    """
+
+    index: int
+    size_mb: int
+    kind: str
 
 
 class GpuProfile(ABC):
@@ -53,6 +74,11 @@ class GpuProfile(ABC):
 
     # PCI device IDs that identify this GPU (e.g. [10de:2901] -> 2901). Override in subclass.
     pci_device_ids: list[str] = []
+
+    # Full PCI BAR layout from `lspci -vvvnn` (see PciBar / discover-profile.sh).
+    # Empty = not yet captured for this model; offline measurement generation is
+    # unavailable until it is (the per-GPU MMIO windows can't be reproduced).
+    pci_bars: list[PciBar] = []
 
     def matches_device_id(self, device_id: str) -> bool:
         """Return True if device_id matches this profile's pci_device_ids."""
@@ -405,6 +431,12 @@ class B300Profile(GpuProfile):
 
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
+    # lspci -vvvnn on dev-h200-tee (10de:2335): BAR2 resizable, current 256GB.
+    pci_bars = [
+        PciBar(0, 16, "p64"),
+        PciBar(2, 262144, "p64"),  # 256G VRAM
+        PciBar(4, 32, "p64"),
+    ]
 
     @property
     def name(self) -> str:
@@ -501,6 +533,12 @@ class H200Profile(GpuProfile):
 class RTXPro6000Profile(GpuProfile):
     # 2bb1 = Workstation Edition, 2bb5 = Server Edition
     pci_device_ids = ["2bb1", "2bb5"]
+    # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
+    pci_bars = [
+        PciBar(0, 64, "p64"),
+        PciBar(2, 131072, "p64"),  # 128G VRAM
+        PciBar(4, 32, "p64"),
+    ]
 
     @property
     def name(self) -> str:
