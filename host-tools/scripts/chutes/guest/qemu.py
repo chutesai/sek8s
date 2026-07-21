@@ -287,6 +287,14 @@ class QemuCommand:
         '{"qom-type":"tdx-guest","id":"tdx",'
         '"quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}'
     )
+    # Direct boot (1.4.0+): OVMF boots these kernel/initrd/cmdline directly,
+    # dropping GRUB/shim from the measured boot chain. When set, the qcow2 stays
+    # attached as the LUKS root but is no longer the boot device (no bootindex).
+    # Left None for legacy GRUB boot and the offline ACPI-dump path (rtmr0 is
+    # boot-method independent).
+    kernel: str | None = None
+    initrd: str | None = None
+    append: str | None = None
     objects: list[str] = field(default_factory=list)
     numa: list[str] = field(default_factory=list)
     smbios: list[str] = field(default_factory=list)
@@ -317,6 +325,12 @@ class QemuCommand:
             args += ["-nographic", "-serial", "mon:stdio"]
         else:
             args += ["-nographic", "-serial", f"file:{self.logfile}", "-daemonize", "-pidfile", self.pidfile]
+        if self.kernel:
+            args += ["-kernel", self.kernel]
+        if self.initrd:
+            args += ["-initrd", self.initrd]
+        if self.append is not None:
+            args += ["-append", self.append]
         for d in self.drives:
             args += ["-drive", d]
         for nd in self.netdevs:
@@ -340,15 +354,26 @@ def build_base_cmd(
     pidfile: str,
     logfile: str,
     host_nodes: list[int],
+    kernel_path: str,
+    initrd_path: str,
+    cmdline: str,
     pci_pinning: PcieRootPinning | None = None,
 ) -> QemuCommand:
-    """Build the base QEMU command (TDX, firmware, CPU, memory, boot disk).
+    """Build the base QEMU command (TDX, firmware, CPU, memory, direct boot).
 
     Pure: reads no live hardware. ``host_nodes`` is the explicit guest-NUMA node
     list, fully resolved by the caller — the launcher from sysfs
     (``host_numa_nodes()`` gated by ``use_numa_topology``), the measurement
     adapter from a topology fingerprint. A guest-NUMA topology is built when it
     names >= 2 nodes; ``[]`` builds a flat guest.
+
+    Direct boot (1.4.0+, not optional): OVMF boots ``kernel_path`` / ``initrd_path``
+    with ``cmdline`` directly — no GRUB. The qcow2 stays attached as the LUKS root
+    but is not the boot device (no ``bootindex``). There is deliberately no GRUB
+    fallback: a second boot path would produce a second, network-inconsistent set
+    of measurements. The launcher passes the artifacts published with the image;
+    the offline ACPI-dump path passes placeholders (RTMR0 is boot-method
+    independent and the measured tables don't include the kernel).
     """
     numa_enabled = len(host_nodes) >= 2
     pinning = pci_pinning or PcieRootPinning(numa_enabled)
@@ -369,7 +394,9 @@ def build_base_cmd(
         logfile=logfile,
         pidfile=pidfile,
         # Pinned SMBIOS identity so per-server motherboard differences don't
-        # shift RTMR0 within a profile. Must match extract-acpi.sh.
+        # shift RTMR0 within a profile. Single source of truth: the offline
+        # measurement path reads this same builder (build_qemu_command →
+        # platform_tables), so launch and measurement can't diverge.
         smbios=[
             "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",
             "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0",
@@ -387,6 +414,12 @@ def build_base_cmd(
     else:
         cmd.objects.append(f"memory-backend-ram,id=mem0,size={mem}")
 
+    # Direct boot (always): OVMF loads the kernel/initrd/cmdline itself. The qcow2
+    # is still the LUKS root, just not the boot device — so no bootindex.
+    cmd.kernel = kernel_path
+    cmd.initrd = initrd_path
+    cmd.append = cmdline
+
     img_fmt = _block_format(img_path)
     drive_opts = f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}'
     if img_fmt == "qcow2":
@@ -394,7 +427,7 @@ def build_base_cmd(
     elif img_fmt == "raw":
         drive_opts += ",discard=on,detect-zeroes=on"
     cmd.drives.append(drive_opts)
-    dev_opts = f"virtio-blk-pci,drive=virtio-disk0,bootindex=0{pinning.device_suffix()}"
+    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pinning.device_suffix()}"
     if img_fmt == "raw":
         dev_opts += ",num-queues=4"
     cmd.devices.append(dev_opts)

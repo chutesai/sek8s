@@ -113,6 +113,9 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
         pidfile="/tmp/pid",
         logfile="/tmp/log",
         host_nodes=[0, 1],
+        kernel_path="/boot/vmlinuz",
+        initrd_path="/boot/initrd.img",
+        cmdline="root=UUID=x ro",
     )
     flat = " ".join(cmd.to_args())
     assert "memory-backend-ram,id=mem-node0" in flat
@@ -129,8 +132,8 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
 
 def test_build_base_cmd_pins_smbios_identity(tmp_path):
     """SMBIOS type 1/2/3 identity is pinned so per-server motherboard
-    differences don't shift RTMR0 within a profile. These values must stay in
-    sync with guest-tools/scripts/extract-acpi.sh."""
+    differences don't shift RTMR0 within a profile. This builder is the single
+    source of truth — the offline measurement path reads it too."""
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
     cmd = build_base_cmd(
@@ -144,6 +147,9 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
         pidfile="/tmp/pid",
         logfile="/tmp/log",
         host_nodes=[],
+        kernel_path="/boot/vmlinuz",
+        initrd_path="/boot/initrd.img",
+        cmdline="root=UUID=x ro",
     )
     flat = " ".join(cmd.to_args())
     assert (
@@ -159,6 +165,36 @@ def test_append_numa_memory_splits_remainder_on_last_node():
     _append_numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1])
     assert "size=768M" in " ".join(cmd.objects)
     assert "size=769M" in " ".join(cmd.objects)
+
+
+def test_direct_boot_emits_kernel_initrd_append_and_drops_bootindex(tmp_path):
+    img = tmp_path / "disk.qcow2"
+    img.write_bytes(b"")
+    cmd = build_base_cmd(
+        mem="512G",
+        smp_topology="94,sockets=1,cores=94,threads=1",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware="/tmp/TDVF.fd",
+        img_path=str(img),
+        foreground=True,
+        pidfile="/tmp/pid",
+        logfile="/tmp/log",
+        host_nodes=[],
+        kernel_path="/boot/vmlinuz",
+        initrd_path="/boot/initrd.img",
+        cmdline="root=UUID=abc ro console=ttyS0",
+    )
+    args = cmd.to_args()
+    flat = " ".join(args)
+    # Direct-boot args present, cmdline pinned verbatim.
+    assert "-kernel" in args and "/boot/vmlinuz" in args
+    assert "-initrd" in args and "/boot/initrd.img" in args
+    assert args[args.index("-append") + 1] == "root=UUID=abc ro console=ttyS0"
+    # qcow2 is still attached as the (LUKS) root disk, just not the boot device.
+    assert "file=" + str(img) in flat
+    assert "virtio-blk-pci,drive=virtio-disk0" in flat
+    assert "bootindex" not in flat
 
 
 def test_config_volume_uses_explicit_virtio_blk_not_legacy_if_virtio(tmp_path):

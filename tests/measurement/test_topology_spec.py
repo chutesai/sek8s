@@ -43,6 +43,11 @@ def _topology_args(cmd):
         ):
             i += 2
             continue
+        # Boot chain (RTMR1/2), not RTMR0-shaping: the launcher passes the real
+        # kernel/initrd/cmdline, the measurement path placeholders — drop both.
+        if cmd[i] in ("-kernel", "-initrd", "-append"):
+            i += 2
+            continue
         out.append(cmd[i])
         i += 1
     return out
@@ -69,6 +74,9 @@ def _live_cmd(profile, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None):
             pidfile="/dev/null",
             logfile="/dev/null",
             host_nodes=host_nodes if numa_active else [],
+            kernel_path="/dev/null",
+            initrd_path="/dev/null",
+            cmdline="",
         )
         _build_pci_topology(
             cmd,

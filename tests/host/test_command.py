@@ -19,6 +19,11 @@ def _base(*, host_nodes, mem="768G"):
         pidfile="/dev/null",
         logfile="/dev/null",
         host_nodes=host_nodes,
+        # Match the measurement path (build_qemu_command) placeholders so the
+        # comparison is over topology, not the boot chain.
+        kernel_path="/dev/null",
+        initrd_path="/dev/null",
+        cmdline="",
     )
 
 

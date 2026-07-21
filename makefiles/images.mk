@@ -246,3 +246,25 @@ sign:
 		echo "Skipping $$pkg_name: $$image_dir/Dockerfile not found"; \
 	fi; \
 	echo ;
+
+define _rclone_pass_prompt
+	if [ -z "$$RCLONE_CONFIG_PASS" ]; then \
+		echo "Enter rclone config password:"; \
+		read -s RCLONE_CONFIG_PASS; \
+		export RCLONE_CONFIG_PASS; \
+		echo ""; \
+	fi; \
+	export RCLONE_CONFIG_PASS
+endef
+
+.PHONY: publish-guest
+publish-guest: ##@images Publish built prod guest image + direct-boot artifacts to R2 (ENV=prod)
+publish-guest:
+	@$(_rclone_pass_prompt); \
+	guest-tools/scripts/publish-image.sh --env $(or $(ENV),prod)
+
+.PHONY: publish-guest-debug
+publish-guest-debug: ##@images Publish built debug guest image + direct-boot artifacts to R2 (ENV=prod)
+publish-guest-debug:
+	@$(_rclone_pass_prompt); \
+	guest-tools/scripts/publish-image.sh --debug --env $(or $(ENV),prod)

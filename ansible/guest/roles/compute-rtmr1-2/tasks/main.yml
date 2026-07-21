@@ -6,20 +6,17 @@
 # are pinned here at build time rather than captured from a boot — and they must
 # come from the PROD image (the debug image's initrd differs). See compute-rtmr1-2.sh.
 #
+# Reads the direct-boot artifacts staged by stage-boot-artifacts (which runs
+# first in compute-rtmrs), so it needs no guestfish itself.
+#
 # Output: <final_img_path without extension>.rtmr1 and .rtmr2  (bare uppercase hex)
 #
-# Prerequisites on the build host: libguestfs-tools (guestfish) + the tdx-measure
-# fork binary (virtee/tdx-measure). Point tdx_measure_bin at it if not on PATH.
-
-- name: Check guestfish is available
-  ansible.builtin.command: which guestfish
-  changed_when: false
-  register: rtmr1_2_guestfish_check
-  failed_when: rtmr1_2_guestfish_check.rc != 0
+# Prerequisite on the build host: the tdx-measure fork binary (virtee/tdx-measure).
+# Point tdx_measure_bin at it if not on PATH.
 
 - name: Compute RTMR1/RTMR2 from final image (direct boot)
   ansible.builtin.command: >-
-    {{ repo_root }}/guest-tools/scripts/compute-rtmr1-2.sh {{ final_img_path }}
+    {{ role_path }}/files/compute-rtmr1-2.sh {{ final_img_path }}
   environment:
     TDX_MEASURE_BIN: "{{ tdx_measure_bin | default('tdx-measure') }}"
   register: rtmr1_2_compute

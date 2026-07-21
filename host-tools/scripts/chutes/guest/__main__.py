@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+from chutes.guest.direct_boot import direct_boot_artifacts
 from chutes.guest.detection import (
     detect_gpu_numa_nodes,
     detect_host_mem_gb,
@@ -136,6 +137,13 @@ def launch_vm(args) -> int:
     firmware = _firmware_path(firmware_filename)
     print(f"Firmware: {firmware}")
 
+    # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
+    # GRUB/shim from the measured chain. These are published with the image (built
+    # once, downloaded from R2) and staged next to it — the same bytes
+    # compute-rtmr1-2 measures, so the boot matches the pinned RTMR1/2.
+    kernel_path, initrd_path, cmdline = direct_boot_artifacts(args.image)
+    print(f"Direct boot: kernel={kernel_path} cmdline={cmdline!r}")
+
     qemu_cmds = build_base_cmd(
         mem=mem,
         smp_topology=smp_topology,
@@ -148,6 +156,9 @@ def launch_vm(args) -> int:
         logfile=LOGFILE,
         host_nodes=host_numa_nodes() if numa_active else [],
         pci_pinning=pci_pinning,
+        kernel_path=kernel_path,
+        initrd_path=initrd_path,
+        cmdline=cmdline,
     )
 
     build_network(

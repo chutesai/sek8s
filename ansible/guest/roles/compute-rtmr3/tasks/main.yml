@@ -18,7 +18,7 @@
 
 - name: Run compute-rtmr3.sh against final image
   ansible.builtin.command: >-
-    {{ repo_root }}/guest-tools/scripts/compute-rtmr3.sh {{ final_img_path }}
+    {{ role_path }}/files/compute-rtmr3.sh {{ final_img_path }}
   register: rtmr3_compute
   changed_when: false
 

@@ -4,13 +4,20 @@
 #
 # One step for callers, composing the per-register components (each also usable
 # on its own — e.g. tee-gpu-vm.yml uses compute-rtmr3 directly):
-#   - compute-rtmr3   : SHA-384 simulation of the guest's rtmr3-measure extend chain
-#   - tdx-measure     : provision the fork binary (the RTMR1/2 engine)
-#   - compute-rtmr1-2 : RTMR1/RTMR2 via tdx-measure (direct boot, --runtime-only)
+#   - stage-boot-artifacts : extract <image>.vmlinuz/.initrd/.cmdline (direct-boot
+#                            artifacts) — published with the qcow2 and read by both
+#                            compute-rtmr1-2 and the launcher
+#   - compute-rtmr3        : SHA-384 simulation of the guest's rtmr3-measure chain
+#   - tdx-measure          : provision the fork binary (the RTMR1/2 engine)
+#   - compute-rtmr1-2      : RTMR1/RTMR2 from the staged artifacts (direct boot)
 #
-# All three are version-level and emitted as <image>.rtmr1/.rtmr2/.rtmr3.
+# The RTMRs are version-level and emitted as <image>.rtmr1/.rtmr2/.rtmr3.
 # Invoke from a become: true play (guestmount/guestfish need root); the
 # tdx-measure provisioning drops to user space itself.
+
+- name: Stage direct-boot artifacts (kernel/initrd/cmdline)
+  ansible.builtin.include_role:
+    name: stage-boot-artifacts
 
 - name: Compute RTMR3 (guest runtime-measure simulation)
   ansible.builtin.include_role:

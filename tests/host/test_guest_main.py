@@ -18,6 +18,7 @@ _FAKE_CMD = QemuCommand(
 )
 
 
+@patch("chutes.guest.__main__.direct_boot_artifacts", return_value=("/k", "/i", "root=UUID=x ro"))
 @patch("chutes.guest.__main__.verify_host_qemu_supported")
 @patch("chutes.guest.__main__.subprocess.run")
 @patch("chutes.guest.__main__.setup_passthrough")
@@ -33,6 +34,7 @@ def test_launch_vm_returns_qemu_nonzero(
     _mock_pt,
     mock_run,
     _mock_qemu_check,
+    _mock_stage,
 ):
     from argparse import Namespace
 

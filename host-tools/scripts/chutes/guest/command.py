@@ -79,6 +79,12 @@ def build_qemu_command(spec: MachineSpec) -> QemuCommand:
         pidfile=spec.pidfile,
         logfile=spec.logfile,
         host_nodes=spec.host_nodes,
+        # This path only dumps ACPI (RTMR0), which is boot-method independent and
+        # excludes the kernel — so the boot chain is placeholders. The dump-side
+        # metadata (platform_tables) supplies its own /dev/null direct section.
+        kernel_path="/dev/null",
+        initrd_path="/dev/null",
+        cmdline="",
     )
     # NUMA is driven entirely by host_nodes (the adapter's decision); this lib
     # supports any node count. (The 2-node SLIT distance in _append_numa_memory
