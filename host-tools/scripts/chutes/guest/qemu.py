@@ -7,6 +7,7 @@ configuration, PCI device topology, networking, volumes, and vsock.
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 
 
 def _block_format(path: str | None) -> str:
@@ -111,8 +112,8 @@ def read_pci_numa_node(bdf: str) -> int:
     return node if node >= 0 else -1
 
 
-def _append_numa_memory(cmd: list[str], mem_mib: int, host_nodes: list[int]) -> None:
-    """Add per-node memory backends and guest NUMA topology.
+def _append_numa_memory(cmd: "QemuCommand", mem_mib: int, host_nodes: list[int]) -> None:
+    """Add per-node memory backends and guest NUMA topology to ``cmd``.
 
     NB: do NOT set prealloc=on on these backends. Under TDX
     (confidential-guest-support=tdx) the guest's actual RAM is private memory
@@ -129,18 +130,15 @@ def _append_numa_memory(cmd: list[str], mem_mib: int, host_nodes: list[int]) -> 
             node_size_mib = mem_mib - per_node_mib * (num_nodes - 1)
         else:
             node_size_mib = per_node_mib
-        cmd.extend([
-            "-object",
-            (
-                f"memory-backend-ram,id=mem-node{i},size={node_size_mib}M,"
-                f"host-nodes={hnode},policy=bind"
-            ),
-        ])
-        cmd.extend(["-numa", f"node,nodeid={i},memdev=mem-node{i}"])
-        cmd.extend(["-numa", f"cpu,node-id={i},socket-id={i}"])
+        cmd.objects.append(
+            f"memory-backend-ram,id=mem-node{i},size={node_size_mib}M,"
+            f"host-nodes={hnode},policy=bind"
+        )
+        cmd.numa.append(f"node,nodeid={i},memdev=mem-node{i}")
+        cmd.numa.append(f"cpu,node-id={i},socket-id={i}")
 
     if num_nodes == 2:
-        cmd.extend(["-numa", "dist,src=0,dst=1,val=21"])
+        cmd.numa.append("dist,src=0,dst=1,val=21")
 
 
 class PciTopologyState:
@@ -153,47 +151,39 @@ class PciTopologyState:
 
     def add_device(
         self,
-        cmd: list[str],
+        cmd: "QemuCommand",
         host_bdf: str,
+        *,
         rp_id: str,
         chassis: int,
-        *,
         bar_size_mb: int | None = None,
         bar_index: int | None = None,
     ):
         """Add a vfio-pci device on a new PCIe root port.
 
         Args:
-            cmd: QEMU command list to extend.
-            host_bdf: PCI BDF of the host device.
+            cmd: QemuCommand to populate (appends a root port + vfio endpoint).
+            host_bdf: host PCI BDF of the device passed through on this root port.
             rp_id: Root port identifier (e.g. 'rp1', 'rp_nvsw1').
             chassis: Chassis number for the root port.
             bar_size_mb: Optional MMIO BAR size hint (fw_cfg opt/ovmf/X-PciMmio64Mb).
             bar_index: 1-based fw_cfg index (only when bar_size_mb is set).
         """
         if self.func == 0:
-            cmd.extend([
-                '-device',
+            cmd.devices.append(
                 f'pcie-root-port,port={self.port},chassis={chassis},id={rp_id},'
-                f'bus=pcie.0,multifunction=on,addr={self.slot:#x}',
-            ])
+                f'bus=pcie.0,multifunction=on,addr={self.slot:#x}'
+            )
         else:
-            cmd.extend([
-                '-device',
+            cmd.devices.append(
                 f'pcie-root-port,port={self.port},chassis={chassis},id={rp_id},'
-                f'bus=pcie.0,addr={self.slot:#x}.{self.func:#x}',
-            ])
+                f'bus=pcie.0,addr={self.slot:#x}.{self.func:#x}'
+            )
 
-        cmd.extend([
-            '-device',
-            f'vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0',
-        ])
+        cmd.devices.append(f'vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0')
 
         if bar_size_mb is not None and bar_index is not None:
-            cmd.extend([
-                '-fw_cfg',
-                f'name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}',
-            ])
+            cmd.fw_cfg.append(f'name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}')
 
         self.port += 1
         self.func = (self.func + 1) % 8
@@ -211,17 +201,14 @@ class NumaPciTopologyState:
         self.pxb_busnr = 128
         self._flat = PciTopologyState(start_port=start_port)
 
-    def _ensure_pxb(self, cmd: list[str], numa_node: int) -> str:
+    def _ensure_pxb(self, cmd: "QemuCommand", numa_node: int) -> str:
         if numa_node not in self.pxb_created:
             pxb_id = f"pxb_numa{numa_node}"
             pxb_addr = f"0x{24 + numa_node:x}"
-            cmd.extend([
-                "-device",
-                (
-                    f"pxb-pcie,bus_nr={self.pxb_busnr},id={pxb_id},"
-                    f"numa_node={numa_node},bus=pcie.0,addr={pxb_addr}"
-                ),
-            ])
+            cmd.devices.append(
+                f"pxb-pcie,bus_nr={self.pxb_busnr},id={pxb_id},"
+                f"numa_node={numa_node},bus=pcie.0,addr={pxb_addr}"
+            )
             self.pxb_created[numa_node] = pxb_id
             self.pxb_port_idx[numa_node] = 0
             self.pxb_busnr += 32
@@ -230,22 +217,28 @@ class NumaPciTopologyState:
 
     def add_device(
         self,
-        cmd: list[str],
+        cmd: "QemuCommand",
         host_bdf: str,
+        *,
         rp_id: str,
         chassis: int,
-        *,
+        numa_node: int,
         bar_size_mb: int | None = None,
         bar_index: int | None = None,
     ):
-        """Add a vfio-pci device under the PXB for its host NUMA node."""
-        numa_node = read_pci_numa_node(host_bdf)
+        """Add a vfio-pci device on a PCIe root port under the PXB for numa_node.
+
+        numa_node is the device's host NUMA node, resolved by the caller (from
+        sysfs for the launch path, from a topology fingerprint for offline
+        measurement); < 0 (NUMA_NO_NODE — no affinity) falls back to flat
+        placement.
+        """
         if numa_node < 0:
             self._flat.add_device(
                 cmd,
                 host_bdf,
-                rp_id,
-                chassis,
+                rp_id=rp_id,
+                chassis=chassis,
                 bar_size_mb=bar_size_mb,
                 bar_index=bar_index,
             )
@@ -255,19 +248,98 @@ class NumaPciTopologyState:
         port_idx = self.pxb_port_idx[numa_node]
         rp_addr = f"0x{port_idx + 1:x}"
         self.pxb_port_idx[numa_node] = port_idx + 1
-        cmd.extend([
-            "-device",
-            f"pcie-root-port,port={self.port},chassis={chassis},id={rp_id},bus={pxb_bus},addr={rp_addr}",
-            "-device",
-            f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0",
-        ])
+        cmd.devices.append(
+            f"pcie-root-port,port={self.port},chassis={chassis},id={rp_id},bus={pxb_bus},addr={rp_addr}"
+        )
+        cmd.devices.append(f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0")
         if bar_size_mb is not None and bar_index is not None:
-            cmd.extend([
-                "-fw_cfg",
-                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}",
-            ])
+            cmd.fw_cfg.append(f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}")
         print(f"    {host_bdf} -> PXB NUMA node {numa_node}")
         self.port += 1
+
+
+@dataclass
+class QemuCommand:
+    """A structured TDX-guest QEMU command.
+
+    Builders populate the structured fields (``objects``/``numa``/``devices``/…)
+    in composition order; ``to_args()`` renders them into the flat
+    ``qemu-system-x86_64`` argv in the one canonical section order QEMU needs
+    (objects before the -numa that reference them, drives before devices). The
+    launcher renders and runs it; offline measurement reads the fields directly
+    (no re-parsing) and rewrites them into tdx-measure metadata.
+
+    ``devices`` is a single ordered list: append order sets PCIe slot assignment
+    (via PcieRootPinning), so it is preserved verbatim.
+    """
+
+    mem: str
+    smp_topology: str
+    cpu_args: str
+    machine: str
+    firmware: str
+    process_name: str
+    foreground: bool
+    logfile: str
+    pidfile: str
+    accel: str = "kvm"
+    tdx_guest: str = (
+        '{"qom-type":"tdx-guest","id":"tdx",'
+        '"quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}'
+    )
+    # Direct boot (1.4.0+): OVMF boots these kernel/initrd/cmdline directly,
+    # dropping GRUB/shim from the measured boot chain. When set, the qcow2 stays
+    # attached as the LUKS root but is no longer the boot device (no bootindex).
+    # Left None for legacy GRUB boot and the offline ACPI-dump path (rtmr0 is
+    # boot-method independent).
+    kernel: str | None = None
+    initrd: str | None = None
+    append: str | None = None
+    objects: list[str] = field(default_factory=list)
+    numa: list[str] = field(default_factory=list)
+    smbios: list[str] = field(default_factory=list)
+    drives: list[str] = field(default_factory=list)
+    netdevs: list[str] = field(default_factory=list)
+    devices: list[str] = field(default_factory=list)
+    fw_cfg: list[str] = field(default_factory=list)
+
+    def to_args(self) -> list[str]:
+        """Render the flat ``qemu-system-x86_64`` argument list."""
+        args = [
+            "qemu-system-x86_64",
+            "-accel", self.accel,
+            "-m", self.mem,
+            "-smp", self.smp_topology,
+            "-name", f"{self.process_name},process={self.process_name},debug-threads=on",
+            "-cpu", self.cpu_args,
+            "-object", self.tdx_guest,
+        ]
+        for o in self.objects:
+            args += ["-object", o]
+        for n in self.numa:
+            args += ["-numa", n]
+        args += ["-machine", self.machine, "-bios", self.firmware, "-nodefaults", "-vga", "none"]
+        for s in self.smbios:
+            args += ["-smbios", s]
+        if self.foreground:
+            args += ["-nographic", "-serial", "mon:stdio"]
+        else:
+            args += ["-nographic", "-serial", f"file:{self.logfile}", "-daemonize", "-pidfile", self.pidfile]
+        if self.kernel:
+            args += ["-kernel", self.kernel]
+        if self.initrd:
+            args += ["-initrd", self.initrd]
+        if self.append is not None:
+            args += ["-append", self.append]
+        for d in self.drives:
+            args += ["-drive", d]
+        for nd in self.netdevs:
+            args += ["-netdev", nd]
+        for dev in self.devices:
+            args += ["-device", dev]
+        for fc in self.fw_cfg:
+            args += ["-fw_cfg", fc]
+        return args
 
 
 def build_base_cmd(
@@ -281,58 +353,72 @@ def build_base_cmd(
     foreground: bool,
     pidfile: str,
     logfile: str,
-    enable_numa_topology: bool = False,
+    host_nodes: list[int],
+    kernel_path: str,
+    initrd_path: str,
+    cmdline: str,
     pci_pinning: PcieRootPinning | None = None,
-) -> list[str]:
-    """Build the base QEMU command (TDX, firmware, CPU, memory, boot disk)."""
-    numa_enabled = use_numa_topology(enable_numa_topology)
-    pinning = pci_pinning or PcieRootPinning(numa_enabled)
-    host_nodes = host_numa_nodes() if numa_enabled else []
+) -> QemuCommand:
+    """Build the base QEMU command (TDX, firmware, CPU, memory, direct boot).
 
-    cmd = [
-        'qemu-system-x86_64',
-        '-accel', 'kvm',
-        '-m', mem,
-        '-smp', smp_topology,
-        '-name', f'{process_name},process={process_name},debug-threads=on',
-        '-cpu', cpu_args,
-        '-object', '{"qom-type":"tdx-guest","id":"tdx","quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}',
-    ]
+    Pure: reads no live hardware. ``host_nodes`` is the explicit guest-NUMA node
+    list, fully resolved by the caller — the launcher from sysfs
+    (``host_numa_nodes()`` gated by ``use_numa_topology``), the measurement
+    adapter from a topology fingerprint. A guest-NUMA topology is built when it
+    names >= 2 nodes; ``[]`` builds a flat guest.
+
+    Direct boot (1.4.0+, not optional): OVMF boots ``kernel_path`` / ``initrd_path``
+    with ``cmdline`` directly — no GRUB. The qcow2 stays attached as the LUKS root
+    but is not the boot device (no ``bootindex``). There is deliberately no GRUB
+    fallback: a second boot path would produce a second, network-inconsistent set
+    of measurements. The launcher passes the artifacts published with the image;
+    the offline ACPI-dump path passes placeholders (RTMR0 is boot-method
+    independent and the measured tables don't include the kernel).
+    """
+    numa_enabled = len(host_nodes) >= 2
+    pinning = pci_pinning or PcieRootPinning(numa_enabled)
+
+    if numa_enabled:
+        machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx"
+    else:
+        machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+
+    cmd = QemuCommand(
+        mem=mem,
+        smp_topology=smp_topology,
+        cpu_args=cpu_args,
+        machine=machine,
+        firmware=firmware,
+        process_name=process_name,
+        foreground=foreground,
+        logfile=logfile,
+        pidfile=pidfile,
+        # Pinned SMBIOS identity so per-server motherboard differences don't
+        # shift RTMR0 within a profile. Single source of truth: the offline
+        # measurement path reads this same builder (build_qemu_command →
+        # platform_tables), so launch and measurement can't diverge.
+        smbios=[
+            "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",
+            "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0",
+            "type=3,manufacturer=Chutes,version=1.0,serial=0",
+        ],
+    )
 
     if numa_enabled:
         mem_mib = _parse_mem_mib(mem)
         _append_numa_memory(cmd, mem_mib, host_nodes)
-        cmd.extend(['-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx'])
         print(
             f"NUMA: {len(host_nodes)} guest nodes, "
             f"{mem_mib // len(host_nodes)}M each (approx), host nodes {host_nodes}"
         )
     else:
-        cmd.extend([
-            '-object', f'memory-backend-ram,id=mem0,size={mem}',
-            '-machine', 'q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0',
-        ])
+        cmd.objects.append(f"memory-backend-ram,id=mem0,size={mem}")
 
-    cmd.extend([
-        '-bios', firmware,
-        '-nodefaults',
-        '-vga', 'none',
-        # Pin SMBIOS identity so per-server motherboard differences don't shift
-        # RTMR0 within a profile. Must match extract-acpi.sh.
-        '-smbios', 'type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000',
-        '-smbios', 'type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0',
-        '-smbios', 'type=3,manufacturer=Chutes,version=1.0,serial=0',
-    ])
-
-    if foreground:
-        cmd.extend(['-nographic', '-serial', 'mon:stdio'])
-    else:
-        cmd.extend([
-            '-nographic',
-            '-serial', f'file:{logfile}',
-            '-daemonize',
-            '-pidfile', pidfile,
-        ])
+    # Direct boot (always): OVMF loads the kernel/initrd/cmdline itself. The qcow2
+    # is still the LUKS root, just not the boot device — so no bootindex.
+    cmd.kernel = kernel_path
+    cmd.initrd = initrd_path
+    cmd.append = cmdline
 
     img_fmt = _block_format(img_path)
     drive_opts = f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}'
@@ -340,17 +426,17 @@ def build_base_cmd(
         drive_opts += ",discard=unmap"
     elif img_fmt == "raw":
         drive_opts += ",discard=on,detect-zeroes=on"
-    cmd.extend(["-drive", drive_opts])
-    dev_opts = f"virtio-blk-pci,drive=virtio-disk0,bootindex=0{pinning.device_suffix()}"
+    cmd.drives.append(drive_opts)
+    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pinning.device_suffix()}"
     if img_fmt == "raw":
         dev_opts += ",num-queues=4"
-    cmd.extend(["-device", dev_opts])
+    cmd.devices.append(dev_opts)
 
     return cmd
 
 
 def build_network(
-    cmd: list[str],
+    cmd: QemuCommand,
     *,
     network_type: str,
     net_iface: str | None,
@@ -358,7 +444,7 @@ def build_network(
     net_queues: int = 4,
     pci_pinning: PcieRootPinning | None = None,
 ):
-    """Add networking configuration to QEMU command."""
+    """Add networking configuration to the QemuCommand."""
     pinning = pci_pinning or PcieRootPinning(False)
     if network_type == "tap":
         if not net_iface:
@@ -366,41 +452,34 @@ def build_network(
             sys.exit(1)
         vectors = 2 * net_queues + 2
         print(f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)")
-        cmd.extend([
-            '-netdev',
-            f'tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}',
-            '-device',
+        cmd.netdevs.append(
+            f'tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}'
+        )
+        cmd.devices.append(
             f'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on'
-            f'{pinning.device_suffix()}',
-        ])
+            f'{pinning.device_suffix()}'
+        )
     else:
         print("Networking: Canonical user-mode networking")
-        cmd.extend([
-            '-device',
-            f'virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}',
-            '-netdev', f'user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22',
-        ])
+        cmd.devices.append(f'virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}')
+        cmd.netdevs.append(f'user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22')
 
 
 def add_volumes(
-    cmd: list[str],
+    cmd: QemuCommand,
     *,
     config_volume: str | None,
     cache_volume: str | None,
     storage_volume: str | None,
     pci_pinning: PcieRootPinning | None = None,
 ):
-    """Add config, cache, and storage volumes to QEMU command."""
+    """Add config, cache, and storage volumes to the QemuCommand."""
     pinning = pci_pinning or PcieRootPinning(False)
     if config_volume:
-        cmd.extend([
-            "-drive",
-            f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on",
-        ])
-        cmd.extend([
-            "-device",
-            f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}",
-        ])
+        cmd.drives.append(
+            f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on"
+        )
+        cmd.devices.append(f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}")
     for vol_path, vol_id in [(cache_volume, "virtio-cache"), (storage_volume, "virtio-storage")]:
         if not vol_path:
             continue
@@ -408,14 +487,14 @@ def add_volumes(
         drive_opts = f"file={vol_path},if=none,id={vol_id},cache=none,aio=native,format={vol_fmt}"
         if vol_fmt == "raw":
             drive_opts += ",discard=on,detect-zeroes=on"
-        cmd.extend(["-drive", drive_opts])
+        cmd.drives.append(drive_opts)
         dev_opts = f"virtio-blk-pci,drive={vol_id}{pinning.device_suffix()}"
         if vol_fmt == "raw":
             dev_opts += ",num-queues=4"
-        cmd.extend(["-device", dev_opts])
+        cmd.devices.append(dev_opts)
 
 
-def add_vsock(cmd: list[str], *, pci_pinning: PcieRootPinning | None = None):
-    """Add vhost-vsock device to QEMU command."""
+def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning | None = None):
+    """Add vhost-vsock device to the QemuCommand."""
     pinning = pci_pinning or PcieRootPinning(False)
-    cmd.extend([f'-device', f'vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}'])
+    cmd.devices.append(f'vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}')

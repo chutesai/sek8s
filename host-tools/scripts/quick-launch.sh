@@ -13,6 +13,22 @@ run_create_config() {
   fi
 }
 
+# Download the direct-boot artifacts published alongside the qcow2 (1.4.0+): the
+# kernel/initrd/cmdline OVMF boots directly. Downloaded next to the image so the
+# launcher (chutes.guest.direct_boot) finds them at <image-base>.{vmlinuz,initrd,cmdline}.
+# $1 = image basename (tdx-guest | tdx-guest-debug), $2 = download dir
+download_boot_artifacts() {
+  local base="$1" dir="$2" ext
+  for ext in vmlinuz initrd cmdline; do
+    echo "Downloading ${base}.${ext} (direct-boot artifact)..."
+    aria2c -x 16 -s 16 -k 1M -d "$dir" -o "${base}.${ext}" "https://vm.chutes.ai/${base}.${ext}" || {
+      echo "Download failed for ${base}.${ext}. It must be published alongside the qcow2 (1.4.0+)."
+      exit 1
+    }
+  done
+  echo "✓ Direct-boot artifacts downloaded next to ${base}.qcow2"
+}
+
 # --------------------------------------------------------------------
 # VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
 # Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
@@ -153,6 +169,7 @@ while [[ $# -gt 0 ]]; do
           echo "Download failed. Ensure aria2c is installed and the URL is accessible."
           exit 1
         }
+        download_boot_artifacts "tdx-guest" "$BASE_DOWNLOAD_DIR"
         echo "✓ Download complete: $BASE_DOWNLOAD_PATH"
       else
         echo "Error: aria2c not found. Install with: sudo apt install aria2"
@@ -172,6 +189,7 @@ while [[ $# -gt 0 ]]; do
           echo "Download failed. Ensure aria2c is installed and the URL is accessible."
           exit 1
         }
+        download_boot_artifacts "tdx-guest-debug" "$BASE_DOWNLOAD_DIR"
         echo "✓ Download complete: $BASE_DOWNLOAD_PATH"
       else
         echo "Error: aria2c not found. Install with: sudo apt install aria2"

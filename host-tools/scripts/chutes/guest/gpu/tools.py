@@ -6,6 +6,7 @@ into a venv if necessary.
 
 import os
 import subprocess
+import sys
 
 
 def _scripts_dir() -> str:
@@ -13,11 +14,60 @@ def _scripts_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
-def ensure_gpu_tools_available() -> str:
-    """Ensure nvidia-gpu-tools CLI is available.
+def _cli_healthy() -> bool:
+    """Return True if nvidia-gpu-tools is on PATH and actually executes.
 
-    Checks if nvidia-gpu-tools is in PATH. If not, installs from bundled
-    wheel into a venv and creates a system-wide symlink.
+    Presence on PATH is not sufficient: /usr/local/bin/nvidia-gpu-tools is a
+    symlink into a venv whose interpreter and site-packages are bound to one
+    Python minor version. An OS upgrade that bumps the system Python (e.g.
+    25.10 -> 26.04, 3.13 -> 3.14) leaves the symlink resolving but the wheel's
+    modules unreachable, so the CLI raises ModuleNotFoundError. Verify it runs
+    (``--help`` exits 0) rather than trusting ``which``.
+    """
+    which = subprocess.run(["which", "nvidia-gpu-tools"], capture_output=True)
+    if which.returncode != 0:
+        return False
+    try:
+        probe = subprocess.run(
+            ["nvidia-gpu-tools", "--help"], capture_output=True, timeout=15
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return probe.returncode == 0
+
+
+def _venv_matches_system_python(venv_dir: str) -> bool:
+    """Return True if the venv was built for the running Python minor version.
+
+    Compares pyvenv.cfg's ``version`` to the current interpreter's ``X.Y``. A
+    mismatch means the system Python was upgraded and the venv's version-scoped
+    ``lib/pythonX.Y/site-packages`` are no longer importable, so it must be
+    rebuilt rather than reused.
+    """
+    cfg = os.path.join(venv_dir, "pyvenv.cfg")
+    if not os.path.exists(cfg):
+        return False
+    try:
+        with open(cfg) as fh:
+            content = fh.read()
+    except OSError:
+        return False
+    target = f"{sys.version_info.major}.{sys.version_info.minor}"
+    for line in content.splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "version":
+            value = value.strip()
+            return value == target or value.startswith(target + ".")
+    return False
+
+
+def ensure_gpu_tools_available() -> str:
+    """Ensure nvidia-gpu-tools CLI is available and functional.
+
+    Returns early only when the installed CLI actually runs — an OS upgrade can
+    bump the system Python and orphan the venv, leaving the CLI on PATH but
+    broken. Otherwise (re)installs from the bundled wheel into a venv rebuilt
+    for the current Python and creates a system-wide symlink.
 
     Returns:
         Command string to use for nvidia-gpu-tools.
@@ -27,8 +77,7 @@ def ensure_gpu_tools_available() -> str:
         RuntimeError: If python3 is not available or installation fails.
         subprocess.CalledProcessError: If installation fails.
     """
-    result = subprocess.run(['which', 'nvidia-gpu-tools'], capture_output=True)
-    if result.returncode == 0:
+    if _cli_healthy():
         return 'nvidia-gpu-tools'
 
     result = subprocess.run(['which', 'python3'], capture_output=True)
@@ -85,6 +134,14 @@ def ensure_gpu_tools_available() -> str:
                 "For Python 3.13 specifically: sudo apt install python3.13-venv"
             )
 
+    # A venv is bound to one Python minor version (its packages live under
+    # lib/pythonX.Y/site-packages). If the system Python was upgraded, the venv
+    # is present but its packages are unreachable — tear it down so it rebuilds
+    # clean rather than reinstalling the wheel into a stale tree.
+    if os.path.exists(venv_dir) and not _venv_matches_system_python(venv_dir):
+        print('  GPU tools venv was built for a different Python — recreating...')
+        subprocess.check_call(['sudo', 'rm', '-rf', venv_dir])
+
     if not os.path.exists(venv_dir):
         _create_venv()
 
@@ -130,7 +187,9 @@ def ensure_gpu_tools_available() -> str:
             f"Please rebuild the wheel using: cd {bundled_tools_dir} && ./bundle-tools.sh"
         )
 
-    if os.path.exists(cli_symlink):
+    # lexists (not exists) so a dangling symlink — left behind when the venv it
+    # pointed into was torn down as stale — is still removed before relinking.
+    if os.path.lexists(cli_symlink):
         if os.path.islink(cli_symlink):
             subprocess.check_call(['sudo', 'rm', cli_symlink])
         else:

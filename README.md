@@ -14,7 +14,7 @@ Confidential GPU infrastructure for Chutes miners and zero-trust workloads. This
 | `**docs/**`             | Integration guide with [chutes-miner](https://github.com/chutesai/chutes-miner) and system-status service documentation |
 | `ansible/guest/`          | Ansible roles for guest image build automation                                                                          |
 | `sek8s/`, `nvevidence/` | Python services running inside the guest (attestation, evidence verification, system status)                            |
-| `guest-tools/`          | Boot measurement extraction tools (`extract-acpi.sh`, `extract-vm-measurements.sh`)                                     |
+| `guest-tools/`          | Guest measurement & verification tooling (`measurement/`), image build output (`image/`), R2 publish (`publish-image.sh`)  |
 
 
 ---
@@ -46,7 +46,7 @@ The `config.yaml` defines your deployment: VM identity, miner credentials, netwo
 ## Key Documentation
 
 - `**[host-tools/README.md](host-tools/README.md)`** — Setting up the TDX host and launching VMs
-- `**[guest-tools/README.md](guest-tools/README.md)**` — Building and measuring the encrypted VM image
+- `**[docs/specs/tdx-measurement-verification.md](docs/specs/tdx-measurement-verification.md)**` — How the guest image's TDX measurements are structured, reproduced, and independently verified (tooling in `guest-tools/measurement/`)
 - `**[docs/end-to-end-miner.md](docs/end-to-end-miner.md)**` — Complete integration workflow with chutes-miner
 - `**[docs/system-status.md](docs/system-status.md)**` — System status API for monitoring service health and GPU telemetry
 

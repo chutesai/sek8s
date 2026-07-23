@@ -66,7 +66,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **ansible/guest/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **ansible/host/** | Operational Ansible (setup / launch / upgrade) for bare-metal TDX hosts over SSH |
 | **opa/** | OPA policy files for admission controller |
-| **guest-tools/** | Boot measurement extraction tools (`extract-acpi.sh`, `extract-vm-measurements.sh`) |
+| **guest-tools/** | Guest measurement & verification tooling (`measurement/`), image build output (`image/`), and R2 publish (`publish-image.sh`) |
 
 ## Environment Setup
 

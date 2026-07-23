@@ -285,15 +285,27 @@
         password: "{{ 'debug' | password_hash('sha512') }}"
       when: debug_build | default(false)
 
-    - name: Allow root password SSH login (debug builds only)
-      ansible.builtin.lineinfile:
-        path: /etc/ssh/sshd_config
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-        state: present
-      loop:
-        - { regexp: '^#?PermitRootLogin',       line: 'PermitRootLogin yes' }
-        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication yes' }
+    - name: Allow root password SSH login via high-precedence drop-in (debug builds only)
+      # Ubuntu's cloud image ships /etc/ssh/sshd_config.d/50-cloud-init.conf with
+      # `PasswordAuthentication no`. sshd honours the FIRST value seen for each
+      # keyword, and the main sshd_config Includes the drop-in dir near the top —
+      # so editing the main file is silently overridden by that drop-in and the
+      # debug image ends up key-only (unusable without the build-time key, which
+      # defeats the point of a debug image). Disabling cloud-init does NOT remove
+      # the drop-in. A `00-` drop-in sorts before `50-cloud-init.conf`, so its
+      # values are seen first and win — restoring password/console access.
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/00-debug-access.conf
+        content: |
+          # Debug build only — restores root password SSH + console access so the
+          # image is usable without the build-time key (e.g. measurement capture).
+          # Named `00-` to win first-match precedence over 50-cloud-init.conf.
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication yes
+        owner: root
+        group: root
+        mode: '0644'
       when: debug_build | default(false)
 
 - name: Security Hardening
@@ -377,15 +389,15 @@
       ansible.builtin.include_role:
         name: finalize-vm-image
 
-- name: Compute expected RTMR3 from final image
+- name: Compute expected RTMRs from final image
   hosts: host
   become: true
   tags:
-    - compute-rtmr3
+    - compute-rtmrs
   tasks:
-    - name: Compute RTMR3
+    - name: Compute RTMR1/RTMR2/RTMR3
       ansible.builtin.include_role:
-        name: compute-rtmr3
+        name: compute-rtmrs
 
 - name: Encrypt disk
   hosts: host

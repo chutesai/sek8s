@@ -1,0 +1,60 @@
+---
+# compute-rtmrs — Compute all expected build-time RTMRs (1, 2, 3) from the
+# finalized image, before LUKS encryption (while it is still plaintext).
+#
+# One step for callers, composing the per-register components (each also usable
+# on its own — e.g. tee-gpu-vm.yml uses compute-rtmr3 directly):
+#   - stage-boot-artifacts : extract <image>.vmlinuz/.initrd/.cmdline (direct-boot
+#                            artifacts) — published with the qcow2 and read by both
+#                            compute-rtmr1-2 and the launcher
+#   - compute-rtmr3        : SHA-384 simulation of the guest's rtmr3-measure chain
+#   - tdx-measure          : provision the fork binary (the RTMR1/2 engine)
+#   - compute-rtmr1-2      : RTMR1/RTMR2 from the staged artifacts (direct boot)
+#
+# The RTMRs are version-level and emitted as <image>.rtmr1/.rtmr2/.rtmr3.
+# Invoke from a become: true play (guestmount/guestfish need root); the
+# tdx-measure provisioning drops to user space itself.
+
+# ── Ensure build-host prerequisites (so the build doesn't fail late) ─────────
+# guestfish/guestmount (libguestfs-tools) for stage-boot-artifacts + compute-rtmr3;
+# git for the tdx-measure fork clone.
+- name: Ensure guestfish/guestmount and git are installed
+  ansible.builtin.apt:
+    name:
+      - libguestfs-tools
+      - git
+    state: present
+    update_cache: true
+
+# cargo builds the tdx-measure fork. Detect as the build user (respecting an
+# existing rustup toolchain in ~/.cargo/bin) and only apt-install if truly absent —
+# never clobber a newer rustup cargo with the older apt one.
+- name: Detect cargo on the build user's PATH
+  ansible.builtin.command: which cargo
+  become: false
+  register: _cargo_present
+  changed_when: false
+  failed_when: false
+
+- name: Install a cargo toolchain when the build user has none
+  ansible.builtin.apt:
+    name: cargo
+    state: present
+  when: _cargo_present.rc != 0
+
+- name: Stage direct-boot artifacts (kernel/initrd/cmdline)
+  ansible.builtin.include_role:
+    name: stage-boot-artifacts
+
+- name: Compute RTMR3 (guest runtime-measure simulation)
+  ansible.builtin.include_role:
+    name: compute-rtmr3
+
+- name: Provision the tdx-measure fork binary (user space)
+  ansible.builtin.include_role:
+    name: tdx-measure
+  become: false
+
+- name: Compute RTMR1/RTMR2 (direct boot, via tdx-measure)
+  ansible.builtin.include_role:
+    name: compute-rtmr1-2

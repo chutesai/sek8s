@@ -42,8 +42,31 @@ host_cpus/host_sockets if the server has a non-standard layout.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
 
 HOST_RESERVED_CPUS = 4
+
+
+@dataclass(frozen=True)
+class PciBar:
+    """One PCI Base Address Register: index, size, and type.
+
+    Read from ``lspci -vvvnn`` (the ``Region N:`` lines, plus the Physical
+    Resizable BAR block for the current VRAM size). ``kind`` is
+    ``m32``/``m64``/``p32``/``p64`` — (m)em non-prefetchable / (p)refetchable,
+    32- or 64-bit addressing. A 64-bit BAR consumes two BAR slots, so a card
+    with three 64-bit BARs reports them at indices 0/2/4.
+
+    Offline measurement generation reproduces these BARs with a ``pci-bar-stub``
+    device so the guest DSDT's MMIO windows match a real passthrough launch
+    without the hardware present.
+    """
+
+    index: int
+    size_mb: int
+    kind: str
 
 
 class GpuProfile(ABC):
@@ -51,6 +74,11 @@ class GpuProfile(ABC):
 
     # PCI device IDs that identify this GPU (e.g. [10de:2901] -> 2901). Override in subclass.
     pci_device_ids: list[str] = []
+
+    # Full PCI BAR layout from `lspci -vvvnn` (see PciBar / discover-profile.sh).
+    # Empty = not yet captured for this model; offline measurement generation is
+    # unavailable until it is (the per-GPU MMIO windows can't be reproduced).
+    pci_bars: list[PciBar] = []
 
     def matches_device_id(self, device_id: str) -> bool:
         """Return True if device_id matches this profile's pci_device_ids."""
@@ -162,6 +190,26 @@ class GpuProfile(ABC):
         return False
 
     @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        """QEMU version -> known topology fingerprints (RTMR0 = f(topology, QEMU)).
+
+        Fingerprints are NumaTopology / FlatTopology value types (see
+        gpu/topology.py). verify-host uses the per-QEMU keys to flag a topology
+        with no measurement at a given QEMU. Empty dict = profile not
+        characterized yet.
+        """
+        return {}
+
+    @property
+    def baselined_topologies(self) -> set[TopologyFingerprint]:
+        """Union of known fingerprints across QEMU versions, for the launch-time
+        hard-match (QEMU-agnostic). Empty union skips the check."""
+        out: set[TopologyFingerprint] = set()
+        for topos in self.baselined_measurements.values():
+            out |= topos
+        return out
+
+    @property
     def enable_post_launch_tuning(self) -> bool:
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
         return False
@@ -249,7 +297,9 @@ class B200Profile(GpuProfile):
 
     @property
     def should_passthrough_infiniband(self) -> bool:
-        return True
+        # Off (like H200/B300): guest networking is virtio-net, NVLink fabric is
+        # host-side FM. Passing IB only made RTMR0 vary by NIC loadout.
+        return False
 
     @property
     def enable_numa_topology(self) -> bool:
@@ -263,6 +313,12 @@ class B200Profile(GpuProfile):
     @property
     def requires_fabric_manager(self) -> bool:
         return True
+
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No NVSwitch and no IB passthrough -> only gpu_nodes set. Every B200 maps
+        # here regardless of NIC loadout. QEMU 10.2.1 (26.04).
+        return {"10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
@@ -278,6 +334,17 @@ class B200Xeon6Profile(B200Profile):
     Flag kept True so it activates automatically when SNC3 support is added.
 
     Confirmed from discover-profile.sh on chutes-miner-gpu-0.
+
+    NOTE (revisit next release): this subclass exists only because host_cpus
+    (288 vs 192) and ram_per_gpu_gb (369 vs 243) differ from B200Profile — both
+    are host-instance facts, not GPU-model policy. The plan is to fold vcpus (from
+    the live host) and guest mem (B200 derives it from host RAM: (host_gb-64)//gpus
+    — see discover-profile.sh) into the topology fingerprint and collapse this into
+    a single B200Profile, so "B200 vs Xeon6" becomes two fingerprints rather than
+    two classes. Deferred now because it would move RTMR0 for off-nominal hosts
+    (e.g. a 192-CPU/3 TB B200 currently pinned to mem=1944 would derive 2952); once
+    the next-release flow captures+validates+reports topology, updating those
+    measurements is cheap. See gpu/topology.py.
     """
 
     pci_device_ids = ["2901"]
@@ -297,6 +364,15 @@ class B200Xeon6Profile(B200Profile):
         # 2 sockets × 72 cores × 2 threads = 288.
         # Confirmed from discover-profile.sh on chutes-miner-gpu-0.
         return 288
+
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        return {
+            # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4.
+            "10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
+            # Xeon6 SNC3 -> 6 nodes -> flat fallback.
+            "10.1.0": {FlatTopology(gpu_count=8)},
+        }
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200 Xeon6)"
@@ -355,6 +431,12 @@ class B300Profile(GpuProfile):
 
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
+    # lspci -vvvnn on dev-h200-tee (10de:2335): BAR2 resizable, current 256GB.
+    pci_bars = [
+        PciBar(0, 16, "p64"),
+        PciBar(2, 262144, "p64"),  # 256G VRAM
+        PciBar(4, 32, "p64"),
+    ]
 
     @property
     def name(self) -> str:
@@ -372,6 +454,17 @@ class H200Profile(GpuProfile):
     def host_cpus(self) -> int:
         # 2 sockets × 32 cores × 2 threads = 128.
         # Confirmed from discover-profile.sh on dev-h200-tee.
+        #
+        # NOTE (revisit next release): this is pinned at 128, so EVERY H200 host
+        # attests at vcpus=124 regardless of its real CPU count. The 192-CPU H200
+        # hosts (e.g. h200-ar6, h200-gd-245) therefore run with 124 vcpus — 68
+        # physical cores unused — and match the single 124-vcpu H200 measurement.
+        # The intended fix (aligned with the B200 direction) is to derive vcpus
+        # from the live host and carry the resulting -smp in the topology
+        # fingerprint, so a 192-CPU H200 runs 188 vcpus with its own baseline.
+        # Deferred here to avoid re-baselining those hosts mid-stream; when it
+        # lands, register the 192-CPU H200 RTMR0 in chutes-ops teeMeasurements
+        # first. See gpu/topology.py for the fingerprint the smp/mem would join.
         return 128
 
     @property
@@ -410,6 +503,27 @@ class H200Profile(GpuProfile):
         # before changing this value.
         return total_gpus == 8
 
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No IB passthrough -> ib_nodes empty. Mirrors chutes-ops teeMeasurements.
+        # The two NUMA fingerprints differ only in which host NUMA node the four
+        # NVSwitches attach to (chassis-dependent); GPUs are always 4+4.
+        nvswitch_on_node1 = NumaTopology(  # e.g. Dell XE9680
+            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(1, 1, 1, 1)
+        )
+        nvswitch_on_node0 = NumaTopology(  # e.g. KR6288
+            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 0, 0, 0)
+        )
+        return {
+            # No 10.2.1 flat entry (no flat-path H200 baselined at 10.2.1 yet).
+            "10.1.0": {
+                nvswitch_on_node1,
+                nvswitch_on_node0,
+                FlatTopology(gpu_count=8, nvswitch_count=4),
+            },
+            "10.2.1": {nvswitch_on_node1, nvswitch_on_node0},
+        }
+
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
             return "PPCIe mode (8 GPUs, H200)"
@@ -419,6 +533,12 @@ class H200Profile(GpuProfile):
 class RTXPro6000Profile(GpuProfile):
     # 2bb1 = Workstation Edition, 2bb5 = Server Edition
     pci_device_ids = ["2bb1", "2bb5"]
+    # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
+    pci_bars = [
+        PciBar(0, 64, "p64"),
+        PciBar(2, 131072, "p64"),  # 128G VRAM
+        PciBar(4, 32, "p64"),
+    ]
 
     @property
     def name(self) -> str:
@@ -458,6 +578,22 @@ class RTXPro6000Profile(GpuProfile):
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return False
+
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # No NVSwitch/IB -> only gpu_nodes / gpu_count set. Two host shapes,
+        # distinguished purely by NUMA node count:
+        #   - 2 NUMA nodes -> guest-NUMA path, GPUs 4+4.
+        #   - >2 NUMA nodes (e.g. 4) -> flat fallback; only GPU count matters.
+        # QEMU 10.2.1 = Ubuntu 26.04 (confirmed by discover-profile); the 10.1.0
+        # entry covers RTX hosts still on 25.10.
+        return {
+            "10.1.0": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
+            "10.2.1": {
+                NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
+                FlatTopology(gpu_count=8),
+            },
+        }
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (RTX Pro 6000)"
