@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-07-18
+## [1.4.0] - 2026-07-23
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -48,6 +48,34 @@ Version source of truth: `ansible/guest/VERSION`
 - `sek8s.attestation-proxy` AppArmor profile confining the proxy container to
   its required paths; added to the apparmor-hardening install/verify wiring and
   to the RTMR3 measurement chain (`tdx-measure-miner.conf`).
+- **Build-time RTMR computation** — `chutes-miner-vm.yml` now computes all expected
+  build-time RTMRs (1, 2, 3) from the finalized image before LUKS encryption, in one
+  `compute-rtmrs` role that composes `stage-boot-artifacts`, `compute-rtmr3`,
+  `tdx-measure` (fork provisioning), and `compute-rtmr1-2`. Emits `<image>.rtmr1`,
+  `.rtmr2`, `.rtmr3` (bare uppercase hex). RTMR1/2 are version-level
+  (topology-independent) and come from the prod image — the debug image's initrd
+  differs, so its RTMR2 would be wrong. The role ensures its own build-host
+  prerequisites (`libguestfs-tools`, `git`, and `cargo` only when the build user has
+  none); `tdx-measure` clones/builds the `chutesai/tdx-measure` fork (reusing an
+  existing checkout), overridable via `tdx_measure_bin`.
+- **`stage-boot-artifacts`** — extracts the direct-boot kernel/initrd/cmdline from the
+  finalized image once and persists them next to it as `<image>.vmlinuz`, `.initrd`,
+  `.cmdline`. Published to R2 with the qcow2 and read by both `compute-rtmr1-2` (build)
+  and the launcher (deploy), so the pinned RTMR1/2 match the running VM by construction.
+- **`capture-measurement-baseline.yml`** — a local build-server step that captures the
+  offline-measurement baseline (the RTMR0 inputs) from the freshly-built debug image:
+  copies it to `/tmp` so the publishable artifact is never mutated, TDX-boots the copy,
+  captures the CCEL + fw_cfg ACPI/SMBIOS preimages into the top-level
+  `measurements/<version>/`, verifies the CCEL actually landed, and tears down.
+- **`guest-tools/measurement/`** — offline RTMR0 measurement/verification tooling:
+  `ccel_replay.py` (CC event-log parse + SHA-384 RTMR replay, with a per-register
+  `diff`), `capture-measurement-artifacts.sh` (capture the CCEL + preimages),
+  `extract-measurements.sh` (report a running guest's live MRTD + RTMR0-3 from a fresh
+  quote), and `utils/` (SMBIOS-event preimage matcher, per-table ACPI byte-diff). Reuses
+  the launcher's QEMU-arg builders and the `virtee/tdx-measure` fork.
+- **`docs/specs/tdx-measurement-verification.md`** — how TDX guest measurements are
+  structured, why RTMR0 is the only per-topology register, and how they are
+  independently reproduced and verified.
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -117,9 +145,18 @@ Version source of truth: `ansible/guest/VERSION`
 - `configure-cosign.yml`: removed the `127.0.0.1 localregistry.chutes.ai`
   `/etc/hosts` alias and the `insecure-registries` Docker daemon config that
   supported the old local proxy.
+- Build-pipeline-only scripts moved from `guest-tools/scripts/` into their Ansible role
+  `files/` (invoked exclusively by the build): `compute-rtmr3.sh`, `compute-rtmr1-2.sh`,
+  `stage-boot-artifacts.sh`, and `extract-vm-measurements.sh`. `guest-tools/scripts/` now
+  holds only the standalone release tool `publish-image.sh`.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
+- Debug guest images (`debug_build: true`) shipped key-only: the debug-credentials play
+  edited the main `sshd_config`, but Ubuntu's `sshd_config.d/50-cloud-init.conf` drop-in
+  (`PasswordAuthentication no`) is Included first and won first-match precedence, so
+  password/console access never took effect. The play now writes a `00-debug-access.conf`
+  drop-in that sorts ahead of the cloud-init one, restoring root password SSH login.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
@@ -127,6 +164,14 @@ Version source of truth: `ansible/guest/VERSION`
 - `setup-tls-certs.sh` userspace proxy-cert generator and its wiring in
   `attestation-service-init.service` / `install-attestation-init-service.yml`.
   The proxy server cert is now minted in the initramfs by `setup_vm_tls`.
+- `guest-tools/scripts/extract-acpi.sh` — dead: the old host-side ACPI dump that had to
+  be hand-synced with the launcher. Superseded by offline generation that shares the
+  launcher's exact `QemuCommand` and generates ACPI via `tdx-measure --create-acpi-tables`.
+- `guest-tools/scripts/run-image.sh` — dead, unreferenced libvirt/VNC/cloud-init test-boot
+  script predating the current `run-td` flow.
+- `guest-tools/README.md` — the old manual step-by-step measurement guide, superseded by
+  build-integrated `compute-rtmrs` + the `guest-tools/measurement/` tooling; the concepts
+  now live in `docs/specs/tdx-measurement-verification.md`.
 
 ### Notes
 - This change alters the RTMR3 measurement baseline (new AppArmor profile, edited
