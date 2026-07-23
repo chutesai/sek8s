@@ -18,3 +18,7 @@
   and `cargo build --release`s it), so the build is self-contained. Override
   `tdx_measure_bin` to use a prebuilt binary and skip cloning/building. Build-host
   prereqs: `git`, `cargo`, and `libguestfs-tools` (guestfish).
+
+- `compute-rtmrs` now ensures build-host prerequisites itself (`libguestfs-tools`,
+  `git`, and — only when the build user has no toolchain — `cargo`), so the build no
+  longer fails late on a missing host dependency.
