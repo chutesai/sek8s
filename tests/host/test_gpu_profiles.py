@@ -495,7 +495,11 @@ def test_detect_qemu_version_parses_upstream_version():
 
     from chutes.guest import detection
 
-    fake = type("R", (), {"stdout": "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)\n"})()
+    fake = type(
+        "R",
+        (),
+        {"stdout": "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)\n"},
+    )()
     with patch("chutes.guest.detection.subprocess.run", return_value=fake):
         assert detection.detect_qemu_version() == "10.2.1"
 
@@ -520,7 +524,9 @@ def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
     # 26.04 ships 10.2.1; a host on 26.04 running 10.1.0 must be flagged.
     with patch("chutes.guest.detection.detect_os_version", return_value="26.04"):
         with patch("chutes.guest.detection.detect_qemu_version", return_value="10.1.0"):
-            with pytest.raises(ValueError, match=r"ships \(and we baseline\) QEMU 10\.2\.1"):
+            with pytest.raises(
+                ValueError, match=r"ships \(and we baseline\) QEMU 10\.2\.1"
+            ):
                 verify_host_qemu_supported()
 
 
@@ -532,7 +538,9 @@ def test_verify_host_qemu_supported_raises_on_unsupported_os():
 
     with patch("chutes.guest.detection.detect_os_version", return_value="24.04"):
         with patch("chutes.guest.detection.detect_qemu_version", return_value="8.2.2"):
-            with pytest.raises(ValueError, match=r"OS release '24.04' is not supported"):
+            with pytest.raises(
+                ValueError, match=r"OS release '24.04' is not supported"
+            ):
                 verify_host_qemu_supported()
 
 
@@ -543,7 +551,9 @@ def test_verify_host_qemu_supported_raises_when_qemu_undetectable():
     from chutes.guest.detection import verify_host_qemu_supported
 
     with patch("chutes.guest.detection.detect_qemu_version", return_value=None):
-        with pytest.raises(ValueError, match="Could not determine the host QEMU version"):
+        with pytest.raises(
+            ValueError, match="Could not determine the host QEMU version"
+        ):
             verify_host_qemu_supported()
 
 
@@ -791,9 +801,7 @@ def test_topology_fingerprint_includes_ib_layout_on_numa_path():
             side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (), (0, 0, 1, 1)],
         ):
             fp = host_topology_fingerprint(profile, gpus, [], ib)
-    assert fp == NumaTopology(
-        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), ib_nodes=(0, 0, 1, 1)
-    )
+    assert fp == NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), ib_nodes=(0, 0, 1, 1))
 
 
 def test_topology_fingerprint_ib_count_on_flat_path():
@@ -828,7 +836,9 @@ def test_detect_profile_skips_topology_check_for_unbaselined_profile():
     # not enforced, so an arbitrary fingerprint must not refuse the launch.
     from chutes.guest.detection import detect_profile
 
-    b300_lines = ["0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"]
+    b300_lines = [
+        "0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"
+    ]
     with _patch_detection(
         lspci_lines=b300_lines,
         host_cpus=192,

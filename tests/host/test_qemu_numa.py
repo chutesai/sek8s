@@ -29,6 +29,7 @@ def _empty_cmd() -> QemuCommand:
         pidfile="/p",
     )
 
+
 # ---------------------------------------------------------------------------
 # safe_vm_mem_gb — clamp guest RAM to host capacity (TDX mem is unreclaimable)
 # ---------------------------------------------------------------------------

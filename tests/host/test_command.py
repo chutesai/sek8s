@@ -72,7 +72,9 @@ def test_flat_spec_matches_direct_builders():
         firmware=_FW,
         host_nodes=[],
         devices=[
-            DeviceSpec(rp_id=f"rp{i + 1}", chassis=i + 1, host_bdf=f"0000:{i + 1:02x}:00.0")
+            DeviceSpec(
+                rp_id=f"rp{i + 1}", chassis=i + 1, host_bdf=f"0000:{i + 1:02x}:00.0"
+            )
             for i in range(8)
         ],
     )
@@ -81,5 +83,7 @@ def test_flat_spec_matches_direct_builders():
     manual = _base(host_nodes=[])
     topo = PciTopologyState()
     for i in range(8):
-        topo.add_device(manual, host_bdf=f"0000:{i + 1:02x}:00.0", rp_id=f"rp{i + 1}", chassis=i + 1)
+        topo.add_device(
+            manual, host_bdf=f"0000:{i + 1:02x}:00.0", rp_id=f"rp{i + 1}", chassis=i + 1
+        )
     assert got == manual

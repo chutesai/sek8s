@@ -7,7 +7,6 @@ tdx-measure container, not here.
 """
 
 import pytest
-
 from chutes.guest.gpu.profiles import GPU_PROFILES
 from chutes.guest.gpu.topology import FlatTopology, NumaTopology
 from platform_tables import MeasurementMetadata
@@ -21,7 +20,9 @@ def _md(model, fingerprint, **kw):
     spec = build_topology_spec(
         profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
     )
-    return MeasurementMetadata(spec, profile, acpi_tables="/out/acpi.bin", **kw).to_dict()
+    return MeasurementMetadata(
+        spec, profile, acpi_tables="/out/acpi.bin", **kw
+    ).to_dict()
 
 
 def _rtx_numa():
@@ -57,7 +58,9 @@ def test_vfio_swapped_for_pci_bar_stub_with_profile_bars():
     stubs = [d for d in q["devices"] if d.startswith("pci-bar-stub")]
     assert len(stubs) == 8  # one per GPU
     # each stub carries the RTX BAR layout and stays on its root port
-    for i, stub in enumerate(sorted(stubs, key=lambda s: int(s.split("bus=rp")[1].split(",")[0])), 1):
+    for i, stub in enumerate(
+        sorted(stubs, key=lambda s: int(s.split("bus=rp")[1].split(",")[0])), 1
+    ):
         assert f"bus=rp{i}," in stub
         assert "bars=0:64M:p64;2:128G:p64;4:32M:p64" in stub
         assert "vendor=0x10de" in stub
@@ -69,8 +72,16 @@ def test_serial_attached_for_com1():
 
 
 def test_smbios_can_be_dropped():
-    with_it = _md("RTX_PRO_6000", NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)), with_smbios=True)
-    without = _md("RTX_PRO_6000", NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)), with_smbios=False)
+    with_it = _md(
+        "RTX_PRO_6000",
+        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
+        with_smbios=True,
+    )
+    without = _md(
+        "RTX_PRO_6000",
+        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
+        with_smbios=False,
+    )
     assert with_it["boot_config"]["qemu"]["smbios"]
     assert without["boot_config"]["qemu"]["smbios"] == []
 
@@ -92,8 +103,6 @@ def test_nvswitch_endpoint_not_yet_modeled():
     # NVSwitch/IB are passthrough devices too; their BARs also shape the DSDT and
     # need their own captured layout. Until then, generation fails loudly rather
     # than silently producing a wrong measurement.
-    fp = NumaTopology(
-        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1)
-    )
+    fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1))
     with pytest.raises(NotImplementedError, match="BAR layout"):
         _md("H200", fp)

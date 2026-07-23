@@ -22,9 +22,15 @@ def _patch_verify(profile, fingerprint, qemu="10.1.0", qemu_raises=False):
     )
     if qemu_raises:
         qemu_gate.side_effect = ValueError("qemu 10.2.1 != expected 10.1.0")
-    stack.enter_context(patch("chutes.guest.verify.detect_profile", return_value=profile))
-    stack.enter_context(patch("chutes.guest.verify.detect_qemu_version", return_value=qemu))
-    stack.enter_context(patch("chutes.guest.verify._host_fingerprint", return_value=fingerprint))
+    stack.enter_context(
+        patch("chutes.guest.verify.detect_profile", return_value=profile)
+    )
+    stack.enter_context(
+        patch("chutes.guest.verify.detect_qemu_version", return_value=qemu)
+    )
+    stack.enter_context(
+        patch("chutes.guest.verify._host_fingerprint", return_value=fingerprint)
+    )
     return stack
 
 
@@ -67,6 +73,8 @@ def test_verify_target_os_skips_live_qemu_gate():
     # In --target-os mode the live-QEMU hygiene gate must NOT run (the upgrade
     # replaces QEMU), so even a raising gate doesn't block a registered combo.
     xeon6 = GPU_PROFILES["B200_XEON6"]
-    xeon6_fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))  # registered at 10.2.1 (no IB)
+    xeon6_fp = NumaTopology(
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)
+    )  # registered at 10.2.1 (no IB)
     with _patch_verify(xeon6, xeon6_fp, qemu_raises=True):
         assert verify.verify_host(target_os="26.04") == verify.READY
