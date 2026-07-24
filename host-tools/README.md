@@ -7,7 +7,7 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 ## Prerequisites
 
 - **Hardware**: Intel TDX-capable CPU and NVIDIA GPUs. See [Validated host topologies](#validated-host-topologies).
-- **OS**: Ubuntu **25.10** (validated). A 26.04 profile exists but has not yet been end-to-end validated. Ubuntu 25.04 is EOL — use `upgrade-host.yml` to advance to 25.10 first.
+- **OS**: Ubuntu **25.10** or **26.04** — both validated end-to-end. Ubuntu 25.04 is EOL and has no setup profile; use `upgrade-host.yml` to advance to 25.10 first.
 - **Access**: Root/sudo privileges on the host; SSH access from the Ansible control machine.
 
 ### Validated host topologies
@@ -16,11 +16,12 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 
 | Ubuntu | GPU SKU      | GPU count | Status              | Notes |
 |--------|--------------|-----------|---------------------|-------|
-| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
-| 26.04  | B300         | 8         | Validated           | Same Blackwell HGX architecture as B200. See [Blackwell HGX notes](#blackwell-hgx-notes). |
-| 25.10  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
 | 25.10  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
-| 25.04  | —            | —         | EOL                 | No profile. Run `upgrade-host.yml` to advance to 25.10. |
+| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
+| 25.10  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
+| 26.04  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
+| 26.04  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
+| 26.04  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
 
 Print the canonical matrix from the repo:
 ```bash
@@ -28,9 +29,9 @@ cd host-tools/scripts
 ./setup-tdx-host --topology-matrix
 ```
 
-#### Blackwell HGX notes (B200 / B300)
+#### Blackwell HGX notes
 
-B200 and B300 use a different NVSwitch architecture from H100/H200. Key differences that affect host setup:
+B200 and B300 use a different NVSwitch architecture from H100/H200. `setup-tdx-host` detects and configures both, but only **B200** is in the [validated topologies](#validated-host-topologies) above — B300 host setup works the same way but has not yet been validated end-to-end. Key differences that affect host setup:
 
 - **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `setup-tdx-host` when B200 or B300 GPUs are detected. The guest's Fabric Manager is masked.
 - **CX7 NVSwitch bridge PFs stay on the host**: ConnectX-7 devices acting as the host interface to NVSwitches (identified by `SMDL=SW_MNG` in PCIe VPD) are excluded from VFIO passthrough. Regular CX7 NIC PFs are still passed through normally.

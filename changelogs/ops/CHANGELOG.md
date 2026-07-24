@@ -3,6 +3,14 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.07.3] - 2026-07-24
+
+### Changed
+- Reconciled the validated host-topology matrix (`support_matrix.py` and the
+  host-tools / ansible READMEs). H200, B200, and RTX Pro 6000 (all 8-GPU) are now
+  listed as validated on both Ubuntu 25.10 and 26.04. Removed the stale
+  `25.04 / H200` (EOL OS) and `26.04 / B300` (not yet validated end-to-end) rows.
+
 ## [2026.07.2] - 2026-07-09
 
 ### Added

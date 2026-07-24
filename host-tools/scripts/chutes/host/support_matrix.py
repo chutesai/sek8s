@@ -10,10 +10,12 @@ Keys use GpuProfile ``name`` values (e.g. ``H200``, ``RTX_PRO_6000``).
 # (ubuntu_version, gpu_sku, gpu_count) — gpu_sku matches GpuProfile.name
 _VALIDATED_TOPOLOGIES: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("25.04", "H200", 8),
+        ("25.10", "H200", 8),
         ("25.10", "B200", 8),
-        ("26.04", "B300", 8),
         ("25.10", "RTX_PRO_6000", 8),
+        ("26.04", "H200", 8),
+        ("26.04", "B200", 8),
+        ("26.04", "RTX_PRO_6000", 8),
     }
 )
 
@@ -25,27 +27,17 @@ _GPU_SKU_LABEL: dict[str, str] = {
 }
 
 # Per-row notes for operators (keep in sync with docs expectations).
+_HGX_NOTE = (
+    "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host "
+    "(excluded from passthrough)."
+)
 _VALIDATED_NOTES: dict[tuple[str, str, int], str] = {
-    (
-        "25.04",
-        "H200",
-        8,
-    ): "NVSwitch required.",
-    (
-        "25.10",
-        "B200",
-        8,
-    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host (excluded from passthrough).",
-    (
-        "26.04",
-        "B300",
-        8,
-    ): "Host-side Fabric Manager required. CX7 NVSwitch bridge PFs stay on host. No IB passthrough (guest uses virtio-net).",
-    (
-        "25.10",
-        "RTX_PRO_6000",
-        8,
-    ): "No NVSwitch on this SKU.",
+    ("25.10", "H200", 8): "NVSwitch required.",
+    ("25.10", "B200", 8): _HGX_NOTE,
+    ("25.10", "RTX_PRO_6000", 8): "No NVSwitch on this SKU.",
+    ("26.04", "H200", 8): "NVSwitch required.",
+    ("26.04", "B200", 8): _HGX_NOTE,
+    ("26.04", "RTX_PRO_6000", 8): "No NVSwitch on this SKU.",
 }
 
 
