@@ -1,9 +1,11 @@
 ---
 # vm-tls — installs setup_vm_tls, the initramfs init-bottom script
-# (PREREQ=setup_storage) that owns the full VM mTLS cert lifecycle: CA
-# generation, validator registration, proxy server cert, registry client cert,
-# and CA key deletion — all within the RTMR2-measured initramfs before
-# pivot_root.
+# (PREREQ=setup_storage) that signs the VM mTLS leaf certs (proxy server cert +
+# registry client cert) from the per-boot VM root CA and then deletes the CA key
+# — all within the RTMR2-measured initramfs before pivot_root. The CA itself is
+# generated earlier in fetch_key_and_unlock (init-premount) and registered with
+# the validator implicitly via the RTMR3-attested /provision call in
+# setup_storage (no separate registration endpoint).
 #
 # This role runs against hosts: vm (like signing-keys and rtmr3-measure) and
 # installs the script onto the live VM filesystem. The "update initramfs"

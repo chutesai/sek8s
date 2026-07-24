@@ -54,9 +54,11 @@ clear_sensitive_data() {
         fi"
     done
 
+    # NB: the VM root CA (/run/chutes/vm-root-ca) is intentionally NOT removed
+    # here — setup_vm_tls owns its lifecycle and deletes ca.key before pivot_root.
     rm -f /tmp/storage_response /tmp/luks_response /tmp/luks_key_cur \
           /tmp/luks_key_nxt /tmp/luks_key_fb /tmp/luks_key_old \
-          /tmp/client_cert.pem /tmp/client_key.pem /run/chutes/cert-hash
+          /run/chutes/cert-hash
 
     # If script exits without success flag, shutdown the VM
     if [ "$SUCCESS_FLAG" -ne 1 ]; then
@@ -195,9 +197,9 @@ post_sync_keys() {
 
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
-    local client_cert="/tmp/client_cert.pem"
-    local client_key="/tmp/client_key.pem"
-    local endpoint_url="${TDX_BASE_URL}/servers/${VM_NAME}/luks/attest"
+    local client_cert="/run/chutes/vm-root-ca/ca.crt"
+    local client_key="/run/chutes/vm-root-ca/ca.key"
+    local endpoint_url="${TDX_BASE_URL}/servers/${VM_NAME}/provision"
 
     # Read the single-use nonce issued alongside the root LUKS key in boot attestation.
     # Embed it as REPORTDATA so the quote is cryptographically bound to this specific call;
@@ -211,7 +213,9 @@ post_sync_keys() {
     fi
 
     # Read the cert hash saved by fetch_key_and_unlock so the quote REPORTDATA binds
-    # this call to the same mTLS certificate used during boot attestation (nonce + cert_hash).
+    # this call to the VM root CA — the same mTLS cert used during boot attestation
+    # (nonce + cert_hash). The validator records this CA as the VM root CA from this
+    # RTMR3-attested /provision call, so no separate registration round-trip is needed.
     local cert_hash
     cert_hash=$(cat /run/chutes/cert-hash 2>/dev/null | tr -d '\n')
     if [ -z "$cert_hash" ]; then
@@ -223,7 +227,7 @@ post_sync_keys() {
     # RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
     local report_data
     report_data=$(echo -n "${quote_nonce}${cert_hash}" | cut -c1-128)
-    log_begin_msg "Generating TDX quote for LUKS attest"
+    log_begin_msg "Generating TDX quote for /provision"
     if ! /usr/bin/tdx-quote-generator --report-data "$report_data" --hex \
             -o "$quote_file" 2>/dev/null; then
         log_end_msg 1
@@ -235,7 +239,7 @@ post_sync_keys() {
     rm -f "$quote_file"
     log_end_msg 0
 
-    log_begin_msg "POST /luks/attest (volumes=${STORAGE_LABEL},${CACHE_LABEL})"
+    log_begin_msg "POST /provision (volumes=${STORAGE_LABEL},${CACHE_LABEL})"
 
     # NO-LOG INVARIANT: the response body contains plaintext LUKS passphrases and
     # the k3s encryption key.  $response_file must NEVER be logged or echoed.
@@ -332,10 +336,10 @@ confirm_rotation() {
 
     local timeout="${TDX_TIMEOUT:-30}"
     local ca_cert="/etc/ssl/certs/ca-certificates.crt"
-    local client_cert="/tmp/client_cert.pem"
-    local client_key="/tmp/client_key.pem"
+    local client_cert="/run/chutes/vm-root-ca/ca.crt"
+    local client_key="/run/chutes/vm-root-ca/ca.key"
     local confirm_url
-    confirm_url="${TDX_BASE_URL}/servers/${VM_NAME}/luks/confirm"
+    confirm_url="${TDX_BASE_URL}/servers/${VM_NAME}/provision/confirm"
 
     local body
     body="{\"volumes\":{"
@@ -361,8 +365,10 @@ confirm_rotation() {
         -o /dev/null \
         "$confirm_url")
 
-    # mTLS cert is no longer needed after this final initramfs API call.
-    rm -f "$client_cert" "$client_key" /run/chutes/cert-hash
+    # The cert-hash scratch file is done after this call. Do NOT delete the VM
+    # root CA here — setup_vm_tls still needs ca.key to sign the attestation-proxy
+    # and registry leaf certs, and deletes it before pivot_root.
+    rm -f /run/chutes/cert-hash
 
     if [ "$http_code" = "200" ]; then
         log_success_msg "LUKS passphrase rotation confirmed by API"
