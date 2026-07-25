@@ -1,7 +1,16 @@
 # Feature Spec: VM Attestation CA + Registry mTLS
 
 **Date**: 2026-05-31 (re-derived onto release/next: 2026-07)
-**Status**: implemented
+**Status**: implemented — CA registration mechanism **superseded** by
+[`root-ca.md`](root-ca.md)
+
+> **Superseded (2026-07):** the per-VM CA is no longer registered via a dedicated
+> `PUT /servers/{vm_name}/vm-root-ca` call. The CA is now generated up front in
+> `fetch_key_and_unlock` (init-premount), presented as the mTLS client cert on every boot call,
+> and recorded by the validator from the RTMR3-attested `POST /servers/{vm}/provision` call
+> (which replaced `/luks/attest`). `setup_vm_tls` no longer generates or registers the CA — it only
+> signs the leaf certs from the existing CA. See [`root-ca.md`](root-ca.md). References below to
+> `PUT /vm-root-ca`, `setup_vm_ca()`, and "generate the CA in `setup_vm_tls`" are historical.
 
 ---
 

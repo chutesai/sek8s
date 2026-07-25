@@ -1,0 +1,7 @@
+### Changed
+- The per-boot VM root CA is now generated up front in `fetch_key_and_unlock` (init-premount) and used as the VM's single mTLS client identity for every boot API call (`GET /nonce`, `POST /boot/attestation`, root `POST /luks/confirm`, and the runtime storage attestation). This replaces the throwaway self-signed client cert (`CN=tdx-vm-<ts>`) that was previously minted for the boot/luks calls.
+- `setup_storage` now calls the new `POST /servers/{vm}/provision` and `POST /servers/{vm}/provision/confirm` endpoints (replacing `/luks/attest` and the storage `/luks/confirm`). The provision quote binds `SHA256(CA pubkey)` after RTMR3 is extended, so the validator records the VM root CA implicitly from that RTMR3-attested call — no separate registration round-trip.
+- VM root CA and both leaf certs (attestation-proxy server cert, registry mTLS client cert) now use a 365-day validity instead of 1 day, so long-running VMs (which reboot only on image updates) do not hit cert expiry mid-run. Per-boot rotation is unchanged — all certs are still regenerated fresh on every boot and live in tmpfs only.
+
+### Removed
+- `setup_vm_tls` no longer generates or registers the VM root CA. It now only signs the leaf certs from the CA generated in init-premount and deletes `ca.key` before `pivot_root`. The dedicated `PUT /servers/{vm}/vm-root-ca` registration call (and its nonce-less quote) is gone.

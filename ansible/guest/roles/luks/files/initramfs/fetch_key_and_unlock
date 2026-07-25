@@ -31,8 +31,14 @@ DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
 TIMEOUT="${TDX_TIMEOUT:-30}"
 RETRY_COUNT="${TDX_RETRY_COUNT:-3}"
-CLIENT_CERT="/tmp/client_cert.pem"
-CLIENT_KEY="/tmp/client_key.pem"
+# The per-boot VM root CA is the VM's single mTLS client identity for every boot
+# API call (nonce, boot attestation, root confirm) and, later, /provision +
+# /provision/confirm in setup_storage. It lives in TDX-encrypted DRAM only
+# (tmpfs) and is deleted before pivot_root by setup_vm_tls after it signs the
+# leaf certs — the key never reaches userspace.
+CA_DIR="/run/chutes/vm-root-ca"
+CLIENT_CERT="${CA_DIR}/ca.crt"
+CLIENT_KEY="${CA_DIR}/ca.key"
 API_CA_CERT="/etc/ssl/certs/ca-certificates.crt"
 
 # Global variables
@@ -64,9 +70,11 @@ clear_luks_key() {
     ROOT_CONFIRM_NONCE=""
     unset ROOT_CONFIRM_NONCE
     
-    # Clear any temporary files that might contain sensitive data.
-    # On success the cert must survive until setup_storage (init-bottom) completes
-    # its /luks/attest call; setup_storage is responsible for deleting them.
+    # Clear temporary files that might contain sensitive data.
+    # On FAILURE, remove the VM root CA key/cert too (the VM is about to power
+    # off). On SUCCESS the CA must survive: setup_storage uses it as the mTLS
+    # client cert for /provision, and setup_vm_tls signs the leaf certs with it
+    # and then deletes ca.key before pivot_root.
     if [ "$SUCCESS_FLAG" -ne 1 ]; then
         rm -f "$CLIENT_CERT" "$CLIENT_KEY"
     fi
@@ -89,26 +97,40 @@ log_msg "Starting TDX-based disk unlock"
 log_msg "TDX mTLS base: ${TDX_BASE_URL}"
 
 # Function to generate self-signed client certificate
-generate_client_cert() {
-    log_begin_msg "Generating self-signed client certificate"
-    
+generate_vm_root_ca() {
+    log_begin_msg "Generating per-boot VM root CA"
+
     export RANDFILE=/tmp/.rnd
     export OPENSSL_CONF=/dev/null
-    
+
     mkdir -p /tmp
-    
-    if ! openssl req -x509 -newkey rsa:4096 -nodes -sha256 \
-        -keyout "$CLIENT_KEY" -out "$CLIENT_CERT" -days 1 \
-        -subj "/CN=tdx-vm-$(date +%s)" -batch 2>/dev/null; then
+    mkdir -m 700 -p "$CA_DIR"
+
+    # Fresh 4096-bit CA each boot — lives in TDX-encrypted DRAM only, never
+    # touches disk. Subject must stay CN=sek8s-vm-root-ca so the leaf certs
+    # setup_vm_tls signs still chain (the validator checks leaf.issuer==ca.subject).
+    #
+    # 365-day validity, not 1: VMs run for months between image updates, so a
+    # short-lived cert would expire mid-run and break registry mTLS / proxy TLS.
+    # Per-boot rotation is preserved — the CA is still regenerated every boot.
+    if ! openssl genrsa -out "$CLIENT_KEY" 4096 2>/dev/null; then
         log_end_msg 1
         return 1
     fi
-    
+    if ! openssl req -new -x509 -sha256 \
+        -key "$CLIENT_KEY" -out "$CLIENT_CERT" -days 365 \
+        -subj "/O=chutes/OU=sek8s/CN=sek8s-vm-root-ca" -batch 2>/dev/null; then
+        log_end_msg 1
+        return 1
+    fi
+    chmod 600 "$CLIENT_KEY"
+    chmod 644 "$CLIENT_CERT"
+
     if [ ! -f "$CLIENT_CERT" ] || [ ! -f "$CLIENT_KEY" ]; then
         log_end_msg 1
         return 1
     fi
-    
+
     CERT_HASH=$(openssl x509 -in "$CLIENT_CERT" -pubkey -noout 2>/dev/null | \
                 openssl pkey -pubin -outform der 2>/dev/null | \
                 sha256sum | cut -d' ' -f1)
@@ -116,7 +138,7 @@ generate_client_cert() {
         log_end_msg 1
         return 1
     fi
-    
+
     log_end_msg 0
     return 0
 }
@@ -457,9 +479,9 @@ main() {
         return 1
     fi
     
-    # Generate self-signed client cert
-    if ! generate_client_cert; then
-        handle_failure "Client certificate generation failed"
+    # Generate the per-boot VM root CA (our single mTLS client identity)
+    if ! generate_vm_root_ca; then
+        handle_failure "VM root CA generation failed"
         return 1
     fi
     
@@ -605,8 +627,9 @@ main() {
         printf '%s' "$LUKS_QUOTE_NONCE" > /run/chutes/luks-quote-nonce
         chmod 600 /run/chutes/luks-quote-nonce
     fi
-    # Save cert hash so setup_storage can bind it into the luks/attest REPORTDATA.
-    # The cert files themselves stay in /tmp/ (cleared by setup_storage after use).
+    # Save cert hash so setup_storage can bind it into the /provision REPORTDATA.
+    # The VM root CA itself lives at ${CA_DIR}/ca.{key,crt} and survives to
+    # setup_vm_tls, which deletes ca.key before pivot_root.
     if [ -n "$CERT_HASH" ]; then
         printf '%s' "$CERT_HASH" > /run/chutes/cert-hash
         chmod 600 /run/chutes/cert-hash
