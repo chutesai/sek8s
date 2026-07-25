@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-07-23
+## [1.4.0] - 2026-07-25
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -149,6 +149,9 @@ Version source of truth: `ansible/guest/VERSION`
   `files/` (invoked exclusively by the build): `compute-rtmr3.sh`, `compute-rtmr1-2.sh`,
   `stage-boot-artifacts.sh`, and `extract-vm-measurements.sh`. `guest-tools/scripts/` now
   holds only the standalone release tool `publish-image.sh`.
+- The per-boot VM root CA is now generated up front in `fetch_key_and_unlock` (init-premount) and used as the VM's single mTLS client identity for every boot API call (`GET /nonce`, `POST /boot/attestation`, root `POST /luks/confirm`, and the runtime storage attestation). This replaces the throwaway self-signed client cert (`CN=tdx-vm-<ts>`) that was previously minted for the boot/luks calls.
+- `setup_storage` now calls the new `POST /servers/{vm}/provision` and `POST /servers/{vm}/provision/confirm` endpoints (replacing `/luks/attest` and the storage `/luks/confirm`). The provision quote binds `SHA256(CA pubkey)` after RTMR3 is extended, so the validator records the VM root CA implicitly from that RTMR3-attested call — no separate registration round-trip.
+- VM root CA and both leaf certs (attestation-proxy server cert, registry mTLS client cert) now use a 365-day validity instead of 1 day, so long-running VMs (which reboot only on image updates) do not hit cert expiry mid-run. Per-boot rotation is unchanged — all certs are still regenerated fresh on every boot and live in tmpfs only.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
@@ -172,6 +175,7 @@ Version source of truth: `ansible/guest/VERSION`
 - `guest-tools/README.md` — the old manual step-by-step measurement guide, superseded by
   build-integrated `compute-rtmrs` + the `guest-tools/measurement/` tooling; the concepts
   now live in `docs/specs/tdx-measurement-verification.md`.
+- `setup_vm_tls` no longer generates or registers the VM root CA. It now only signs the leaf certs from the CA generated in init-premount and deletes `ca.key` before `pivot_root`. The dedicated `PUT /servers/{vm}/vm-root-ca` registration call (and its nonce-less quote) is gone.
 
 ### Notes
 - This change alters the RTMR3 measurement baseline (new AppArmor profile, edited
