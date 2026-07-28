@@ -202,6 +202,21 @@
         apply:
           tags: system-manager
 
+- name: Setup chute log shipper service
+  hosts: vm
+  become: true
+  tags:
+    - chute-log-shipper
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Chute log shipper
+      ansible.builtin.include_role:
+        name: chute-log-shipper
+        apply:
+          tags: chute-log-shipper
+
 - name: Setup cache volume service
   hosts: vm
   become: true
