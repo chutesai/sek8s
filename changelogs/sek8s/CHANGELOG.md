@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-07-18
+## [0.4.0] - 2026-07-29
 
 ### Added
 - `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
@@ -37,6 +37,10 @@ Version source of truth: `src/sek8s/VERSION`
 - `resolve_to_full_ref` (`system_manager/images/util.py`) resolves short-form
   image refs against `registry.chutes.ai` and drops the now-unused
   `localhost` / `127.0.0.1` special-casing for full-ref detection.
+- `AdmissionConfig` cosign key documentation updated to reflect that the
+  dynamically-fetched cosign keys are now RSA-verified (not PGP-verified)
+  against the attested root key before being written to tmpfs. Key paths and
+  behavior are unchanged.
 
 ## [0.3.1] - 2026-06-20
 
