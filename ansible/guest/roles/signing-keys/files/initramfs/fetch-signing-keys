@@ -2,17 +2,18 @@
 # /etc/initramfs-tools/scripts/init-bottom/fetch-signing-keys
 #
 # Fetches the signing key bundle from the validator API, verifies each key's
-# detached PGP signature against the attested root key, and writes verified
+# detached RSA signature against the attested root key, and writes verified
 # keys to /run/chutes/signing-keys/ on the tmpfs before pivot_root.
 #
 # Security model:
-#   - /etc/chutes/root-signing-key.gpg is baked into the initramfs at build
+#   - /etc/chutes/root-signing-key.pem is baked into the initramfs at build
 #     time and covered by RTMR1.  The same file on the root filesystem is
 #     measured into RTMR3 via the /etc/chutes/ recursive path list.  Any
 #     offline tampering with the root key changes RTMR3.
-#   - Leaf keys (cosign, Helm) are not measured in RTMR3.  Trust is delegated
-#     via the PGP chain: RTMR3 attests root pubkey → root pubkey verifies PGP
-#     signature → PGP signature authenticates the leaf key.
+#   - Signatures are RSA PKCS#1 v1.5 over SHA-256 of the raw (base64-decoded)
+#     key bytes.  Leaf keys (cosign, Helm) are not measured in RTMR3; trust is
+#     delegated via the RSA chain: RTMR3 attests root pubkey → root pubkey
+#     verifies the signature → signature authenticates the leaf key.
 #   - If any signature check fails, or the API is unreachable, the VM powers
 #     off.  Fail-closed by design — same pattern as rtmr3-measure.
 #
@@ -30,7 +31,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 . /scripts/functions
 
 CONF_FILE="/etc/chutes/signing-keys.conf"
-ROOT_KEY="/etc/chutes/root-signing-key.gpg"
+ROOT_KEY="/etc/chutes/root-signing-key.pem"
 OUTPUT_DIR="/run/chutes/signing-keys"
 SIGNING_KEYS_URL=""
 TIMEOUT=30
@@ -115,12 +116,12 @@ for KEY_NAME in $KEY_NAMES; do
         fail "base64 decode failed for signature: $KEY_NAME"
     }
 
-    # Verify the detached PGP signature against the attested root key.
-    GPGV_ERR=$(gpgv --no-default-keyring --keyring "$ROOT_KEY" "$TMPSIG" "$TMPKEY" 2>&1)
+    # Verify the RSA signature (PKCS#1 v1.5, SHA-256) over the raw key bytes.
+    OPENSSL_ERR=$(openssl dgst -sha256 -verify "$ROOT_KEY" -signature "$TMPSIG" "$TMPKEY" 2>&1)
     if [ $? -ne 0 ]; then
         rm -f "$TMPKEY" "$TMPSIG"
-        echo "fetch-signing-keys: gpgv output: $GPGV_ERR" > /dev/kmsg
-        fail "PGP signature verification FAILED for: $KEY_NAME"
+        echo "fetch-signing-keys: openssl output: $OPENSSL_ERR" > /dev/kmsg
+        fail "RSA signature verification FAILED for: $KEY_NAME"
     fi
 
     # Install to output directory (create subdirectories as needed).

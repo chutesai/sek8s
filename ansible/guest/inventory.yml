@@ -11,12 +11,7 @@ all:
 
   vars:
     ansible_user: "{{ lookup('env', 'USER') }}"
-    # Root PGP public key — baked into image, measured in RTMR3.
-    # This is the only signing artifact required on the build machine.
-    # Cosign and Helm leaf keys are fetched from the signing-keys API and
-    # PGP-verified at both build time and VM boot time.
-    # Private key must be stored offline or in an HSM.
-    root_signing_key_path: "~/.chutes/root-signing-key.gpg"
+    root_signing_key_path: "~/.chutes/root-signing-key.pem"
     luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"
     tdx_base_url: "https://tdx-attestation.example.com:8443"
     validator_base_url: "https://api.chutes.ai"

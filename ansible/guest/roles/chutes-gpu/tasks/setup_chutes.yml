@@ -5,12 +5,7 @@
     state: directory
     mode: '0755'
 
-# Fetch the Helm PGP key from the signing-keys API and verify its PGP signature
-# against the root signing key on the build host.  The root key is the only
-# signing artifact required on the build machine — no separate leaf-key files
-# need to be distributed.  Verification uses the same trust chain as the VM
-# boot-time fetch, ensuring build and runtime keys are always identical.
-- name: Fetch and verify Helm PGP key from signing-keys API (runs on build host)
+- name: Fetch and verify Helm key from signing-keys API (runs on build host)
   ansible.builtin.shell: |
     set -euo pipefail
 
@@ -36,8 +31,8 @@
     printf '%s' "$KEY_B64" | base64 -d > "$TMPKEY"
     printf '%s' "$SIG_B64" | base64 -d > "$TMPSIG"
 
-    gpgv --no-default-keyring --keyring "$ROOT_KEY" "$TMPSIG" "$TMPKEY" 2>&1 \
-      || { echo "ERROR: PGP signature verification FAILED for helm-pubkey.gpg" >&2; exit 1; }
+    openssl dgst -sha256 -verify "$ROOT_KEY" -signature "$TMPSIG" "$TMPKEY" >&2 \
+      || { echo "ERROR: RSA signature verification FAILED for helm-pubkey.gpg" >&2; exit 1; }
 
     # Output verified key bytes as base64 for the follow-up copy task
     base64 -w0 < "$TMPKEY"
