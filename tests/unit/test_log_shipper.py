@@ -102,6 +102,28 @@ def test_logs_url_and_selector_defaults(monkeypatch):
     assert config.selector_key == "chutes/chute"
     assert config.selector_value == "true"
     assert config.stop_status_code == 204
+    assert config.terminal_status_codes == [403, 404]
+    assert config.deployment_id_label == "chutes/deployment-id"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("[401, 410]", [401, 410]),
+        ("401,410", [401, 410]),
+        ("403", [403]),
+        ([401, 402], [401, 402]),
+    ],
+)
+def test_terminal_status_codes_parsing(raw, expected):
+    config = LogShipperConfig(TERMINAL_STATUS_CODES=raw)
+    assert config.terminal_status_codes == expected
+
+
+def test_terminal_reason_fallback():
+    assert PodLogShipper._terminal_reason(410) == "terminal reject"
+    assert PodLogShipper._terminal_reason(404) == "unknown config_id"
+    assert PodLogShipper._terminal_reason(403) == "cert/ownership rejected"
 
 
 def test_logs_url_strips_trailing_slash():
@@ -198,7 +220,11 @@ def test_parse_chute_pods_filters(tmp_path):
             {
                 "metadata": {"name": "good", "uid": "u1", "namespace": "chutes"},
                 "state": "SANDBOX_READY",
-                "labels": {"chutes/chute": "true", "chutes/config-id": "cfg-1"},
+                "labels": {
+                    "chutes/chute": "true",
+                    "chutes/config-id": "cfg-1",
+                    "chutes/deployment-id": "dep-1",
+                },
             },
             {  # wrong namespace
                 "metadata": {"name": "n", "uid": "u2", "namespace": "default"},
@@ -221,8 +247,22 @@ def test_parse_chute_pods_filters(tmp_path):
     pods = parse_chute_pods(raw, config)
     assert len(pods) == 1
     assert pods[0].config_id == "cfg-1"
+    assert pods[0].deployment_id == "dep-1"
     assert pods[0].name == "good"
     assert pods[0].state == "SANDBOX_READY"
+
+
+def test_parse_chute_pods_missing_deployment_id_defaults_empty():
+    raw = _pods_json(
+        [
+            {
+                "metadata": {"name": "n", "uid": "u", "namespace": "chutes"},
+                "labels": {"chutes/chute": "true", "chutes/config-id": "cfg"},
+            }
+        ]
+    )
+    pods = parse_chute_pods(raw, make_config())
+    assert pods[0].deployment_id == ""
 
 
 def test_parse_chute_pods_empty_items():
@@ -448,7 +488,13 @@ def test_read_new_lines_ignores_gz(tmp_path):
 
 
 def make_shipper(config, session, cursor, pod=None):
-    pod = pod or ChutePod(config_id="cfg", name="pod", uid="uid", namespace="chutes")
+    pod = pod or ChutePod(
+        config_id="cfg",
+        name="pod",
+        uid="uid",
+        namespace="chutes",
+        deployment_id="dep-1",
+    )
     return PodLogShipper(config, session, pod, cursor)
 
 
@@ -464,6 +510,35 @@ async def test_post_batch_ok_and_stop(tmp_path):
 
     ship_stop = make_shipper(config, FakeSession([204]), cursor)
     assert await ship_stop._post_batch(batch) == "stop"
+
+
+@pytest.mark.asyncio
+async def test_post_batch_body_carries_deployment_id(tmp_path):
+    config = make_config()
+    cursor = CursorStore(tmp_path / "c.json")
+    await cursor.load()
+    session = FakeSession([200])
+    ship = make_shipper(config, session, cursor)
+    await ship._post_batch([LogLine(ts="t1", stream="stdout", log="x")])
+    body = session.calls[0]["json"]
+    assert body["deployment_id"] == "dep-1"
+    assert body["logs"] == [{"ts": "t1", "stream": "stdout", "log": "x"}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,reason", [(404, "unknown"), (403, "cert/ownership")])
+async def test_post_batch_terminal_reject(tmp_path, status, reason):
+    config = make_config()
+    cursor = CursorStore(tmp_path / "c.json")
+    await cursor.load()
+    session = FakeSession([status])
+    ship = make_shipper(config, session, cursor)
+    # Terminal codes stop immediately — no retry loop.
+    assert (
+        await ship._post_batch([LogLine(ts="t", stream="stdout", log="x")])
+        == "terminal"
+    )
+    assert len(session.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -528,6 +603,30 @@ async def test_ship_transient_failure_leaves_cursor(tmp_path):
     ship = make_shipper(config, session, cursor)
     assert await ship._ship([LogLine(ts="t1", stream="stdout", log="a")]) == "retry"
     assert cursor.get("cfg") is None
+
+
+@pytest.mark.asyncio
+async def test_ship_terminal_reject_leaves_cursor(tmp_path):
+    config = make_config()
+    cursor = CursorStore(tmp_path / "c.json")
+    await cursor.load()
+    session = FakeSession([404])
+    ship = make_shipper(config, session, cursor)
+    assert await ship._ship([LogLine(ts="t1", stream="stdout", log="a")]) == "terminal"
+    assert cursor.get("cfg") is None
+
+
+@pytest.mark.asyncio
+async def test_run_stops_on_terminal_reject(tmp_path, monkeypatch):
+    config = make_config()
+    cursor = CursorStore(tmp_path / "c.json")
+    await cursor.load()
+    monkeypatch.setattr(
+        "sek8s.log_shipper.shipper.read_new_lines",
+        lambda pod, cfg, since: [LogLine(ts="t1", stream="stdout", log="a")],
+    )
+    ship = make_shipper(config, FakeSession([403]), cursor)
+    assert await ship.run() == "terminal"
 
 
 @pytest.mark.asyncio

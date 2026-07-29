@@ -168,6 +168,9 @@ class PodLogShipper:
                             self._pod.config_id,
                         )
                         return "stop"
+                    if action == "terminal":
+                        # Reason already logged in _post_batch; stop retrying.
+                        return "terminal"
                 if self._now() - started >= self._config.max_capture_seconds:
                     logger.info(
                         "Max capture duration reached for config_id={}",
@@ -180,7 +183,10 @@ class PodLogShipper:
             raise
 
     async def _ship(self, lines: List[LogLine]) -> str:
-        """Ship all new lines in bounded batches. Returns 'stop', 'ok', or 'retry'."""
+        """Ship all new lines in bounded batches.
+
+        Returns 'stop' (cutoff), 'terminal' (403/404 reject), 'ok', or 'retry'.
+        """
         for batch in _chunk(
             lines, self._config.batch_max_lines, self._config.batch_max_bytes
         ):
@@ -188,6 +194,9 @@ class PodLogShipper:
             if result == "fail":
                 # Transient: leave the cursor so the same lines are re-read next poll.
                 return "retry"
+            if result == "terminal":
+                # Reject that can never succeed — do not advance the cursor.
+                return "terminal"
             # Both 'stop' (204) and 'ok' (other 2xx) mean the batch was accepted.
             await self._cursor.set(self._pod.config_id, batch[-1].ts)
             if result == "stop":
@@ -195,8 +204,12 @@ class PodLogShipper:
         return "ok"
 
     async def _post_batch(self, batch: List[LogLine]) -> str:
-        """POST one batch with retry/backoff. Returns 'stop', 'ok', or 'fail'."""
-        body = LogBatch(logs=batch).model_dump()
+        """POST one batch with retry/backoff.
+
+        Returns 'stop' (204), 'terminal' (403/404), 'ok' (other 2xx), or 'fail'
+        (transient error exhausted).
+        """
+        body = LogBatch(deployment_id=self._pod.deployment_id, logs=batch).model_dump()
         timeout = aiohttp.ClientTimeout(total=self._config.request_timeout_seconds)
         for attempt in range(self._config.retry_max_attempts):
             try:
@@ -205,6 +218,14 @@ class PodLogShipper:
                 ) as resp:
                     if resp.status == self._config.stop_status_code:
                         return "stop"
+                    if resp.status in self._config.terminal_status_codes:
+                        logger.warning(
+                            "Terminal reject ({}) for config_id={}: {} — stopping capture",
+                            resp.status,
+                            self._pod.config_id,
+                            self._terminal_reason(resp.status),
+                        )
+                        return "terminal"
                     if 200 <= resp.status < 300:
                         return "ok"
                     logger.warning(
@@ -223,3 +244,11 @@ class PodLogShipper:
     def _backoff(self, attempt: int) -> float:
         delay = self._config.retry_base_delay_seconds * (2**attempt)
         return min(delay, self._config.retry_max_delay_seconds)
+
+    @staticmethod
+    def _terminal_reason(status: int) -> str:
+        if status == 404:
+            return "unknown config_id"
+        if status == 403:
+            return "cert/ownership rejected"
+        return "terminal reject"

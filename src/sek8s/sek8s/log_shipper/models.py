@@ -22,8 +22,15 @@ class LogLine(BaseModel):
 
 
 class LogBatch(BaseModel):
-    """Request body for POST /instances/launch_config/{config_id}/logs."""
+    """Request body for POST /instances/launch_config/{config_id}/logs.
 
+    `deployment_id` is the sole top-level metadata field — non-security
+    correlation data (Grafana filtering) the validator cannot derive from
+    `config_id` in the pre-registration window. All identity is derived
+    server-side from the path + mTLS leaf + proxy.
+    """
+
+    deployment_id: str
     logs: list[LogLine]
 
 
@@ -31,15 +38,17 @@ class LogBatch(BaseModel):
 class ChutePod:
     """A chute pod discovered from `crictl pods -o json`.
 
-    Only the fields the agent actually needs: config_id (→ path), the on-disk
-    log-dir components (namespace/name/uid), and the sandbox state (terminal
-    detection). chute-id / deployment-id labels are intentionally not carried.
+    Only the fields the agent actually needs: config_id (→ path), deployment_id
+    (→ shipped top-level), the on-disk log-dir components (namespace/name/uid),
+    and the sandbox state (terminal detection). The chute-id label is
+    intentionally not carried — the validator derives that identity server-side.
     """
 
     config_id: str
     name: str
     uid: str
     namespace: str
+    deployment_id: str = ""
     state: str = ""
     labels: Dict[str, str] = field(default_factory=dict)
 

@@ -5,6 +5,10 @@
 **Revised**: 2026-07-25 (architecture finalized — standalone VM service reading CRI + `/var/log/pods`)
 **Revised**: 2026-07-27 (wire contract finalized — log-lines-only body; identity resolved server-side
 from the mTLS cert + path + proxy; `204` = stop; `seq`/`server_ip`/pod-metadata dropped)
+**Revised**: 2026-07-29 (validator-side alignment — two coordinated wire changes: (1) send top-level
+`deployment_id` (from the `chutes/deployment-id` pod label), the one field the validator cannot derive
+from `config_id`; (2) treat `403`/`404` as **terminal** — stop + log the reason — not transient retry.
+See the companion validator spec `chutes-api/docs/specs/chute-log-shipper.md`.)
 
 ---
 
@@ -68,9 +72,9 @@ per-chute 8001 log server (Phase 2).
   - **discovers pods + reads their labels/uid/phase** by shelling to the bundled
     **`k3s crictl pods -o json`** through a restricted wrapper (the CRI sandbox metadata carries the
     pod's k8s labels and UID — `k3s ctr` does **not** expose k8s pod labels). The agent consumes only
-    `chutes/config-id` (→ request path) and the pod UID (→ log path); the `chutes/chute-id` /
-    `chutes/deployment-id` labels are present but unused, since the validator derives all identity
-    server-side, and
+    `chutes/config-id` (→ request path), `chutes/deployment-id` (→ shipped top-level, the one field
+    the validator cannot derive from `config_id`), and the pod UID (→ log path); the `chutes/chute-id`
+    label is present but unused, since the validator derives chute/miner/user identity server-side, and
   - **reads log content** directly from `/var/log/pods/chutes_<pod>_<uid>/<container>/*.log` (CRI
     format, `<RFC3339Nano> stdout F <line>`; rotation is handled by kubelet).
 
@@ -79,10 +83,15 @@ per-chute 8001 log server (Phase 2).
   already-present `aiohttp`). The authorization ceiling becomes a **kernel-LSM (AppArmor)** boundary
   over specific paths + the crictl socket, not an API-server RBAC ceiling.
 - **Minimal request body — identity resolved server-side, not self-asserted.** The shipment body
-  carries only the log lines (`{"logs": [{ts, stream, log}]}`); everything else the validator
-  derives, because a value the guest could assert about itself is strictly less trustworthy than one
-  the infrastructure observes:
+  carries the log lines plus `deployment_id` (`{"deployment_id": "…", "logs": [{ts, stream, log}]}`);
+  every **security-relevant** value the validator derives, because a value the guest could assert
+  about itself is strictly less trustworthy than one the infrastructure observes:
   - `config_id` ← the request path.
+  - `deployment_id` ← the `chutes/deployment-id` pod label, shipped top-level. This is the **one
+    exception** to "derive server-side": it is non-security correlation metadata (used only for
+    Grafana filtering) that does **not** exist on the validator's `LaunchConfig` in the
+    pre-registration window, so the validator genuinely cannot derive it — the guest must supply it.
+    It is never used for auth, so self-asserting it carries no trust cost.
   - `(miner_hotkey, vm_name)` — and therefore the server — ← the presented registry-tls leaf,
     verified against the registered per-boot VM CA. `vm_name` is unique *per* `miner_hotkey`, and the
     leaf binds to a specific server registered to a specific miner, so the cert is the durable
@@ -92,8 +101,11 @@ per-chute 8001 log server (Phase 2).
     guaranteed to stay so — whereas the cert → `(miner, vm)` → server mapping is.
 - **Push, with validator-controlled cutoff (simple).** The agent streams batches outbound and keys
   off the response **status code** to decide whether to keep sending or stop: **`204 No Content` =
-  stop**, any other 2xx = keep sending, and a non-2xx or connection error = transient failure →
-  retry with backoff (cursor unchanged). All cutoff *logic* lives in the API (default: stop at
+  stop**, any other 2xx = keep sending, **`403`/`404` = terminal reject → stop and log the specific
+  reason** (`404` = unknown `config_id`; `403` = cert/ownership rejection — a cross-miner or
+  misconfigured shipment that will never succeed), and any *other* non-2xx or a connection error =
+  transient failure → retry with backoff (cursor unchanged). All cutoff *logic* lives in the API
+  (default: stop at
   activation; per-chute override keeps it going). The agent holds no cutoff policy of its own — it
   obeys the code — plus a local max-duration backstop so a never-activating, never-terminating pod
   cannot stream forever.
@@ -126,13 +138,17 @@ The guest agent is a **client**; it calls the validator. No inbound API is added
 - **Path — `POST /instances/launch_config/{config_id}/logs`** (the validator spec's §1), on the
   `cvm.chutes.ai` mTLS host. `config_id` comes from the pod label; there is no `vm_name` in the path
   — the mTLS leaf resolves the VM identity server-side.
-- **Request body — log lines only:** `{"logs": [{"ts": "<RFC3339Nano>", "stream": "stdout|stderr",
-  "log": "<line>"}]}`. The guest self-asserts no identity or metadata: `config_id` ← path,
-  `(miner_hotkey, vm_name)` + server ← the verified mTLS leaf, source IP ← the proxy. No `seq`,
-  `server_ip`, `miner_hotkey`, `vm_name`, `chute_id`, `deployment_id`, `pod_uid`, or `container` is
-  sent — each is derivable server-side or redundant.
+- **Request body — log lines + `deployment_id`:** `{"deployment_id": "<uuid>", "logs": [{"ts":
+  "<RFC3339Nano>", "stream": "stdout|stderr", "log": "<line>"}]}`. The guest self-asserts no
+  **identity**: `config_id` ← path, `(miner_hotkey, vm_name)` + server ← the verified mTLS leaf,
+  source IP ← the proxy. `deployment_id` (from the `chutes/deployment-id` pod label) is the sole
+  top-level metadata field — non-security correlation data the validator cannot derive from
+  `config_id` in the pre-registration window. No `seq`, `server_ip`, `miner_hotkey`, `vm_name`,
+  `chute_id`, `pod_uid`, or `container` is sent — each is derivable server-side or redundant.
 - **Response contract — cutoff by status:** `204 No Content` = stop capturing this pod; any other
-  2xx = keep sending; non-2xx or a connection error = transient → retry with backoff.
+  2xx = keep sending; **`403`/`404` = terminal reject → stop and log the reason** (`404` = unknown
+  `config_id`; `403` = cert/ownership rejection); any other non-2xx or a connection error = transient
+  → retry with backoff.
 - **Proxy enforcement is API-side and transparent to the guest.** The dedicated CVM proxy terminates
   mTLS and injects a **secret header** that the API validates, so mTLS-required routes can only be
   reached through the proxy (defense in depth against a request bypassing the proxy on the internal
@@ -152,15 +168,18 @@ Success (Phase 1) =
   confined by an AppArmor profile that permits only `/var/log/pods/chutes_*/**` reads, the crictl
   socket, the registry-tls leaf, the cursor dir, and egress to the validator.
 - `k3s crictl pods -o json` (via the restricted wrapper) yields chute pods with their
-  `config-id` label + uid + phase; the service joins uid →
-  `/var/log/pods/chutes_<pod>_<uid>/…` and reads the log files.
+  `config-id` + `deployment-id` labels + uid + phase; the service joins uid →
+  `/var/log/pods/chutes_<pod>_<uid>/…` and reads the log files, shipping `deployment_id` top-level.
 - For a chute that **crashes during warmup and never registers an instance**, its logs are shipped
   to the validator and become retrievable (via `chutes-miner instance-logs` and the support view).
 - For a chute that **activates normally**, the validator returns `204` and the agent ceases
   capture for that pod — no steady-state logs are shipped by default.
 - Setting the per-chute override causes capture to continue past activation.
-- Shipments carry RFC3339-nanosecond per-line `ts`; duplicates/replays are idempotent
-  validator-side on `(config_id, ts)`. No `seq` is sent — reliable delivery makes it redundant.
+- An unknown or unauthorized `config_id` returns `403`/`404`; the agent stops capturing that pod and
+  logs the specific reason (no indefinite retry loop).
+- Shipments carry RFC3339-nanosecond per-line `ts` + top-level `deployment_id`; duplicates/replays
+  are idempotent validator-side on `(config_id, ts)`. No `seq` is sent — reliable delivery makes it
+  redundant.
 - `make lint-local sek8s` and `make test-local sek8s` pass; ≥90% coverage on new code.
 
 ---
@@ -192,18 +211,21 @@ Success (Phase 1) =
      max-capture-seconds, retry/backoff.
    - `agent.py` — poll `k3s crictl pods -o json` (via the restricted wrapper) on an interval →
      filter to chute pods (label selector) → per new chute pod, spawn a capture task; read the
-     `chutes/config-id` label (→ request path), the pod uid (→ log path), and phase (for terminal
-     detection). Reconcile the cursor file against the live pod set. (No `chute-id`/`deployment-id`
-     labels or node IP are read — the validator derives all identity server-side, so the agent only
-     needs `config-id` + uid.)
+     `chutes/config-id` label (→ request path), the `chutes/deployment-id` label (→ shipped
+     top-level), the pod uid (→ log path), and phase (for terminal detection). Reconcile the cursor
+     file against the live pod set. (No `chute-id` label or node IP is read — the validator derives
+     chute/miner/user identity server-side, so the agent needs only `config-id` + `deployment-id` +
+     uid.)
    - `shipper.py` — per-pod: tail `/var/log/pods/chutes_<pod>_<uid>/<container>/*.log`, parse the CRI
      line format (`<RFC3339Nano> <stdout|stderr> <F|P> <msg>`), resume from the cursor `last_ts` →
-     bounded batch → `POST /instances/launch_config/{config_id}/logs` over mTLS with a log-lines-only
-     body (`{"logs": [{ts, stream, log}]}`; no `seq`/`server_ip`/metadata — all derived server-side
-     from the path + mTLS leaf + proxy) → key off the response **status code** for the cutoff (`204`
-     = stop; any other 2xx = keep sending) → stop on `204` / pod terminal / max-duration;
-     retry-with-backoff on non-2xx or connection error (cursor unchanged); advance the cursor on
-     successful ship. Optional light filtering of shim-excluded noise (`nvidia-smi`, `curl`, …).
+     bounded batch → `POST /instances/launch_config/{config_id}/logs` over mTLS with a
+     body of `{"deployment_id": "<uuid>", "logs": [{ts, stream, log}]}` (`deployment_id` from the
+     pod label; no `seq`/`server_ip`/identity — all derived server-side from the path + mTLS leaf +
+     proxy) → key off the response **status code** for the cutoff (`204` = stop; any other 2xx = keep
+     sending) → stop on `204` / **`403`/`404` terminal reject (log the reason)** / pod terminal /
+     max-duration; retry-with-backoff on any *other* non-2xx or connection error (cursor unchanged);
+     advance the cursor on successful ship. Optional light filtering of shim-excluded noise
+     (`nvidia-smi`, `curl`, …).
    - Console entry `chute-log-shipper` in `src/sek8s/pyproject.toml` `[tool.poetry.scripts]`.
 2. **Ansible role** `chute-log-shipper` (mirroring `system-manager`):
    - `chute-log-shipper.service` systemd unit (`User=` dedicated non-root uid, `After=` k3s, restart
@@ -231,8 +253,12 @@ Success (Phase 1) =
 - Modifies `setup_vm_tls` / initramfs (shifts RTMR2 unnecessarily).
 - Ships steady-state logs after the validator returns `204` (ignores the cutoff), or has no
   max-duration backstop for a never-activating pod.
-- Self-asserts identity in the request body (`miner_hotkey`, `vm_name`, `server_ip`, or pod
-  metadata) instead of letting the validator derive it from the path + mTLS leaf + proxy.
+- Self-asserts **identity** in the request body (`miner_hotkey`, `vm_name`, `server_ip`, `chute_id`,
+  `pod_uid`) instead of letting the validator derive it from the path + mTLS leaf + proxy.
+  (`deployment_id` is the deliberate exception — non-security correlation metadata the validator
+  cannot derive from `config_id`; shipping it top-level is required, not a violation.)
+- Retries indefinitely on a `403`/`404` **terminal** reject (an unknown or unauthorized `config_id`
+  that can never succeed) instead of stopping and logging the specific reason.
 - Uses a line-index dedupe key (breaks across kubelet log rotation / restarts) instead of the CRI
   `ts`; or ships without per-line `ts`.
 - Lets the cursor file grow unbounded (must reconcile to the live pod set).
@@ -263,9 +289,14 @@ Success (Phase 1) =
      idempotent. No `seq` is sent — reliable delivery (retry + advance-cursor-on-success) makes it
      redundant.
   3. Resolve identity server-side: `config_id` from the path, `(miner_hotkey, vm_name)` + server from
-     the verified mTLS leaf, source IP from the proxy. The guest self-asserts none of these; the
-     request body is log lines only (`{"logs": [{ts, stream, log}]}`).
-  4. Return **`204 No Content`** to signal cutoff (any other 2xx keeps capture going).
+     the verified mTLS leaf, `chute_id`/`miner_hotkey`/`user_id` from `LaunchConfig`→`Chute`, source
+     IP from the proxy. The guest self-asserts none of these; the request body is
+     `{"deployment_id": "<uuid>", "logs": [{ts, stream, log}]}` — `deployment_id` (from the pod label)
+     is the only field shipped because the validator cannot derive it from `config_id`.
+  4. Return **`204 No Content`** to signal cutoff (any other 2xx keeps capture going); return
+     **`404`** for an unknown `config_id` and **`403`** for a cert/ownership rejection — the guest
+     treats both as terminal (stops + logs), so these must be reserved for genuinely unrecoverable
+     shipments, not transient errors.
 - **Phase 2 (separate change):** repoint the readiness/liveness probe off `:8001/_alive` → 8000
   **first** (`chutes-miner api/k8s/operator.py:_get_probe_port`), migrate `log_prober` and the
   `stream_logs`/`encrypted_logs` paths onto the agent/central store, extend the agent to ship

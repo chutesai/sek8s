@@ -90,6 +90,7 @@ def parse_chute_pods(raw: str, config: LogShipperConfig) -> List[ChutePod]:
                 name=name,
                 uid=uid,
                 namespace=namespace,
+                deployment_id=labels.get(config.deployment_id_label, ""),
                 state=item.get("state", ""),
                 labels=labels,
             )

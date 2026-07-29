@@ -14,7 +14,11 @@
     profile delivered via `apparmor-hardening`. The registry mTLS leaf is untouched at mint time
     (RTMR2 stable); a boot-time path unit re-groups it for the service's uid.
   - Wire contract: `POST https://cvm.chutes.ai/instances/launch_config/{config_id}/logs` with a
-    log-lines-only body (`{"logs": [{ts, stream, log}]}`) — identity is derived validator-side from
-    the mTLS leaf + path + proxy, nothing is self-asserted. `204` = stop capture; other 2xx = keep
-    sending; dedupe is `(config_id, ts)`, so no `seq` is sent (deviation from the original spec,
-    which listed `seq`).
+    body of `{"deployment_id": "<uuid>", "logs": [{ts, stream, log}]}`. Identity is derived
+    validator-side from the mTLS leaf + path + proxy — nothing security-relevant is self-asserted;
+    `deployment_id` (from the `chutes/deployment-id` pod label) is the sole top-level field, non-
+    security correlation metadata the validator cannot derive from `config_id` pre-registration.
+    `204` = stop capture; other 2xx = keep sending; `403`/`404` = terminal reject (stop + log the
+    reason: `404` unknown config_id, `403` cert/ownership) — no indefinite retry; any other non-2xx
+    / connection error = transient retry with backoff. Dedupe is `(config_id, ts)`, so no `seq` is
+    sent (deviation from the original spec, which listed `seq`).

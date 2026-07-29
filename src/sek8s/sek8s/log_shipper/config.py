@@ -5,7 +5,9 @@ Env-driven via pydantic-settings, following the SystemManager* config style
 credentials — everything below is overridable from the rendered env file.
 """
 
+import json
 from pathlib import Path
+from typing import Any, List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +35,13 @@ class LogShipperConfig(BaseSettings):
     # HTTP status the validator returns to signal "stop capturing this pod".
     # Any other 2xx = keep sending; non-2xx / connection error = transient retry.
     stop_status_code: int = Field(default=204, alias="STOP_STATUS_CODE", ge=200, le=599)
+    # Statuses that mean "this shipment can never succeed" (unknown config_id /
+    # cert-ownership rejection): stop and log rather than retry forever.
+    terminal_status_codes: List[int] = Field(
+        default_factory=lambda: [403, 404],
+        alias="TERMINAL_STATUS_CODES",
+        description="Non-2xx statuses treated as terminal rejects (stop + log, no retry)",
+    )
 
     # ── Pod discovery (CRI via restricted crictl wrapper) ───────────────────
     namespace: str = Field(default="chutes", alias="POD_NAMESPACE")
@@ -45,6 +54,12 @@ class LogShipperConfig(BaseSettings):
         default="chutes/config-id",
         alias="CONFIG_ID_LABEL",
         description="Pod label holding the launch config id (→ request path)",
+    )
+    deployment_id_label: str = Field(
+        default="chutes/deployment-id",
+        alias="DEPLOYMENT_ID_LABEL",
+        description="Pod label holding the deployment id (→ shipped top-level; validator "
+        "cannot derive it from config_id in the pre-registration window)",
     )
     crictl_wrapper_path: Path = Field(
         default=Path("/usr/local/bin/crictl-pods-helper"),
@@ -119,6 +134,22 @@ class LogShipperConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
+
+    @field_validator("terminal_status_codes", mode="before")
+    @classmethod
+    def _parse_terminal_codes(cls, v: Any) -> List[int]:
+        """Accept a JSON array or comma-separated list of status codes."""
+        if isinstance(v, (list, tuple)):
+            return [int(x) for x in v]
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [int(x) for x in parsed]
+            except json.JSONDecodeError:
+                pass
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return v  # pragma: no cover - defensive; let pydantic validate other types
 
     @field_validator("label_selector")
     @classmethod
