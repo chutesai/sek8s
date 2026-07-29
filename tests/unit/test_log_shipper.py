@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 from sek8s.log_shipper.agent import LogShipperAgent, build_ssl_context
+from sek8s.log_shipper.checkpoint import CheckpointStore
 from sek8s.log_shipper.config import LogShipperConfig
 from sek8s.log_shipper.crictl import (
     CrictlError,
@@ -21,14 +22,21 @@ from sek8s.log_shipper.crictl import (
     parse_chute_pods,
     run_crictl,
 )
-from sek8s.log_shipper.cursor import CursorStore
+from sek8s.log_shipper.exceptions import (
+    LogStreamingRejected,
+    LogStreamingTerminated,
+    TransientShipError,
+)
 from sek8s.log_shipper.models import ChutePod, LogLine
 from sek8s.log_shipper.shipper import (
     PodLogShipper,
-    _chunk,
+    _batch_entries,
+    _Entry,
+    _log_files,
+    _log_sort_key,
     _truncate_bytes,
     parse_cri_line,
-    read_new_lines,
+    parse_logical_lines,
 )
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -44,6 +52,36 @@ def make_config(**overrides) -> LogShipperConfig:
     }
     base.update(overrides)
     return LogShipperConfig(**base)
+
+
+def make_pod(**overrides) -> ChutePod:
+    fields = dict(
+        config_id="cfg",
+        name="pod",
+        uid="uid",
+        namespace="chutes",
+        deployment_id="dep-1",
+    )
+    fields.update(overrides)
+    return ChutePod(**fields)
+
+
+async def make_checkpoints(tmp_path) -> CheckpointStore:
+    store = CheckpointStore(tmp_path / "checkpoint.json")
+    await store.load()
+    return store
+
+
+def cri(ts, msg, stream="stdout", tag="F") -> str:
+    return f"{ts} {stream} {tag} {msg}"
+
+
+def write_log_file(root, pod, container, name, lines) -> "object":
+    directory = root / pod.log_dir_name / container
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text("".join(line + "\n" for line in lines))
+    return path
 
 
 class FakeResp:
@@ -83,16 +121,10 @@ class FakeSession:
         return FakePost(outcome)
 
 
-def write_log(pod_dir, container, filename, lines):
-    d = pod_dir / container
-    d.mkdir(parents=True, exist_ok=True)
-    (d / filename).write_text("".join(line + "\n" for line in lines))
-
-
 # ── config.py ───────────────────────────────────────────────────────────────
 
 
-def test_logs_url_and_selector_defaults(monkeypatch):
+def test_config_defaults(monkeypatch):
     monkeypatch.delenv("VALIDATOR_BASE_URL", raising=False)
     config = LogShipperConfig()
     assert (
@@ -104,6 +136,8 @@ def test_logs_url_and_selector_defaults(monkeypatch):
     assert config.stop_status_code == 204
     assert config.terminal_status_codes == [403, 404]
     assert config.deployment_id_label == "chutes/deployment-id"
+    assert config.buffer_bytes == 1_048_576
+    assert config.checkpoint_path.name == "checkpoint.json"
 
 
 @pytest.mark.parametrize(
@@ -120,10 +154,10 @@ def test_terminal_status_codes_parsing(raw, expected):
     assert config.terminal_status_codes == expected
 
 
-def test_terminal_reason_fallback():
-    assert PodLogShipper._terminal_reason(410) == "terminal reject"
-    assert PodLogShipper._terminal_reason(404) == "unknown config_id"
-    assert PodLogShipper._terminal_reason(403) == "cert/ownership rejected"
+def test_rejection_reason():
+    assert PodLogShipper._rejection_reason(410) == "rejected"
+    assert PodLogShipper._rejection_reason(404) == "unknown config_id"
+    assert PodLogShipper._rejection_reason(403) == "cert/ownership rejected"
 
 
 def test_logs_url_strips_trailing_slash():
@@ -147,63 +181,58 @@ def test_chute_pod_log_dir_name():
     assert pod.log_dir_name == "chutes_pod-a_uid-1"
 
 
-# ── cursor.py ───────────────────────────────────────────────────────────────
+# ── checkpoint.py ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_cursor_missing_file_loads_empty(tmp_path):
-    store = CursorStore(tmp_path / "nope" / "cursor.json")
+async def test_checkpoint_missing_file_loads_empty(tmp_path):
+    store = CheckpointStore(tmp_path / "nope" / "checkpoint.json")
     await store.load()
-    assert store.get("x") is None
+    assert store.get("x") == {}
 
 
 @pytest.mark.asyncio
-async def test_cursor_corrupt_file_loads_empty(tmp_path):
-    path = tmp_path / "cursor.json"
+async def test_checkpoint_corrupt_and_non_dict_load_empty(tmp_path):
+    path = tmp_path / "checkpoint.json"
     path.write_text("not json{{")
-    store = CursorStore(path)
+    store = CheckpointStore(path)
     await store.load()
     assert store.snapshot() == {}
-
-
-@pytest.mark.asyncio
-async def test_cursor_non_dict_file_loads_empty(tmp_path):
-    path = tmp_path / "cursor.json"
     path.write_text("[1, 2, 3]")
-    store = CursorStore(path)
-    await store.load()
-    assert store.snapshot() == {}
+    store2 = CheckpointStore(path)
+    await store2.load()
+    assert store2.snapshot() == {}
 
 
 @pytest.mark.asyncio
-async def test_cursor_set_is_monotonic_and_persists(tmp_path):
-    path = tmp_path / "sub" / "cursor.json"
-    store = CursorStore(path)
+async def test_checkpoint_set_get_persists(tmp_path):
+    path = tmp_path / "sub" / "checkpoint.json"
+    store = CheckpointStore(path)
     await store.load()
-    await store.set("c1", "2026-07-27T00:00:02Z")
-    await store.set("c1", "2026-07-27T00:00:01Z")  # older, ignored
-    assert store.get("c1") == "2026-07-27T00:00:02Z"
-    # Reload from disk to confirm the atomic flush landed.
-    reloaded = CursorStore(path)
+    await store.set("c1", {"7": 100, "8": 200})
+    assert store.get("c1") == {"7": 100, "8": 200}
+    # get returns a copy — mutating it must not affect the store.
+    store.get("c1")["7"] = 0
+    assert store.get("c1")["7"] == 100
+    reloaded = CheckpointStore(path)
     await reloaded.load()
-    assert reloaded.get("c1") == "2026-07-27T00:00:02Z"
+    assert reloaded.get("c1") == {"7": 100, "8": 200}
 
 
 @pytest.mark.asyncio
-async def test_cursor_evict_and_reconcile(tmp_path):
-    store = CursorStore(tmp_path / "cursor.json")
+async def test_checkpoint_evict_and_reconcile(tmp_path):
+    store = CheckpointStore(tmp_path / "checkpoint.json")
     await store.load()
-    await store.set("a", "t1")
-    await store.set("b", "t2")
-    await store.set("c", "t3")
+    await store.set("a", {"1": 1})
+    await store.set("b", {"1": 2})
+    await store.set("c", {"1": 3})
     await store.evict("a")
-    assert store.get("a") is None
+    assert store.get("a") == {}
     removed = await store.reconcile({"b"})
     assert removed == 1
-    assert store.get("c") is None
-    assert store.get("b") == "t2"
-    # Evicting a missing key is a no-op.
-    await store.evict("missing")
+    assert store.get("c") == {}
+    assert store.get("b") == {"1": 2}
+    await store.evict("missing")  # no-op
 
 
 # ── crictl.py ───────────────────────────────────────────────────────────────
@@ -213,7 +242,7 @@ def _pods_json(items):
     return json.dumps({"items": items})
 
 
-def test_parse_chute_pods_filters(tmp_path):
+def test_parse_chute_pods_filters():
     config = make_config()
     raw = _pods_json(
         [
@@ -248,7 +277,6 @@ def test_parse_chute_pods_filters(tmp_path):
     assert len(pods) == 1
     assert pods[0].config_id == "cfg-1"
     assert pods[0].deployment_id == "dep-1"
-    assert pods[0].name == "good"
     assert pods[0].state == "SANDBOX_READY"
 
 
@@ -265,11 +293,8 @@ def test_parse_chute_pods_missing_deployment_id_defaults_empty():
     assert pods[0].deployment_id == ""
 
 
-def test_parse_chute_pods_empty_items():
+def test_parse_chute_pods_empty_and_bad():
     assert parse_chute_pods(json.dumps({}), make_config()) == []
-
-
-def test_parse_chute_pods_bad_json():
     with pytest.raises(CrictlError):
         parse_chute_pods("not json", make_config())
 
@@ -293,14 +318,11 @@ class FakeProc:
 
 @pytest.mark.asyncio
 async def test_run_crictl_success(monkeypatch):
-    proc = FakeProc(stdout=b'{"items": []}')
-
     async def fake_exec(*args, **kwargs):
-        return proc
+        return FakeProc(stdout=b'{"items": []}')
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    out = await run_crictl(make_config(), ["pods", "-o", "json"])
-    assert out == '{"items": []}'
+    assert await run_crictl(make_config(), ["pods", "-o", "json"]) == '{"items": []}'
 
 
 @pytest.mark.asyncio
@@ -355,7 +377,7 @@ async def test_list_chute_pods(monkeypatch):
     assert [p.config_id for p in pods] == ["cfg"]
 
 
-# ── shipper.py: parsing & reading ────────────────────────────────────────────
+# ── shipper.py: parsing ───────────────────────────────────────────────────────
 
 
 def test_parse_cri_line_variants():
@@ -382,291 +404,398 @@ def test_truncate_bytes():
     assert _truncate_bytes("hello", 3) == "hel"
 
 
-def test_chunk_by_lines_and_bytes():
-    lines = [LogLine(ts=f"t{i}", stream="stdout", log="ab") for i in range(5)]
-    by_lines = list(_chunk(lines, max_lines=2, max_bytes=10_000))
+def test_parse_logical_lines_basic_and_offsets():
+    line1 = cri("2026-07-27T00:00:01Z", "hello") + "\n"
+    line2 = cri("2026-07-27T00:00:02Z", "world", stream="stderr") + "\n"
+    data = (line1 + line2).encode()
+    result = parse_logical_lines(data, 16_384)
+    assert [(ll.log, ll.stream) for ll, _ in result] == [
+        ("hello", "stdout"),
+        ("world", "stderr"),
+    ]
+    # end offsets point just past each line's terminating newline.
+    assert result[0][1] == len(line1.encode())
+    assert result[1][1] == len(data)
+
+
+def test_parse_logical_lines_partial_reassembly():
+    data = (
+        cri("2026-07-27T00:00:01Z", "hel", tag="P")
+        + "\n"
+        + cri("2026-07-27T00:00:01Z", "lo ", tag="P")
+        + "\n"
+        + cri("2026-07-27T00:00:02Z", "world", tag="F")
+        + "\n"
+    ).encode()
+    result = parse_logical_lines(data, 16_384)
+    assert len(result) == 1
+    assert result[0][0].log == "hello world"
+    assert result[0][0].ts == "2026-07-27T00:00:02Z"
+    assert result[0][1] == len(data)  # committed through the F line
+
+
+def test_parse_logical_lines_excludes_incomplete_physical_line():
+    complete = cri("2026-07-27T00:00:01Z", "a") + "\n"
+    data = (complete + "2026-07-27T00:00:02Z stdout F partial-no-newline").encode()
+    result = parse_logical_lines(data, 16_384)
+    assert [ll.log for ll, _ in result] == ["a"]
+    assert result[0][1] == len(complete.encode())  # offset stops before the fragment
+
+
+def test_parse_logical_lines_excludes_trailing_p_run():
+    complete = cri("2026-07-27T00:00:01Z", "a") + "\n"
+    trailing_p = cri("2026-07-27T00:00:02Z", "beg", tag="P") + "\n"
+    data = (complete + trailing_p).encode()
+    result = parse_logical_lines(data, 16_384)
+    assert [ll.log for ll, _ in result] == ["a"]
+    assert result[0][1] == len(complete.encode())
+
+
+def test_parse_logical_lines_skips_malformed_and_truncates():
+    data = (
+        "garbage without fields\n" + cri("2026-07-27T00:00:01Z", "abcdefgh") + "\n"
+    ).encode()
+    result = parse_logical_lines(data, 3)
+    assert [ll.log for ll, _ in result] == ["abc"]  # truncated to max_line_bytes
+
+
+def test_batch_entries():
+    entries = [
+        _Entry(LogLine(ts=f"t{i}", stream="stdout", log="ab"), inode=1, end_offset=i)
+        for i in range(5)
+    ]
+    by_lines = list(_batch_entries(entries, max_lines=2, max_bytes=10_000))
     assert [len(b) for b in by_lines] == [2, 2, 1]
-    # Each line is 2 bytes; a 3-byte cap forces one line per batch.
-    by_bytes = list(_chunk(lines, max_lines=100, max_bytes=3))
+    by_bytes = list(_batch_entries(entries, max_lines=100, max_bytes=3))
     assert [len(b) for b in by_bytes] == [1, 1, 1, 1, 1]
 
 
-def test_read_new_lines_since_filter(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    write_log(
-        tmp_path / pod.log_dir_name,
-        "app",
-        "0.log",
-        [
-            "2026-07-27T00:00:01Z stdout F one",
-            "2026-07-27T00:00:02Z stdout F two",
-            "2026-07-27T00:00:03Z stderr F three",
-        ],
-    )
-    lines = read_new_lines(pod, config, "2026-07-27T00:00:01Z")
-    assert [line.log for line in lines] == ["two", "three"]
-    assert lines[1].stream == "stderr"
+def test_log_sort_key_and_files_ordering(tmp_path):
+    pod = make_pod()
+    directory = tmp_path / pod.log_dir_name / "app"
+    directory.mkdir(parents=True)
+    names = ["0.log", "0.log.20260101-01", "0.log.20260101-02", "1.log"]
+    for name in names:
+        (directory / name).write_text("")
+    ordered = [p.name for p in _log_files(tmp_path / pod.log_dir_name)]
+    # rotated (oldest->newest) then current, per restart index ascending.
+    assert ordered == ["0.log.20260101-01", "0.log.20260101-02", "0.log", "1.log"]
+    # unknown names sort deterministically (fall to the front group).
+    assert _log_sort_key(directory / "weird.txt")[0] == 0
 
 
-def test_read_new_lines_partial_reassembly(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    write_log(
-        tmp_path / pod.log_dir_name,
-        "app",
-        "0.log",
-        [
-            "2026-07-27T00:00:01Z stdout P hel",
-            "2026-07-27T00:00:01Z stdout P lo ",
-            "2026-07-27T00:00:02Z stdout F world",
-        ],
-    )
-    lines = read_new_lines(pod, config, "")
-    assert len(lines) == 1
-    assert lines[0].log == "hello world"
-    assert lines[0].ts == "2026-07-27T00:00:02Z"
+# ── shipper.py: _read_window ──────────────────────────────────────────────────
 
 
-def test_read_new_lines_sorts_across_files(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    pod_dir = tmp_path / pod.log_dir_name
-    write_log(pod_dir, "app", "0.log", ["2026-07-27T00:00:03Z stdout F c"])
-    write_log(pod_dir, "app", "0.log.20260101", ["2026-07-27T00:00:01Z stdout F a"])
-    lines = read_new_lines(pod, config, "")
-    assert [line.log for line in lines] == ["a", "c"]
-
-
-def test_read_new_lines_skips_malformed(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    write_log(
-        tmp_path / pod.log_dir_name,
-        "app",
-        "0.log",
-        [
-            "garbage without fields",
-            "2026-07-27T00:00:01Z stdout F good",
-        ],
-    )
-    lines = read_new_lines(pod, config, "")
-    assert [line.log for line in lines] == ["good"]
-
-
-def test_read_new_lines_missing_dir(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="gone", uid="uid", namespace="chutes")
-    assert read_new_lines(pod, config, "") == []
-
-
-def test_read_new_lines_respects_max_lines(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path), MAX_LINES_PER_POLL=2)
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    write_log(
-        tmp_path / pod.log_dir_name,
-        "app",
-        "0.log",
-        [f"2026-07-27T00:00:0{i}Z stdout F line{i}" for i in range(1, 5)],
-    )
-    lines = read_new_lines(pod, config, "")
-    assert len(lines) == 2
-
-
-def test_read_new_lines_ignores_gz(tmp_path):
-    config = make_config(POD_LOG_ROOT=str(tmp_path))
-    pod = ChutePod(config_id="c", name="pod", uid="uid", namespace="chutes")
-    d = tmp_path / pod.log_dir_name / "app"
-    d.mkdir(parents=True)
-    (d / "0.log.gz").write_bytes(b"binary garbage not parsed")
-    (d / "0.log").write_text("2026-07-27T00:00:01Z stdout F ok\n")
-    lines = read_new_lines(pod, config, "")
-    assert [line.log for line in lines] == ["ok"]
-
-
-# ── shipper.py: PodLogShipper ────────────────────────────────────────────────
-
-
-def make_shipper(config, session, cursor, pod=None):
-    pod = pod or ChutePod(
-        config_id="cfg",
-        name="pod",
-        uid="uid",
-        namespace="chutes",
-        deployment_id="dep-1",
-    )
-    return PodLogShipper(config, session, pod, cursor)
+def make_shipper(config, session, checkpoints, pod=None) -> PodLogShipper:
+    return PodLogShipper(config, session, pod or make_pod(), checkpoints)
 
 
 @pytest.mark.asyncio
-async def test_post_batch_ok_and_stop(tmp_path):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    batch = [LogLine(ts="t1", stream="stdout", log="x")]
-
-    ship_ok = make_shipper(config, FakeSession([200]), cursor)
-    assert await ship_ok._post_batch(batch) == "ok"
-
-    ship_stop = make_shipper(config, FakeSession([204]), cursor)
-    assert await ship_stop._post_batch(batch) == "stop"
+async def test_read_window_fresh_read_does_not_advance_offsets(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    write_log_file(
+        tmp_path,
+        pod,
+        "app",
+        "0.log",
+        [cri("2026-07-27T00:00:01Z", "a"), cri("2026-07-27T00:00:02Z", "b")],
+    )
+    entries, hit_budget = ship._read_window()
+    assert [e.line.log for e in entries] == ["a", "b"]
+    assert not hit_budget
+    assert ship._offsets == {}  # committed only on ship
 
 
 @pytest.mark.asyncio
-async def test_post_batch_body_carries_deployment_id(tmp_path):
+async def test_read_window_incremental_by_offset(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    path = write_log_file(
+        tmp_path,
+        pod,
+        "app",
+        "0.log",
+        [cri("2026-07-27T00:00:01Z", "a"), cri("2026-07-27T00:00:02Z", "b")],
+    )
+    inode = path.stat().st_ino
+    entries, _ = ship._read_window()
+    # Simulate the first line being shipped/committed, then read again.
+    ship._offsets = {inode: entries[0].end_offset}
+    entries2, _ = ship._read_window()
+    assert [e.line.log for e in entries2] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_read_window_truncation_resets(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    path = write_log_file(
+        tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "old")]
+    )
+    inode = path.stat().st_ino
+    ship._offsets = {inode: 9999}  # committed past a now-smaller file
+    path.write_text(cri("2026-07-27T00:00:02Z", "new") + "\n")  # same inode, smaller
+    entries, _ = ship._read_window()
+    assert [e.line.log for e in entries] == ["new"]
+
+
+@pytest.mark.asyncio
+async def test_read_window_follows_rotation_by_inode(tmp_path):
+    import os
+
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    directory = tmp_path / pod.log_dir_name / "app"
+    current = write_log_file(
+        tmp_path,
+        pod,
+        "app",
+        "0.log",
+        [cri("2026-07-27T00:00:01Z", "a1"), cri("2026-07-27T00:00:02Z", "a2")],
+    )
+    inode1 = current.stat().st_ino
+    ship._offsets = {inode1: current.stat().st_size}  # fully committed
+    # Rotate: rename keeps the inode; a fresh 0.log gets a new inode.
+    os.rename(current, directory / "0.log.20260101-01")
+    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:03Z", "b1")])
+    entries, _ = ship._read_window()
+    # The renamed file (same inode, fully committed) yields nothing; only new file reads.
+    assert [e.line.log for e in entries] == ["b1"]
+
+
+@pytest.mark.asyncio
+async def test_read_window_budget_caps_read(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path), BUFFER_BYTES=65_536)
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    # ~1000 lines * ~40 bytes ≈ 40 KB < 64 KB... make it exceed the window.
+    lines = [cri(f"2026-07-27T00:00:{i:02d}Z", "x" * 60) for i in range(1200)]
+    write_log_file(tmp_path, pod, "app", "0.log", lines)
+    entries, hit_budget = ship._read_window()
+    assert hit_budget
+    assert 0 < len(entries) < 1200
+
+
+@pytest.mark.asyncio
+async def test_read_window_budget_stops_before_next_file(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path), BUFFER_BYTES=65_536)
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    # First file (restart 0) fills the whole window; the second is not reached.
+    write_log_file(
+        tmp_path,
+        pod,
+        "app",
+        "0.log",
+        [cri(f"2026-07-27T00:00:{i:02d}Z", "x" * 60) for i in range(1200)],
+    )
+    write_log_file(
+        tmp_path, pod, "app", "1.log", [cri("2026-07-27T01:00:00Z", "second-file")]
+    )
+    entries, hit_budget = ship._read_window()
+    assert hit_budget
+    assert all(e.line.log != "second-file" for e in entries)
+
+
+@pytest.mark.asyncio
+async def test_read_window_ignores_gz_and_missing_dir(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    # Missing pod dir -> nothing.
+    assert ship._read_window() == ([], False)
+    directory = tmp_path / pod.log_dir_name / "app"
+    directory.mkdir(parents=True)
+    (directory / "0.log.gz").write_bytes(b"binary garbage")
+    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "ok")])
+    entries, _ = ship._read_window()
+    assert [e.line.log for e in entries] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_read_window_prunes_gone_inodes(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "a")])
+    ship._offsets = {987654321: 5}  # an inode that isn't present
+    ship._read_window()
+    assert 987654321 not in ship._offsets
+
+
+# ── shipper.py: _ship / _post_batch ───────────────────────────────────────────
+
+
+def _entry(ts, msg, inode, end_offset):
+    return _Entry(LogLine(ts=ts, stream="stdout", log=msg), inode, end_offset)
+
+
+@pytest.mark.asyncio
+async def test_ship_commits_offsets_and_persists(tmp_path):
     config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
+    checkpoints = await make_checkpoints(tmp_path)
     session = FakeSession([200])
-    ship = make_shipper(config, session, cursor)
-    await ship._post_batch([LogLine(ts="t1", stream="stdout", log="x")])
+    ship = make_shipper(config, session, checkpoints)
+    await ship._ship([_entry("t1", "a", inode=7, end_offset=10)])
+    assert ship._offsets == {7: 10}
+    assert checkpoints.get("cfg") == {"7": 10}
     body = session.calls[0]["json"]
     assert body["deployment_id"] == "dep-1"
-    assert body["logs"] == [{"ts": "t1", "stream": "stdout", "log": "x"}]
+    assert body["logs"] == [{"ts": "t1", "stream": "stdout", "log": "a"}]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,reason", [(404, "unknown"), (403, "cert/ownership")])
-async def test_post_batch_terminal_reject(tmp_path, status, reason):
+async def test_ship_terminated_does_not_commit(tmp_path):
+    config = make_config(BATCH_MAX_LINES=1)
+    checkpoints = await make_checkpoints(tmp_path)
+    # first batch 200 (commit), second 204 (raise before commit).
+    ship = make_shipper(config, FakeSession([200, 204]), checkpoints)
+    entries = [
+        _entry("t1", "a", inode=7, end_offset=10),
+        _entry("t2", "b", inode=7, end_offset=20),
+    ]
+    with pytest.raises(LogStreamingTerminated):
+        await ship._ship(entries)
+    assert ship._offsets == {7: 10}  # only the accepted batch committed
+
+
+@pytest.mark.asyncio
+async def test_ship_transient_leaves_offsets(tmp_path):
     config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([status])
-    ship = make_shipper(config, session, cursor)
-    # Terminal codes stop immediately — no retry loop.
-    assert (
-        await ship._post_batch([LogLine(ts="t", stream="stdout", log="x")])
-        == "terminal"
+    checkpoints = await make_checkpoints(tmp_path)
+    ship = make_shipper(config, FakeSession([500, 500]), checkpoints)
+    with pytest.raises(TransientShipError):
+        await ship._ship([_entry("t1", "a", inode=7, end_offset=10)])
+    assert ship._offsets == {}
+
+
+@pytest.mark.asyncio
+async def test_post_batch_ok_returns_none(tmp_path):
+    ship = make_shipper(
+        make_config(), FakeSession([200]), await make_checkpoints(tmp_path)
     )
+    assert await ship._post_batch([LogLine(ts="t", stream="stdout", log="x")]) is None
+
+
+@pytest.mark.asyncio
+async def test_post_batch_cutoff_and_reject(tmp_path):
+    checkpoints = await make_checkpoints(tmp_path)
+    batch = [LogLine(ts="t", stream="stdout", log="x")]
+    ship204 = make_shipper(make_config(), FakeSession([204]), checkpoints)
+    with pytest.raises(LogStreamingTerminated):
+        await ship204._post_batch(batch)
+    ship403 = make_shipper(make_config(), FakeSession([403]), checkpoints)
+    with pytest.raises(LogStreamingRejected) as exc:
+        await ship403._post_batch(batch)
+    assert exc.value.status == 403
+    assert exc.value.reason == "cert/ownership rejected"
+
+
+@pytest.mark.asyncio
+async def test_post_batch_retry_then_ok_and_exhaust(tmp_path):
+    checkpoints = await make_checkpoints(tmp_path)
+    batch = [LogLine(ts="t", stream="stdout", log="x")]
+    retry = FakeSession([aiohttp.ClientConnectionError("down"), 200])
+    ship = make_shipper(make_config(), retry, checkpoints)
+    assert await ship._post_batch(batch) is None
+    assert len(retry.calls) == 2
+    exhaust = FakeSession([500, 503])
+    ship2 = make_shipper(make_config(), exhaust, checkpoints)
+    with pytest.raises(TransientShipError):
+        await ship2._post_batch(batch)
+    assert len(exhaust.calls) == 2
+
+
+# ── shipper.py: run (end-to-end) ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_run_streams_from_disk_then_terminates(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    session = FakeSession([204])
+    ship = make_shipper(config, session, checkpoints, pod)
+    write_log_file(
+        tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "hello")]
+    )
+    assert await ship.run() is None
+    assert session.calls[0]["json"]["logs"] == [
+        {"ts": "2026-07-27T00:00:01Z", "stream": "stdout", "log": "hello"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_terminates_on_204(tmp_path, monkeypatch):
+    ship = make_shipper(
+        make_config(), FakeSession([204]), await make_checkpoints(tmp_path)
+    )
+    monkeypatch.setattr(
+        ship, "_read_window", lambda: ([_entry("t1", "a", 1, 10)], False)
+    )
+    assert await ship.run() is None
+
+
+@pytest.mark.asyncio
+async def test_run_stops_on_rejection(tmp_path, monkeypatch):
+    session = FakeSession([403])
+    ship = make_shipper(make_config(), session, await make_checkpoints(tmp_path))
+    monkeypatch.setattr(
+        ship, "_read_window", lambda: ([_entry("t1", "a", 1, 10)], False)
+    )
+    assert await ship.run() is None
     assert len(session.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_post_batch_retries_then_ok(tmp_path):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([aiohttp.ClientConnectionError("down"), 200])
-    ship = make_shipper(config, session, cursor)
-    assert await ship._post_batch([LogLine(ts="t", stream="stdout", log="x")]) == "ok"
-    assert len(session.calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_post_batch_non_2xx_exhausts_to_fail(tmp_path):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([500, 503])
-    ship = make_shipper(config, session, cursor)
-    assert await ship._post_batch([LogLine(ts="t", stream="stdout", log="x")]) == "fail"
-    assert len(session.calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_ship_advances_cursor_and_stops(tmp_path):
-    config = make_config(BATCH_MAX_LINES=1)
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    # Two batches: first 200 (advance), second 204 (advance + stop).
-    session = FakeSession([200, 204])
-    ship = make_shipper(config, session, cursor)
-    lines = [
-        LogLine(ts="2026-07-27T00:00:01Z", stream="stdout", log="a"),
-        LogLine(ts="2026-07-27T00:00:02Z", stream="stdout", log="b"),
-    ]
-    assert await ship._ship(lines) == "stop"
-    assert cursor.get("cfg") == "2026-07-27T00:00:02Z"
-
-
-@pytest.mark.asyncio
-async def test_ship_all_ok_advances_without_stop(tmp_path):
-    config = make_config(BATCH_MAX_LINES=1)
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([200, 202])
-    ship = make_shipper(config, session, cursor)
-    lines = [
-        LogLine(ts="2026-07-27T00:00:01Z", stream="stdout", log="a"),
-        LogLine(ts="2026-07-27T00:00:02Z", stream="stdout", log="b"),
-    ]
-    assert await ship._ship(lines) == "ok"
-    assert cursor.get("cfg") == "2026-07-27T00:00:02Z"
-
-
-@pytest.mark.asyncio
-async def test_ship_transient_failure_leaves_cursor(tmp_path):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([500, 500])
-    ship = make_shipper(config, session, cursor)
-    assert await ship._ship([LogLine(ts="t1", stream="stdout", log="a")]) == "retry"
-    assert cursor.get("cfg") is None
-
-
-@pytest.mark.asyncio
-async def test_ship_terminal_reject_leaves_cursor(tmp_path):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    session = FakeSession([404])
-    ship = make_shipper(config, session, cursor)
-    assert await ship._ship([LogLine(ts="t1", stream="stdout", log="a")]) == "terminal"
-    assert cursor.get("cfg") is None
-
-
-@pytest.mark.asyncio
-async def test_run_stops_on_terminal_reject(tmp_path, monkeypatch):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
+async def test_run_retries_after_transient(tmp_path, monkeypatch):
+    session = FakeSession([500, 500, 204])  # poll1 transient (2 attempts), poll2 -> 204
+    ship = make_shipper(make_config(), session, await make_checkpoints(tmp_path))
     monkeypatch.setattr(
-        "sek8s.log_shipper.shipper.read_new_lines",
-        lambda pod, cfg, since: [LogLine(ts="t1", stream="stdout", log="a")],
+        ship, "_read_window", lambda: ([_entry("t1", "a", 1, 10)], False)
     )
-    ship = make_shipper(config, FakeSession([403]), cursor)
-    assert await ship.run() == "terminal"
+    assert await ship.run() is None
+    assert len(session.calls) == 3
 
 
 @pytest.mark.asyncio
-async def test_run_stops_on_cutoff(tmp_path, monkeypatch):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
+async def test_run_drains_backlog_without_sleeping(tmp_path, monkeypatch):
+    # hit_budget True keeps the loop draining (no idle sleep) until a stop signal.
+    session = FakeSession([200, 200, 204])
+    ship = make_shipper(make_config(), session, await make_checkpoints(tmp_path))
     monkeypatch.setattr(
-        "sek8s.log_shipper.shipper.read_new_lines",
-        lambda pod, cfg, since: [LogLine(ts="t1", stream="stdout", log="a")],
+        ship, "_read_window", lambda: ([_entry("t1", "a", 1, 10)], True)
     )
-    ship = make_shipper(config, FakeSession([204]), cursor)
-    assert await ship.run() == "stop"
-
-
-@pytest.mark.asyncio
-async def test_run_hits_max_duration(tmp_path, monkeypatch):
-    config = make_config(MAX_CAPTURE_SECONDS=1.0)
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
+    slept = []
     monkeypatch.setattr(
-        "sek8s.log_shipper.shipper.read_new_lines", lambda pod, cfg, since: []
+        "sek8s.log_shipper.shipper.asyncio.sleep",
+        lambda s: slept.append(s) or asyncio.sleep(0),
     )
-    clock = iter([0.0, 1000.0, 2000.0])
-    pod = ChutePod(config_id="cfg", name="pod", uid="uid", namespace="chutes")
-    ship = PodLogShipper(
-        config, FakeSession([]), pod, cursor, now_fn=lambda: next(clock)
-    )
-    assert await ship.run() == "max_duration"
+    assert await ship.run() is None
+    assert len(session.calls) == 3
+    assert slept == []  # never idled while draining a full window
 
 
 @pytest.mark.asyncio
 async def test_run_propagates_cancel(tmp_path, monkeypatch):
-    config = make_config()
-    cursor = CursorStore(tmp_path / "c.json")
-    await cursor.load()
-    monkeypatch.setattr(
-        "sek8s.log_shipper.shipper.read_new_lines", lambda pod, cfg, since: []
+    ship = make_shipper(
+        make_config(), FakeSession([]), await make_checkpoints(tmp_path)
     )
-    ship = make_shipper(config, FakeSession([]), cursor)
+    monkeypatch.setattr(ship, "_read_window", lambda: ([], False))
     task = asyncio.create_task(ship.run())
     await asyncio.sleep(0.02)
     task.cancel()
@@ -714,14 +843,14 @@ class FakeShipper:
     behavior: dict = {}
     started: list = []
 
-    def __init__(self, config, session, pod, cursor):
+    def __init__(self, config, session, pod, checkpoints):
         self._pod = pod
 
     async def run(self):
         FakeShipper.started.append(self._pod.config_id)
         mode = FakeShipper.behavior.get(self._pod.config_id, "hang")
         if mode == "stop":
-            return "stop"
+            return None
         if mode == "error":
             raise RuntimeError("boom")
         await asyncio.Event().wait()  # hang until cancelled
@@ -733,6 +862,13 @@ def _pod(config_id):
     )
 
 
+def _async_return(value):
+    async def _coro():
+        return value
+
+    return _coro()
+
+
 @pytest.mark.asyncio
 async def test_poll_discovery_error_is_swallowed(monkeypatch):
     agent = LogShipperAgent(make_config())
@@ -741,7 +877,7 @@ async def test_poll_discovery_error_is_swallowed(monkeypatch):
         raise CrictlError("no crictl")
 
     monkeypatch.setattr("sek8s.log_shipper.agent.list_chute_pods", boom)
-    await agent._poll_once()  # must not raise
+    await agent._poll_once()
     assert agent._tasks == {}
 
 
@@ -750,29 +886,27 @@ async def test_poll_spawns_and_drops(monkeypatch, tmp_path):
     FakeShipper.behavior = {}
     FakeShipper.started = []
     monkeypatch.setattr("sek8s.log_shipper.agent.PodLogShipper", FakeShipper)
-    agent = LogShipperAgent(make_config(CURSOR_PATH=str(tmp_path / "c.json")))
+    agent = LogShipperAgent(make_config(CHECKPOINT_PATH=str(tmp_path / "c.json")))
     agent._session = FakeSession([])
-    await agent._cursor.load()
-    await agent._cursor.set("cfg-1", "t1")
+    await agent._checkpoints.load()
+    await agent._checkpoints.set("cfg-1", {"7": 5})
 
     pods = [_pod("cfg-1")]
     monkeypatch.setattr(
-        "sek8s.log_shipper.agent.list_chute_pods",
-        lambda _c: _async_return(pods),
+        "sek8s.log_shipper.agent.list_chute_pods", lambda _c: _async_return(pods)
     )
     await agent._poll_once()
     await asyncio.sleep(0)
     assert "cfg-1" in agent._tasks
     assert FakeShipper.started == ["cfg-1"]
 
-    # Pod disappears -> task cancelled, cursor evicted.
     monkeypatch.setattr(
         "sek8s.log_shipper.agent.list_chute_pods", lambda _c: _async_return([])
     )
     await agent._poll_once()
     await asyncio.sleep(0)
     assert agent._tasks == {}
-    assert agent._cursor.get("cfg-1") is None
+    assert agent._checkpoints.get("cfg-1") == {}  # evicted
 
 
 @pytest.mark.asyncio
@@ -789,7 +923,6 @@ async def test_poll_respects_capacity(monkeypatch):
     await agent._poll_once()
     await asyncio.sleep(0)
     assert len(agent._tasks) == 1
-    # Second poll while at capacity keeps it at 1 (the deferred pod stays deferred).
     await agent._poll_once()
     await asyncio.sleep(0)
     assert len(agent._tasks) == 1
@@ -807,11 +940,11 @@ async def test_poll_reaps_finished_and_does_not_respawn(monkeypatch):
         "sek8s.log_shipper.agent.list_chute_pods", lambda _c: _async_return([_pod("a")])
     )
     await agent._poll_once()
-    await asyncio.sleep(0.01)  # let the "stop" task finish
-    await agent._poll_once()  # reap + no respawn
+    await asyncio.sleep(0.01)
+    await agent._poll_once()
     assert agent._tasks == {}
     assert "a" in agent._done
-    assert FakeShipper.started == ["a"]  # started exactly once
+    assert FakeShipper.started == ["a"]
 
 
 @pytest.mark.asyncio
@@ -832,22 +965,6 @@ async def test_poll_reaps_errored_task(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_cancels_tasks(monkeypatch):
-    FakeShipper.behavior = {}
-    FakeShipper.started = []
-    monkeypatch.setattr("sek8s.log_shipper.agent.PodLogShipper", FakeShipper)
-    agent = LogShipperAgent(make_config())
-    agent._session = FakeSession([])
-    monkeypatch.setattr(
-        "sek8s.log_shipper.agent.list_chute_pods", lambda _c: _async_return([_pod("a")])
-    )
-    await agent._poll_once()
-    await asyncio.sleep(0)
-    await agent._shutdown()
-    assert agent._tasks == {}
-
-
-@pytest.mark.asyncio
 async def test_reap_skips_cancelled_task():
     agent = LogShipperAgent(make_config())
 
@@ -862,12 +979,12 @@ async def test_reap_skips_cancelled_task():
     agent._pods["x"] = _pod("x")
     agent._reap_finished()
     assert "x" not in agent._tasks
-    assert "x" not in agent._done  # cancelled tasks are not marked done
+    assert "x" not in agent._done
 
 
 @pytest.mark.asyncio
 async def test_agent_run_sets_up_session_and_shuts_down(monkeypatch, tmp_path):
-    config = make_config(CURSOR_PATH=str(tmp_path / "c.json"))
+    config = make_config(CHECKPOINT_PATH=str(tmp_path / "c.json"))
     agent = LogShipperAgent(config)
     monkeypatch.setattr("sek8s.log_shipper.agent.build_ssl_context", lambda c: None)
 
@@ -905,8 +1022,24 @@ async def test_agent_run_sets_up_session_and_shuts_down(monkeypatch, tmp_path):
     monkeypatch.setattr("sek8s.log_shipper.agent.asyncio.sleep", no_sleep)
     with pytest.raises(asyncio.CancelledError):
         await agent.run()
-    assert calls["n"] == 2  # polled, slept, polled again then cancelled
+    assert calls["n"] == 2
     assert agent._session is not None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_tasks(monkeypatch):
+    FakeShipper.behavior = {}
+    FakeShipper.started = []
+    monkeypatch.setattr("sek8s.log_shipper.agent.PodLogShipper", FakeShipper)
+    agent = LogShipperAgent(make_config())
+    agent._session = FakeSession([])
+    monkeypatch.setattr(
+        "sek8s.log_shipper.agent.list_chute_pods", lambda _c: _async_return([_pod("a")])
+    )
+    await agent._poll_once()
+    await asyncio.sleep(0)
+    await agent._shutdown()
+    assert agent._tasks == {}
 
 
 # ── services/log_shipper.py entrypoint ───────────────────────────────────────
@@ -933,15 +1066,8 @@ def test_service_run_handles_keyboard_interrupt(monkeypatch):
     import sek8s.services.log_shipper as entry
 
     def fake_run(coro):
-        coro.close()  # avoid "coroutine never awaited" warning
+        coro.close()
         raise KeyboardInterrupt()
 
     monkeypatch.setattr(entry.asyncio, "run", fake_run)
     entry.run()  # must not raise
-
-
-def _async_return(value):
-    async def _coro():
-        return value
-
-    return _coro()

@@ -14,11 +14,11 @@ from typing import List
 from loguru import logger
 
 from .config import LogShipperConfig
+
+# CrictlError is defined in exceptions.py and re-exported here: callers (agent,
+# tests) do `from ...crictl import CrictlError`.
+from .exceptions import CrictlError
 from .models import ChutePod
-
-
-class CrictlError(RuntimeError):
-    """Raised when the crictl wrapper fails or returns unparseable output."""
 
 
 async def run_crictl(config: LogShipperConfig, args: List[str]) -> str:

@@ -11,12 +11,11 @@ chute_log_shipper_validator_base_url: "https://cvm.chutes.ai"
 # Pod discovery / capture knobs (see src/sek8s/sek8s/log_shipper/config.py).
 chute_log_shipper_namespace: "chutes"
 chute_log_shipper_label_selector: "chutes/chute=true"
+chute_log_shipper_buffer_bytes: 1048576
 chute_log_shipper_poll_interval: 10
 chute_log_shipper_batch_max_lines: 500
 chute_log_shipper_batch_max_bytes: 1048576
 chute_log_shipper_max_line_bytes: 16384
-chute_log_shipper_max_lines_per_poll: 5000
-chute_log_shipper_max_capture_seconds: 3600
 chute_log_shipper_max_concurrent_pods: 32
 chute_log_shipper_request_timeout: 30
 chute_log_shipper_retry_max_attempts: 5

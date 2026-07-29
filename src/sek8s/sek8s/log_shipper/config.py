@@ -75,16 +75,29 @@ class LogShipperConfig(BaseSettings):
         default=15.0, alias="COMMAND_TIMEOUT_SECONDS", gt=0.0, le=120.0
     )
 
-    # ── Cursor persistence ──────────────────────────────────────────────────
-    cursor_path: Path = Field(
-        default=Path("/var/lib/chute-log-shipper/cursor.json"),
-        alias="CURSOR_PATH",
-        description="Persisted {config_id -> last_shipped_ts}, reconciled to the live pod set",
+    # ── Offset checkpoint persistence ───────────────────────────────────────
+    checkpoint_path: Path = Field(
+        default=Path("/var/lib/chute-log-shipper/checkpoint.json"),
+        alias="CHECKPOINT_PATH",
+        description="Persisted {config_id -> {inode -> shipped byte offset}}, "
+        "reconciled to the live pod set",
     )
 
-    # ── Loop / batching cadence ─────────────────────────────────────────────
+    # ── Streaming window / cadence ──────────────────────────────────────────
+    buffer_bytes: int = Field(
+        default=1_048_576,
+        alias="BUFFER_BYTES",
+        ge=65_536,
+        le=64 * 1_048_576,
+        description="Per-pod in-flight read window — the deterministic memory ceiling. "
+        "Must exceed the CRI physical line cap (~16 KiB) so a window always makes progress.",
+    )
     poll_interval_seconds: float = Field(
-        default=10.0, alias="POLL_INTERVAL_SECONDS", gt=0.0, le=3600.0
+        default=10.0,
+        alias="POLL_INTERVAL_SECONDS",
+        gt=0.0,
+        le=3600.0,
+        description="Idle sleep when caught up to EOF (only new bytes are read next cycle)",
     )
     batch_max_lines: int = Field(default=500, alias="BATCH_MAX_LINES", ge=1, le=100_000)
     batch_max_bytes: int = Field(
@@ -95,24 +108,10 @@ class LogShipperConfig(BaseSettings):
         alias="MAX_LINE_BYTES",
         ge=256,
         le=1_048_576,
-        description="A single reassembled log line is truncated to this many bytes",
-    )
-    max_lines_per_poll: int = Field(
-        default=5_000,
-        alias="MAX_LINES_PER_POLL",
-        ge=1,
-        le=1_000_000,
-        description="Per-pod cap on new lines read in one poll (DRAM backpressure)",
+        description="A single reassembled logical line is truncated to this many bytes",
     )
 
-    # ── Backstops ───────────────────────────────────────────────────────────
-    max_capture_seconds: float = Field(
-        default=3600.0,
-        alias="MAX_CAPTURE_SECONDS",
-        gt=0.0,
-        le=7 * 24 * 3600.0,
-        description="Hard stop so a never-activating, never-terminating pod cannot stream forever",
-    )
+    # ── Concurrency ─────────────────────────────────────────────────────────
     max_concurrent_pods: int = Field(
         default=32, alias="MAX_CONCURRENT_PODS", ge=1, le=1024
     )

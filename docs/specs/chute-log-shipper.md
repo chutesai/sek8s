@@ -9,6 +9,11 @@ from the mTLS cert + path + proxy; `204` = stop; `seq`/`server_ip`/pod-metadata 
 `deployment_id` (from the `chutes/deployment-id` pod label), the one field the validator cannot derive
 from `config_id`; (2) treat `403`/`404` as **terminal** — stop + log the reason — not transient retry.
 See the companion validator spec `chutes-api/docs/specs/chute-log-shipper.md`.)
+**Revised**: 2026-07-29 (read-path redesign — Phase 1 targets **all** chute pods, so replace the
+whole-file re-read + ts cursor with a bounded-window **streamer**: tail only new bytes (byte offset
+per file keyed by inode), deterministic memory (`buffer_bytes × pods`), backpressure, complete-lines-
+only, commit-offset-on-ship persisted to a `{config_id → {inode → offset}}` checkpoint. Also removed
+the wall-clock max-capture backstop — termination is the validator's job.)
 
 ---
 
@@ -65,7 +70,7 @@ per-chute 8001 log server (Phase 2).
   the guest (`system-manager`, `system-status`, `attestation-service`, `admission-controller`) runs
   as a **systemd service on the VM**; only the lean `attestation-proxy` runs in-cluster. The log
   shipper follows the dominant pattern: it runs on the VM with native filesystem access (trivial
-  cursor persistence, direct reads of the registry-tls leaf), outside the very cluster it observes.
+  checkpoint persistence, direct reads of the registry-tls leaf), outside the very cluster it observes.
 - **No k8s API access at all — read CRI + log files off disk.** The admin kubeconfig
   (`/etc/rancher/k3s/k3s.yaml`) is purged at boot, and a non-pod process gets no projected
   ServiceAccount token. Rather than mint and rotate a standalone credential, the service:
@@ -104,25 +109,36 @@ per-chute 8001 log server (Phase 2).
   stop**, any other 2xx = keep sending, **`403`/`404` = terminal reject → stop and log the specific
   reason** (`404` = unknown `config_id`; `403` = cert/ownership rejection — a cross-miner or
   misconfigured shipment that will never succeed), and any *other* non-2xx or a connection error =
-  transient failure → retry with backoff (cursor unchanged). All cutoff *logic* lives in the API
-  (default: stop at
-  activation; per-chute override keeps it going). The agent holds no cutoff policy of its own — it
-  obeys the code — plus a local max-duration backstop so a never-activating, never-terminating pod
-  cannot stream forever.
+  transient failure → retry with backoff (offset unchanged). All cutoff *logic* lives in the API
+  (default: stop at activation; per-chute override keeps it going). The agent holds **no** cutoff
+  policy of its own — it obeys the code. There is deliberately no local wall-clock backstop: a
+  never-activating, never-terminating pod is the validator's responsibility to cut off (it can
+  return `204` on its own timeout), and a deleted/reaped pod is stopped by the agent cancelling its
+  capture task (pod-gone). A guest-side timer would be an arbitrary cutoff policy that contradicts
+  "cutoff logic lives in the API," and risks truncating a legitimately slow warmup before the crash
+  we exist to capture.
 - **Egress auth = mTLS, enforced.** Reuse the per-boot registry mTLS leaf (no new leaf, no
   `setup_vm_tls` edit → no RTMR2 shift). The validator verifies the presented leaf against the
   registered per-boot VM CA → `(miner_hotkey, vm_name)`, binding each shipment to the attested boot.
   There is no non-mTLS path.
-- **Timestamp-based resume/dedupe, not line-index.** Logs are read with CRI RFC3339-nanosecond
-  timestamps. The validator dedupes on `(config_id, ts)` (nanosecond ts is effectively unique per
-  line in a single container stream). **No `seq`/gap marker is sent:** batches retry on failure and
-  the cursor advances only on a successful ship, so no batch is ever silently dropped for a `seq` to
-  detect — the reliable-delivery design already provides the guarantee `seq` was meant to hint at.
-  Timestamp-keyed dedupe survives kubelet log rotation (line indices are not stable across rotation)
-  and agent restarts. The service persists a cursor file
-  `{config_id → last_shipped_ts}` and, on restart, reconciles it against the live pod set (dropping
-  keys for pods no longer present to prevent unbounded growth; entries are also evicted on
-  pod-delete while running).
+- **Streaming with a bounded window + offset checkpoint (deterministic memory).** The target is
+  **all** chute pods (until the validator cuts each off), so the read path must not re-read whole
+  files. The **log file on disk is the durable buffer**; the agent tails only a bounded window
+  (`buffer_bytes`) into RAM per pod, so total memory is deterministic — `buffer_bytes × pods`, and
+  there is at most one chute pod per GPU. A single streaming coroutine reads the next window only
+  after shipping the current one, so a slow validator naturally **pauses reading** (backpressure);
+  the unread bytes stay on disk. Read position is a **byte offset per file, keyed by inode** (so it
+  follows kubelet rotation — a rename keeps the inode — and resets on truncation / a new inode). The
+  **committed offset advances only on a successful ship**, and is persisted to a checkpoint
+  `{config_id → {inode → offset}}`, so on any restart the stream resumes from the last durably-shipped
+  position. Per-line CRI `ts` is still sent; the validator dedupes on `(config_id, ts)` (nanosecond
+  ts is effectively unique per line), which backstops the rotation/restart edges where an offset is
+  re-read. **No `seq`/gap marker is sent** — retry-until-shipped + commit-on-success already prevent
+  gaps. **Only complete logical lines are shipped:** a window boundary that cuts a physical line, and
+  a CRI `P`-run whose `F` has not arrived, are both held back (the offset is not advanced past them),
+  so the validator never receives a partial line and needs no partial-handling. The checkpoint is
+  reconciled to the live pod set on every poll (dropping keys for pods no longer present to prevent
+  unbounded growth) and evicted on pod-delete.
 
 ---
 
@@ -166,7 +182,7 @@ The guest agent is a **client**; it calls the validator. No inbound API is added
 Success (Phase 1) =
 - The agent runs as a single `chute-log-shipper.service` on the VM, as a dedicated non-root uid,
   confined by an AppArmor profile that permits only `/var/log/pods/chutes_*/**` reads, the crictl
-  socket, the registry-tls leaf, the cursor dir, and egress to the validator.
+  socket, the registry-tls leaf, the checkpoint dir, and egress to the validator.
 - `k3s crictl pods -o json` (via the restricted wrapper) yields chute pods with their
   `config-id` + `deployment-id` labels + uid + phase; the service joins uid →
   `/var/log/pods/chutes_<pod>_<uid>/…` and reads the log files, shipping `deployment_id` top-level.
@@ -193,8 +209,9 @@ Success (Phase 1) =
 - Config via `pydantic-settings` (env-driven), following `SystemManagerConfig`; no hardcoded URLs,
   paths, or credentials.
 - Do **not** modify `setup_vm_tls` or anything in initramfs (keep RTMR2 stable).
-- Bounded resource use: per-pod line/byte caps, max-capture-duration backstop, capped concurrency
-  across pods, bounded cursor file (reconciled to the live pod set).
+- Bounded resource use: a bounded per-pod read window (`buffer_bytes`, the deterministic memory
+  ceiling), capped concurrency across pods, bounded checkpoint file
+  (reconciled to the live pod set).
 - Hardened service: dedicated non-root uid (not 1000, per the system-manager isolation rule),
   least-privilege group/ACL wiring at boot for the crictl socket + `/var/log/pods` + the registry-tls
   leaf, and an AppArmor profile consistent with `sek8s.system-manager`.
@@ -207,34 +224,39 @@ Success (Phase 1) =
    - `config.py` — `LogShipperConfig(BaseSettings)`: validator base URL (the CVM mTLS host —
      `https://cvm.chutes.ai`), mTLS cert/key paths (`/run/chutes/registry-tls/...`), namespace
      (`chutes`), label selector (`chutes/chute=true`), crictl wrapper path, `/var/log/pods` root,
-     cursor file path, poll interval, batch size/flush interval, per-pod line/byte caps,
-     max-capture-seconds, retry/backoff.
+     checkpoint file path, `buffer_bytes` (per-pod window / memory ceiling), poll interval (idle
+     sleep), batch size caps, `max_line_bytes`, concurrency cap, retry/backoff.
+   - `checkpoint.py` — `CheckpointStore`: persisted `{config_id → {inode → shipped offset}}`;
+     atomic write, reconciled to the live pod set, evicted on pod-delete.
    - `agent.py` — poll `k3s crictl pods -o json` (via the restricted wrapper) on an interval →
      filter to chute pods (label selector) → per new chute pod, spawn a capture task; read the
      `chutes/config-id` label (→ request path), the `chutes/deployment-id` label (→ shipped
-     top-level), the pod uid (→ log path), and phase (for terminal detection). Reconcile the cursor
-     file against the live pod set. (No `chute-id` label or node IP is read — the validator derives
-     chute/miner/user identity server-side, so the agent needs only `config-id` + `deployment-id` +
-     uid.)
-   - `shipper.py` — per-pod: tail `/var/log/pods/chutes_<pod>_<uid>/<container>/*.log`, parse the CRI
-     line format (`<RFC3339Nano> <stdout|stderr> <F|P> <msg>`), resume from the cursor `last_ts` →
-     bounded batch → `POST /instances/launch_config/{config_id}/logs` over mTLS with a
-     body of `{"deployment_id": "<uuid>", "logs": [{ts, stream, log}]}` (`deployment_id` from the
-     pod label; no `seq`/`server_ip`/identity — all derived server-side from the path + mTLS leaf +
-     proxy) → key off the response **status code** for the cutoff (`204` = stop; any other 2xx = keep
-     sending) → stop on `204` / **`403`/`404` terminal reject (log the reason)** / pod terminal /
-     max-duration; retry-with-backoff on any *other* non-2xx or connection error (cursor unchanged);
-     advance the cursor on successful ship. Optional light filtering of shim-excluded noise
-     (`nvidia-smi`, `curl`, …).
+     top-level), and the pod uid (→ log path). Reconcile the checkpoint against the live pod set.
+     (No `chute-id` label or node IP is read — the validator derives chute/miner/user identity
+     server-side, so the agent needs only `config-id` + `deployment-id` + uid.)
+   - `shipper.py` — per-pod streaming coroutine: read a bounded `buffer_bytes` window of **new** bytes
+     (byte offset per file keyed by inode; reset on truncation/new inode) from
+     `/var/log/pods/chutes_<pod>_<uid>/<container>/*.log`, parse the CRI line format
+     (`<RFC3339Nano> <stdout|stderr> <F|P> <msg>`) into **complete logical lines only** (hold a
+     window-cut physical line or a trailing `P`-run) → bounded batch → `POST
+     /instances/launch_config/{config_id}/logs` over mTLS with a body of `{"deployment_id": "<uuid>",
+     "logs": [{ts, stream, log}]}` (`deployment_id` from the pod label; no `seq`/`server_ip`/identity
+     — all derived server-side from the path + mTLS leaf + proxy) → key off the response **status
+     code** (`204` = terminated/stop; any other 2xx = keep sending) → **commit + persist the offset
+     only on a successful ship** → stop on `204` / **`403`/`404` rejection (log the reason)** / task
+     cancellation when the pod is gone; retry-with-backoff on any *other* non-2xx or connection error
+     (offset unchanged); reading pauses while a ship is in flight (backpressure) and idles at the poll
+     interval when caught up. No local wall-clock backstop — termination is the validator's job.
+     Optional light filtering of shim-excluded noise (`nvidia-smi`, `curl`, …).
    - Console entry `chute-log-shipper` in `src/sek8s/pyproject.toml` `[tool.poetry.scripts]`.
 2. **Ansible role** `chute-log-shipper` (mirroring `system-manager`):
    - `chute-log-shipper.service` systemd unit (`User=` dedicated non-root uid, `After=` k3s, restart
      policy), `chute-log-shipper.env.j2` rendered config, a restricted `k3s crictl` wrapper (allow
      only `pods -o json` / `ps` read verbs, à la `k3s-images-helper`), boot tasks that create the
      uid, wire group/ACL read on the crictl socket + `/var/log/pods` + the registry-tls leaf, and
-     create the cursor dir owned by that uid.
+     create the checkpoint dir owned by that uid.
    - `sek8s.chute-log-shipper` AppArmor profile (deliver via `apparmor-hardening`): read
-     `/var/log/pods/chutes_*/**`, the crictl socket, and the registry-tls leaf; read/write the cursor
+     `/var/log/pods/chutes_*/**`, the crictl socket, and the registry-tls leaf; read/write the checkpoint
      dir; network egress to the validator only; deny the rest.
    - Register the role in `ansible/guest/playbooks/chutes-miner-vm.yml`.
 3. **Changelog fragment** in `changelogs/vm/unreleased/direct-boot.md` under `### Added`. No
@@ -251,17 +273,22 @@ Success (Phase 1) =
 - Runs as root or as uid 1000 (must be a dedicated non-root uid, per the system-manager isolation
   rule).
 - Modifies `setup_vm_tls` / initramfs (shifts RTMR2 unnecessarily).
-- Ships steady-state logs after the validator returns `204` (ignores the cutoff), or has no
-  max-duration backstop for a never-activating pod.
+- Ships steady-state logs after the validator returns `204` (ignores the cutoff).
+- Imposes a guest-side cutoff policy (e.g. a local wall-clock capture timer) instead of obeying the
+  validator — termination is the API's job (`204`), and pod deletion is handled by pod-gone
+  cancellation.
 - Self-asserts **identity** in the request body (`miner_hotkey`, `vm_name`, `server_ip`, `chute_id`,
   `pod_uid`) instead of letting the validator derive it from the path + mTLS leaf + proxy.
   (`deployment_id` is the deliberate exception — non-security correlation metadata the validator
   cannot derive from `config_id`; shipping it top-level is required, not a violation.)
 - Retries indefinitely on a `403`/`404` **terminal** reject (an unknown or unauthorized `config_id`
   that can never succeed) instead of stopping and logging the specific reason.
-- Uses a line-index dedupe key (breaks across kubelet log rotation / restarts) instead of the CRI
+- Ships partial lines (a window-cut physical line, or a CRI `P`-run whose `F` has not arrived) — must
+  ship only complete logical lines. Or uses a line-index dedupe key (breaks across rotation/restarts) instead of the CRI
   `ts`; or ships without per-line `ts`.
-- Lets the cursor file grow unbounded (must reconcile to the live pod set).
+- Lets the checkpoint file grow unbounded (must reconcile to the live pod set).
+- Re-reads the whole log file each poll instead of tailing only new bytes from the committed offset
+  (unbounded memory / CPU at all-chutes scale — the read window must be bounded by `buffer_bytes`).
 - Unbounded buffering / no per-pod caps (DRAM pressure).
 - Drops logs silently on transient POST failure (must retry with backoff), or double-counts on
   retry (validator dedupes on `(config_id, ts)`; send `ts`).
@@ -286,7 +313,7 @@ Success (Phase 1) =
      (the API-side enforcement described in §API Changes). No change to the guest, which just presents
      the mTLS leaf.
   2. Dedupe on **`(config_id, ts)`** (nanosecond) so agent restarts and kubelet log rotation stay
-     idempotent. No `seq` is sent — reliable delivery (retry + advance-cursor-on-success) makes it
+     idempotent. No `seq` is sent — reliable delivery (retry + commit-offset-on-success) makes it
      redundant.
   3. Resolve identity server-side: `config_id` from the path, `(miner_hotkey, vm_name)` + server from
      the verified mTLS leaf, `chute_id`/`miner_hotkey`/`user_id` from `LaunchConfig`→`Chute`, source
@@ -297,6 +324,10 @@ Success (Phase 1) =
      **`404`** for an unknown `config_id` and **`403`** for a cert/ownership rejection — the guest
      treats both as terminal (stops + logs), so these must be reserved for genuinely unrecoverable
      shipments, not transient errors.
+  5. **Own the never-activating cutoff.** The guest has no wall-clock backstop (removed by design),
+     so a pod that never activates and never terminates will keep shipping until the validator
+     returns `204`. The API must cut these off on its own timeout (e.g. `204` once a launch config is
+     `failed_at` + grace, or after a max capture window) rather than relying on the guest to stop.
 - **Phase 2 (separate change):** repoint the readiness/liveness probe off `:8001/_alive` → 8000
   **first** (`chutes-miner api/k8s/operator.py:_get_probe_port`), migrate `log_prober` and the
   `stream_logs`/`encrypted_logs` paths onto the agent/central store, extend the agent to ship

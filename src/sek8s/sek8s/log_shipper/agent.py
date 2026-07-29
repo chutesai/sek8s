@@ -1,5 +1,5 @@
 """Orchestrator: poll CRI for chute pods, run one capture task per pod, and
-reconcile the cursor to the live pod set.
+reconcile the offset checkpoints to the live pod set.
 
 The agent is fail-closed: a crictl error or a dead validator endpoint never
 crashes the loop — it logs, backs off, and retries on the next poll.
@@ -14,9 +14,9 @@ from typing import Dict, List, Optional, Set, cast
 import aiohttp
 from loguru import logger
 
+from .checkpoint import CheckpointStore
 from .config import LogShipperConfig
 from .crictl import CrictlError, list_chute_pods
-from .cursor import CursorStore
 from .models import ChutePod
 from .shipper import PodLogShipper
 
@@ -39,7 +39,7 @@ class LogShipperAgent:
 
     def __init__(self, config: LogShipperConfig):
         self._config = config
-        self._cursor = CursorStore(config.cursor_path)
+        self._checkpoints = CheckpointStore(config.checkpoint_path)
         # config_id -> running capture task
         self._tasks: Dict[str, asyncio.Task] = {}
         # config_id -> pod being captured (for logging)
@@ -49,7 +49,7 @@ class LogShipperAgent:
         self._session: Optional[aiohttp.ClientSession] = None  # set in run()
 
     async def run(self) -> None:
-        await self._cursor.load()
+        await self._checkpoints.load()
         context = build_ssl_context(self._config)
         connector = aiohttp.TCPConnector(ssl=context)
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -72,7 +72,7 @@ class LogShipperAgent:
         self._reap_finished()
         await self._drop_gone(live_ids)
         self._spawn_new(pods, live_ids)
-        await self._cursor.reconcile(live_ids)
+        await self._checkpoints.reconcile(live_ids)
 
     def _reap_finished(self) -> None:
         """Move completed tasks out of the active set."""
@@ -99,7 +99,7 @@ class LogShipperAgent:
                 task.cancel()
             self._pods.pop(config_id, None)
             self._done.discard(config_id)
-            await self._cursor.evict(config_id)
+            await self._checkpoints.evict(config_id)
 
     def _spawn_new(self, pods: List[ChutePod], live_ids: Set[str]) -> None:
         """Start capture tasks for newly-seen pods, respecting the concurrency cap."""
@@ -128,12 +128,12 @@ class LogShipperAgent:
             self._pods[pod.config_id] = pod
             self._tasks[pod.config_id] = asyncio.create_task(self._capture(pod))
 
-    async def _capture(self, pod: ChutePod) -> str:
+    async def _capture(self, pod: ChutePod) -> None:
         # Captures are only spawned from _poll_once, which runs inside run() after
         # the session is created — so this is always set here.
         session = cast(aiohttp.ClientSession, self._session)
-        shipper = PodLogShipper(self._config, session, pod, self._cursor)
-        return await shipper.run()
+        shipper = PodLogShipper(self._config, session, pod, self._checkpoints)
+        await shipper.run()
 
     async def _shutdown(self) -> None:
         tasks = list(self._tasks.values())

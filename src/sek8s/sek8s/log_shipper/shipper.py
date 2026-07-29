@@ -1,27 +1,46 @@
-"""Per-pod capture: tail CRI log files, batch, ship over mTLS, honor the cutoff.
+"""Per-pod streaming capture: tail CRI log files into a bounded in-flight window,
+ship complete lines over mTLS, and checkpoint the shipped byte offset.
 
-Cutoff contract (see docs/specs/chute-log-shipper.md):
-  * validator returns 204  -> stop capturing this pod
-  * any other 2xx          -> keep sending
-  * non-2xx / conn error   -> transient; retry with backoff, cursor unchanged
+The log file on disk is the durable buffer; only a bounded window (``buffer_bytes``)
+is ever held in RAM, so total memory is deterministic (window x pods, and there
+is at most one chute pod per GPU). A slow validator naturally pauses reading
+(we do not read the next window until the current one is shipped — backpressure),
+and the committed offset only advances on a successful ship, so on any restart we
+resume from the last durably-shipped position.
+
+Only *complete* logical lines are ever shipped — a window boundary that cuts a
+physical line, and a CRI ``P``-run whose ``F`` has not arrived, are both held back
+(the offset is not advanced past them). The validator therefore never receives a
+partial line and needs no partial-handling.
+
+Validator response contract (see docs/specs/chute-log-shipper.md):
+  * 204                 -> LogStreamingTerminated: validator ended streaming, stop
+  * any other 2xx       -> keep sending
+  * 403 / 404           -> LogStreamingRejected: shipment refused, stop
+  * other non-2xx / err -> transient; retry with backoff, offset unchanged
 """
 
 from __future__ import annotations
 
 import asyncio
-import time
+import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import aiohttp
 from loguru import logger
 
+from .checkpoint import CheckpointStore
 from .config import LogShipperConfig
-from .cursor import CursorStore
+from .exceptions import LogStreamingRejected, LogStreamingTerminated, TransientShipError
 from .models import ChutePod, LogBatch, LogLine
 
 _VALID_STREAMS = {"stdout", "stderr"}
 _VALID_TAGS = {"F", "P"}
+
+# CRI log filename: "<restart>.log" (current) or "<restart>.log.<rotation-suffix>".
+_LOG_NAME = re.compile(r"^(\d+)\.log(?:\.(.+))?$")
 
 
 def parse_cri_line(raw: str) -> Optional[Tuple[str, str, str, str]]:
@@ -30,10 +49,9 @@ def parse_cri_line(raw: str) -> Optional[Tuple[str, str, str, str]]:
     Format: ``<RFC3339Nano> <stdout|stderr> <F|P> <message>``. Returns None for
     blank or malformed lines.
     """
-    line = raw.rstrip("\n")
-    if not line:
+    if not raw:
         return None
-    parts = line.split(" ", 3)
+    parts = raw.split(" ", 3)
     if len(parts) < 3:
         return None
     ts, stream, tag = parts[0], parts[1], parts[2]
@@ -50,8 +68,64 @@ def _truncate_bytes(message: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
-def _container_log_files(pod_dir: Path) -> List[Path]:
-    """All plain (non-gz) CRI log files under a pod's container subdirectories."""
+def parse_logical_lines(data: bytes, max_line_bytes: int) -> List[Tuple[LogLine, int]]:
+    """Parse complete logical (F-terminated) CRI lines from a byte window.
+
+    Returns ``(LogLine, end_offset)`` pairs, where ``end_offset`` is the byte
+    offset (relative to the start of ``data``) just past the line's terminating
+    ``F`` record. Only lines through their ``F`` are returned:
+
+      * a trailing physical line without a newline (window cut mid-line), and
+      * a trailing ``P``-run whose ``F`` has not yet arrived,
+
+    are both excluded, so the caller can advance its committed offset to the last
+    returned ``end_offset`` and never ship or skip a partial. Multi-chunk logical
+    lines are reassembled and truncated to ``max_line_bytes``.
+    """
+    results: List[Tuple[LogLine, int]] = []
+    partial: Dict[str, str] = {}
+    i = 0
+    while True:
+        j = data.find(b"\n", i)
+        if j == -1:
+            break  # incomplete trailing physical line — leave it for next window
+        end = j + 1
+        parsed = parse_cri_line(data[i:j].decode("utf-8", errors="replace"))
+        if parsed is not None:
+            ts, stream, tag, message = parsed
+            if tag == "P":
+                buf = partial.get(stream, "") + message
+                partial[stream] = buf[:max_line_bytes]  # bound the accumulator
+            else:
+                full = partial.pop(stream, "") + message
+                results.append(
+                    (
+                        LogLine(
+                            ts=ts,
+                            stream=stream,
+                            log=_truncate_bytes(full, max_line_bytes),
+                        ),
+                        end,
+                    )
+                )
+        i = end
+    return results
+
+
+def _log_sort_key(path: Path) -> Tuple[int, int, str]:
+    """Order log files oldest->newest: lower restart index first; within an index,
+    rotated files (by suffix) before the current file."""
+    match = _LOG_NAME.match(path.name)
+    if not match:
+        return (0, 0, path.name)
+    index = int(match.group(1))
+    suffix = match.group(2)
+    # rotated (has suffix) sorts before current (no suffix); rotated by suffix asc.
+    return (index, 0 if suffix else 1, suffix or "")
+
+
+def _log_files(pod_dir: Path) -> List[Path]:
+    """Non-gz CRI log files under a pod's container dirs, oldest->newest per container."""
     files: List[Path] = []
     try:
         containers = sorted(p for p in pod_dir.iterdir() if p.is_dir())
@@ -59,98 +133,70 @@ def _container_log_files(pod_dir: Path) -> List[Path]:
         return files
     for container in containers:
         try:
-            entries = sorted(container.iterdir())
+            entries = [
+                e
+                for e in container.iterdir()
+                if e.is_file() and ".log" in e.name and not e.name.endswith(".gz")
+            ]
         except OSError:  # pragma: no cover - defensive
             continue
-        for entry in entries:
-            if (
-                entry.is_file()
-                and ".log" in entry.name
-                and not entry.name.endswith(".gz")
-            ):
-                files.append(entry)
+        entries.sort(key=_log_sort_key)
+        files.extend(entries)
     return files
 
 
-def read_new_lines(
-    pod: ChutePod, config: LogShipperConfig, since_ts: str
-) -> List[LogLine]:
-    """Read log lines with ts > since_ts, reassembling partial (P) chunks.
+@dataclass(frozen=True)
+class _Entry:
+    """A shippable logical line plus where it ends in its file (for the offset)."""
 
-    Bounded by ``max_lines_per_poll``; the remainder is picked up next poll.
-    Returned lines are globally sorted by timestamp.
-    """
-    pod_dir = config.pod_log_root / pod.log_dir_name
-    collected: List[LogLine] = []
-    for log_file in _container_log_files(pod_dir):
-        try:
-            content = log_file.read_text(errors="replace")
-        except OSError:  # pragma: no cover - file vanished mid-read
-            continue
-        partial: dict[str, str] = {}
-        for raw in content.splitlines():
-            parsed = parse_cri_line(raw)
-            if parsed is None:
-                continue
-            ts, stream, tag, message = parsed
-            if tag == "P":
-                partial[stream] = partial.get(stream, "") + message
-                continue
-            full = partial.pop(stream, "") + message
-            if ts <= since_ts:
-                continue
-            collected.append(
-                LogLine(
-                    ts=ts,
-                    stream=stream,
-                    log=_truncate_bytes(full, config.max_line_bytes),
-                )
-            )
-    collected.sort(key=lambda line: line.ts)
-    if len(collected) > config.max_lines_per_poll:
-        collected = collected[: config.max_lines_per_poll]
-    return collected
+    line: LogLine
+    inode: int
+    end_offset: int
 
 
-def _chunk(
-    lines: List[LogLine], max_lines: int, max_bytes: int
-) -> Iterator[List[LogLine]]:
-    """Split ts-ordered lines into batches bounded by line count and byte size."""
-    batch: List[LogLine] = []
+def _batch_entries(
+    entries: List[_Entry], max_lines: int, max_bytes: int
+) -> Iterator[List[_Entry]]:
+    """Split entries into batches bounded by line count and byte size."""
+    batch: List[_Entry] = []
     size = 0
-    for line in lines:
-        line_bytes = len(line.log.encode("utf-8", errors="replace"))
+    for entry in entries:
+        line_bytes = len(entry.line.log.encode("utf-8", errors="replace"))
         if batch and (len(batch) >= max_lines or size + line_bytes > max_bytes):
             yield batch
             batch, size = [], 0
-        batch.append(line)
+        batch.append(entry)
         size += line_bytes
     if batch:
         yield batch
 
 
 class PodLogShipper:
-    """Captures and ships one chute pod's logs until cutoff / terminal / backstop."""
+    """Streams one chute pod's logs until validator termination or rejection."""
 
     def __init__(
         self,
         config: LogShipperConfig,
         session: aiohttp.ClientSession,
         pod: ChutePod,
-        cursor: CursorStore,
-        *,
-        now_fn: Callable[[], float] = time.monotonic,
+        checkpoints: CheckpointStore,
     ):
         self._config = config
         self._session = session
         self._pod = pod
-        self._cursor = cursor
-        self._now = now_fn
+        self._checkpoints = checkpoints
         self._url = config.logs_url(pod.config_id)
+        # committed shipped offset per inode; seeded from the persisted checkpoint.
+        self._offsets: Dict[int, int] = {
+            int(ino): off for ino, off in checkpoints.get(pod.config_id).items()
+        }
 
-    async def run(self) -> str:
-        """Capture loop. Returns the reason it stopped (for logging/tests)."""
-        started = self._now()
+    async def run(self) -> None:
+        """Stream loop until termination, rejection, or cancel.
+
+        No local wall-clock backstop: termination is the validator's job (204),
+        and a deleted pod is stopped by the agent cancelling this task.
+        """
         logger.info(
             "Capturing logs for chute pod {} (config_id={})",
             self._pod.name,
@@ -158,56 +204,110 @@ class PodLogShipper:
         )
         try:
             while True:
-                since = self._cursor.get(self._pod.config_id) or ""
-                lines = read_new_lines(self._pod, self._config, since)
-                if lines:
-                    action = await self._ship(lines)
-                    if action == "stop":
-                        logger.info(
-                            "Validator signalled cutoff for config_id={}",
+                entries, hit_budget = self._read_window()
+                shipped = True
+                if entries:
+                    try:
+                        await self._ship(entries)
+                    except TransientShipError:
+                        # Offsets hold at the last shipped batch; retry next cycle.
+                        logger.warning(
+                            "Transient ship failure for config_id={}; retrying next cycle",
                             self._pod.config_id,
                         )
-                        return "stop"
-                    if action == "terminal":
-                        # Reason already logged in _post_batch; stop retrying.
-                        return "terminal"
-                if self._now() - started >= self._config.max_capture_seconds:
-                    logger.info(
-                        "Max capture duration reached for config_id={}",
-                        self._pod.config_id,
-                    )
-                    return "max_duration"
-                await asyncio.sleep(self._config.poll_interval_seconds)
+                        shipped = False
+                # Only skip the idle sleep while actively draining a backlog.
+                if not hit_budget or not shipped:
+                    await asyncio.sleep(self._config.poll_interval_seconds)
+        except LogStreamingTerminated:
+            logger.info(
+                "Validator ended log streaming for config_id={} (activated / no longer needed)",
+                self._pod.config_id,
+            )
+        except LogStreamingRejected as exc:
+            logger.warning(
+                "Log streaming rejected ({}) for config_id={}: {} — stopping capture",
+                exc.status,
+                self._pod.config_id,
+                exc.reason,
+            )
         except asyncio.CancelledError:
             logger.info("Capture cancelled for config_id={}", self._pod.config_id)
             raise
 
-    async def _ship(self, lines: List[LogLine]) -> str:
-        """Ship all new lines in bounded batches.
+    def _read_window(self) -> Tuple[List[_Entry], bool]:
+        """Read up to ``buffer_bytes`` of new data across the pod's log files.
 
-        Returns 'stop' (cutoff), 'terminal' (403/404 reject), 'ok', or 'retry'.
+        Reads only ``[committed_offset, EOF)`` per file (offsets keyed by inode so
+        they follow rotation; reset on inode change or truncation). Committed
+        offsets are NOT advanced here — only ``_ship`` advances them on success, so
+        an unshipped window is simply re-read next cycle. Returns the parsed
+        entries and whether the read filled the window (more may remain).
         """
-        for batch in _chunk(
-            lines, self._config.batch_max_lines, self._config.batch_max_bytes
-        ):
-            result = await self._post_batch(batch)
-            if result == "fail":
-                # Transient: leave the cursor so the same lines are re-read next poll.
-                return "retry"
-            if result == "terminal":
-                # Reject that can never succeed — do not advance the cursor.
-                return "terminal"
-            # Both 'stop' (204) and 'ok' (other 2xx) mean the batch was accepted.
-            await self._cursor.set(self._pod.config_id, batch[-1].ts)
-            if result == "stop":
-                return "stop"
-        return "ok"
+        pod_dir = self._config.pod_log_root / self._pod.log_dir_name
+        budget = self._config.buffer_bytes
+        entries: List[_Entry] = []
+        present: set[int] = set()
+        hit_budget = False
+        for log_file in _log_files(pod_dir):
+            try:
+                stat = log_file.stat()
+            except OSError:  # pragma: no cover - file vanished mid-scan
+                continue
+            inode = stat.st_ino
+            present.add(inode)
+            offset = self._offsets.get(inode, 0)
+            if stat.st_size < offset:  # truncated — start over
+                offset = 0
+            available = stat.st_size - offset
+            if available <= 0:
+                continue
+            if budget <= 0:
+                hit_budget = True
+                break
+            to_read = min(available, budget)
+            if to_read < available:
+                hit_budget = True
+            try:
+                with log_file.open("rb") as handle:
+                    handle.seek(offset)
+                    data = handle.read(to_read)
+            except OSError:  # pragma: no cover - file vanished mid-read
+                continue
+            for line, rel_end in parse_logical_lines(data, self._config.max_line_bytes):
+                entries.append(_Entry(line, inode, offset + rel_end))
+            budget -= len(data)
+        # Forget offsets for files that are gone (rotated out / deleted).
+        for inode in [i for i in self._offsets if i not in present]:
+            del self._offsets[inode]
+        return entries, hit_budget
 
-    async def _post_batch(self, batch: List[LogLine]) -> str:
+    async def _ship(self, entries: List[_Entry]) -> None:
+        """Ship entries in bounded batches, committing the offset per accepted batch.
+
+        Raises LogStreamingTerminated / LogStreamingRejected to end capture, or
+        TransientShipError if a batch cannot be delivered after retries — the
+        committed offsets hold at the last accepted batch so the next cycle resumes
+        without gaps or dups.
+        """
+        for batch in _batch_entries(
+            entries, self._config.batch_max_lines, self._config.batch_max_bytes
+        ):
+            await self._post_batch([entry.line for entry in batch])
+            for entry in batch:
+                if entry.end_offset > self._offsets.get(entry.inode, 0):
+                    self._offsets[entry.inode] = entry.end_offset
+            await self._checkpoints.set(self._pod.config_id, self._serialize_offsets())
+
+    def _serialize_offsets(self) -> Dict[str, int]:
+        return {str(inode): off for inode, off in self._offsets.items()}
+
+    async def _post_batch(self, batch: List[LogLine]) -> None:
         """POST one batch with retry/backoff.
 
-        Returns 'stop' (204), 'terminal' (403/404), 'ok' (other 2xx), or 'fail'
-        (transient error exhausted).
+        Returns when the batch is accepted (a keep-going 2xx). Raises
+        LogStreamingTerminated (204), LogStreamingRejected (403/404), or
+        TransientShipError (transient error exhausted).
         """
         body = LogBatch(deployment_id=self._pod.deployment_id, logs=batch).model_dump()
         timeout = aiohttp.ClientTimeout(total=self._config.request_timeout_seconds)
@@ -217,17 +317,13 @@ class PodLogShipper:
                     self._url, json=body, timeout=timeout
                 ) as resp:
                     if resp.status == self._config.stop_status_code:
-                        return "stop"
+                        raise LogStreamingTerminated()
                     if resp.status in self._config.terminal_status_codes:
-                        logger.warning(
-                            "Terminal reject ({}) for config_id={}: {} — stopping capture",
-                            resp.status,
-                            self._pod.config_id,
-                            self._terminal_reason(resp.status),
+                        raise LogStreamingRejected(
+                            resp.status, self._rejection_reason(resp.status)
                         )
-                        return "terminal"
                     if 200 <= resp.status < 300:
-                        return "ok"
+                        return
                     logger.warning(
                         "Log ship for config_id={} got status {}",
                         self._pod.config_id,
@@ -239,16 +335,16 @@ class PodLogShipper:
                 )
             if attempt + 1 < self._config.retry_max_attempts:
                 await asyncio.sleep(self._backoff(attempt))
-        return "fail"
+        raise TransientShipError()
 
     def _backoff(self, attempt: int) -> float:
         delay = self._config.retry_base_delay_seconds * (2**attempt)
         return min(delay, self._config.retry_max_delay_seconds)
 
     @staticmethod
-    def _terminal_reason(status: int) -> str:
+    def _rejection_reason(status: int) -> str:
         if status == 404:
             return "unknown config_id"
         if status == 403:
             return "cert/ownership rejected"
-        return "terminal reject"
+        return "rejected"
