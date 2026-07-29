@@ -38,7 +38,7 @@ profile sek8s.system-manager flags=(enforce) {
   /etc/admission-controller/cosign/cosign.pub r,
 
   # Dynamic signing keys — fetched at boot by fetch-signing-keys initramfs script,
-  # PGP-verified against attested root key, written to tmpfs before pivot_root.
+  # RSA-verified against attested root key, written to tmpfs before pivot_root.
   /run/chutes/signing-keys/** r,
 
   # Helper binaries (sudoers-restricted)

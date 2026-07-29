@@ -206,7 +206,7 @@ class AdmissionConfig(ServerConfig):
 
     # Cosign public keys for chutes namespace enforcement.
     # Keys are fetched at boot by the fetch-signing-keys initramfs script,
-    # PGP-verified against the attested root key, and written to tmpfs.
+    # RSA-verified against the attested root key, and written to tmpfs.
     chutes_public_key_path: Path = Field(
         default=Path("/run/chutes/signing-keys/cosign/chutes.pub"),
         alias="CHUTES_PUBLIC_KEY_PATH",

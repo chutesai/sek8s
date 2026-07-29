@@ -1,10 +1,6 @@
 ---
-# signing-keys — Install root PGP trust anchor and initramfs fetch machinery.
-#
-# Bakes the root PGP public key into /etc/chutes/ (measured by RTMR3).
-# At boot the initramfs fetch-signing-keys script fetches cosign/Helm keys
-# from the validator API, verifies them against the root key with gpgv, and
-# writes verified keys to /run/chutes/signing-keys/ (ephemeral tmpfs).
+# signing-keys — Bake the root RSA public key (PEM) into /etc/chutes/ (measured
+# by RTMR3) and install the initramfs fetch/verify machinery.
 
 # ── Validate build-host prerequisites ───────────────────────────────────────
 
@@ -19,11 +15,9 @@
   ansible.builtin.assert:
     that: _root_key_stat.stat.exists
     fail_msg: >-
-      Root signing PGP key not found at {{ root_signing_key_path }}.
-      Generate it with: gpg --export security@chutes.ai > {{ root_signing_key_path }}
-      Store the private key offline or in an HSM — never on the VM.
+      Root RSA public key (PEM) not found at {{ root_signing_key_path }}.
 
-# ── Install root PGP public key and URL config ───────────────────────────────
+# ── Install root RSA public key and URL config ───────────────────────────────
 
 - name: Ensure /etc/chutes directory exists
   ansible.builtin.file:
@@ -33,10 +27,10 @@
     group: root
     mode: '0755'
 
-- name: Install root PGP signing key
+- name: Install root RSA signing key (PEM)
   ansible.builtin.copy:
     src: "{{ root_signing_key_path }}"
-    dest: /etc/chutes/root-signing-key.gpg
+    dest: /etc/chutes/root-signing-key.pem
     owner: root
     group: root
     mode: '0644'
@@ -49,12 +43,8 @@
     group: root
     mode: '0644'
 
-# ── Ensure gpgv is installed (needed by the initramfs hook's copy_exec) ──────
-
-- name: Ensure gpgv is installed
-  ansible.builtin.apt:
-    name: gpgv
-    state: present
+# openssl (the RSA verifier) is already staged into the initramfs by the LUKS
+# fetch_key hook, so no extra binary is installed here.
 
 # ── Install initramfs hook and init-bottom script ────────────────────────────
 

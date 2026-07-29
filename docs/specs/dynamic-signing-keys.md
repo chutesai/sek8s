@@ -1,7 +1,19 @@
-# Feature Spec: Dynamic Signing Key Retrieval via Root-of-Trust PGP Chain
+# Feature Spec: Dynamic Signing Key Retrieval via Root-of-Trust RSA Chain
 
 **Date**: 2026-05-28  
 **Status**: implemented
+
+> **Update (signature primitive changed to raw RSA):** The root-of-trust chain
+> described below was originally built on OpenPGP detached signatures verified
+> with `gpgv`. It has since been switched to **raw RSA (PKCS#1 v1.5, SHA-256)**
+> verified with `openssl dgst -sha256 -verify`, because the root signing key is
+> now held by an external RSA signer that cannot emit OpenPGP signatures. The
+> trust chain, the measured locations (RTMR1 + RTMR3), the JSON bundle shape,
+> the tmpfs output paths, and the fail-closed behavior are all **unchanged** —
+> only the signature primitive over the raw key bytes changed. The root key is
+> now the RSA public key `/etc/chutes/root-signing-key.pem`. `helm-pubkey.gpg`
+> remains a byte-identical OpenPGP key file consumed by Helm for chart
+> provenance. Where the text below says PGP/`gpgv`, read RSA/`openssl`.
 
 ---
 
@@ -24,15 +36,15 @@ This feature switches cosign and Helm keys to the same dynamic retrieval pattern
   - `ansible/guest/inventory.yml` — build-time key path variables
   - `src/sek8s/sek8s/config.py` — `AdmissionConfig` default key paths
   - `ansible/guest/roles/luks/files/initramfs/write-validator-auth` — existing dynamic pattern reference
-- **Dependencies**: `gpgv` (minimal GPG verifier, available in `gnupg` package), `curl`, `jq`, `base64` (all already present in initramfs or installable via hook)
+- **Dependencies**: `openssl` (RSA verifier, `openssl dgst -sha256 -verify`), `curl`, `jq`, `base64` — all already staged into the initramfs by the LUKS `fetch_key` hook; no new binary is added
 
 ---
 
 ## Design Decisions
 
 - **Dedicated root signing PGP key (not reusing the Helm key)**: The root key serves a distinct purpose — authenticating all dynamically-fetched leaf keys. A dedicated key has its own rotation cadence (very rare, requires image rebuild) and can be stored in an HSM. The Helm key is a leaf key that may rotate independently.
-- **PGP (not Ed25519 or X.509)**: GPG tooling is already present on the image for Helm `--verify --keyring`. `gpgv` is a minimal verifier with no keyring management overhead — ideal for initramfs. No new crypto tooling required.
-- **Root key path: `/etc/chutes/root-signing-key.gpg`**: The `/etc/chutes` directory is already measured into RTMR3 via `tdx-measure-miner.conf`. Adding a file here requires no measurement config changes for the root key itself.
+- **Raw RSA (PKCS#1 v1.5, SHA-256)**: The root key is held by an external RSA signer that cannot produce OpenPGP signatures, so the bundle is signed as raw RSA over the base64-decoded key bytes and verified with `openssl dgst -sha256 -verify`. `openssl` (and `libcrypto`) is already staged in the initramfs by the LUKS `fetch_key` hook, so no new crypto tooling is required. (Originally this was OpenPGP verified with `gpgv`.)
+- **Root key path: `/etc/chutes/root-signing-key.pem`**: The `/etc/chutes` directory is already measured into RTMR3 via `tdx-measure-miner.conf`. Adding a file here requires no measurement config changes for the root key itself.
 - **Dynamic keys stored in `/run/chutes/signing-keys/`**: Consistent with the validator auth pattern (`/run/chutes/validator-auth.env`). Tmpfs, fully ephemeral, cleared on reboot. Not measured in RTMR3 — trust is proven via the PGP signature chain, not direct measurement.
 - **Cosign keys removed from RTMR3 measurement**: `/etc/admission-controller/cosign` is removed from `tdx-measure-miner.conf`. The directory may still exist (for structure) but contains no keys at runtime. Trust in the keys is delegated to the PGP chain: RTMR3 attests root pubkey → root pubkey verifies PGP sig → PGP sig authenticates cosign key.
 - **Helm key stored outside `/etc/chutes/`**: The dynamic Helm key must NOT be written to `/etc/chutes/` because that directory is recursively measured in RTMR3. Writing a dynamic file there would make RTMR3 non-deterministic. It goes to `/run/chutes/signing-keys/helm-pubkey.gpg` instead.
@@ -75,7 +87,7 @@ This feature switches cosign and Helm keys to the same dynamic retrieval pattern
 
 Success = Cosign and Helm keys are fetched dynamically at boot, verified against an attested root PGP key, and used for admission control and chart provenance — without baking the leaf keys into the image. Specifically:
 
-1. A VM boots, fetches the key bundle from the API, verifies all PGP signatures against the root key at `/etc/chutes/root-signing-key.gpg`, and writes verified keys to `/run/chutes/signing-keys/`.
+1. A VM boots, fetches the key bundle from the API, verifies all PGP signatures against the root key at `/etc/chutes/root-signing-key.pem`, and writes verified keys to `/run/chutes/signing-keys/`.
 2. The admission controller starts and reads cosign keys from `/run/chutes/signing-keys/cosign/` — image admission works identically to the static-key behavior.
 3. `04-helm-chart-upgrade.sh` reads the Helm keyring from `/run/chutes/signing-keys/helm-pubkey.gpg` — chart provenance verification works identically.
 4. A key rotation (new cosign key signed with root PGP key, published to API) is picked up by VMs on next reboot with zero image changes.
@@ -90,8 +102,8 @@ Success = Cosign and Helm keys are fetched dynamically at boot, verified against
 
 - The root signing PGP private key must be stored offline or in an HSM. It is never present on any VM or in any hot-path service. It is used only when rotating cosign/Helm keys (an infrequent, manual operation).
 - The root signing PGP public key must be present at `root_signing_key_path` on the build machine at Ansible build time. Missing key is a hard build failure.
-- The initramfs `fetch-signing-keys` script must use only tools available in initramfs: `sh`, `curl`, `gpgv`, `jq`, `base64`, `mkdir`, `chmod`. All must be copied into the initramfs via the hook.
-- `curl` and `jq` are already pulled into the initramfs by the existing `fetch_key_and_unlock` hook. `gpgv` and `base64` need to be added.
+- The initramfs `fetch-signing-keys` script must use only tools available in initramfs: `sh`, `curl`, `openssl`, `jq`, `base64`, `mkdir`, `chmod`.
+- `curl`, `jq`, `base64`, and `openssl` are already pulled into the initramfs by the LUKS `fetch_key` hook. The `fetch-signing-keys-hook` reuses them and stages only the root RSA public key and `signing-keys.conf`.
 - The fetch script must complete within 30 seconds (matching `TDX_TIMEOUT` from `fetch_key_and_unlock`). Network is already established by `fetch_key_and_unlock` (init-premount).
 - Dynamic keys go to `/run/chutes/signing-keys/` only — never to the root filesystem, never to a measured path.
 - The `/etc/chutes/` directory must not contain any dynamic files. Static build-time files (root signing key, chart-versions, chart-configs) remain there and are measured in RTMR3.
@@ -107,7 +119,7 @@ Success = Cosign and Helm keys are fetched dynamically at boot, verified against
 
 ### Ansible: New files
 
-1. **`ansible/guest/roles/signing-keys/tasks/main.yml`** (new role) — installs root signing PGP public key to `/etc/chutes/root-signing-key.gpg`, creates `/etc/chutes/signing-keys.conf` with the API URL, installs the initramfs hook and init-bottom script.
+1. **`ansible/guest/roles/signing-keys/tasks/main.yml`** (new role) — installs root signing PGP public key to `/etc/chutes/root-signing-key.pem`, creates `/etc/chutes/signing-keys.conf` with the API URL, installs the initramfs hook and init-bottom script.
 
 2. **`ansible/guest/roles/signing-keys/files/initramfs/fetch-signing-keys`** — init-bottom script that fetches the key bundle from the API, verifies PGP signatures with `gpgv`, writes verified keys to `/run/chutes/signing-keys/`, and powers off on any failure.
 
@@ -125,11 +137,11 @@ Success = Cosign and Helm keys are fetched dynamically at boot, verified against
 
 8. **`ansible/guest/roles/admission-controller/templates/cosign-registries.json.j2`** — change all `public_key` paths from `/etc/admission-controller/cosign/` to `/run/chutes/signing-keys/cosign/`.
 
-9. **`ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf`** — remove line `/etc/admission-controller/cosign`. Add comment explaining trust is delegated to PGP chain via attested root key in `/etc/chutes/root-signing-key.gpg`.
+9. **`ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf`** — remove line `/etc/admission-controller/cosign`. Add comment explaining trust is delegated to PGP chain via attested root key in `/etc/chutes/root-signing-key.pem`.
 
 10. **`ansible/guest/roles/k3s/files/cluster-init/04-helm-chart-upgrade.sh`** — change `KEYRING_FILE` from `/etc/chutes/helm-pubkey.gpg` to `/run/chutes/signing-keys/helm-pubkey.gpg`.
 
-11. **`ansible/guest/inventory.yml`** — add `root_signing_key_path: "~/.chutes/root-signing-key.gpg"` and `signing_keys_api_url` variables. Keep existing cosign key path vars (still used at build time for initial chart signing setup, but no longer baked into guest image).
+11. **`ansible/guest/inventory.yml`** — add `root_signing_key_path: "~/.chutes/root-signing-key.pem"` and `signing_keys_api_url` variables. Keep existing cosign key path vars (still used at build time for initial chart signing setup, but no longer baked into guest image).
 
 12. **`ansible/guest/playbooks/chutes-miner-vm.yml`** — add `signing-keys` role to the play, after `admission-controller` and before `rtmr3-measure`.
 
@@ -160,7 +172,7 @@ Success = Cosign and Helm keys are fetched dynamically at boot, verified against
 - `cosign-registries.json` or `admission-controller.env` still references the old `/etc/admission-controller/cosign/` paths.
 - `04-helm-chart-upgrade.sh` still references `/etc/chutes/helm-pubkey.gpg` instead of the dynamic path.
 - The root signing PGP private key is present on the VM or in any online service (must be offline/HSM only).
-- The initramfs hook fails to copy `gpgv` into the initramfs, causing `fetch-signing-keys` to fail on every boot.
+- `openssl` is not present in the initramfs (it must be staged by the LUKS `fetch_key` hook), causing `fetch-signing-keys` to fail on every boot.
 - `ImageConfig.cosign_public_key_path` or `ImageManager` is modified (separate concern, must not change).
 - Any keyless-verified or disabled registry entries in `cosign-registries.json` are changed.
 
@@ -168,31 +180,23 @@ Success = Cosign and Helm keys are fetched dynamically at boot, verified against
 
 ## Rollout Notes
 
-- **Root signing key generation** (one-time, before first build):
+- **Root signing key provisioning** (one-time, before first build): the root key
+  is an RSA key held by the external signer; its private half stays there. Export
+  only the public half (PEM) to `~/.chutes/root-signing-key.pem` on build machines.
+- **Sign existing cosign/Helm keys** before first build. Signatures are RSA
+  PKCS#1 v1.5 over SHA-256 of the raw key bytes; the base64-encoded signature
+  bytes are what the API serves. With a local private key the equivalent is:
   ```bash
-  gpg --batch --gen-key <<EOF
-  Key-Type: EdDSA
-  Key-Curve: ed25519
-  Name-Real: Chutes Root Signing Key
-  Name-Email: security@chutes.ai
-  Expire-Date: 0
-  %no-protection
-  EOF
-  gpg --export "security@chutes.ai" > ~/.chutes/root-signing-key.gpg
-  ```
-  Store the private key offline/HSM. Distribute only the public key to build machines.
-- **Sign existing cosign/Helm keys** before first build with this feature:
-  ```bash
-  gpg --detach-sign --armor -o chutes.pub.sig chutes.pub
-  gpg --detach-sign --armor -o dockerhub.pub.sig dockerhub.pub
-  gpg --detach-sign --armor -o helm-pubkey.gpg.sig helm-pubkey.gpg
+  openssl dgst -sha256 -sign root-priv.pem -out chutes.pub.sig      chutes.pub
+  openssl dgst -sha256 -sign root-priv.pem -out dockerhub.pub.sig   dockerhub.pub
+  openssl dgst -sha256 -sign root-priv.pem -out helm-pubkey.gpg.sig helm-pubkey.gpg
   ```
 - **API endpoint** must be live and serving the signed key bundle before any VM with this feature boots.
 - **Hard cut-over on guest image build**: Old images continue to work with baked-in keys. New images require the API endpoint. There is no backward-compatible fallback in the new image — if the API is down at boot, the VM powers off.
 - **RTMR3 changes**: This feature changes RTMR3 (new paths in `admission-controller.env`, removed `/etc/admission-controller/cosign` from measurement, root signing key added to `/etc/chutes/`). This is a one-time change. All subsequent key rotations leave RTMR3 unchanged.
 - **Key rotation workflow** (post-rollout):
   1. Generate new cosign key pair.
-  2. Sign the new public key with the root PGP private key (offline).
+  2. Sign the new public key with the root RSA key (PKCS#1 v1.5, SHA-256).
   3. Update the API endpoint to serve the new key + signature (keep old key for transition window).
   4. VMs pick up the new key on next reboot. No image rebuild, no version bump.
 - **Changelog fragment**: `changelogs/vm/unreleased/<branch-name>.md` under `### Changed`.
