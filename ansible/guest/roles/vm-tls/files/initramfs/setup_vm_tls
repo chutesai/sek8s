@@ -149,7 +149,7 @@ generate_registry_client_cert() {
     local csr="/tmp/registry_client.csr"
     if ! openssl req -new \
             -key "${tls_dir}/client.key" \
-            -subj "/O=chutes/OU=sek8s/CN=sek8s-vm-registry-client" \
+            -subj "/O=chutes/OU=sek8s/CN=sek8s-cvm-mtls-client" \
             -out "$csr" 2>/dev/null; then
         log_failure_msg "Failed to generate registry client CSR"
         return 1

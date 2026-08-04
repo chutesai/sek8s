@@ -29,6 +29,7 @@
     - sek8s.setup-cache
     - sek8s.deny-sensitive-default
     - sek8s.attestation-proxy
+    - sek8s.chute-log-shipper
 
 # ── Systemd drop-ins: apply named profiles to services ───────────────────
 # system-manager and setup-cache need their own permissive profiles
@@ -44,6 +45,7 @@
   loop:
     - system-manager
     - setup-cache
+    - chute-log-shipper
 
 - name: Apply AppArmor profile to system-manager via systemd
   ansible.builtin.copy:
@@ -51,6 +53,16 @@
       [Service]
       AppArmorProfile=sek8s.system-manager
     dest: /etc/systemd/system/system-manager.service.d/30-apparmor.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Apply AppArmor profile to chute-log-shipper via systemd
+  ansible.builtin.copy:
+    content: |
+      [Service]
+      AppArmorProfile=sek8s.chute-log-shipper
+    dest: /etc/systemd/system/chute-log-shipper.service.d/30-apparmor.conf
     owner: root
     group: root
     mode: '0644'
