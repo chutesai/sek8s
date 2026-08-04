@@ -138,6 +138,7 @@ def test_config_defaults(monkeypatch):
     assert config.deployment_id_label == "chutes/deployment-id"
     assert config.buffer_bytes == 1_048_576
     assert config.checkpoint_path.name == "checkpoint.json"
+    assert config.container_name == "chute"
 
 
 @pytest.mark.parametrize(
@@ -472,12 +473,12 @@ def test_batch_entries():
 
 def test_log_sort_key_and_files_ordering(tmp_path):
     pod = make_pod()
-    directory = tmp_path / pod.log_dir_name / "app"
+    directory = tmp_path / pod.log_dir_name / "chute"
     directory.mkdir(parents=True)
     names = ["0.log", "0.log.20260101-01", "0.log.20260101-02", "1.log"]
     for name in names:
         (directory / name).write_text("")
-    ordered = [p.name for p in _log_files(tmp_path / pod.log_dir_name)]
+    ordered = [p.name for p in _log_files(tmp_path / pod.log_dir_name, "chute")]
     # rotated (oldest->newest) then current, per restart index ascending.
     assert ordered == ["0.log.20260101-01", "0.log.20260101-02", "0.log", "1.log"]
     # unknown names sort deterministically (fall to the front group).
@@ -500,7 +501,7 @@ async def test_read_window_fresh_read_does_not_advance_offsets(tmp_path):
     write_log_file(
         tmp_path,
         pod,
-        "app",
+        "chute",
         "0.log",
         [cri("2026-07-27T00:00:01Z", "a"), cri("2026-07-27T00:00:02Z", "b")],
     )
@@ -519,7 +520,7 @@ async def test_read_window_incremental_by_offset(tmp_path):
     path = write_log_file(
         tmp_path,
         pod,
-        "app",
+        "chute",
         "0.log",
         [cri("2026-07-27T00:00:01Z", "a"), cri("2026-07-27T00:00:02Z", "b")],
     )
@@ -538,7 +539,7 @@ async def test_read_window_truncation_resets(tmp_path):
     pod = make_pod()
     ship = make_shipper(config, FakeSession([]), checkpoints, pod)
     path = write_log_file(
-        tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "old")]
+        tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:01Z", "old")]
     )
     inode = path.stat().st_ino
     ship._offsets = {inode: 9999}  # committed past a now-smaller file
@@ -555,11 +556,11 @@ async def test_read_window_follows_rotation_by_inode(tmp_path):
     checkpoints = await make_checkpoints(tmp_path)
     pod = make_pod()
     ship = make_shipper(config, FakeSession([]), checkpoints, pod)
-    directory = tmp_path / pod.log_dir_name / "app"
+    directory = tmp_path / pod.log_dir_name / "chute"
     current = write_log_file(
         tmp_path,
         pod,
-        "app",
+        "chute",
         "0.log",
         [cri("2026-07-27T00:00:01Z", "a1"), cri("2026-07-27T00:00:02Z", "a2")],
     )
@@ -567,7 +568,7 @@ async def test_read_window_follows_rotation_by_inode(tmp_path):
     ship._offsets = {inode1: current.stat().st_size}  # fully committed
     # Rotate: rename keeps the inode; a fresh 0.log gets a new inode.
     os.rename(current, directory / "0.log.20260101-01")
-    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:03Z", "b1")])
+    write_log_file(tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:03Z", "b1")])
     entries, _ = ship._read_window()
     # The renamed file (same inode, fully committed) yields nothing; only new file reads.
     assert [e.line.log for e in entries] == ["b1"]
@@ -581,7 +582,7 @@ async def test_read_window_budget_caps_read(tmp_path):
     ship = make_shipper(config, FakeSession([]), checkpoints, pod)
     # ~1000 lines * ~40 bytes ≈ 40 KB < 64 KB... make it exceed the window.
     lines = [cri(f"2026-07-27T00:00:{i:02d}Z", "x" * 60) for i in range(1200)]
-    write_log_file(tmp_path, pod, "app", "0.log", lines)
+    write_log_file(tmp_path, pod, "chute", "0.log", lines)
     entries, hit_budget = ship._read_window()
     assert hit_budget
     assert 0 < len(entries) < 1200
@@ -597,12 +598,12 @@ async def test_read_window_budget_stops_before_next_file(tmp_path):
     write_log_file(
         tmp_path,
         pod,
-        "app",
+        "chute",
         "0.log",
         [cri(f"2026-07-27T00:00:{i:02d}Z", "x" * 60) for i in range(1200)],
     )
     write_log_file(
-        tmp_path, pod, "app", "1.log", [cri("2026-07-27T01:00:00Z", "second-file")]
+        tmp_path, pod, "chute", "1.log", [cri("2026-07-27T01:00:00Z", "second-file")]
     )
     entries, hit_budget = ship._read_window()
     assert hit_budget
@@ -617,12 +618,29 @@ async def test_read_window_ignores_gz_and_missing_dir(tmp_path):
     ship = make_shipper(config, FakeSession([]), checkpoints, pod)
     # Missing pod dir -> nothing.
     assert ship._read_window() == ([], False)
-    directory = tmp_path / pod.log_dir_name / "app"
+    directory = tmp_path / pod.log_dir_name / "chute"
     directory.mkdir(parents=True)
     (directory / "0.log.gz").write_bytes(b"binary garbage")
-    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "ok")])
+    write_log_file(tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:01Z", "ok")])
     entries, _ = ship._read_window()
     assert [e.line.log for e in entries] == ["ok"]
+
+
+@pytest.mark.asyncio
+async def test_read_window_captures_only_chute_container(tmp_path):
+    config = make_config(POD_LOG_ROOT=str(tmp_path))
+    checkpoints = await make_checkpoints(tmp_path)
+    pod = make_pod()
+    ship = make_shipper(config, FakeSession([]), checkpoints, pod)
+    # Init/sidecar containers are ignored — only the "chute" container is shipped.
+    write_log_file(
+        tmp_path, pod, "init", "0.log", [cri("2026-07-27T00:00:00Z", "init-log")]
+    )
+    write_log_file(
+        tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:01Z", "chute-log")]
+    )
+    entries, _ = ship._read_window()
+    assert [e.line.log for e in entries] == ["chute-log"]
 
 
 @pytest.mark.asyncio
@@ -631,7 +649,7 @@ async def test_read_window_prunes_gone_inodes(tmp_path):
     checkpoints = await make_checkpoints(tmp_path)
     pod = make_pod()
     ship = make_shipper(config, FakeSession([]), checkpoints, pod)
-    write_log_file(tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "a")])
+    write_log_file(tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:01Z", "a")])
     ship._offsets = {987654321: 5}  # an inode that isn't present
     ship._read_window()
     assert 987654321 not in ship._offsets
@@ -684,6 +702,36 @@ async def test_ship_transient_leaves_offsets(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_ship_splits_batch_on_413(tmp_path):
+    config = make_config()
+    checkpoints = await make_checkpoints(tmp_path)
+    # 413 on the 2-line batch → split → each half posts 200.
+    session = FakeSession([413, 200, 200])
+    ship = make_shipper(config, session, checkpoints)
+    before = ship._max_batch_bytes
+    await ship._ship(
+        [
+            _entry("t1", "a", inode=7, end_offset=10),
+            _entry("t2", "b", inode=7, end_offset=20),
+        ]
+    )
+    assert len(session.calls) == 3  # 1 rejected + 2 halves
+    assert ship._offsets == {7: 20}
+    assert ship._max_batch_bytes == before // 2  # shrank the ceiling
+
+
+@pytest.mark.asyncio
+async def test_ship_413_single_line_skips_to_progress(tmp_path):
+    config = make_config()
+    checkpoints = await make_checkpoints(tmp_path)
+    session = FakeSession([413])  # a lone line that still 413s can't be split further
+    ship = make_shipper(config, session, checkpoints)
+    await ship._ship([_entry("t1", "a", inode=7, end_offset=10)])
+    assert len(session.calls) == 1
+    assert ship._offsets == {7: 10}  # committed past it — no livelock
+
+
+@pytest.mark.asyncio
 async def test_post_batch_ok_returns_none(tmp_path):
     ship = make_shipper(
         make_config(), FakeSession([200]), await make_checkpoints(tmp_path)
@@ -731,7 +779,7 @@ async def test_run_streams_from_disk_then_terminates(tmp_path):
     session = FakeSession([204])
     ship = make_shipper(config, session, checkpoints, pod)
     write_log_file(
-        tmp_path, pod, "app", "0.log", [cri("2026-07-27T00:00:01Z", "hello")]
+        tmp_path, pod, "chute", "0.log", [cri("2026-07-27T00:00:01Z", "hello")]
     )
     assert await ship.run() is None
     assert session.calls[0]["json"]["logs"] == [

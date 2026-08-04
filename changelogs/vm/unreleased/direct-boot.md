@@ -18,6 +18,12 @@
     `P`-runs are held); the shipped byte offset is committed on success and persisted to a
     `{config_id → {inode → offset}}` checkpoint for restart resume. No wall-clock capture backstop —
     termination is the validator's job (`204`).
+  - **Only the `chute` container is captured** (`CONTAINER_NAME`, admission-enforced name);
+    init/sidecar containers are skipped so the shipped stream is single-container and therefore
+    monotonic in `ts`, which the validator's high-watermark dedupe relies on.
+  - **`413` handling:** an over-size batch is split and the halves retried (rather than retried
+    as-is), and the batch-byte ceiling is halved so subsequent batches are pre-split; a lone line
+    that still `413`s is skipped (offset committed) to avoid a livelock.
   - New Ansible role `chute-log-shipper` (registered in `chutes-miner-vm.yml`) plus the AppArmor
     profile delivered via `apparmor-hardening`. No new leaf is minted — a boot-time path unit
     re-groups the existing per-boot CVM mTLS leaf for the service's uid.

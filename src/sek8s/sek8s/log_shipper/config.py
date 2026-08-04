@@ -71,6 +71,13 @@ class LogShipperConfig(BaseSettings):
         alias="POD_LOG_ROOT",
         description="CRI on-disk pod log root: <root>/<ns>_<name>_<uid>/<container>/*.log",
     )
+    container_name: str = Field(
+        default="chute",
+        alias="CONTAINER_NAME",
+        description="Only this pod container's logs are shipped. Admission enforces the chute "
+        "main container is named 'chute'; init/sidecar containers are skipped so the stream stays "
+        "single-container (monotonic ts, which the validator's high-watermark dedupe relies on).",
+    )
     command_timeout_seconds: float = Field(
         default=15.0, alias="COMMAND_TIMEOUT_SECONDS", gt=0.0, le=120.0
     )

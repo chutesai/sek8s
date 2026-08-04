@@ -163,8 +163,9 @@ The guest agent is a **client**; it calls the validator. No inbound API is added
   `chute_id`, `pod_uid`, or `container` is sent — each is derivable server-side or redundant.
 - **Response contract — cutoff by status:** `204 No Content` = stop capturing this pod; any other
   2xx = keep sending; **`403`/`404` = terminal reject → stop and log the reason** (`404` = unknown
-  `config_id`; `403` = cert/ownership rejection); any other non-2xx or a connection error = transient
-  → retry with backoff.
+  `config_id`; `403` = cert/ownership rejection); **`413` = payload too large → split the batch and
+  retry the halves** (and shrink the batch ceiling); any other non-2xx or a connection error =
+  transient → retry with backoff.
 - **Proxy enforcement is API-side and transparent to the guest.** The dedicated CVM proxy terminates
   mTLS and injects a **secret header** that the API validates, so mTLS-required routes can only be
   reached through the proxy (defense in depth against a request bypassing the proxy on the internal
@@ -235,19 +236,21 @@ Success (Phase 1) =
      (No `chute-id` label or node IP is read — the validator derives chute/miner/user identity
      server-side, so the agent needs only `config-id` + `deployment-id` + uid.)
    - `shipper.py` — per-pod streaming coroutine: read a bounded `buffer_bytes` window of **new** bytes
-     (byte offset per file keyed by inode; reset on truncation/new inode) from
-     `/var/log/pods/chutes_<pod>_<uid>/<container>/*.log`, parse the CRI line format
-     (`<RFC3339Nano> <stdout|stderr> <F|P> <msg>`) into **complete logical lines only** (hold a
-     window-cut physical line or a trailing `P`-run) → bounded batch → `POST
-     /instances/launch_config/{config_id}/logs` over mTLS with a body of `{"deployment_id": "<uuid>",
-     "logs": [{ts, stream, log}]}` (`deployment_id` from the pod label; no `seq`/`server_ip`/identity
-     — all derived server-side from the path + mTLS leaf + proxy) → key off the response **status
-     code** (`204` = terminated/stop; any other 2xx = keep sending) → **commit + persist the offset
-     only on a successful ship** → stop on `204` / **`403`/`404` rejection (log the reason)** / task
-     cancellation when the pod is gone; retry-with-backoff on any *other* non-2xx or connection error
-     (offset unchanged); reading pauses while a ship is in flight (backpressure) and idles at the poll
-     interval when caught up. No local wall-clock backstop — termination is the validator's job.
-     Optional light filtering of shim-excluded noise (`nvidia-smi`, `curl`, …).
+     (byte offset per file keyed by inode; reset on truncation/new inode) from the **`chute` container
+     only** (`/var/log/pods/chutes_<pod>_<uid>/chute/*.log`; init/sidecar containers are skipped so
+     the stream stays single-container → monotonic `ts` → compatible with the validator's
+     high-watermark dedupe), parse the CRI line format (`<RFC3339Nano> <stdout|stderr> <F|P> <msg>`)
+     into **complete logical lines only** (hold a window-cut physical line or a trailing `P`-run) →
+     bounded batch → `POST /instances/launch_config/{config_id}/logs` over mTLS with a body of
+     `{"deployment_id": "<uuid>", "logs": [{ts, stream, log}]}` (`deployment_id` from the pod label;
+     no `seq`/`server_ip`/identity — all derived server-side from the path + mTLS leaf + proxy) → key
+     off the response **status code** (`204` = terminated/stop; any other 2xx = keep sending) →
+     **commit + persist the offset only on a successful ship** → stop on `204` / **`403`/`404`
+     rejection (log the reason)** / task cancellation when the pod is gone; **on `413` split the batch
+     and retry the halves** (shrinking the batch ceiling); retry-with-backoff on any *other* non-2xx or
+     connection error (offset unchanged); reading pauses while a ship is in flight (backpressure) and
+     idles at the poll interval when caught up. No local wall-clock backstop — termination is the
+     validator's job. Optional light filtering of shim-excluded noise (`nvidia-smi`, `curl`, …).
    - Console entry `chute-log-shipper` in `src/sek8s/pyproject.toml` `[tool.poetry.scripts]`.
 2. **Ansible role** `chute-log-shipper` (mirroring `system-manager`):
    - `chute-log-shipper.service` systemd unit (`User=` dedicated non-root uid, `After=` k3s, restart
@@ -307,7 +310,19 @@ Success (Phase 1) =
 - **Ordering with the validator:** the agent is a no-op until the validator endpoints exist; ship
   the `chutes-api` side (or a stub returning `204`) first, or gate the agent behind a config flag.
   A shipment to a missing endpoint must fail closed (retry/backoff, no crash).
-- **Validator-side deltas to confirm** (in the still-draft companion spec, easy to adjust):
+- **Validator-side contract — verified compatible against merged `chutes-api` main (2026-08-04).**
+  Confirmed end-to-end: path/mount (`/instances/launch_config/{config_id}/logs`), body
+  (`LogShipmentArgs` = `{deployment_id, logs:[{ts,stream,log}]}`), `204`/`200`/`403`/`404` semantics,
+  **CA-based mTLS identity that ignores the leaf CN** (so the generic `sek8s-cvm-mtls-client` CN is
+  fine), the `cvm.chutes.ai` proxy secret gate, and the high-watermark `(config_id, max ts)` dedupe.
+  Line/byte caps (validator `5000`/`32768`) sit above the guest's (`500`/`16384`). Two follow-ups:
+  - **Multi-container:** the guest ships **only the `chute` container** so the stream is monotonic in
+    `ts` (required by the single high-watermark). Capturing more than one container per pod would
+    need a per-line **container id** stored server-side (Loki label) so reads can select a container.
+  - **`413` / body size:** confirm `cvm.chutes.ai`'s nginx `client_max_body_size` is comfortably above
+    the guest's max body; the guest now splits on `413` regardless, but a generous limit avoids the
+    extra round-trips.
+- **Validator-side deltas (all now implemented in `chutes-api` main; kept for reference):**
   1. Route the ingest endpoint (`/instances/launch_config/{config_id}/logs`, §1) through the new
      **dedicated `cvm.chutes.ai` CVM mTLS proxy** and gate it on that proxy's injected secret header
      (the API-side enforcement described in §API Changes). No change to the guest, which just presents

@@ -57,6 +57,15 @@ class LogStreamingRejected(CaptureStopped):
 class TransientShipError(LogShipperError):
     """A batch could not be shipped after retries; retry on the next poll.
 
-    Not a stop condition — the cursor is left untouched so the same lines are
+    Not a stop condition — the offset is left untouched so the same lines are
     re-read and re-sent next time around.
+    """
+
+
+class PayloadTooLarge(LogShipperError):
+    """The validator/proxy rejected the batch as too large (HTTP 413).
+
+    Not transient (retrying the same batch would 413 again) and not terminal —
+    the shipper splits the batch and retries the halves, and shrinks its batch
+    size ceiling so subsequent batches are pre-split.
     """

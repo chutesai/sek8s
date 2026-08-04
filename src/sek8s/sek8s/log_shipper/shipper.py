@@ -17,6 +17,7 @@ Validator response contract (see docs/specs/chute-log-shipper.md):
   * 204                 -> LogStreamingTerminated: validator ended streaming, stop
   * any other 2xx       -> keep sending
   * 403 / 404           -> LogStreamingRejected: shipment refused, stop
+  * 413                 -> PayloadTooLarge: batch too big; split and retry the halves
   * other non-2xx / err -> transient; retry with backoff, offset unchanged
 """
 
@@ -33,11 +34,21 @@ from loguru import logger
 
 from .checkpoint import CheckpointStore
 from .config import LogShipperConfig
-from .exceptions import LogStreamingRejected, LogStreamingTerminated, TransientShipError
+from .exceptions import (
+    LogStreamingRejected,
+    LogStreamingTerminated,
+    PayloadTooLarge,
+    TransientShipError,
+)
 from .models import ChutePod, LogBatch, LogLine
 
 _VALID_STREAMS = {"stdout", "stderr"}
 _VALID_TAGS = {"F", "P"}
+
+# HTTP 413: batch too large for the validator/proxy — split rather than retry.
+_PAYLOAD_TOO_LARGE = 413
+# Floor for the adaptive batch-byte ceiling so it always fits one max-size line.
+_MIN_BATCH_BYTES = 32_768
 
 # CRI log filename: "<restart>.log" (current) or "<restart>.log.<rotation-suffix>".
 _LOG_NAME = re.compile(r"^(\d+)\.log(?:\.(.+))?$")
@@ -124,25 +135,25 @@ def _log_sort_key(path: Path) -> Tuple[int, int, str]:
     return (index, 0 if suffix else 1, suffix or "")
 
 
-def _log_files(pod_dir: Path) -> List[Path]:
-    """Non-gz CRI log files under a pod's container dirs, oldest->newest per container."""
-    files: List[Path] = []
+def _log_files(pod_dir: Path, container_name: str) -> List[Path]:
+    """Non-gz CRI log files for the chute container only, oldest->newest.
+
+    Only the main `chute` container is captured — init/sidecar containers are
+    skipped so the shipped stream stays single-container, hence monotonic in ts,
+    which the validator's high-watermark dedupe relies on. (Supporting multiple
+    containers would require the validator to store a per-line container id.)
+    """
+    container = pod_dir / container_name
     try:
-        containers = sorted(p for p in pod_dir.iterdir() if p.is_dir())
+        entries = [
+            e
+            for e in container.iterdir()
+            if e.is_file() and ".log" in e.name and not e.name.endswith(".gz")
+        ]
     except (FileNotFoundError, NotADirectoryError):
-        return files
-    for container in containers:
-        try:
-            entries = [
-                e
-                for e in container.iterdir()
-                if e.is_file() and ".log" in e.name and not e.name.endswith(".gz")
-            ]
-        except OSError:  # pragma: no cover - defensive
-            continue
-        entries.sort(key=_log_sort_key)
-        files.extend(entries)
-    return files
+        return []
+    entries.sort(key=_log_sort_key)
+    return entries
 
 
 @dataclass(frozen=True)
@@ -190,6 +201,8 @@ class PodLogShipper:
         self._offsets: Dict[int, int] = {
             int(ino): off for ino, off in checkpoints.get(pod.config_id).items()
         }
+        # Adaptive batch-byte ceiling; shrinks on a 413 so we stop re-hitting it.
+        self._max_batch_bytes = config.batch_max_bytes
 
     async def run(self) -> None:
         """Stream loop until termination, rejection, or cancel.
@@ -249,7 +262,7 @@ class PodLogShipper:
         entries: List[_Entry] = []
         present: set[int] = set()
         hit_budget = False
-        for log_file in _log_files(pod_dir):
+        for log_file in _log_files(pod_dir, self._config.container_name):
             try:
                 stat = log_file.stat()
             except OSError:  # pragma: no cover - file vanished mid-scan
@@ -291,13 +304,35 @@ class PodLogShipper:
         without gaps or dups.
         """
         for batch in _batch_entries(
-            entries, self._config.batch_max_lines, self._config.batch_max_bytes
+            entries, self._config.batch_max_lines, self._max_batch_bytes
         ):
+            await self._ship_batch(batch)
+
+    async def _ship_batch(self, batch: List[_Entry]) -> None:
+        """Ship one batch, splitting it on a 413, then commit its offsets.
+
+        Entries in a batch are ts-ordered (single container), so each half stays
+        ordered — safe for the validator's high-watermark dedupe.
+        """
+        try:
             await self._post_batch([entry.line for entry in batch])
-            for entry in batch:
-                if entry.end_offset > self._offsets.get(entry.inode, 0):
-                    self._offsets[entry.inode] = entry.end_offset
-            await self._checkpoints.set(self._pod.config_id, self._serialize_offsets())
+        except PayloadTooLarge:
+            self._max_batch_bytes = max(_MIN_BATCH_BYTES, self._max_batch_bytes // 2)
+            if len(batch) > 1:
+                mid = len(batch) // 2
+                await self._ship_batch(batch[:mid])
+                await self._ship_batch(batch[mid:])
+                return
+            # A single line still too large — skip it (commit past it) so we make
+            # progress instead of looping; max_line_bytes already bounds content.
+            logger.warning(
+                "Single log line exceeds the server payload limit for config_id={}; skipping",
+                self._pod.config_id,
+            )
+        for entry in batch:
+            if entry.end_offset > self._offsets.get(entry.inode, 0):
+                self._offsets[entry.inode] = entry.end_offset
+        await self._checkpoints.set(self._pod.config_id, self._serialize_offsets())
 
     def _serialize_offsets(self) -> Dict[str, int]:
         return {str(inode): off for inode, off in self._offsets.items()}
@@ -306,8 +341,8 @@ class PodLogShipper:
         """POST one batch with retry/backoff.
 
         Returns when the batch is accepted (a keep-going 2xx). Raises
-        LogStreamingTerminated (204), LogStreamingRejected (403/404), or
-        TransientShipError (transient error exhausted).
+        LogStreamingTerminated (204), LogStreamingRejected (403/404),
+        PayloadTooLarge (413 — caller splits), or TransientShipError (exhausted).
         """
         body = LogBatch(deployment_id=self._pod.deployment_id, logs=batch).model_dump()
         timeout = aiohttp.ClientTimeout(total=self._config.request_timeout_seconds)
@@ -322,6 +357,8 @@ class PodLogShipper:
                         raise LogStreamingRejected(
                             resp.status, self._rejection_reason(resp.status)
                         )
+                    if resp.status == _PAYLOAD_TOO_LARGE:
+                        raise PayloadTooLarge()  # caller splits; don't retry as-is
                     if 200 <= resp.status < 300:
                         return
                     logger.warning(
