@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.1] - 2026-07-23
+## [2026.07.1] - 2026-08-04
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -84,6 +84,19 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   the CLI broken with `ModuleNotFoundError: No module named 'entry_point'` — and
   re-running `setup-tdx-host` did not fix it because the stale symlink still
   resolved on `PATH`.
+- 25.10 → 26.04 host upgrade no longer stalls on `sgx-dcap-pccs`. Intel's
+  `noble`-suite PCCS now depends on `nodejs (>= 22.13)`, which is unsatisfiable
+  on 25.10 (questing ships nodejs 20.x), so apt parks it as permanently
+  "kept back" and `do-release-upgrade` refuses to proceed (holding the package
+  does not help — `do-release-upgrade` also refuses with held packages).
+  `pre_2510` now backs up the PCCS artifacts (`config/`, `ssl_key/` — API key,
+  token hashes, TLS cert, cached collateral) and removes the package before the
+  upgrade; a new `init_2604` hook restores them on the upgraded OS *before*
+  `setup-tdx-host` reinstalls PCCS from the `resolute` suite, so the reinstall's
+  post-install brings the service up already configured and registration is
+  preserved without manual steps. Adds a target-keyed `init_<version>` hook
+  phase to the os_upgrade role (runs on the new OS after reboot, before
+  `setup-tdx-host`).
 
 ### Removed
 - **InfiniBand passthrough for B200 / B200_XEON6** (`should_passthrough_infiniband` → `False`, matching H200/B300/RTX). It added no value — guest networking is virtio-net and NVLink fabric is host-side Fabric Manager (which works with IB off). Its only effect was to make RTMR0 vary by each host's IB NIC loadout (e.g. `am-b200-20` with 4 IB PFs vs `am-b200-57` with 20), forcing a separate measurement per loadout. With IB off, every B200 converges to one fingerprint `NumaTopology(gpu_nodes=(0,0,0,0,1,1,1,1))`. The new no-IB RTMR0 is submitted to chutes-ops `teeMeasurements` after the fact (the profile carries the fingerprint; the measurement follows).
