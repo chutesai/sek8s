@@ -46,7 +46,9 @@ per-chute 8001 log server (Phase 2).
   - `ansible/guest/roles/apparmor-hardening/files/profiles/sek8s.chute-log-shipper` (new — confine
     the service to the specific log paths, the crictl socket, the registry-tls leaf, and egress)
   - `ansible/guest/playbooks/chutes-miner-vm.yml` (register the new role)
-  - `changelogs/vm/unreleased/direct-boot.md` (`### Added` fragment)
+  - `changelogs/sek8s/unreleased/log-service.md` + `changelogs/vm/unreleased/log-service.md`
+    (branch-named fragments; the CI check requires one per affected component — `src/sek8s/` → sek8s,
+    `ansible/guest/` → vm)
 - **Reused, unchanged**:
   - `/run/chutes/registry-tls/client.{crt,key}` — the per-boot registry mTLS leaf minted by
     `ansible/guest/roles/vm-tls/files/initramfs/setup_vm_tls` (egress credential; **no change** to
@@ -262,8 +264,10 @@ Success (Phase 1) =
      `/var/log/pods/chutes_*/**`, the crictl socket, and the registry-tls leaf; read/write the checkpoint
      dir; network egress to the validator only; deny the rest.
    - Register the role in `ansible/guest/playbooks/chutes-miner-vm.yml`.
-3. **Changelog fragment** in `changelogs/vm/unreleased/direct-boot.md` under `### Added`. No
-   `VERSION` bump during development.
+3. **Changelog fragments** — branch-named (`log-service.md`) in **both** affected components:
+   `changelogs/sek8s/unreleased/` (the `src/sek8s` agent package) and `changelogs/vm/unreleased/`
+   (the `ansible/guest` role + the vm-tls CN change), per the CI `--check-branch` gate. No `VERSION`
+   bump during development.
 
 ---
 
