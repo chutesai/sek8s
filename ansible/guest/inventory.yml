@@ -13,7 +13,7 @@ all:
     ansible_user: "{{ lookup('env', 'USER') }}"
     root_signing_key_path: "~/.chutes/root-signing-key.pem"
     luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"
-    tdx_base_url: "https://tdx-attestation.example.com:8443"
+    tdx_base_url: "https://cvm.chutes.ai"
     validator_base_url: "https://api.chutes.ai"
     build_env: "prod"
     prime_wait_timeout: 300
