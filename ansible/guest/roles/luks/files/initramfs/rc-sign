@@ -1,0 +1,54 @@
+# /etc/initramfs-tools/scripts/rc-sign
+#
+# Operator-key proof-of-possession for release-candidate (rc) attestation, sourced
+# by the boot-lifecycle initramfs scripts (fetch_key_and_unlock, setup_storage).
+#
+# When a measurement is flagged `rc: true` API-side, the validator will only release
+# credentials / register the VM if the caller proves possession of an authorized
+# operator key. The proof is a detached RSA signature over the server-issued single-use
+# nonce (the same nonce already bound into the quote REPORTDATA), sent in the
+# X-Operator-Signature header (distinct from the hotkey's X-Chutes-Signature so the
+# API processes it as an RSA operator sig). This is the exact inverse of the `openssl dgst -sha256
+# -verify` the initramfs already runs for the signing-keys bundle — no new tooling.
+#
+# Entirely a no-op unless an operator signing key was provisioned onto the config
+# volume for this VM (debug / RC test launches only). For published measurements the
+# API ignores the header, so signing when a key happens to be present is harmless.
+# The private key is NEVER baked into the image: it arrives at runtime on the per-VM
+# config volume and is stashed to the initramfs /run tmpfs, never the root filesystem.
+
+RC_OPERATOR_KEY="/run/chutes/operator-signing-key.pem"
+
+# rc_stash_operator_key <config_mount>
+#   Copy the operator signing key off the (currently mounted) config volume into the
+#   initramfs /run tmpfs so later init-bottom scripts can sign after the volume is
+#   unmounted. No-op when the key is absent (the normal prod case).
+rc_stash_operator_key() {
+    _rc_src="$1/operator-signing-key.pem"
+    if [ -f "$_rc_src" ]; then
+        mkdir -m 700 -p /run/chutes
+        cp "$_rc_src" "$RC_OPERATOR_KEY"
+        chmod 600 "$RC_OPERATOR_KEY"
+    fi
+}
+
+# rc_sign_nonce <nonce>
+#   Echo a base64 RSA (PKCS#1 v1.5, SHA-256) signature over the nonce bytes, or nothing
+#   when no operator key is present. base64 (not hex) because `base64` is guaranteed
+#   staged into the initramfs by the fetch_key hook while `od`/`xxd` are not — the API
+#   side decodes with base64.b64decode() and RSA-verifies over the raw nonce bytes.
+rc_sign_nonce() {
+    [ -f "$RC_OPERATOR_KEY" ] || return 0
+    _rc_data=$(mktemp /tmp/rc-nonce.XXXXXX) || return 0
+    printf '%s' "$1" > "$_rc_data"
+    openssl dgst -sha256 -sign "$RC_OPERATOR_KEY" "$_rc_data" 2>/dev/null \
+        | base64 -w0
+    rm -f "$_rc_data"
+}
+
+# rc_shred_operator_key
+#   Remove the stashed key. Called before pivot_root by prod so it never reaches
+#   userspace; debug builds may leave it (the VM is non-confidential either way).
+rc_shred_operator_key() {
+    rm -f "$RC_OPERATOR_KEY"
+}
