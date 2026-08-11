@@ -16,14 +16,16 @@
 # longer generates or registers a CA — it only consumes the existing one to sign
 # the leaf certs and then destroys ca.key.
 #
-# Ordering: PREREQ="setup_storage" — runs in init-bottom AFTER setup_storage
-# (which runs after rtmr3-measure). setup_storage keeps the CA in place (it uses
-# it as the /provision mTLS client cert and must not delete it), so ca.key is
-# still present when this script runs. This script deletes ca.key before
+# Ordering: PREREQ="setup_storage setup_storage_debug" — runs in init-bottom AFTER
+# whichever storage script this image carries (prod installs setup_storage, debug
+# installs setup_storage_debug; only one is ever present, and an absent PREREQ name
+# is simply ignored by initramfs ordering). Both run after rtmr3-measure and keep the
+# CA in place (they use it as the /provision mTLS client cert and must not delete it),
+# so ca.key is still present when this script runs. This script deletes ca.key before
 # pivot_root; the key never reaches userspace (RTMR2 is the attestation proof).
 # openssl is copied into the initramfs by the luks fetch_key hook.
 
-PREREQ="setup_storage"
+PREREQ="setup_storage setup_storage_debug"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 

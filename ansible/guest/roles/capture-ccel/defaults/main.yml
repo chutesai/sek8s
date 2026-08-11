@@ -1,0 +1,36 @@
+---
+# capture-ccel defaults.
+#
+# The capture boots the DEBUG image (the only bootable/SSH-able one) on TDX
+# hardware and pulls the CCEL + fw_cfg ACPI/SMBIOS preimages — the RTMR0 baseline,
+# which is identical across debug and prod for a given topology. Override any of
+# these at the play/CLI level.
+
+# Source image = the debug build's output (never launched directly — the launch
+# mutates the qcow2, so we always work on a copy).
+measurement_source_image: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-debug.qcow2"
+# Pristine working copy in /tmp — this is what actually gets launched/mutated.
+measurement_work_image: "/tmp/{{ vm_version }}-debug-measure.qcow2"
+
+measurement_hostname: chutes-measure
+measurement_guest_user: root
+# SSH auth uses the build-time key: run-vm injects ~/.ssh/id_ed25519.pub into the
+# image and the miner build never strips it (setup-ssh-access is gpu-only), so the
+# builder — who holds this private key locally and is running the capture on the same
+# host — can key-auth straight in. (The key is measured into RTMR3, so it's attested.)
+measurement_guest_ssh_key: "~/.ssh/id_ed25519"
+measurement_ssh_wait_seconds: 600
+
+measurement_output_dir: "{{ repo_root }}/measurements"
+
+# Bridge the launcher uses (fixed BRIDGE_NAME in host-tools setup-bridge.sh). If it
+# already exists we reuse its subnet; if not we discover a free one (see below).
+measurement_bridge_name: br0
+# The same non-overlapping-subnet discovery the host launch flow uses. Only invoked
+# when the bridge does not exist yet, so it never re-derives (or disturbs) a network
+# that is already up, and never collides with the server's own subnets.
+measurement_pick_network_script: "{{ repo_root }}/ansible/host/roles/chutes_vm_config/files/pick_guest_network.py"
+
+# The capture VM never joins a cluster; dummy creds keep quick-launch happy.
+measurement_miner_ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+measurement_miner_seed: "0000000000000000000000000000000000000000000000000000000000000000"

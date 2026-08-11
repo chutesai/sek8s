@@ -17,7 +17,8 @@ Design + rationale: [`docs/specs/offline-rtmr0-measurement.md`](../../docs/specs
   log plus the fw_cfg ACPI/SMBIOS preimages (`etc/acpi/tables`, `etc/table-loader`,
   `etc/acpi/rsdp`, `etc/smbios/*`), `/sys/firmware/dmi/tables/*`, and the kernel
   cmdline. These are the inputs the offline recompute and the `#14` matcher consume.
-  Driven unattended by `ansible/host/playbooks/capture-measurement-baseline.yml`.
+  Driven unattended by the `capture-ccel` Ansible role (the final
+  gather step (`capture-ccel`); re-run standalone via `--tags gather-measurement-inputs`).
   **Note:** the CCEL only exists on TDX hardware, so this bundle requires a
   TDX-capable host once per image version (RTMR1/2/3 + MRTD are reproducible
   offline without it; a fully CCEL-free RTMR0 is the Phase-2 goal).

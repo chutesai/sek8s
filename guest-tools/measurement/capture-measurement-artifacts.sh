@@ -9,7 +9,8 @@
 #   - /proc/cmdline               -> part of the boot chain (feeds RTMR2)
 #   - DMI + EFI vars (reference)  -> for boot-event reconstruction (Phase 2)
 # then tars the result for extraction. Self-locating and CWD-independent so it can
-# be driven unattended by ansible/host/playbooks/capture-measurement-baseline.yml.
+# be driven unattended by the capture-ccel Ansible role (the final
+# gather step (capture-ccel); re-run via `--tags gather-measurement-inputs`).
 #
 # This does NOT generate a quote or print RTMR values — that is a separate
 # concern; see extract-measurements.sh for reporting a running VM's measurements.

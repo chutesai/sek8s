@@ -1,0 +1,224 @@
+---
+# capture-ccel — boot the debug image on TDX hardware and capture
+# the CCEL + fw_cfg ACPI/SMBIOS preimages into measurements/<version>/.
+#
+# This is the RTMR0 baseline: topology-independent (constant RTMR0 events are the
+# same across every GPU/NUMA layout) and version-specific — capture once per image
+# version. The CCEL is identical across debug and prod, so capturing from the
+# (bootable) debug image serves both. RTMR1/2/3 are computed separately, statically,
+# from each image (compute-rtmr3 / compute-rtmr1-2 / compute-rtmr0) — not here.
+#
+# CCEL only exists on TDX hardware, so the build/capture host must be TDX-capable.
+# SSH into the guest uses the build-time key (measurement_guest_ssh_key) — see the
+# note in defaults/main.yml.
+#
+# Networking: reuse the launcher's bridge (br0) if it is already up — running all VMs
+# on one network is the normal host state — otherwise discover a free subnet the same
+# way the host launch flow does. The capture NEVER tears the bridge down (other VMs
+# may share it); it only stops its own throwaway VM.
+#
+# Runs as a gather step (post-luks), gated by measurements=full (the CCEL capture is
+# the only TDX-hardware step). To (re)capture on an already-built image without a full
+# rebuild (e.g. after a measurements=offline build, or a transient SSH-probe failure),
+# just re-run that step against the existing image:
+#     ansible-playbook playbooks/chutes-miner-vm.yml --tags gather-measurement-inputs
+
+- name: Set derived capture facts
+  ansible.builtin.set_fact:
+    _host_tools_scripts: "{{ repo_root }}/host-tools/scripts"
+    _baseline_dir: "{{ measurement_output_dir }}/{{ vm_version }}"
+
+# ── Resolve the VM/bridge network ─────────────────────────────────────────────
+# Reuse br0's subnet if it's already up (don't re-derive or disturb a live network);
+# otherwise discover a non-overlapping /24 exactly as the host launch flow does.
+
+- name: Read the launcher bridge address (empty if the bridge is absent)
+  ansible.builtin.shell: |
+    ip -4 -o addr show {{ measurement_bridge_name }} 2>/dev/null | grep -oP 'inet \K\S+' | head -1 || true
+  register: _br_cidr
+  changed_when: false
+
+- name: Record existing bridge CIDR
+  ansible.builtin.set_fact:
+    _br_existing_cidr: "{{ _br_cidr.stdout | trim }}"
+
+- name: Discover a non-overlapping network when the bridge is absent
+  # Same script the host launch flow runs. Only executes when br0 doesn't exist, so
+  # it never re-derives a network that's already up or collides with host subnets.
+  ansible.builtin.command: "python3 {{ measurement_pick_network_script }}"
+  register: _pick_net
+  changed_when: false
+  when: _br_existing_cidr | length == 0
+
+- name: Resolve bridge_ip / vm_ip (reuse the bridge subnet, or the discovered one)
+  ansible.builtin.set_fact:
+    _bridge_ip: >-
+      {{ _br_existing_cidr if (_br_existing_cidr | length > 0)
+         else (_pick_net.stdout | trim | from_json).bridge_ip }}
+    _vm_ip: >-
+      {{ (_br_existing_cidr.split('/')[0].rsplit('.', 1)[0] ~ '.2')
+         if (_br_existing_cidr | length > 0)
+         else (_pick_net.stdout | trim | from_json).vm_ip }}
+
+- name: Show the resolved capture network
+  ansible.builtin.debug:
+    msg: "capture network: vm_ip={{ _vm_ip }} bridge_ip={{ _bridge_ip }} (bridge {{ 'reused' if (_br_existing_cidr | length > 0) else 'to be created' }})"
+
+- name: Assert the built debug image exists
+  ansible.builtin.stat:
+    path: "{{ measurement_source_image }}"
+    get_checksum: false
+  register: _src_img
+  failed_when: not _src_img.stat.exists
+
+- name: Copy the built debug image to a throwaway working copy
+  # Never launch the publishable artifact directly — the launch injects a
+  # config volume and writes first-boot state, mutating the qcow2.
+  ansible.builtin.copy:
+    src: "{{ measurement_source_image }}"
+    dest: "{{ measurement_work_image }}"
+    remote_src: true
+    mode: "0644"
+
+- name: Copy the direct-boot artifacts alongside the working copy
+  # The launcher direct-boots and resolves <work-image-base>.{vmlinuz,initrd,cmdline}
+  # next to the qcow2 (staged by the build's stage-boot-artifacts), so they must
+  # travel with the /tmp copy or the launch fails with "artifacts missing".
+  ansible.builtin.copy:
+    src: "{{ (measurement_source_image | splitext | first) + '.' + item }}"
+    dest: "{{ (measurement_work_image | splitext | first) + '.' + item }}"
+    remote_src: true
+    mode: "0644"
+  loop:
+    - vmlinuz
+    - initrd
+    - cmdline
+
+- name: Compute guest SSH/SCP command prefixes (build-time key auth)
+  ansible.builtin.set_fact:
+    _guest_ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+    _guest_auth: "-i {{ measurement_guest_ssh_key }}"
+    _guest_target: "{{ measurement_guest_user }}@{{ _vm_ip }}"
+
+- name: Capture the baseline (VM runs from here; always torn down)
+  block:
+    - name: Launch the debug VM from the working copy (TDX, no GPUs)
+      ansible.builtin.command:
+        chdir: "{{ _host_tools_scripts }}"
+        argv:
+          - ./quick-launch.sh
+          - --hostname
+          - "{{ measurement_hostname }}"
+          - --base-image
+          - "{{ measurement_work_image }}"
+          - --miner-ss58
+          - "{{ measurement_miner_ss58 }}"
+          - --miner-seed
+          - "{{ measurement_miner_seed }}"
+          - --vm-ip
+          - "{{ _vm_ip }}"
+          - --bridge-ip
+          - "{{ _bridge_ip }}"
+          - --network-type
+          - tap
+          - --skip-bind
+          - --skip-checksum
+      changed_when: true
+
+    - name: Wait for the guest to accept SSH
+      ansible.builtin.shell: |
+        set -uo pipefail
+        ssh {{ _guest_ssh_opts }} {{ _guest_auth }} {{ _guest_target }} 'true'
+      register: _guest_ssh_probe
+      retries: "{{ (measurement_ssh_wait_seconds | int) // 10 }}"
+      delay: 10
+      until: _guest_ssh_probe.rc == 0
+      changed_when: false
+
+    - name: Copy the capture script into the guest
+      ansible.builtin.shell: |
+        set -euo pipefail
+        scp {{ _guest_ssh_opts }} {{ _guest_auth }} \
+          {{ repo_root }}/guest-tools/measurement/capture-measurement-artifacts.sh \
+          {{ _guest_target }}:/root/capture-measurement-artifacts.sh
+      changed_when: true
+
+    - name: Run the capture inside the guest
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ssh {{ _guest_ssh_opts }} {{ _guest_auth }} {{ _guest_target }} \
+          'cd /root && bash capture-measurement-artifacts.sh --output-dir /root/baseline_capture'
+      register: _guest_capture
+      changed_when: true
+
+    - name: Show capture output
+      ansible.builtin.debug:
+        var: _guest_capture.stdout_lines
+
+    - name: Copy the artifact tarball out of the guest
+      ansible.builtin.shell: |
+        set -euo pipefail
+        scp {{ _guest_ssh_opts }} {{ _guest_auth }} \
+          {{ _guest_target }}:/root/baseline_capture.tar.gz /tmp/baseline_capture.tar.gz
+      changed_when: true
+
+    - name: Ensure the baseline destination exists
+      ansible.builtin.file:
+        path: "{{ _baseline_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Unpack the artifact bundle into measurements/<version>/
+      # --strip-components=1 drops the tarball's baseline_capture/ prefix so the
+      # blobs land directly in measurements/<version>/ (not a nested subdir).
+      ansible.builtin.unarchive:
+        src: /tmp/baseline_capture.tar.gz
+        dest: "{{ _baseline_dir }}/"
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+
+    - name: Verify the CC event log was actually captured
+      # The whole point of the capture is the CCEL (the RTMR0 baseline). If the
+      # guest kernel didn't expose data/CCEL, the capture "succeeds" but yields
+      # an unusable baseline — fail loudly here instead of shipping a bad fixture.
+      ansible.builtin.stat:
+        path: "{{ _baseline_dir }}/ccel_data.bin"
+      register: _ccel_stat
+      failed_when: (not _ccel_stat.stat.exists) or (_ccel_stat.stat.size | int) == 0
+
+    - name: Write baseline metadata
+      ansible.builtin.copy:
+        dest: "{{ _baseline_dir }}/baseline.json"
+        content: |
+          {
+            "version": "{{ vm_version }}",
+            "build_env": "{{ build_env }}",
+            "boot_method": "direct",
+            "source_image": "{{ measurement_source_image }}",
+            "gpus": false
+          }
+        mode: "0644"
+
+  always:
+    # Stop ONLY the throwaway capture VM — never the bridge. quick-launch --clean would
+    # also delete br0 (setup-bridge.sh --clean), which may be shared with other VMs on
+    # this host; run-td --clean is the VM-only primitive quick-launch itself uses.
+    - name: Stop the capture VM (leave the shared bridge in place)
+      ansible.builtin.command:
+        chdir: "{{ _host_tools_scripts }}"
+        argv:
+          - ./run-td
+          - --clean
+      changed_when: true
+      failed_when: false
+
+    - name: Remove the throwaway working image + boot artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ measurement_work_image }}"
+        - "{{ (measurement_work_image | splitext | first) + '.vmlinuz' }}"
+        - "{{ (measurement_work_image | splitext | first) + '.initrd' }}"
+        - "{{ (measurement_work_image | splitext | first) + '.cmdline' }}"

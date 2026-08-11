@@ -13,18 +13,34 @@
 
 - name: Provision tdx-measure from source (skipped when tdx_measure_bin is preset)
   when: (tdx_measure_bin | default('')) | length == 0
+  # The clone + cargo build run in user space (per-user rust toolchain / build tree);
+  # the apt installs below opt back into root per-task.
+  become: false
   block:
-    - name: Ensure git is available
-      ansible.builtin.command: which git
-      changed_when: false
-      register: _tdxm_git
-      failed_when: _tdxm_git.rc != 0
+    # This role is invoked become: false (the build tree is per-user), so the apt
+    # installs opt back into root per-task. git clones the fork; cargo builds it.
+    - name: Ensure git is installed
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+      become: true
 
-    - name: Ensure cargo is available
+    # Detect cargo as the build user (respect an existing rustup toolchain in
+    # ~/.cargo/bin) and only apt-install if truly absent — never clobber a newer
+    # rustup cargo with the older apt one.
+    - name: Detect cargo on the build user's PATH
       ansible.builtin.command: which cargo
-      changed_when: false
       register: _tdxm_cargo
-      failed_when: _tdxm_cargo.rc != 0
+      changed_when: false
+      failed_when: false
+
+    - name: Install a cargo toolchain when the build user has none
+      ansible.builtin.apt:
+        name: cargo
+        state: present
+      become: true
+      when: _tdxm_cargo.rc != 0
 
     - name: Clone the tdx-measure fork if not already checked out
       # update: false — never disturb an existing checkout (a dev's working tree

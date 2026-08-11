@@ -221,6 +221,26 @@
     owner: root
     group: root
 
+# Shared boot-attestation / provision libraries sourced by the prod entry scripts
+# (fetch_key_and_unlock -> attest-common; setup_storage -> provision-common). Staged
+# into the initramfs by the fetch_key hook. The debug-only rc-sign lib is intentionally
+# NOT installed here — prod carries none of it and keeps a distinct measurement.
+- name: Copy shared boot-attestation library (attest-common)
+  ansible.builtin.copy:
+    src: files/initramfs/attest-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/attest-common"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy shared provision library (provision-common)
+  ansible.builtin.copy:
+    src: files/initramfs/provision-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/provision-common"
+    mode: '0755'
+    owner: root
+    group: root
+
 - name: Copy TDX initramfs hooks
   ansible.builtin.copy:
     src: files/initramfs/fetch_key

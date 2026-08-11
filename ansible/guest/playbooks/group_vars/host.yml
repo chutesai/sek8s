@@ -11,3 +11,20 @@ gpu_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-gpu.qcow2"
 libvirt_image_dir: "/var/lib/libvirt/images"
 build_img_path: "{{ libvirt_image_dir }}/tdx-guest.qcow2"
 vm_name: "tdx-build"
+# `measurements` — the whole measurement phase, as a ladder (default: full):
+#   none    → skip everything (pure image build; runs on any machine — local dev iteration)
+#   offline → RTMR1/2/3 (any x86-64 Linux, Docker for the fork; no CCEL capture)
+#   full    → + capture the baseline CCEL by booting the debug image (needs a TDX host)
+# The CCEL capture is the ONLY step that needs TDX hardware. Re-run just the capture with
+#   ansible-playbook playbooks/chutes-miner-vm.yml --tags gather-measurement-inputs
+# and just the RTMR compute with --tags compute-measurements.
+measurements: full
+
+# measurement_profile — which profile(s) compute-rtmr0 generates RTMR0 for:
+#   a name (e.g. RTX_PRO_6000) → that profile only (debug VM, one class).
+#   empty → ALL profiles (prod publish → API values).
+# Today the single captured baseline supplies #14 only for its own (mem,cpu) class, so
+# "all" emits the profile the baseline matches and lists the rest as pending; it covers
+# every profile once the Phase-2 fork change computes #14 (then no per-class baseline is
+# needed). Generation is OFFLINE (fork + Docker, any x86-64 Linux — no TDX, no GPUs).
+measurement_profile: ""

@@ -404,17 +404,28 @@
       ansible.builtin.include_role:
         name: finalize-vm-image
 
-- name: Compute expected RTMRs from final image
+# RTMR3 is derived from userspace files only (luks-independent) and is easiest to
+# compute against the plaintext image, so it runs PRE-luks. The initrd-dependent
+# RTMR1/2 + boot-artifact staging run POST-luks (below), because luks rebuilds the
+# initrd for both prod and debug.
+# `measurements` gates the whole measurement phase, as a ladder (see host.yml):
+#   none    → skip everything (pure image build — non-TDX / local dev iteration)
+#   offline → RTMR1/2/3 (any x86-64 Linux; no CCEL capture)
+#   full    → + capture the baseline CCEL (needs a TDX host)   [default]
+# RTMR0 generation runs whenever a baseline CCEL is present (compute-rtmr0 skips cleanly
+# without one); measurement_profile selects which profile(s).
+- name: Compute expected RTMR3 from final image (pre-luks)
   hosts: host
   become: true
   tags:
-    - compute-rtmrs
+    - compute-rtmr3
   tasks:
-    - name: Compute RTMR1/RTMR2/RTMR3
+    - name: Compute RTMR3
       ansible.builtin.include_role:
-        name: compute-rtmrs
+        name: compute-rtmr3
+      when: (measurements | default('full')) != 'none'
 
-- name: Encrypt disk
+- name: Provision root filesystem (encrypt for prod / install debug initramfs)
   hosts: host
   become: true
   tags:
@@ -423,12 +434,58 @@
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Encrypt disk
+    - name: Provision root filesystem
       ansible.builtin.include_role:
         name: luks
         apply:
           tags: luks
-      when: not (debug_build | default(false))
+
+# ── Measurement GATHER (post-luks) ────────────────────────────────────────────
+# The initrd is now final (luks rebuilt it for prod AND debug). Gather the two kinds
+# of measurement input, by their distinct mechanisms:
+#   - stage-boot-artifacts : extract this image's direct-boot vmlinuz/initrd/cmdline
+#   - capture-ccel         : boot the debug image on TDX hw → baseline CCEL + ACPI/SMBIOS
+# stage runs for offline+full; the CCEL capture is the full-only step (needs TDX hw).
+- name: Gather measurement inputs from final image (post-luks)
+  hosts: host
+  become: true
+  tags:
+    - gather-measurement-inputs
+  tasks:
+    - name: Stage direct-boot artifacts
+      ansible.builtin.include_role:
+        name: stage-boot-artifacts
+      when: (measurements | default('full')) != 'none'
+
+    - name: Capture baseline CCEL + ACPI/SMBIOS from the debug image (needs TDX)
+      ansible.builtin.include_role:
+        name: capture-ccel
+      when: (measurements | default('full')) == 'full'
+
+# ── Measurement COMPUTE (post-luks) ───────────────────────────────────────────
+# One peer role per register: compute-rtmr1-2 (RTMR1/2) and compute-rtmr0 (per-topology
+# RTMR0, splice+replay against the baseline). RTMR3 is computed pre-luks. tdx-measure
+# builds the shared fork engine both use. All run offline (no TDX/GPU).
+- name: Compute measurements from gathered inputs (post-luks)
+  hosts: host
+  become: true
+  tags:
+    - compute-measurements
+  tasks:
+    - name: Provision the tdx-measure fork (RTMR0/1/2 engine)
+      ansible.builtin.include_role:
+        name: tdx-measure
+      when: (measurements | default('full')) != 'none'
+
+    - name: Compute RTMR1/RTMR2
+      ansible.builtin.include_role:
+        name: compute-rtmr1-2
+      when: (measurements | default('full')) != 'none'
+
+    - name: Generate per-topology RTMR0
+      ansible.builtin.include_role:
+        name: compute-rtmr0
+      when: (measurements | default('full')) != 'none'
 
 - name: Prime VM for stable TDX measurements
   hosts: host
