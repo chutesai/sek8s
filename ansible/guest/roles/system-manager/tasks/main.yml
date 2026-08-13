@@ -180,6 +180,30 @@
     group: system-manager
     mode: '0640'
 
+# validator-auth.env normally lives on /run (tmpfs) and is written by the initramfs
+# write-validator-auth script before pivot_root. There is no initramfs at build time, so
+# without a placeholder system-manager's required EnvironmentFile fails and the service
+# restart-loops. Deploy a dummy here (removed by cleanup-build-vm); /run is tmpfs, so the
+# real per-VM auth replaces it on every boot regardless.
+- name: Ensure /run/chutes exists for the build-time validator-auth placeholder
+  ansible.builtin.file:
+    path: /run/chutes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deploy dummy validator-auth.env for build time (config volume not mounted; replaced by initramfs at runtime)
+  ansible.builtin.copy:
+    content: |
+      # Build-time placeholder; replaced by the initramfs write-validator-auth script
+      # (real per-VM ALLOWED_VALIDATORS on /run tmpfs) at first boot.
+      ALLOWED_VALIDATORS=
+    dest: /run/chutes/validator-auth.env
+    owner: root
+    group: system-manager
+    mode: '0640'
+
 # cache-rm (not bare /usr/bin/rm) bounds the destructive grant to direct children
 # of the HF cache base, so an RCE in system-manager cannot `sudo rm -rf` arbitrary
 # root-owned paths. k3s-images-helper runs without sudo via the containerd group.
