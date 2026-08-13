@@ -138,8 +138,12 @@ while IFS= read -r relpath; do
     fullpath="${rootmnt}${relpath}"
     [ -f "$fullpath" ] || continue
 
-    # sha384sum outputs "<hash>  <filename>" — extract just the hash
-    hash=$(sha384sum "$fullpath" 2>/dev/null | awk '{print $1}')
+    # Hash via stdin so sha384sum never prints — and backslash-escapes — the filename.
+    # A path containing a backslash (e.g. systemd's system-systemd\x2dcryptsetup.slice)
+    # otherwise makes sha384sum prefix the line with '\', so awk '{print $1}' would capture
+    # "\<hash>" and tdx-rtmr-extend would reject it. Reading from stdin yields "<hash>  -",
+    # matching the content-only hash the build-time compute-rtmr3.sh (Python) produces.
+    hash=$(sha384sum < "$fullpath" 2>/dev/null | awk '{print $1}')
     if [ -z "$hash" ]; then
         rm -f "$sorted_list"
         handle_failure "could not hash ${relpath}"
