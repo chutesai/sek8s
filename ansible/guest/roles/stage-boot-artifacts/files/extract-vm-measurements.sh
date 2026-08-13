@@ -20,20 +20,36 @@ echo "=== TDX Boot Artifact Extraction ==="
 echo "Image: $IMG"
 echo
 
-echo "==> Detecting ext4 root filesystem..."
-ROOT_PART=$(
-  guestfish --ro -a "$IMG" <<'EOF' | awk '/ext4/ {sub(/:$/, "", $1); print $1}'
+echo "==> Detecting the boot filesystem (carries vmlinuz/initrd/grub)..."
+# Match the ext4 partition that actually holds the versioned kernel, not just "any ext4".
+# On an encrypted (prod) image the root is LUKS, so only the unencrypted /boot partition
+# is ext4 — but on an unencrypted (debug) image BOTH the root and /boot partitions are
+# ext4, so a bare /ext4/ match returns two devices and the later mount fails. The kernel
+# (vmlinuz-*) lives only on the /boot partition, so pick by that.
+ROOT_PART=""
+for part in $(
+  guestfish --ro -a "$IMG" <<'LIST' | awk '/ext4/ {sub(/:$/, "", $1); print $1}'
 run
 list-filesystems
-EOF
-)
+LIST
+); do
+  if guestfish --ro -a "$IMG" <<CHECK 2>/dev/null | grep -q 'vmlinuz-'
+run
+mount $part /
+ls /
+CHECK
+  then
+    ROOT_PART="$part"
+    break
+  fi
+done
 
 if [[ -z "$ROOT_PART" ]]; then
-  echo "ERROR: Could not find ext4 root partition."
+  echo "ERROR: Could not find an ext4 partition containing the kernel (vmlinuz-*)."
   exit 1
 fi
 
-echo "Found root partition: $ROOT_PART"
+echo "Found boot partition: $ROOT_PART"
 echo
 
 #
