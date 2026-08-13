@@ -28,10 +28,6 @@
 - CVM mTLS operations now use the `cvm.chutes.ai` domain.
 - HWE kernel bumped to `7.0.0-28.28~24.04.1`.
 
-### Fixed
-- Prod initramfs now installs and stages the shared boot libraries it sources
-  (`attest-common`/`provision-common`); previously they were referenced but never staged.
-
 ### Removed
 - Retired the userspace debug k3s secrets-encryption path (build-time static key baked at
   `/etc/chutes` + k3s systemd drop-in). Debug now writes the k3s EncryptionConfiguration from

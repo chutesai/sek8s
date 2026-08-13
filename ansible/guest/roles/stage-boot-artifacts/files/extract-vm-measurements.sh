@@ -58,30 +58,33 @@ echo
 
 echo "==> Extracting kernel and initrd..."
 
-guestfish --ro -a "$IMG" <<EOF
-run
-mount $ROOT_PART /
+# guestfish has no if/then/else or $() substitution, so pick the filenames in bash from a
+# directory listing, then download them by exact path. On the /boot partition the kernel
+# and initrd are versioned (vmlinuz-* / initrd.img-*); the bare /vmlinuz symlink lives on
+# the root fs, not here.
+boot_ls=$(guestfish --ro -a "$IMG" run : mount "$ROOT_PART" / : ls /)
 
-# Extract vmlinuz symlink if present
-if exists /vmlinuz ; then
-    download /vmlinuz $OUT_DIR/vmlinuz
-else
-    # Pick newest vmlinuz-* by version
-    newest_vmlinuz=\$(glob ls /vmlinuz-* | sort | tail -n1)
-    download \$newest_vmlinuz $OUT_DIR/vmlinuz
+_pick() {  # $1 = base (vmlinuz|initrd.img): prefer a bare symlink, else the newest versioned file
+  if grep -qx "$1" <<<"$boot_ls"; then
+    printf '%s\n' "$1"
+  else
+    grep -E "^$1-" <<<"$boot_ls" | sort -V | tail -n1
+  fi
+}
+
+vmlinuz=$(_pick vmlinuz)
+initrd=$(_pick initrd.img)
+if [[ -z "$vmlinuz" || -z "$initrd" ]]; then
+  echo "ERROR: could not locate kernel/initrd on $ROOT_PART (contents: $(echo "$boot_ls" | tr '\n' ' '))" >&2
+  exit 1
 fi
 
-# Extract initrd symlink if present
-if exists /initrd.img ; then
-    download /initrd.img $OUT_DIR/initrd.img
-else
-    newest_initrd=\$(glob ls /initrd.img-* | sort | tail -n1)
-    download \$newest_initrd $OUT_DIR/initrd.img
-fi
-
-# Extract grub config for cmdline parsing
-download /grub/grub.cfg $OUT_DIR/grub.cfg
-EOF
+guestfish --ro -a "$IMG" \
+  run : \
+  mount "$ROOT_PART" / : \
+  download "/$vmlinuz" "$OUT_DIR/vmlinuz" : \
+  download "/$initrd" "$OUT_DIR/initrd.img" : \
+  download /grub/grub.cfg "$OUT_DIR/grub.cfg"
 
 echo "✓ Extracted kernel → $OUT_DIR/vmlinuz"
 echo "✓ Extracted initrd → $OUT_DIR/initrd.img"
