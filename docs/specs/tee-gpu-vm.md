@@ -266,8 +266,7 @@ nvevidence).
   - Skip `MINER_SS58` and `MINER_SEED` validation (set to dummy/placeholder values).
   - Skip cache volume creation and attachment.
   - Skip config volume creation and attachment.
-  - Default to `--skip-checksum` (different image SHA than production).
-  - Default base image to `/var/lib/chutes/base-images/tdx-guest-benchmark.qcow2`.
+  - Default base image to the benchmark image set `/var/lib/chutes/base-images/tdx-guest-benchmark/` (assembled with `chutes.guest.image_set manifest`, like any other image set).
   - Keep bridge+TAP networking (default, unchanged).
   - Keep storage volume creation and attachment (raw block device for partner).
   - Start `benchmark-netlog.service` after bridge setup.

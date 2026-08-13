@@ -71,19 +71,28 @@
   register: _src_img
   failed_when: not _src_img.stat.exists
 
-- name: Copy the built debug image to a throwaway working copy
-  # Never launch the publishable artifact directly — the launch injects a
-  # config volume and writes first-boot state, mutating the qcow2.
+# Assemble a throwaway image SET directory the launcher can consume. We never launch the
+# publishable artifact directly (the launch injects a config volume and writes first-boot
+# state, mutating the qcow2), and there is one image format — the set — so we stage the
+# qcow2 + its direct-boot artifacts into a dir and generate a manifest over them. This is
+# an ephemeral capture-time manifest (over the pre-prime image), independent of the
+# published manifest the build emits post-prime.
+- name: Create the throwaway working image-set directory
+  ansible.builtin.file:
+    path: "{{ measurement_work_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Copy the built debug image into the working set
   ansible.builtin.copy:
     src: "{{ measurement_source_image }}"
     dest: "{{ measurement_work_image }}"
     remote_src: true
     mode: "0644"
 
-- name: Copy the direct-boot artifacts alongside the working copy
-  # The launcher direct-boots and resolves <work-image-base>.{vmlinuz,initrd,cmdline}
-  # next to the qcow2 (staged by the build's stage-boot-artifacts), so they must
-  # travel with the /tmp copy or the launch fails with "artifacts missing".
+- name: Copy the direct-boot artifacts into the working set
+  # The launcher resolves <qcow2-base>.{vmlinuz,initrd,cmdline} next to the qcow2 (staged by
+  # the build's stage-boot-artifacts) and verifies them against the manifest below.
   ansible.builtin.copy:
     src: "{{ (measurement_source_image | splitext | first) + '.' + item }}"
     dest: "{{ (measurement_work_image | splitext | first) + '.' + item }}"
@@ -94,6 +103,22 @@
     - initrd
     - cmdline
 
+- name: Generate the working set's manifest (coherence contract the launcher verifies)
+  ansible.builtin.command:
+    chdir: "{{ _host_tools_scripts }}"
+    argv:
+      - python3
+      - -m
+      - chutes.guest.image_set
+      - manifest
+      - "{{ measurement_work_image }}"
+      - -o
+      - "{{ measurement_work_dir }}/manifest.json"
+      - --version
+      - "{{ vm_version }}"
+      - --debug
+  changed_when: true
+
 - name: Compute guest SSH/SCP command prefixes (build-time key auth)
   ansible.builtin.set_fact:
     _guest_ssh_opts: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
@@ -102,7 +127,7 @@
 
 - name: Capture the baseline (VM runs from here; always torn down)
   block:
-    - name: Launch the debug VM from the working copy (TDX, no GPUs)
+    - name: Launch the debug VM from the working image set (TDX, no GPUs)
       ansible.builtin.command:
         chdir: "{{ _host_tools_scripts }}"
         argv:
@@ -110,7 +135,7 @@
           - --hostname
           - "{{ measurement_hostname }}"
           - --base-image
-          - "{{ measurement_work_image }}"
+          - "{{ measurement_work_dir }}"
           - --miner-ss58
           - "{{ measurement_miner_ss58 }}"
           - --miner-seed
@@ -122,7 +147,6 @@
           - --network-type
           - tap
           - --skip-bind
-          - --skip-checksum
       changed_when: true
 
     - name: Wait for the guest to accept SSH
@@ -213,12 +237,7 @@
       changed_when: true
       failed_when: false
 
-    - name: Remove the throwaway working image + boot artifacts
+    - name: Remove the throwaway working image set
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ measurement_work_dir }}"
         state: absent
-      loop:
-        - "{{ measurement_work_image }}"
-        - "{{ (measurement_work_image | splitext | first) + '.vmlinuz' }}"
-        - "{{ (measurement_work_image | splitext | first) + '.initrd' }}"
-        - "{{ (measurement_work_image | splitext | first) + '.cmdline' }}"

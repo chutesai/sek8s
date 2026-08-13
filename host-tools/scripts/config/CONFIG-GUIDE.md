@@ -76,15 +76,24 @@ For Docker Hub: if you pass **both** `--docker-hub-username` and `--docker-hub-t
 Example:
 ```bash
 # Base image precedence:
-./quick-launch.sh config.yaml --base-image /path/to/custom.qcow2
-# Uses: /path/to/custom.qcow2 (CLI wins)
+./quick-launch.sh config.yaml --base-image /path/to/custom-image-set/
+# Uses: /path/to/custom-image-set/ (CLI wins)
 
-./quick-launch.sh config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"
-# Uses: value from YAML
+./quick-launch.sh config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest/"
+# Uses: value from YAML (image-set directory)
 
 ./quick-launch.sh config.yaml  # config.yaml has vm.base_image: ""
-# Uses: default /var/lib/chutes/base-images/tdx-guest.qcow2
+# Uses: default /var/lib/chutes/base-images/tdx-guest/
 ```
+
+`base_image` points at a **published image-set directory** — the qcow2 plus its direct-boot
+artifacts (`.vmlinuz`/`.initrd`/`.cmdline`) and a `manifest.json` that ties them together —
+populated by `quick-launch --download`. There is one image format: the set. The launcher
+verifies the set against the manifest (so a stale/mismatched artifact fails loudly, not as
+an opaque boot error) and reads the qcow2's sha256 from the manifest instead of re-hashing
+it each launch. Launch does not auto-download: a missing set fails with a clear message,
+and you stage it explicitly with `--download` (or, in a build, via ansible). Custom or
+benchmark images must likewise be assembled into a set (`chutes.guest.image_set manifest`).
 
 ## Docker Hub (optional)
 
@@ -108,7 +117,7 @@ docker_hub:
 ```yaml
 vm:
   hostname: chutes-miner-prod-0
-  base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"  # Encrypted image
+  base_image: "/var/lib/chutes/base-images/tdx-guest/"  # Encrypted image set (dir)
   vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 
 volumes:
@@ -129,7 +138,7 @@ volumes:
 ```yaml
 vm:
   hostname: chutes-miner-debug-0
-  base_image: "/var/lib/chutes/base-images/tdx-guest-debug.qcow2"  # Debug image
+  base_image: "/var/lib/chutes/base-images/tdx-guest-debug/"  # Debug image set (dir)
   vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 
 volumes:
@@ -153,16 +162,16 @@ volumes:
 
 ```yaml
 vm:
-  base_image: "/var/lib/chutes/base-images/tdx-guest.qcow2"
+  base_image: "/var/lib/chutes/base-images/tdx-guest/"
   vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
 ```
 
-Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest.qcow2`.
+Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest/`.
 
 ### Via CLI Override
 
 ```bash
-./quick-launch.sh config.yaml --base-image /path/to/tdx-guest.qcow2
+./quick-launch.sh config.yaml --base-image /path/to/image-set-dir/
 ./quick-launch.sh config.yaml --vm-image-dir /custom/vm-images/
 ```
 
@@ -290,7 +299,7 @@ See `config-schema.json` for the complete schema definition. Key sections:
 ```yaml
 vm:
   hostname: my-miner
-  base_image: ""  # Optional: default /var/lib/chutes/base-images/tdx-guest.qcow2
+  base_image: ""  # Optional: default /var/lib/chutes/base-images/tdx-guest/
   vm_image_directory: ""  # Optional: default /var/lib/chutes/vm-images/
 
 miner:

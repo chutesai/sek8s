@@ -234,8 +234,8 @@ sudo sysctl net.ipv4.ip_forward       # should be 1
 
 | Path | Description |
 |------|-------------|
-| `/var/lib/chutes/base-images/tdx-guest.qcow2` | Base VM image |
-| `/var/lib/chutes/vm-overlays/tdx-<hostname>-<sha>.qcow2` | Per-launch overlay |
+| `/var/lib/chutes/base-images/tdx-guest/` | Base VM image set (qcow2 + boot artifacts + manifest.json) |
+| `/var/lib/chutes/vm-images/tdx-<hostname>-<sha>.qcow2` | Per-VM image copy |
 | `host-tools/scripts/cache-<hostname>.raw` | HF/model cache volume (XFS) |
 | `host-tools/scripts/storage-<hostname>.raw` | k3s/containerd/kubelet volume |
 | `host-tools/scripts/config-<hostname>.qcow2` | Credentials config volume |

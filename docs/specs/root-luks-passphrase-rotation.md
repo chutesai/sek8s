@@ -70,14 +70,14 @@ Success = on every boot, the correct root passphrase is returned by the API and 
 
 ### 1. `host-tools/scripts/prepare-vm-image.sh`
 
-Replace overlay creation with per-VM copy. Same interface, same SHA verification on the base image.
+Replace overlay creation with per-VM copy. The base image is a verified image-set directory.
 
 ```
-Input:  BASE_IMAGE, HOSTNAME, EXPECTED_SHA, VM_IMAGE_DIR, [skip_checksum]
+Input:  BASE_IMAGE_SET_DIR, HOSTNAME, VM_IMAGE_DIR
 Output: path to per-VM image (stdout)
 
 Logic:
-  1. Verify base SHA256 (unchanged)
+  1. Verify the set against its manifest (chutes.guest.image_set resolve); read the qcow2 sha256 from the manifest
   2. VM_IMAGE="$VM_IMAGE_DIR/tdx-${HOSTNAME}-${SHA:0:16}.qcow2"
   3. If exists: reuse
   4. If not: cp "$BASE_IMAGE" "$VM_IMAGE"

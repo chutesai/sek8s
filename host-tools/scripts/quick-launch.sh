@@ -13,27 +13,49 @@ run_create_config() {
   fi
 }
 
-# Download the direct-boot artifacts published alongside the qcow2 (1.4.0+): the
-# kernel/initrd/cmdline OVMF boots directly. Downloaded next to the image so the
-# launcher (chutes.guest.direct_boot) finds them at <image-base>.{vmlinuz,initrd,cmdline}.
-# $1 = image basename (tdx-guest | tdx-guest-debug), $2 = download dir
-download_boot_artifacts() {
-  local base="$1" dir="$2" ext
+# Download a full image set (1.4.0+) into its own per-variant directory: the qcow2, the
+# direct-boot kernel/initrd/cmdline OVMF boots directly, and the manifest that ties them
+# together. The set lives in one directory so the launcher resolves the qcow2 + sidecars
+# next to each other, and `image_set resolve --full` verifies every downloaded byte
+# against the manifest (the R2-published integrity source).
+#   $1 = image basename (tdx-guest | tdx-guest-debug)
+download_image_set() {
+  local base="$1" ext
+  local dir="/var/lib/chutes/base-images/${base}"
+  sudo mkdir -p "$dir"
+
+  # Download into a fixed per-variant directory (overwrites in place — keep an old build
+  # by moving its directory aside before re-downloading). Manifest last so a partial
+  # download never leaves a manifest advertising bytes that aren't there yet.
+  echo "Downloading ${base}.qcow2..."
+  aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "${base}.qcow2" \
+    "https://vm.chutes.ai/${base}.qcow2" || { echo "Download failed for ${base}.qcow2"; exit 1; }
   for ext in vmlinuz initrd cmdline; do
     echo "Downloading ${base}.${ext} (direct-boot artifact)..."
-    aria2c -x 16 -s 16 -k 1M -d "$dir" -o "${base}.${ext}" "https://vm.chutes.ai/${base}.${ext}" || {
+    aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "${base}.${ext}" \
+      "https://vm.chutes.ai/${base}.${ext}" || {
       echo "Download failed for ${base}.${ext}. It must be published alongside the qcow2 (1.4.0+)."
       exit 1
     }
   done
-  echo "✓ Direct-boot artifacts downloaded next to ${base}.qcow2"
+  echo "Downloading manifest.json (coherence contract)..."
+  aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "manifest.json" \
+    "https://vm.chutes.ai/${base}.manifest.json" || {
+    echo "Download failed for ${base}.manifest.json. It must be published alongside the qcow2 (1.4.0+)."
+    exit 1
+  }
+
+  echo "Verifying the downloaded image set against its manifest..."
+  python3 -m chutes.guest.image_set resolve --full "$dir" >/dev/null || {
+    echo "ERROR: downloaded image set failed manifest verification (see above)."
+    exit 1
+  }
+  echo "✓ Image set downloaded and verified: $dir"
+  echo "  Point base_image at this directory (or leave it empty to use the default)."
 }
 
-# --------------------------------------------------------------------
-# VM base image version - must match tdx-guest.qcow2 from https://vm.chutes.ai
-# Update this when publishing a new VM; ensures QEMU args match VM version (RTMR0 consistency)
-# --------------------------------------------------------------------
-EXPECTED_BASE_SHA256="2df7256a248b246ae532b74601e376a455ad8af98202e56deb91b623fce3b88a"
+# Integrity is carried entirely by the per-image-set manifest.json (verified at download
+# and launch by chutes.guest.image_set) — there is no pinned base-image hash to maintain.
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
@@ -57,7 +79,6 @@ STORAGE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
 FOREGROUND="false"
-SKIP_CHECKSUM="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
 EPHEMERAL="false"
@@ -84,7 +105,6 @@ CLI_STORAGE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
 CLI_FOREGROUND=""
-CLI_SKIP_CHECKSUM=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 CLI_EPHEMERAL=""
@@ -148,7 +168,6 @@ while [[ $# -gt 0 ]]; do
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
-    --skip-checksum) CLI_SKIP_CHECKSUM="true"; shift ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
     --ephemeral) CLI_EPHEMERAL="true"; shift ;;
@@ -158,43 +177,22 @@ while [[ $# -gt 0 ]]; do
     --force) CLI_FORCE="true"; shift ;;
     --clean) CLI_CLEAN="true"; shift ;;
     --download)
-      echo "=== Downloading VM Base Image (production) ==="
-      BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
-      BASE_DOWNLOAD_PATH="$BASE_DOWNLOAD_DIR/tdx-guest.qcow2"
-      sudo mkdir -p "$BASE_DOWNLOAD_DIR"
-      if command -v aria2c >/dev/null 2>&1; then
-        echo "Downloading to $BASE_DOWNLOAD_PATH..."
-        # aria2c -o treats paths as relative to -d; use -d for dir and -o for filename only
-        aria2c -x 16 -s 16 -k 1M -d "$BASE_DOWNLOAD_DIR" -o "tdx-guest.qcow2" "https://vm.chutes.ai/tdx-guest.qcow2" || {
-          echo "Download failed. Ensure aria2c is installed and the URL is accessible."
-          exit 1
-        }
-        download_boot_artifacts "tdx-guest" "$BASE_DOWNLOAD_DIR"
-        echo "✓ Download complete: $BASE_DOWNLOAD_PATH"
-      else
+      echo "=== Downloading VM Image Set (production) ==="
+      if ! command -v aria2c >/dev/null 2>&1; then
         echo "Error: aria2c not found. Install with: sudo apt install aria2"
         exit 1
       fi
+      download_image_set tdx-guest
       exit 0
       ;;
 
     --download-debug)
-      echo "=== Downloading VM Base Image (debug) ==="
-      BASE_DOWNLOAD_DIR="/var/lib/chutes/base-images"
-      BASE_DOWNLOAD_PATH="$BASE_DOWNLOAD_DIR/tdx-guest-debug.qcow2"
-      sudo mkdir -p "$BASE_DOWNLOAD_DIR"
-      if command -v aria2c >/dev/null 2>&1; then
-        echo "Downloading to $BASE_DOWNLOAD_PATH..."
-        aria2c -x 16 -s 16 -k 1M -d "$BASE_DOWNLOAD_DIR" -o "tdx-guest-debug.qcow2" "https://vm.chutes.ai/tdx-guest-debug.qcow2" || {
-          echo "Download failed. Ensure aria2c is installed and the URL is accessible."
-          exit 1
-        }
-        download_boot_artifacts "tdx-guest-debug" "$BASE_DOWNLOAD_DIR"
-        echo "✓ Download complete: $BASE_DOWNLOAD_PATH"
-      else
+      echo "=== Downloading VM Image Set (debug) ==="
+      if ! command -v aria2c >/dev/null 2>&1; then
         echo "Error: aria2c not found. Install with: sudo apt install aria2"
         exit 1
       fi
+      download_image_set tdx-guest-debug
       exit 0
       ;;
 
@@ -218,7 +216,7 @@ Config File:
 
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
-  --base-image PATH         Path to base VM image (qcow2). Default: /var/lib/chutes/base-images/tdx-guest.qcow2
+  --base-image PATH         Image-set directory (qcow2 + boot artifacts + manifest) or a bare .qcow2. Default: /var/lib/chutes/base-images/tdx-guest/
   --vm-image-dir PATH       Directory for per-VM image files. Default: /var/lib/chutes/vm-images/
   --miner-ss58 VALUE        Miner SS58 credential (required)
   --miner-seed VALUE        Miner seed credential (required)
@@ -238,7 +236,6 @@ Volumes:
   --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
   --config-volume PATH       Existing qcow2 is repopulated from config.yaml each launch (same file)
   --skip-bind
-  --skip-checksum         Skip base image SHA256 verification (for debug with custom images)
 
 Runtime:
   --foreground
@@ -358,7 +355,6 @@ fi
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
 [[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
-[[ -n "$CLI_SKIP_CHECKSUM" ]] && SKIP_CHECKSUM="true"
 
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
 [[ -n "$CLI_NETWORK_TYPE" ]] && NETWORK_TYPE="$CLI_NETWORK_TYPE"
@@ -434,17 +430,20 @@ if [[ "$CLI_CLEAN" == "true" ]]; then
   exit 0
 fi
 
-# Benchmark mode: set defaults before the general defaults below
+# Benchmark mode: set defaults before the general defaults below. The benchmark image is
+# a published image set (directory) like every other image — assemble one with
+# `chutes.guest.image_set manifest` if you're pointing at a loose qcow2.
 if [[ "$BENCHMARK" == "true" ]]; then
-  [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest-benchmark.qcow2"
-  SKIP_CHECKSUM="true"
+  [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest-benchmark"
   # Miner credentials are not used in benchmark mode; set placeholders to satisfy any downstream checks
   [[ -z "$MINER_SS58" ]] && MINER_SS58="benchmark"
   [[ -z "$MINER_SEED" ]] && MINER_SEED="benchmark"
 fi
 
-# Default base image and overlay directory when not specified
-[[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest.qcow2"
+# Default base image: the published image-set directory (qcow2 + boot artifacts +
+# manifest) that `--download` populates. There is one image format — the set directory;
+# a missing set fails cleanly here rather than being auto-downloaded at launch.
+[[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest"
 if [[ "$EPHEMERAL" == "true" ]]; then
   VM_IMAGE_DIR="/tmp/chutes-vm-images"
 elif [[ -z "$VM_IMAGE_DIR" ]]; then
@@ -679,12 +678,10 @@ fi
 echo ""
 
 # --------------------------------------------------------------------
-# Step 4b: Prepare VM image (verify base SHA256, create/reuse per-VM copy)
+# Step 4b: Instantiate the per-VM copy of the image set (verify against manifest)
 # --------------------------------------------------------------------
-echo "Step 4b: Preparing VM image (verify + per-VM copy)..."
-SKIP_ARG=""
-[[ "$SKIP_CHECKSUM" == "true" ]] && SKIP_ARG="1"
-VM_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$VM_IMAGE_DIR" $SKIP_ARG | tail -1)
+echo "Step 4b: Preparing VM image (verify set + per-VM copy)..."
+VM_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$VM_IMAGE_DIR" | tail -1)
 # Pipeline masks exit status; PIPESTATUS[0] is prepare-vm-image's exit code
 [[ ${PIPESTATUS[0]} -ne 0 ]] && { echo "Error: VM image preparation failed (see output above)"; exit 1; }
 [[ -z "$VM_IMAGE" ]] && { echo "Error: Failed to get VM image path"; exit 1; }

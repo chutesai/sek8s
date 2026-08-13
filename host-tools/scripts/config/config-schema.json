@@ -18,7 +18,7 @@
         },
         "base_image": {
           "type": "string",
-          "description": "Path to base VM image (qcow2). Empty uses default /var/lib/chutes/base-images/tdx-guest.qcow2.",
+          "description": "Published image-set directory (qcow2 + boot artifacts + manifest.json). Empty uses default /var/lib/chutes/base-images/tdx-guest/.",
           "minLength": 0
         },
         "vm_image_directory": {

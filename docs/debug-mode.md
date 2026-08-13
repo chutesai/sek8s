@@ -133,7 +133,8 @@ cd host-tools/scripts
 ./quick-launch.sh --download-debug
 ```
 
-This downloads the debug image to `/var/lib/chutes/base-images/tdx-guest-debug.qcow2`.
+This downloads the debug image set (qcow2 + boot artifacts + `manifest.json`) into
+`/var/lib/chutes/base-images/tdx-guest-debug/` and verifies it against the manifest.
 
 ### Launch with quick-launch.sh
 
