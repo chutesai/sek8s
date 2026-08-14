@@ -247,7 +247,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     def fork_overrides(profile, fp):
         spec = build_topology_spec(
             profile, fp, cpu_args=cpu_args_for_qemu_version(args.qemu),
-            firmware=profile.firmware_filename,
+            firmware=str(Path(args.bios_dir) / profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
             meta = MeasurementMetadata(spec, profile, acpi_tables=str(Path(td) / "acpi.bin")).to_dict()
@@ -342,6 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument("--qemu", default="10.2.1", help="QEMU version key in baselined_measurements")
     gen.add_argument("--tdx-measure-bin", default="tdx-measure", help="path to the tdx-measure fork binary")
     gen.add_argument("--dist", default="ubuntu:26.04", help="ACPI-dump container base image")
+    gen.add_argument("--bios-dir", default=str(_HERE.parent.parent / "firmware"),
+                     help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
+                          "opens the metadata's 'bios' path, so it must resolve absolutely")
     gen.set_defaults(func=_cmd_generate)
 
     args = ap.parse_args(argv)
