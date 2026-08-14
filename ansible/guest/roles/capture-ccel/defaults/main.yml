@@ -1,34 +1,41 @@
 ---
 # capture-ccel defaults.
 #
-# The capture boots the DEBUG image (the only bootable/SSH-able one) on TDX
-# hardware and pulls the CCEL + fw_cfg ACPI/SMBIOS preimages — the RTMR0 baseline,
-# which is identical across debug and prod for a given topology. Override any of
+# The capture does a MINIMAL boot of a throwaway copy of the debug image: it injects a
+# CCEL dumper into the initramfs that dumps the CC event log to the serial console and
+# powers off — firmware -> kernel -> dump -> off, no userspace/attestation/k3s/SSH. RTMR0
+# (the baseline) is firmware-populated before the kernel, so this yields the same CCEL a
+# full boot would. Identical across debug and prod for a given topology. Override any of
 # these at the play/CLI level.
 
-# Source image = the debug build's output (never launched directly — the launch
-# mutates the qcow2, so we always work on a copy).
+# Source image = the debug build's output (never launched directly — we always work on a
+# copy, and we mutate that copy's initramfs to inject the dumper).
 measurement_source_image: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-debug.qcow2"
-# Throwaway working image SET (directory) in /tmp — the launcher consumes a set
-# directory (qcow2 + .vmlinuz/.initrd/.cmdline + manifest.json), so we assemble one here
-# from the build output and launch/mutate that. There is no bare-qcow2 launch path.
+# Throwaway working image SET (directory) in /tmp — the launcher consumes a set directory
+# (qcow2 + .vmlinuz/.initrd/.cmdline + manifest.json), so we assemble one here from a copy
+# of the build output (with the dumper baked into its initramfs) and launch that.
 measurement_work_dir: "/tmp/{{ vm_version }}-debug-measure"
 # The qcow2 inside the working set (basename mirrors the source; the launcher globs *.qcow2).
 measurement_work_image: "{{ measurement_work_dir }}/{{ measurement_source_image | basename }}"
 
 measurement_hostname: chutes-measure
-measurement_guest_user: root
-# SSH auth uses the build-time key: run-vm injects ~/.ssh/id_ed25519.pub into the
-# image and the miner build never strips it (setup-ssh-access is gpu-only), so the
-# builder — who holds this private key locally and is running the capture on the same
-# host — can key-auth straight in. (The key is measured into RTMR3, so it's attested.)
-measurement_guest_ssh_key: "~/.ssh/id_ed25519"
-measurement_ssh_wait_seconds: 600
 
 measurement_output_dir: "{{ repo_root }}/measurements"
 
+# Host-side initramfs surgery (inject the dumper + rebuild): nbd + chroot on the copy.
+measurement_nbd_device: /dev/nbd0
+measurement_mnt: /mnt/ccel-capture
+# stage-boot-artifacts.sh re-extracts the (dumper-carrying) kernel/initrd/cmdline.
+measurement_stage_boot_script: "{{ repo_root }}/ansible/guest/roles/stage-boot-artifacts/files/stage-boot-artifacts.sh"
+# run-td logs the guest serial here; the dumper's base64 lands in it.
+measurement_serial_log: /tmp/tdx-guest-td.log
+# Max seconds to wait for the dump to finish (a minimal boot + dump is ~1-2 min).
+measurement_dump_wait_seconds: 300
+
 # Bridge the launcher uses (fixed BRIDGE_NAME in host-tools setup-bridge.sh). If it
-# already exists we reuse its subnet; if not we discover a free one (see below).
+# already exists we reuse its subnet; if not we discover a free one (see below). The
+# capture never uses the network — but the virtio-net device must be present so the
+# DSDT (an RTMR0 input) matches a real launch, so we still launch with --network-type tap.
 measurement_bridge_name: br0
 # The same non-overlapping-subnet discovery the host launch flow uses. Only invoked
 # when the bridge does not exist yet, so it never re-derives (or disturbs) a network
