@@ -129,7 +129,7 @@ def acpi_digests(acpi_dir: str | Path) -> dict[int, bytes]:
 
 
 def generate_acpi_blobs(
-    metadata: dict, out_dir: Path, *, tdx_measure_bin: str, dist: str, qemu_version: str
+    metadata: dict, out_dir: Path, *, tdx_measure_bin: str, dist: str
 ) -> dict:
     """Run `tdx-measure --create-acpi-tables` to dump the topology's fw_cfg ACPI
     blobs and its {mrtd, rtmr0}. Mirrors local/scripts/run_validation.sh:43. The
@@ -139,21 +139,28 @@ def generate_acpi_blobs(
     Runs OFFLINE on any x86-64 Linux with Docker + the fork — no TDX, no GPUs. KVM
     speeds the brief ACPI-gen QEMU run but isn't required; reserve=off (applied by
     platform_tables.MeasurementMetadata) lifts the guest-sized-RAM requirement.
+
+    Only the distribution is passed to --create-acpi-tables: the fork pins the exact
+    QEMU source-package version *and* container image digest per dist (qemu_pkg_for),
+    which is what makes the dump reproducible. Our internal baselined_measurements key
+    (e.g. "10.2.1") is a release label, NOT a Debian package version — forwarding it as
+    the fork's version override lands an unresolvable `pull-lp-source qemu 10.2.1`.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     meta_path = out_dir / "metadata.json"
     result_path = out_dir / "result.json"
     meta_path.write_text(json.dumps(metadata, indent=2))
+    # The metadata positional is placed first: --create-acpi-tables is num_args=1..=2,
+    # so a metadata path immediately after `dist` would be greedily eaten as the version.
     subprocess.run(
         [
             tdx_measure_bin,
+            str(meta_path),
             "--platform-only",
             "--json-file",
             str(result_path),
             "--create-acpi-tables",
             dist,
-            qemu_version,
-            str(meta_path),
         ],
         check=True,
     )
@@ -276,7 +283,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 Path(td),
                 tdx_measure_bin=args.tdx_measure_bin,
                 dist=args.dist,
-                qemu_version=args.qemu,
             )
         return overrides_from_fork_log(out.get("rtmr0_log") or []), out.get("mrtd", "")
 
