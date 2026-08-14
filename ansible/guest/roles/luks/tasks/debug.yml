@@ -16,7 +16,7 @@
 #   scripts/rc-sign                 DEBUG   (operator-key signing lib)
 #   scripts/init-premount/fetch_key_and_unlock_debug   DEBUG entry (fail-open, no LUKS)
 #   scripts/init-bottom/setup_storage_debug            DEBUG entry (static k3s key)
-#   scripts/init-bottom/write-validator-auth           shared
+#   scripts/init-bottom/write-validator-auth_debug     DEBUG entry (fail-open)
 #
 # NOT installed: luks-helpers (LUKS-only), fetch_key_and_unlock / setup_storage (prod
 # entries). Prod-only code never lands in the debug image, and rc-sign / *_debug never

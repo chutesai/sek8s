@@ -165,10 +165,14 @@
     owner: root
     group: root
 
-- name: Copy write-validator-auth script (init-bottom)
+- name: Copy debug write-validator-auth script (init-bottom, fail-open)
+  # Debug installs the fail-open variant: a debug VM that cannot attest (e.g. an
+  # unregistered image being measured) must still boot, writing an empty
+  # ALLOWED_VALIDATORS rather than powering off. The prod (fail-closed)
+  # write-validator-auth is deliberately NOT installed here.
   ansible.builtin.copy:
-    src: files/initramfs/write-validator-auth
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/write-validator-auth"
+    src: files/initramfs/write-validator-auth_debug
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom/write-validator-auth_debug"
     mode: '0755'
     owner: root
     group: root
