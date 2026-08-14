@@ -13,9 +13,10 @@
 #     class the baseline matches and lists the rest as pending; it covers every profile
 #     once the Phase-2 fork change computes #14 (then no per-class baseline is needed).
 #
-# Runs OFFLINE — the fork + Docker on any x86-64 Linux (no TDX, no GPUs); only the
-# baseline CAPTURE (capture-ccel) needs TDX hardware. Non-fatal: a missing baseline or
-# pending profiles never fail the build.
+# Runs OFFLINE — the fork + Docker (with buildx; it uses `docker build --progress plain`)
+# on any x86-64 Linux (no TDX, no GPUs); only the baseline CAPTURE (capture-ccel) needs TDX
+# hardware. build-setup.yml installs both. Non-fatal: a missing baseline or pending profiles
+# never fail the build.
 
 - name: Check for a captured baseline CCEL
   ansible.builtin.stat:
@@ -38,6 +39,12 @@
       - "{{ repo_root }}/measurements/{{ vm_version }}/rtmr0.json"
       - --tdx-measure-bin
       - "{{ tdx_measure_bin | default('tdx-measure') }}"
+  environment:
+    # The tdx-measure fork shells out to `docker build` for offline ACPI generation
+    # (Command::new("docker") in acpi.rs). Extend PATH so the fork subprocess finds
+    # docker even when it is installed via snap (/snap/bin) or the task inherits a
+    # minimal PATH — otherwise it fails with "Failed to invoke `docker build`" (ENOENT).
+    PATH: "{{ lookup('env', 'PATH') }}:/usr/local/bin:/usr/bin:/snap/bin"
   register: _rtmr0_gen
   changed_when: _rtmr0_gen.rc == 0
   failed_when: false

@@ -1,4 +1,9 @@
 ### Added
+- `build-setup.yml` now installs and enables Docker **with the buildx plugin** on build
+  hosts. Offline RTMR0 generation (the `compute-rtmr0` role) runs the tdx-measure fork's
+  patched QEMU in a container built via `docker build --progress plain`, which requires
+  BuildKit/buildx. A build host without it reported every profile PENDING with "Failed to
+  invoke `docker build`" (no docker) or "unknown flag: --progress" (no buildx).
 - Image-set coherence checking, as the single image format. A VM image is a set — the
   qcow2 plus its direct-boot `.vmlinuz`/`.initrd`/`.cmdline` and a `manifest.json` (sha256 +
   size per artifact) — verified as a matched unit against the manifest at download (full

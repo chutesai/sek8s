@@ -9,6 +9,8 @@
 #   - Benchmarks Ubuntu apt mirrors and selects the fastest one
 #   - Installs host script dependencies (git, aria2, python3-yaml, python3-venv)
 #   - Installs Ansible for running the guest image build locally
+#   - Installs Docker (offline RTMR0 generation runs the tdx-measure fork's
+#     patched QEMU in a container; see roles/compute-rtmr0)
 
 - name: Build host setup
   hosts: td_hosts
@@ -23,3 +25,22 @@
         name: ansible
         state: present
         update_cache: true
+
+    - name: Install Docker (with buildx)
+      # The compute-rtmr0 role's offline ACPI generation shells out to
+      # `docker build --progress plain` (tdx-measure fork). That needs BuildKit, so the
+      # buildx plugin is required — docker.io's legacy builder rejects --progress. Without
+      # docker.io the build reports "Failed to invoke `docker build`"; without docker-buildx,
+      # "unknown flag: --progress".
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-buildx
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker is running and enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
