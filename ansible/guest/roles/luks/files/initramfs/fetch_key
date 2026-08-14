@@ -15,6 +15,7 @@ copy_exec /usr/sbin/cryptsetup
 copy_exec /usr/bin/tdx-quote-generator
 copy_exec /usr/bin/base64
 copy_exec /usr/bin/openssl
+copy_exec /usr/bin/chown
 copy_exec /usr/bin/sha256sum
 copy_exec /usr/bin/sha384sum
 

@@ -31,6 +31,13 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 
+# The initramfs ships the openssl binary but no default openssl.cnf, so a bare
+# `openssl req` (e.g. the registry client cert below, which uses -subj without its own
+# -config) cannot load a config and fails. Point openssl at an empty config — the same
+# idiom the existing initramfs mTLS code uses (attest-common, main's fetch_key_and_unlock).
+# The proxy cert's explicit `-config` still overrides this for its SAN/EKU extensions.
+export OPENSSL_CONF=/dev/null
+
 CA_DIR="/run/chutes/vm-root-ca"
 
 # ── Cleanup on any exit ───────────────────────────────────────────────────────
