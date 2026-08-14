@@ -71,13 +71,14 @@ class PciBar:
 
 @dataclass
 class PassthroughDevice:
-    """A passthrough endpoint type reproduced offline as a ``pci-bar-stub``: its PCI device
-    id + class + BAR layout, all from ``lspci -vvvnn``. Keyed by endpoint kind (e.g.
-    ``"nvswitch"``) in ``GpuProfile.passthrough``.
+    """A passthrough endpoint reproduced offline as a ``pci-bar-stub``: its PCI vendor,
+    device id, class, and BAR layout, all from ``lspci -vvvnn``. Keyed by endpoint kind
+    ("gpu"/"nvswitch"/"ib") in ``GpuProfile.passthrough``.
     """
 
-    device_id: str        # hex, e.g. "22a3"
-    pci_class: int        # e.g. 0x0680
+    vendor: int  # e.g. 0x10DE (NVIDIA), 0x15B3 (Mellanox / IB)
+    device_id: str  # hex, e.g. "22a3"
+    pci_class: int  # e.g. 0x0680
     bars: list[PciBar]
 
 
@@ -85,16 +86,14 @@ class GpuProfile(ABC):
     """Base class for GPU-type-specific passthrough behavior."""
 
     # PCI device IDs that identify this GPU (e.g. [10de:2901] -> 2901). Override in subclass.
+    # Drives profile DETECTION at launch (matches_device_id); the offline stub id for the
+    # GPU lives in passthrough["gpu"].
     pci_device_ids: list[str] = []
 
-    # Full PCI BAR layout from `lspci -vvvnn` (see PciBar / discover-profile.sh).
-    # Empty = not yet captured for this model; offline measurement generation is
-    # unavailable until it is (the per-GPU MMIO windows can't be reproduced).
-    pci_bars: list[PciBar] = []
-
-    # Auxiliary passthrough endpoints beyond the GPU (`pci_bars` above), keyed by the
-    # root-port kind _swap_endpoint matches: "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Empty
-    # for profiles that pass only GPUs through.
+    # Every passthrough endpoint reproduced offline as a pci-bar-stub, keyed by the bus kind
+    # _swap_endpoint matches: "gpu" (rp\d+), "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Captured
+    # from `lspci -vvvnn` (discover-profile.sh). No "gpu" entry = not yet modeled for this
+    # model, so offline measurement generation is unavailable (not broken) until it is added.
     passthrough: dict[str, PassthroughDevice] = {}
 
     def matches_device_id(self, device_id: str) -> bool:
@@ -448,14 +447,17 @@ class B300Profile(GpuProfile):
 
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
-    # lspci -vvvnn on dev-h200-tee (10de:2335): BAR2 resizable, current 256GB.
-    pci_bars = [
-        PciBar(0, 16, "p64"),
-        PciBar(2, 262144, "p64"),  # 256G VRAM
-        PciBar(4, 32, "p64"),
-    ]
-    # NVSwitch (10de:22a3, class 0680): single 32M m64 BAR (lspci -vvvnn on dev-h200-tee).
-    passthrough = {"nvswitch": PassthroughDevice("22a3", 0x0680, [PciBar(0, 32, "m64")])}
+    # lspci -vvvnn on dev-h200-tee: GPU 10de:2335 (BAR2 resizable, 256G) + NVSwitch
+    # 10de:22a3 class 0680 (single 32M BAR).
+    passthrough = {
+        "gpu": PassthroughDevice(
+            0x10DE,
+            "2335",
+            0x0302,
+            [PciBar(0, 16, "p64"), PciBar(2, 262144, "p64"), PciBar(4, 32, "p64")],
+        ),
+        "nvswitch": PassthroughDevice(0x10DE, "22a3", 0x0680, [PciBar(0, 32, "m64")]),
+    }
 
     @property
     def name(self) -> str:
@@ -553,11 +555,15 @@ class RTXPro6000Profile(GpuProfile):
     # 2bb1 = Workstation Edition, 2bb5 = Server Edition
     pci_device_ids = ["2bb1", "2bb5"]
     # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
-    pci_bars = [
-        PciBar(0, 64, "p64"),
-        PciBar(2, 131072, "p64"),  # 128G VRAM
-        PciBar(4, 32, "p64"),
-    ]
+    # Stub id 2bb1 (pci_device_ids[0]); the device id is measurement-neutral.
+    passthrough = {
+        "gpu": PassthroughDevice(
+            0x10DE,
+            "2bb1",
+            0x0302,
+            [PciBar(0, 64, "p64"), PciBar(2, 131072, "p64"), PciBar(4, 32, "p64")],
+        ),
+    }
 
     @property
     def name(self) -> str:

@@ -99,10 +99,32 @@ def test_boot_config_scalars():
     assert bc["acpi_tables"] == "/out/acpi.bin"
 
 
-def test_nvswitch_endpoint_not_yet_modeled():
-    # NVSwitch/IB are passthrough devices too; their BARs also shape the DSDT and
-    # need their own captured layout. Until then, generation fails loudly rather
-    # than silently producing a wrong measurement.
+def test_nvswitch_endpoint_modeled():
+    # NVSwitch is a passthrough device too; its BARs shape the DSDT. H200 models it,
+    # so each switch endpoint becomes a pci-bar-stub with the captured layout.
     fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1))
-    with pytest.raises(NotImplementedError, match="BAR layout"):
-        _md("H200", fp)
+    q = _md("H200", fp)["boot_config"]["qemu"]
+    nvsw = [
+        d for d in q["devices"] if d.startswith("pci-bar-stub") and "bus=rp_nvsw" in d
+    ]
+    assert len(nvsw) == 4  # one per NVSwitch
+    for stub in nvsw:
+        assert "bars=0:32M:m64" in stub
+        assert "device=0x22a3" in stub and "class=0x0680" in stub
+
+
+def test_unmodeled_passthrough_raises():
+    # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
+    # unrecognized bus is NotImplementedError — never a silent wrong measurement.
+    profile = GPU_PROFILES["H200"]
+    md = MeasurementMetadata(
+        build_topology_spec(
+            profile, NumaTopology(gpu_nodes=(0,) * 8), cpu_args="host", firmware=_FW
+        ),
+        profile,
+        acpi_tables="/out/a.bin",
+    )
+    with pytest.raises(ValueError, match=r"passthrough\['ib'\]"):
+        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
+    with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
+        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")

@@ -32,7 +32,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -85,13 +84,11 @@ def overrides_from_fork_log(rtmr0_log: list[str]) -> dict[int, bytes]:
 
 # ── Core: splice + replay ─────────────────────────────────────────────────────
 
+
 def mr1_events(events: list[cc.Event]) -> list[cc.Event]:
     """The MrIndex==1 events that actually fold into RTMR0 (skipping EV_NO_ACTION),
     in order — so list position == the event number in findings §1 (#0..#18)."""
-    return [
-        e for e in events
-        if e.mr_index == 1 and e.event_type != cc.EV_NO_ACTION
-    ]
+    return [e for e in events if e.mr_index == 1 and e.event_type != cc.EV_NO_ACTION]
 
 
 def replay_with_overrides(
@@ -121,12 +118,15 @@ def acpi_digests(acpi_dir: str | Path) -> dict[int, bytes]:
     for pos, fw_name in ACPI_EVENT_POS.items():
         blob = acpi_dir / ACPI_BLOB_FILES[fw_name]
         if not blob.exists():
-            raise FileNotFoundError(f"missing fw_cfg blob for #{pos} ({fw_name}): {blob}")
+            raise FileNotFoundError(
+                f"missing fw_cfg blob for #{pos} ({fw_name}): {blob}"
+            )
         out[pos] = hashlib.sha384(blob.read_bytes()).digest()
     return out
 
 
 # ── Per-topology ACPI generation (build host: tdx-measure + Docker) ────────────
+
 
 def generate_acpi_blobs(
     metadata: dict, out_dir: Path, *, tdx_measure_bin: str, dist: str, qemu_version: str
@@ -145,14 +145,23 @@ def generate_acpi_blobs(
     result_path = out_dir / "result.json"
     meta_path.write_text(json.dumps(metadata, indent=2))
     subprocess.run(
-        [tdx_measure_bin, "--platform-only", "--json-file", str(result_path),
-         "--create-acpi-tables", dist, qemu_version, str(meta_path)],
+        [
+            tdx_measure_bin,
+            "--platform-only",
+            "--json-file",
+            str(result_path),
+            "--create-acpi-tables",
+            dist,
+            qemu_version,
+            str(meta_path),
+        ],
         check=True,
     )
     return json.loads(result_path.read_text())
 
 
 # ── Topology enumeration (offline, from the profile registry) ─────────────────
+
 
 @dataclass(frozen=True)
 class Topology:
@@ -181,6 +190,7 @@ def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+
 
 def _cmd_selftest(args: argparse.Namespace) -> int:
     """Prove the splice+recompute+replay path against the committed RTX fixture:
@@ -211,14 +221,18 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     synth = ["00" * 48] * (max(FORK_LOG_TO_CANONICAL) + 1)
     for fork_i, canon in FORK_LOG_TO_CANONICAL.items():
         synth[fork_i] = captured[canon].digest().hex()
-    forkpath = replay_with_overrides(events, overrides_from_fork_log(synth)).hex().upper()
+    forkpath = (
+        replay_with_overrides(events, overrides_from_fork_log(synth)).hex().upper()
+    )
     ok_forklog = forkpath == expected
     print(f"fork-log override : {'MATCH baseline' if ok_forklog else 'MISMATCH'}")
 
     ok = spliced == expected and ok_acpi and ok_forklog
     if args.expect:
         ok = ok and spliced.startswith(args.expect.upper())
-        print(f"expect {args.expect}: {'MATCH' if spliced.startswith(args.expect.upper()) else 'NO MATCH'}")
+        print(
+            f"expect {args.expect}: {'MATCH' if spliced.startswith(args.expect.upper()) else 'NO MATCH'}"
+        )
     print("SELFTEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -237,23 +251,32 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     Needs the fork + Docker (offline, any x86-64 Linux — no TDX/GPU)."""
     from chutes.guest.gpu.profiles import GPU_PROFILES
-    from topology_spec import build_topology_spec, cpu_args_for_qemu_version
     from platform_tables import MeasurementMetadata
+    from topology_spec import build_topology_spec, cpu_args_for_qemu_version
 
     baseline = cc.parse_event_log(Path(args.baseline).read_bytes())
     baseline_rtmr0 = cc.replay(baseline, 1).hex().upper()
-    baseline_tdhob = mr1_events(baseline)[TDHOB_POS].digest()  # #0 = the memory-class fingerprint
+    baseline_tdhob = mr1_events(baseline)[
+        TDHOB_POS
+    ].digest()  # #0 = the memory-class fingerprint
 
     def fork_overrides(profile, fp):
         spec = build_topology_spec(
-            profile, fp, cpu_args=cpu_args_for_qemu_version(args.qemu),
+            profile,
+            fp,
+            cpu_args=cpu_args_for_qemu_version(args.qemu),
             firmware=str(Path(args.bios_dir) / profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
-            meta = MeasurementMetadata(spec, profile, acpi_tables=str(Path(td) / "acpi.bin")).to_dict()
+            meta = MeasurementMetadata(
+                spec, profile, acpi_tables=str(Path(td) / "acpi.bin")
+            ).to_dict()
             out = generate_acpi_blobs(
-                meta, Path(td), tdx_measure_bin=args.tdx_measure_bin,
-                dist=args.dist, qemu_version=args.qemu,
+                meta,
+                Path(td),
+                tdx_measure_bin=args.tdx_measure_bin,
+                dist=args.dist,
+                qemu_version=args.qemu,
             )
         return overrides_from_fork_log(out.get("rtmr0_log") or []), out.get("mrtd", "")
 
@@ -268,7 +291,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if not fps:
             continue  # nothing baselined for this QEMU version
         entries, class_matches = [], None
-        # A profile that can't be generated offline yet (e.g. no pci_bars modeled) must not
+        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"] modeled) must not
         # take down the whole publish — mark it PENDING and keep going, like the class check.
         try:
             for fp in fps:
@@ -277,22 +300,30 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                     class_matches = overrides[TDHOB_POS] == baseline_tdhob
                     if not class_matches:
                         pending.append(name)
-                        print(f"  {name}: PENDING — memory class (#0) differs from the baseline; "
-                              "needs a baseline captured for this class (or the Phase-2 fork #14).",
-                              file=sys.stderr)
+                        print(
+                            f"  {name}: PENDING — memory class (#0) differs from the baseline; "
+                            "needs a baseline captured for this class (or the Phase-2 fork #14).",
+                            file=sys.stderr,
+                        )
                         break
                 rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
                 key = Topology(name, args.qemu, fp).key()
                 entries.append({"topology": key, "rtmr0": rtmr0, "mrtd": mrtd})
-                print(f"    {key}  rtmr0={rtmr0[:16]}…"
-                      f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
-                      file=sys.stderr)
+                print(
+                    f"    {key}  rtmr0={rtmr0[:16]}…"
+                    f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
+                    file=sys.stderr,
+                )
         except Exception as exc:
             pending.append(name)
-            print(f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr)
+            print(
+                f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr
+            )
             continue
         if class_matches:
-            generated.append({"profile": name, "qemu_version": args.qemu, "rtmr0": entries})
+            generated.append(
+                {"profile": name, "qemu_version": args.qemu, "rtmr0": entries}
+            )
 
     block = {"version": args.version, "profiles": generated}
     if pending:
@@ -300,8 +331,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(block, indent=2) + "\n")
-    print(f"wrote {out}: {len(generated)} profile(s) generated"
-          f"{f', pending: {block['pending_profiles']}' if pending else ''}", file=sys.stderr)
+    print(
+        f"wrote {out}: {len(generated)} profile(s) generated"
+        f"{f', pending: {block['pending_profiles']}' if pending else ''}",
+        file=sys.stderr,
+    )
     # Fail only when a specific profile was requested but couldn't be generated.
     return 2 if (args.profile and not generated) else 0
 
@@ -318,8 +352,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     st = sub.add_parser("selftest", help="validate splice/replay against a fixture")
-    st.add_argument("--fixture", default=str(_HERE.parent.parent / "local" / "acpi_real"),
-                    help="capture dir with data/CCEL + fw_cfg ACPI blobs")
+    st.add_argument(
+        "--fixture",
+        default=str(_HERE.parent.parent / "local" / "acpi_real"),
+        help="capture dir with data/CCEL + fw_cfg ACPI blobs",
+    )
     st.add_argument("--expect", default="5FC09D10", help="expected RTMR0 hex prefix")
     st.set_defaults(func=_cmd_selftest)
 
@@ -331,20 +368,42 @@ def main(argv: list[str] | None = None) -> int:
         "generate",
         help="generate per-topology RTMR0 for a profile (build host: needs the tdx-measure fork + Docker/KVM)",
     )
-    gen.add_argument("--profile", default="",
-                     help="GPU profile (e.g. RTX_PRO_6000) — must match the baseline's class; "
-                          "empty = ALL profiles (each generated only if its class matches a baseline)")
-    gen.add_argument("--baseline", required=True,
-                     help="baseline CCEL blob (data/CCEL) captured from this profile's debug image")
-    gen.add_argument("--version", required=True, help="image version (recorded in the output)")
-    gen.add_argument("--output", required=True,
-                     help="output JSON, e.g. measurements/<ver>/rtmr0-<profile>.json")
-    gen.add_argument("--qemu", default="10.2.1", help="QEMU version key in baselined_measurements")
-    gen.add_argument("--tdx-measure-bin", default="tdx-measure", help="path to the tdx-measure fork binary")
-    gen.add_argument("--dist", default="ubuntu:26.04", help="ACPI-dump container base image")
-    gen.add_argument("--bios-dir", default=str(_HERE.parent.parent / "firmware"),
-                     help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
-                          "opens the metadata's 'bios' path, so it must resolve absolutely")
+    gen.add_argument(
+        "--profile",
+        default="",
+        help="GPU profile (e.g. RTX_PRO_6000) — must match the baseline's class; "
+        "empty = ALL profiles (each generated only if its class matches a baseline)",
+    )
+    gen.add_argument(
+        "--baseline",
+        required=True,
+        help="baseline CCEL blob (data/CCEL) captured from this profile's debug image",
+    )
+    gen.add_argument(
+        "--version", required=True, help="image version (recorded in the output)"
+    )
+    gen.add_argument(
+        "--output",
+        required=True,
+        help="output JSON, e.g. measurements/<ver>/rtmr0-<profile>.json",
+    )
+    gen.add_argument(
+        "--qemu", default="10.2.1", help="QEMU version key in baselined_measurements"
+    )
+    gen.add_argument(
+        "--tdx-measure-bin",
+        default="tdx-measure",
+        help="path to the tdx-measure fork binary",
+    )
+    gen.add_argument(
+        "--dist", default="ubuntu:26.04", help="ACPI-dump container base image"
+    )
+    gen.add_argument(
+        "--bios-dir",
+        default=str(_HERE.parent.parent / "firmware"),
+        help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
+        "opens the metadata's 'bios' path, so it must resolve absolutely",
+    )
     gen.set_defaults(func=_cmd_generate)
 
     args = ap.parse_args(argv)

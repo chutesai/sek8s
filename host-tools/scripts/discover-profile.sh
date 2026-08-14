@@ -221,8 +221,8 @@ if [[ $GPU_COUNT -gt 0 ]]; then
     fi
 fi
 
-# Full PCI BAR layout of the first GPU, for the profile's `pci_bars` (offline
-# measurement generation reproduces these windows with a pci-bar-stub). The
+# Full PCI BAR layout of the first GPU, for the profile's passthrough["gpu"] spec
+# (offline measurement generation reproduces these windows with a pci-bar-stub). The
 # Region lines already report a resizable BAR's *current* size, so no separate
 # Resizable-BAR parse is needed. Emitted as a copy-pasteable PciBar(...) list.
 GPU_PCI_BARS_SNIPPET=""
@@ -359,10 +359,13 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Suggested ram_per_gpu_gb"  "${SUGGESTED_RAM_PER_GPU} GB  (${GPU_COUNT}× = $(( GPU_COUNT * SUGGESTED_RAM_PER_GPU )) GB total)"
     if [[ -n "$GPU_PCI_BARS_SNIPPET" ]]; then
         echo ""
-        echo "  Full BAR layout — paste into the GpuProfile subclass:"
-        echo "    pci_bars = ["
+        echo "  Passthrough layout — paste into the GpuProfile subclass:"
+        echo "    passthrough = {"
+        echo "        \"gpu\": PassthroughDevice(0x10DE, \"${GPU_DEVICE_IDS[0]:-????}\", 0x0302, ["
         printf '%s' "$GPU_PCI_BARS_SNIPPET"
-        echo "    ]"
+        echo "        ]),"
+        echo "        # + \"nvswitch\"/\"ib\" entries if this host passes them through (capture their BARs the same way)"
+        echo "    }"
     fi
 
     section "CPU"
