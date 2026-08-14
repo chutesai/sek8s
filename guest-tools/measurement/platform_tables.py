@@ -108,13 +108,22 @@ class MeasurementMetadata:
             raise ValueError(f"vfio-pci device without a bus=: {dev!r}")
         rp = bus.group(1)
         if not re.fullmatch(r"rp\d+", rp):
-            # NVSwitch (rp_nvsw*) / InfiniBand (rp_ib*) are passthrough devices
-            # too; their BARs also shape the DSDT and need their own captured
-            # layout.
+            if rp.startswith("rp_nvsw"):  # NVSwitch passthrough — stubbed like the GPU
+                spec = self.profile.passthrough.get("nvswitch")
+                if not spec:
+                    raise ValueError(
+                        f"profile {self.profile.name!r} passes NVSwitches but has no "
+                        f"passthrough['nvswitch'] — capture lspci -vvvnn for the switch first"
+                    )
+                return (
+                    f"pci-bar-stub,bus={rp},bars={_bars_arg(spec.bars)},"
+                    f"vendor={_NVIDIA_VENDOR:#06x},device={int(spec.device_id, 16):#06x},"
+                    f"class={spec.pci_class:#06x}"
+                )
+            # InfiniBand (rp_ib*) and other passthrough types are still unmodeled.
             raise NotImplementedError(
                 f"endpoint on {rp!r} has no BAR layout yet — capture "
-                f"lspci -vvvnn for that device type and extend the profile "
-                f"(only GPU BARs are modeled today)"
+                f"lspci -vvvnn for that device type and extend the profile"
             )
         if not self.profile.pci_bars:
             raise ValueError(

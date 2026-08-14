@@ -69,6 +69,18 @@ class PciBar:
     kind: str
 
 
+@dataclass
+class PassthroughDevice:
+    """A passthrough endpoint type reproduced offline as a ``pci-bar-stub``: its PCI device
+    id + class + BAR layout, all from ``lspci -vvvnn``. Keyed by endpoint kind (e.g.
+    ``"nvswitch"``) in ``GpuProfile.passthrough``.
+    """
+
+    device_id: str        # hex, e.g. "22a3"
+    pci_class: int        # e.g. 0x0680
+    bars: list[PciBar]
+
+
 class GpuProfile(ABC):
     """Base class for GPU-type-specific passthrough behavior."""
 
@@ -79,6 +91,11 @@ class GpuProfile(ABC):
     # Empty = not yet captured for this model; offline measurement generation is
     # unavailable until it is (the per-GPU MMIO windows can't be reproduced).
     pci_bars: list[PciBar] = []
+
+    # Auxiliary passthrough endpoints beyond the GPU (`pci_bars` above), keyed by the
+    # root-port kind _swap_endpoint matches: "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Empty
+    # for profiles that pass only GPUs through.
+    passthrough: dict[str, PassthroughDevice] = {}
 
     def matches_device_id(self, device_id: str) -> bool:
         """Return True if device_id matches this profile's pci_device_ids."""
@@ -437,6 +454,8 @@ class H200Profile(GpuProfile):
         PciBar(2, 262144, "p64"),  # 256G VRAM
         PciBar(4, 32, "p64"),
     ]
+    # NVSwitch (10de:22a3, class 0680): single 32M m64 BAR (lspci -vvvnn on dev-h200-tee).
+    passthrough = {"nvswitch": PassthroughDevice("22a3", 0x0680, [PciBar(0, 32, "m64")])}
 
     @property
     def name(self) -> str:
