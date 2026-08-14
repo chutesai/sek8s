@@ -147,6 +147,7 @@
           - --network-type
           - tap
           - --skip-bind
+          - --no-gpus
       changed_when: true
 
     - name: Wait for the guest to accept SSH

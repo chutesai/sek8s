@@ -78,6 +78,7 @@ STORAGE_SIZE="500G"
 STORAGE_VOLUME=""
 CONFIG_VOLUME=""
 SKIP_BIND="false"
+PASS_GPUS="true"
 FOREGROUND="false"
 SSH_PORT=2222
 NETWORK_TYPE="tap"
@@ -104,6 +105,7 @@ CLI_STORAGE_SIZE=""
 CLI_STORAGE_VOLUME=""
 CLI_CONFIG_VOLUME=""
 CLI_SKIP_BIND=""
+CLI_NO_GPUS=""
 CLI_FOREGROUND=""
 CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
@@ -167,6 +169,7 @@ while [[ $# -gt 0 ]]; do
     --storage-volume) CLI_STORAGE_VOLUME="$2"; shift 2 ;;
     --config-volume) CLI_CONFIG_VOLUME="$2"; shift 2 ;;
     --skip-bind) CLI_SKIP_BIND="true"; shift ;;
+    --no-gpus) CLI_NO_GPUS="true"; shift ;;
     --foreground) CLI_FOREGROUND="true"; shift ;;
     --ssh-port) CLI_SSH_PORT="$2"; shift 2 ;;
     --network-type) CLI_NETWORK_TYPE="$2"; shift 2 ;;
@@ -236,6 +239,7 @@ Volumes:
   --storage-volume PATH      Default: storage-<hostname>.raw (existing .qcow2 allowed at launch)
   --config-volume PATH       Existing qcow2 is repopulated from config.yaml each launch (same file)
   --skip-bind
+  --no-gpus               Launch without GPU/NVSwitch passthrough (GPU-less; used by the measurement capture VM)
 
 Runtime:
   --foreground
@@ -354,6 +358,7 @@ fi
 [[ -n "$CLI_CONFIG_VOLUME" ]] && CONFIG_VOLUME="$CLI_CONFIG_VOLUME"
 
 [[ -n "$CLI_SKIP_BIND" ]] && SKIP_BIND="$CLI_SKIP_BIND"
+[[ -n "$CLI_NO_GPUS" ]] && PASS_GPUS="false"
 [[ -n "$CLI_FOREGROUND" ]] && FOREGROUND="$CLI_FOREGROUND"
 
 [[ -n "$CLI_SSH_PORT" ]] && SSH_PORT="$CLI_SSH_PORT"
@@ -765,10 +770,14 @@ fi
 echo "Launching Chutes VM..."
 
 LAUNCH_ARGS=(
-  --pass-gpus
   --image "$VM_IMAGE"
   --network-type "$NETWORK_TYPE"
 )
+# GPU passthrough is on by default; --no-gpus omits it (e.g. the measurement capture VM,
+# which must boot without the physical GPUs/NVSwitches — their fabric never trains in a
+# capture VM and stalls the boot before multi-user/sshd). run-td then uses its GPU-less
+# defaults (DEFAULT_MEM, single socket, no vfio devices).
+[[ "$PASS_GPUS" == "true" ]] && LAUNCH_ARGS+=(--pass-gpus)
 
 if [[ "$NETWORK_TYPE" == "tap" ]]; then
   LAUNCH_ARGS+=(--net-iface "$NET_IFACE")
