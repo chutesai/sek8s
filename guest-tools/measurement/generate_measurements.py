@@ -268,22 +268,29 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         if not fps:
             continue  # nothing baselined for this QEMU version
         entries, class_matches = [], None
-        for fp in fps:
-            overrides, mrtd = fork_overrides(profile, fp)
-            if class_matches is None:
-                class_matches = overrides[TDHOB_POS] == baseline_tdhob
-                if not class_matches:
-                    pending.append(name)
-                    print(f"  {name}: PENDING — memory class (#0) differs from the baseline; "
-                          "needs a baseline captured for this class (or the Phase-2 fork #14).",
-                          file=sys.stderr)
-                    break
-            rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
-            key = Topology(name, args.qemu, fp).key()
-            entries.append({"topology": key, "rtmr0": rtmr0, "mrtd": mrtd})
-            print(f"    {key}  rtmr0={rtmr0[:16]}…"
-                  f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
-                  file=sys.stderr)
+        # A profile that can't be generated offline yet (e.g. no pci_bars modeled) must not
+        # take down the whole publish — mark it PENDING and keep going, like the class check.
+        try:
+            for fp in fps:
+                overrides, mrtd = fork_overrides(profile, fp)
+                if class_matches is None:
+                    class_matches = overrides[TDHOB_POS] == baseline_tdhob
+                    if not class_matches:
+                        pending.append(name)
+                        print(f"  {name}: PENDING — memory class (#0) differs from the baseline; "
+                              "needs a baseline captured for this class (or the Phase-2 fork #14).",
+                              file=sys.stderr)
+                        break
+                rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
+                key = Topology(name, args.qemu, fp).key()
+                entries.append({"topology": key, "rtmr0": rtmr0, "mrtd": mrtd})
+                print(f"    {key}  rtmr0={rtmr0[:16]}…"
+                      f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
+                      file=sys.stderr)
+        except Exception as exc:
+            pending.append(name)
+            print(f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr)
+            continue
         if class_matches:
             generated.append({"profile": name, "qemu_version": args.qemu, "rtmr0": entries})
 
