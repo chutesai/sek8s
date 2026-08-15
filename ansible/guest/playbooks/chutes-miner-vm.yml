@@ -487,18 +487,6 @@
         name: compute-rtmr0
       when: (measurements | default('full')) != 'none'
 
-- name: Prime VM for stable TDX measurements
-  hosts: host
-  become: true
-  tags:
-    - prime-vm
-  tasks:
-    - name: Prime VM EFI boot variable state
-      ansible.builtin.include_role:
-        name: prime-vm
-        apply:
-          tags: prime-vm
-
 - name: Stage the published image-set manifest
   hosts: host
   become: true
@@ -508,7 +496,7 @@
     # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
     # manifest.json tying them together. chutes.guest.image_set is the single manifest
     # generator (also used by publish and the launcher), so the schema never drifts.
-    # Generated post-prime over the FINAL qcow2 so the recorded sha256 matches what miners
+    # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
     # download, and for whichever variant this build produced (debug or prod) — so the
     # build (ansible) owns the published sha for both. Depends on the direct-boot sidecars
     # from stage-boot-artifacts, hence the same measurements!=none gate.
