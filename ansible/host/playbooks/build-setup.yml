@@ -27,11 +27,8 @@
         update_cache: true
 
     - name: Install Docker (with buildx)
-      # The compute-rtmr0 role's offline ACPI generation shells out to
-      # `docker build --progress plain` (tdx-measure fork). That needs BuildKit, so the
-      # buildx plugin is required — docker.io's legacy builder rejects --progress. Without
-      # docker.io the build reports "Failed to invoke `docker build`"; without docker-buildx,
-      # "unknown flag: --progress".
+      # compute-rtmr0's offline ACPI gen runs the tdx-measure fork's `docker build
+      # --progress plain`, which needs BuildKit (the buildx plugin), not docker.io's legacy builder.
       ansible.builtin.apt:
         name:
           - docker.io
