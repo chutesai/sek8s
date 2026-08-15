@@ -2,10 +2,12 @@
 """Offline per-topology RTMR0 generator → teeMeasurements block.
 
 Implements the release-time generator from local/offline-rtmr0-findings.md §7:
-RTMR0 is a 19-event SHA-384 chain over the CCEL's MrIndex==1 records, of which
-**14 are constant** (firmware/boot, topology-independent) and **5 vary** per
-topology. From one baseline CCEL (the 14 constants) plus a per-topology recompute
-of the varying events, splice + replay → rtmr0 for every supported topology.
+RTMR0 is a SHA-384 chain over the CCEL's MrIndex==1 records — 14 events on this
+branch's direct boot (19 on indirect, with the #15-18 boot variables) — of which
+**5 vary** per topology and the rest are constant (firmware/boot). From one baseline
+CCEL (the constants) plus a per-topology recompute of the varying events, splice +
+replay → rtmr0. The varying events are located by identity (locate_rtmr0_events), so
+the splice is correct regardless of that boot-method count.
 
 The 5 varying events and how each is reproduced offline (no guest boot):
 
@@ -44,59 +46,81 @@ sys.path.insert(0, str(_HERE.parent.parent / "host-tools" / "scripts"))
 
 import ccel_replay as cc  # noqa: E402
 
-# Positions (index within the MrIndex==1 fold, matching findings §1) of the varying
-# events. #11-13 are the ACPI DATA digests; #0 the TD-HOB; #14 the SMBIOS handoff.
-ACPI_EVENT_POS = {11: "etc/table-loader", 12: "etc/acpi/rsdp", 13: "etc/acpi/tables"}
-TDHOB_POS = 0
-SMBIOS_POS = 14
+# The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
+# not by fixed position: the boot method sets how many CONSTANT events surround them
+# (indirect boot = 19 events total; direct boot = 14 — no #15-18 boot variables and one
+# fewer QEMU FW CFG), which shifts absolute positions. We recompute #0 (TD-HOB) and the
+# three ACPI DATA digests; #14 (SMBIOS) and every constant stay from the baseline.
+_EV_HANDOFF_TABLES2 = 0x8000000B  # TD-HOB (#0); data contains "TdxTable"
+_EV_PLATFORM_CONFIG_FLAGS = (
+    0x0000000A  # the three ACPI DATA events (#11-13) share this type
+)
 
-# The fw_cfg blob filenames (as staged by extract-measurements.sh) for #11-13.
-ACPI_BLOB_FILES = {
-    "etc/table-loader": "table_loader.bin",
-    "etc/acpi/rsdp": "rsdp.bin",
-    "etc/acpi/tables": "acpi_tables.bin",
-}
+# The three ACPI DATA events, in fold order, → their fw_cfg blob name (as staged by
+# extract-measurements.sh) for the #11-13 recompute.
+ACPI_BLOB_FILES = ["table_loader.bin", "rsdp.bin", "acpi_tables.bin"]
 
-# Map from the FORK's rtmr0_log index (tdx-measure --json-file, direct-boot order)
-# to the canonical baseline event position we override. The fork's direct-boot log is:
-#   [0]#0 td_hob [1]#1 cfv [2-6]#5-9 secureboot [7]#10 sep
-#   [8]#11 table-loader [9]#12 rsdp [10]#13 acpi-tables [11]#15 BootOrder [12]#16
-# The fork omits #2/3/4 (QEMU fw_cfg) and #14 (SMBIOS); those stay from the baseline.
-FORK_LOG_TO_CANONICAL = {0: 0, 8: 11, 9: 12, 10: 13}
+# The fork's rtmr0_log (tdx-measure --json-file) indices for the events it recomputes:
+# [0] = TD-HOB, [8,9,10] = the three ACPI DATA digests (table-loader / rsdp / acpi-tables).
+FORK_TDHOB_IDX = 0
+FORK_ACPI_IDX = (8, 9, 10)
 
 
-def overrides_from_fork_log(rtmr0_log: list[str]) -> dict[int, bytes]:
-    """Turn the fork's per-event rtmr0_log (hex strings) into {canonical_pos: digest}
-    for the topology-varying events the fork computes — #0 (TD-HOB) and #11-13 (ACPI).
-    #14 (SMBIOS, same (mem,cpu) class) and #2/3/4 stay from the baseline."""
-    need = max(FORK_LOG_TO_CANONICAL) + 1
+def overrides_from_fork_log(
+    rtmr0_log: list[str], tdhob_idx: int, acpi_idx: list[int]
+) -> dict[int, bytes]:
+    """Map the fork's recomputed digests onto the located baseline indices (from
+    locate_rtmr0_events): fork #0 → TD-HOB, fork [8,9,10] → the three ACPI DATA events,
+    in order. #14 (SMBIOS, same (mem,cpu) class) and #2/3/4 stay from the baseline."""
+    need = max((FORK_TDHOB_IDX, *FORK_ACPI_IDX)) + 1
     if len(rtmr0_log) < need:
         raise ValueError(
             f"fork rtmr0_log has {len(rtmr0_log)} events, need >= {need}. "
             "Rebuild the tdx-measure fork with the rtmr0_log field, and confirm "
             "direct-boot mode (kernel/initrd set in the metadata)."
         )
-    return {
-        canon: bytes.fromhex(rtmr0_log[fork_i])
-        for fork_i, canon in FORK_LOG_TO_CANONICAL.items()
-    }
+    out = {tdhob_idx: bytes.fromhex(rtmr0_log[FORK_TDHOB_IDX])}
+    for baseline_i, fork_i in zip(acpi_idx, FORK_ACPI_IDX):
+        out[baseline_i] = bytes.fromhex(rtmr0_log[fork_i])
+    return out
 
 
 # ── Core: splice + replay ─────────────────────────────────────────────────────
 
 
 def mr1_events(events: list[cc.Event]) -> list[cc.Event]:
-    """The MrIndex==1 events that actually fold into RTMR0 (skipping EV_NO_ACTION),
-    in order — so list position == the event number in findings §1 (#0..#18)."""
+    """The MrIndex==1 events that fold into RTMR0 (skipping EV_NO_ACTION), in order.
+    Its length is boot-method-dependent (direct=14, indirect=19), so index the events
+    the splice touches via locate_rtmr0_events, not by a fixed findings-§1 number."""
     return [e for e in events if e.mr_index == 1 and e.event_type != cc.EV_NO_ACTION]
+
+
+def locate_rtmr0_events(events: list[cc.Event]) -> tuple[int, list[int]]:
+    """Locate the spliced events in the MrIndex==1 fold BY IDENTITY, so it works for any
+    boot method's event count. Returns (tdhob_index, [three acpi indices]): the TD-HOB
+    (EV_EFI_HANDOFF_TABLES2 / "TdxTable") and the three ACPI DATA events
+    (EV_PLATFORM_CONFIG_FLAGS / "ACPI DATA"), in fold order."""
+    tdhob = None
+    acpi: list[int] = []
+    for i, e in enumerate(mr1_events(events)):
+        if e.event_type == _EV_HANDOFF_TABLES2 and b"TdxTable" in e.data:
+            tdhob = i
+        elif e.event_type == _EV_PLATFORM_CONFIG_FLAGS and b"ACPI DATA" in e.data:
+            acpi.append(i)
+    if tdhob is None or len(acpi) != 3:
+        raise cc.EventLogError(
+            f"unexpected RTMR0 layout: TD-HOB found={tdhob is not None}, "
+            f"{len(acpi)} ACPI DATA events (need exactly 1 + 3)."
+        )
+    return tdhob, acpi
 
 
 def replay_with_overrides(
     events: list[cc.Event], overrides: dict[int, bytes], alg: int = cc.RTMR_ALG
 ) -> bytes:
-    """Fold RTMR0 (MrIndex==1) substituting overrides[pos] (pos = event number in
-    §1) for that event's SHA-384 digest. This is the splice: constant events keep
-    their baseline digest, varying events get their recomputed one."""
+    """Fold RTMR0 (MrIndex==1) substituting overrides[i] (i = index into mr1_events) for
+    that event's SHA-384 digest. This is the splice: constant events keep their baseline
+    digest, the located varying events get their recomputed one."""
     hash_name = cc._ALG_NAMES[alg]
     acc = b"\x00" * cc._ALG_SIZES[alg]
     for pos, ev in enumerate(mr1_events(events)):
@@ -109,19 +133,18 @@ def replay_with_overrides(
     return acc
 
 
-def acpi_digests(acpi_dir: str | Path) -> dict[int, bytes]:
-    """{11: SHA384(table-loader), 12: SHA384(rsdp), 13: SHA384(acpi/tables)} from a
-    directory of generated (or captured) fw_cfg blobs. This is the #11-13 recompute,
-    proven in findings §2: the ACPI DATA digests are literally SHA384 of the bytes."""
+def acpi_digests(acpi_dir: str | Path, acpi_idx: list[int]) -> dict[int, bytes]:
+    """{baseline_index: SHA384(blob)} for the three ACPI DATA events, mapping each located
+    index to its fw_cfg blob (table-loader / rsdp / acpi-tables, in fold order). This is the
+    #11-13 recompute, proven in findings §2: the ACPI DATA digests are literally SHA384 of
+    the bytes."""
     acpi_dir = Path(acpi_dir)
     out: dict[int, bytes] = {}
-    for pos, fw_name in ACPI_EVENT_POS.items():
-        blob = acpi_dir / ACPI_BLOB_FILES[fw_name]
+    for baseline_i, fname in zip(acpi_idx, ACPI_BLOB_FILES):
+        blob = acpi_dir / fname
         if not blob.exists():
-            raise FileNotFoundError(
-                f"missing fw_cfg blob for #{pos} ({fw_name}): {blob}"
-            )
-        out[pos] = hashlib.sha384(blob.read_bytes()).digest()
+            raise FileNotFoundError(f"missing fw_cfg blob {fname}: {blob}")
+        out[baseline_i] = hashlib.sha384(blob.read_bytes()).digest()
     return out
 
 
@@ -210,12 +233,13 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     events = cc.parse_event_log(ccel.read_bytes())
 
     expected = cc.replay(events, 1).hex().upper()
-    overrides = acpi_digests(fixture)
+    tdhob_idx, acpi_idx = locate_rtmr0_events(events)
+    overrides = acpi_digests(fixture, acpi_idx)
     spliced = replay_with_overrides(events, overrides).hex().upper()
 
-    # Cross-check: the recomputed #11-13 must equal the captured event digests.
+    # Cross-check: the recomputed ACPI digests must equal the captured event digests.
     captured = mr1_events(events)
-    ok_acpi = all(overrides[p] == captured[p].digest() for p in ACPI_EVENT_POS)
+    ok_acpi = all(overrides[i] == captured[i].digest() for i in acpi_idx)
 
     print(f"baseline replay   : {expected[:16]}…")
     print(f"spliced replay    : {spliced[:16]}…")
@@ -223,13 +247,18 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
 
     # Also validate the fork-log → override path (what `generate` uses) without
     # needing tdx-measure: synthesize a fork rtmr0_log whose [0,8,9,10] entries are
-    # the baseline's own #0/#11/#12/#13, run it through overrides_from_fork_log +
+    # the baseline's own TD-HOB/ACPI digests, run it through overrides_from_fork_log +
     # replay, and confirm it reproduces the baseline. Proves the index map + splice.
-    synth = ["00" * 48] * (max(FORK_LOG_TO_CANONICAL) + 1)
-    for fork_i, canon in FORK_LOG_TO_CANONICAL.items():
-        synth[fork_i] = captured[canon].digest().hex()
+    synth = ["00" * 48] * (max((FORK_TDHOB_IDX, *FORK_ACPI_IDX)) + 1)
+    synth[FORK_TDHOB_IDX] = captured[tdhob_idx].digest().hex()
+    for baseline_i, fork_i in zip(acpi_idx, FORK_ACPI_IDX):
+        synth[fork_i] = captured[baseline_i].digest().hex()
     forkpath = (
-        replay_with_overrides(events, overrides_from_fork_log(synth)).hex().upper()
+        replay_with_overrides(
+            events, overrides_from_fork_log(synth, tdhob_idx, acpi_idx)
+        )
+        .hex()
+        .upper()
     )
     ok_forklog = forkpath == expected
     print(f"fork-log override : {'MATCH baseline' if ok_forklog else 'MISMATCH'}")
@@ -263,9 +292,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
     baseline = cc.parse_event_log(Path(args.baseline).read_bytes())
     baseline_rtmr0 = cc.replay(baseline, 1).hex().upper()
+    tdhob_idx, acpi_idx = locate_rtmr0_events(baseline)
     baseline_tdhob = mr1_events(baseline)[
-        TDHOB_POS
-    ].digest()  # #0 = the memory-class fingerprint
+        tdhob_idx
+    ].digest()  # memory-class fingerprint
 
     def fork_overrides(profile, fp):
         spec = build_topology_spec(
@@ -284,7 +314,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 tdx_measure_bin=args.tdx_measure_bin,
                 dist=args.dist,
             )
-        return overrides_from_fork_log(out.get("rtmr0_log") or []), out.get("mrtd", "")
+        overrides = overrides_from_fork_log(
+            out.get("rtmr0_log") or [], tdhob_idx, acpi_idx
+        )
+        return overrides, out.get("mrtd", "")
 
     names = [args.profile] if args.profile else list(GPU_PROFILES)
     generated, pending = [], []
@@ -303,7 +336,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
             for fp in fps:
                 overrides, mrtd = fork_overrides(profile, fp)
                 if class_matches is None:
-                    class_matches = overrides[TDHOB_POS] == baseline_tdhob
+                    class_matches = overrides[tdhob_idx] == baseline_tdhob
                     if not class_matches:
                         pending.append(name)
                         print(
