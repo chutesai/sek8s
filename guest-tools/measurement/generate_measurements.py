@@ -15,12 +15,13 @@ The 5 varying events and how each is reproduced offline (no guest boot):
     #11  SHA384(etc/table-loader)   SHA384(fw_cfg blob)     — per topology
     #12  SHA384(etc/acpi/rsdp)      SHA384(fw_cfg blob)     — per topology
     #13  SHA384(etc/acpi/tables)    SHA384(fw_cfg blob)     — per topology
-    #14  SMBIOS handoff         per (mem, cpu-count) class  — from baseline / gap
+    #14  SMBIOS handoff         from baseline — host/topology-invariant (pinned identity)
 
-Within one profile (fixed mem + cpu), only #11-13 change (NUMA/flat layout), so
-#0/#14 are reused from that profile's baseline and only the three ACPI digests are
-recomputed. Across profiles, #0 also changes (measure_td_hob) and #14 is the open
-SMBIOS-preimage gap (see smbios_match.py) — resolve per (mem, cpu) class.
+#0 and #11-13 are recomputed per topology by the fork; #14 and the constants come from the
+one baseline CCEL. SMBIOS's only host-varying input (the type-1/2/3 identity) is pinned this
+release, so #14 does not vary by host or topology — one CCEL, captured anywhere, generates
+every profile. (Recomputing #14 offline from the SMBIOS blob, to drop the CCEL entirely, is
+future work — see utils/smbios_match.py.)
 
 Verified end-to-end against local/acpi_real (box-028, RTX_PRO_6000) — see `selftest`.
 
@@ -175,7 +176,9 @@ def generate_acpi_blobs(
     meta_path.write_text(json.dumps(metadata, indent=2))
     # The metadata positional is placed first: --create-acpi-tables is num_args=1..=2,
     # so a metadata path immediately after `dist` would be greedily eaten as the version.
-    subprocess.run(
+    # Capture the output (the fork's docker build log is very noisy) and, on failure,
+    # raise just the tail — the caller renders it as a one-line PENDING reason.
+    proc = subprocess.run(
         [
             tdx_measure_bin,
             str(meta_path),
@@ -185,8 +188,17 @@ def generate_acpi_blobs(
             "--create-acpi-tables",
             dist,
         ],
-        check=True,
+        capture_output=True,
+        text=True,
     )
+    if proc.returncode != 0:
+        tail = "\n    ".join(
+            (proc.stderr or proc.stdout or "").strip().splitlines()[-4:]
+        )
+        raise RuntimeError(
+            f"tdx-measure --create-acpi-tables (dist={dist}) failed "
+            f"(exit {proc.returncode}):\n    {tail}"
+        )
     return json.loads(result_path.read_text())
 
 
@@ -279,11 +291,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     (rtmr0_log), splice into the baseline CCEL (keeping its #14/#2-4/constants) and
     replay → RTMR0.
 
-    A profile only generates correctly when its (mem,cpu) class matches the baseline's —
-    that's where #14 comes from. We check the fork's #0 (= measure_td_hob(memory)) against
-    the baseline's #0: a match means same memory class. Profiles whose #0 differs are
-    reported as PENDING (need their own captured baseline, or the Phase-2 fork #14) and
-    never emitted with a wrong #14. Writes the generated profiles to --output.
+    The fork recomputes the per-topology events (#0 TD-HOB, #11-13 ACPI); the baseline
+    supplies the constants and #14 (SMBIOS). #14's only host-varying input (the type-1/2/3
+    identity) is pinned this release, so ONE CCEL — captured on any host, TDX or not —
+    generates every profile offline; there is no per-class baseline requirement. The
+    generated rtmr0 is validated against a live quote. Writes the profiles to --output.
 
     Needs the fork + Docker (offline, any x86-64 Linux — no TDX/GPU)."""
     from chutes.guest.gpu.profiles import GPU_PROFILES
@@ -293,9 +305,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     baseline = cc.parse_event_log(Path(args.baseline).read_bytes())
     baseline_rtmr0 = cc.replay(baseline, 1).hex().upper()
     tdhob_idx, acpi_idx = locate_rtmr0_events(baseline)
-    baseline_tdhob = mr1_events(baseline)[
-        tdhob_idx
-    ].digest()  # memory-class fingerprint
 
     def fork_overrides(profile, fp):
         spec = build_topology_spec(
@@ -329,22 +338,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         fps = sorted(profile.baselined_measurements.get(args.qemu, set()), key=str)
         if not fps:
             continue  # nothing baselined for this QEMU version
-        entries, class_matches = [], None
-        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"] modeled) must not
-        # take down the whole publish — mark it PENDING and keep going, like the class check.
+        entries = []
+        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"] modeled)
+        # must not take down the whole publish — mark it PENDING and keep going.
         try:
             for fp in fps:
                 overrides, mrtd = fork_overrides(profile, fp)
-                if class_matches is None:
-                    class_matches = overrides[tdhob_idx] == baseline_tdhob
-                    if not class_matches:
-                        pending.append(name)
-                        print(
-                            f"  {name}: PENDING — memory class (#0) differs from the baseline; "
-                            "needs a baseline captured for this class (or the Phase-2 fork #14).",
-                            file=sys.stderr,
-                        )
-                        break
                 rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
                 key = Topology(name, args.qemu, fp).key()
                 entries.append({"topology": key, "rtmr0": rtmr0, "mrtd": mrtd})
@@ -359,10 +358,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr
             )
             continue
-        if class_matches:
-            generated.append(
-                {"profile": name, "qemu_version": args.qemu, "rtmr0": entries}
-            )
+        generated.append({"profile": name, "qemu_version": args.qemu, "rtmr0": entries})
 
     block = {"version": args.version, "profiles": generated}
     if pending:
