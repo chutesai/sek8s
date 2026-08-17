@@ -31,9 +31,24 @@ profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
   @{confined_bins} mrix,
   /{,usr/}{bin,sbin}/** mrix,
   /usr/local/{bin,sbin}/** mrix,
+  # k3s ships its binaries (k3s/kubectl/crictl) under a versioned data dir, not in
+  # the standard bin paths above — allow exec so shells/scripts can run kubectl etc.
+  /var/lib/rancher/k3s/data/*/bin/** mrix,
 
   # Network (curl, wget, scp, socat, nc need it)
   network,
+
+  # Confines by PATH (cache/secrets), not privilege: allow capabilities broadly so
+  # normal root tooling (dmesg -> CAP_SYS_RESOURCE, chown, mount) keeps working, but
+  # deny the ones that let a confined process drop below AppArmor entirely. sys_module
+  # is the critical one while module signing is not yet enforced — an insmod would
+  # otherwise load a kernel module and bypass this profile's path denies wholesale.
+  capability,
+  deny capability sys_module,
+  deny capability mac_admin,
+  deny capability mac_override,
+  deny capability sys_rawio,
+  deny capability sys_boot,
 
   # Signals and ptrace (debugging tools)
   signal,

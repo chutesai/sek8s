@@ -31,6 +31,23 @@
     - sek8s.attestation-proxy
     - sek8s.chute-log-shipper
 
+# Debug builds load the profiles in complain mode: denials are logged, not
+# enforced, so a too-strict profile can't power off the VM (setup-cache et al.
+# carry OnFailure=poweroff) — you still get a login and a full denial log to
+# tighten profiles against. Production keeps flags=(enforce) untouched.
+- name: Debug builds — set sek8s AppArmor profiles to complain mode
+  ansible.builtin.replace:
+    path: "/etc/apparmor.d/{{ item }}"
+    regexp: 'flags=\(enforce\)'
+    replace: 'flags=(complain)'
+  loop:
+    - sek8s.system-manager
+    - sek8s.setup-cache
+    - sek8s.deny-sensitive-default
+    - sek8s.attestation-proxy
+    - sek8s.chute-log-shipper
+  when: debug_build | default(false) | bool
+
 # ── Systemd drop-ins: apply named profiles to services ───────────────────
 # system-manager and setup-cache need their own permissive profiles
 # (overriding the auto-attached deny-sensitive-default on bash/python).
@@ -95,8 +112,10 @@
     group: root
     mode: '0644'
 
-- name: Enable AppArmor profile verification service
+# Enforcing-only: debug builds run profiles in complain, so this check (which
+# powers off when a profile isn't enforcing) must not be enabled there.
+- name: Enable AppArmor profile verification service (enforcing builds only)
   ansible.builtin.systemd:
     name: verify-apparmor-profiles.service
-    enabled: true
+    enabled: "{{ not (debug_build | default(false) | bool) }}"
     daemon_reload: true
