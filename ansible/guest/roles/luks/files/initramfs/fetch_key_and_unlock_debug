@@ -55,6 +55,16 @@ log_msg "TDX mTLS base: ${TDX_BASE_URL}"
 # boot anyway (fail-open) without it, and those scripts degrade the same fail-open way.
 if run_boot_attestation; then
     write_boot_state
+else
+    # Fail-open: no real credentials from the API (unregistered image, API 500, etc.).
+    # Write a format-valid dummy validator ss58 (well-known Alice dev key) so the normal
+    # downstream startup runs unchanged — write-validator-auth, 03-k3s-validator-auth.sh
+    # and system-manager all see a credential exactly as in prod, needing no debug
+    # branches. A debug VM never serves real traffic, so this allow-list entry is inert.
+    mkdir -m 700 -p /run/chutes
+    printf '%s' "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY" > /run/chutes/validator-ss58
+    chmod 600 /run/chutes/validator-ss58
+    log_msg "debug attestation fail-open: wrote dummy validator-ss58 for normal downstream startup"
 fi
 
 exit 0
