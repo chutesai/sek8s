@@ -13,6 +13,8 @@
 
 abi <abi/4.0>,
 
+include <tunables/global>
+
 @{confined_bins} = /usr/bin/{bash,dash,cat,cp,tar,rsync,scp,curl,wget,perl,dd,socat,nc,ncat} /bin/{sh,dash}
 
 profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
