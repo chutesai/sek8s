@@ -38,6 +38,7 @@
   become: true
   tags:
     - common
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -51,6 +52,7 @@
   become: true
   tags:
     - gpu
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -64,6 +66,7 @@
   become: true
   tags:
     - checkpoint-gpu
+    - build
   tasks:
     - name: Save GPU checkpoint
       ansible.builtin.include_role:
@@ -76,6 +79,7 @@
   become: true
   tags:
     - k3s
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -89,6 +93,7 @@
   become: true
   tags:
     - gpu-verify
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -102,6 +107,7 @@
   become: true
   tags:
     - chutes-gpu
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -117,6 +123,7 @@
   become: true
   tags:
     - sek8s
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -132,6 +139,7 @@
   become: true
   tags:
     - attestation-service
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -147,6 +155,7 @@
   become: true
   tags:
     - admission-controller
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -162,6 +171,7 @@
   become: true
   tags:
     - signing-keys
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -177,6 +187,7 @@
   become: true
   tags:
     - vm-tls
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -192,6 +203,7 @@
   become: true
   tags:
     - system-manager
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -207,6 +219,7 @@
   become: true
   tags:
     - chute-log-shipper
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -222,6 +235,7 @@
   become: true
   tags:
     - cache-volume
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -237,6 +251,7 @@
   become: true
   tags:
     - apparmor-hardening
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -253,6 +268,7 @@
   any_errors_fatal: false
   tags:
     - config
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -268,6 +284,7 @@
   become: true
   tags:
     - lock-accounts
+    - build
   tasks:
     - name: Lock accounts
       ansible.builtin.include_role:
@@ -279,6 +296,7 @@
   become: true
   tags:
     - disable-console
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -293,6 +311,7 @@
   become: true
   tags:
     - debug-credentials
+    - build
   tasks:
     - name: Set known root password for console access (debug builds only)
       ansible.builtin.user:
@@ -328,6 +347,7 @@
   become: true
   tags:
     - security
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -341,6 +361,7 @@
   become: true
   tags:
     - rtmr3-measure
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -355,6 +376,7 @@
   any_errors_fatal: false
   tags:
     - cleanup-orchestration
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -369,6 +391,7 @@
   any_errors_fatal: false
   tags:
     - cleanup-build-vm
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -382,6 +405,7 @@
   become: true
   tags:
     - remove-ssh
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -396,6 +420,7 @@
   become: true
   tags:
     - finalize-vm-image
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -431,6 +456,7 @@
   become: true
   tags:
     - luks
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
