@@ -36,7 +36,7 @@
       - --version
       - "{{ vm_version }}"
       - --output
-      - "-"
+      - "/tmp/rtmr0-{{ vm_version }}.json"
       - --tdx-measure-bin
       - "{{ tdx_measure_bin | default('tdx-measure') }}"
   environment:
@@ -55,12 +55,18 @@
     var: _rtmr0_gen.stderr_lines
   when: _baseline_ccel.stat.exists
 
-- name: Register RTMR0 measurements as a build fact (no on-disk artifact)
+- name: Register RTMR0 measurements as a build fact (from the transient JSON)
   ansible.builtin.set_fact:
-    rtmr0_data: "{{ _rtmr0_gen.stdout | from_json }}"
+    rtmr0_data: "{{ lookup('file', '/tmp/rtmr0-' + vm_version + '.json') | from_json }}"
   when:
     - _baseline_ccel.stat.exists
     - _rtmr0_gen.rc == 0
+
+- name: Remove the transient RTMR0 JSON (the fact holds it now — no persisted artifact)
+  ansible.builtin.file:
+    path: "/tmp/rtmr0-{{ vm_version }}.json"
+    state: absent
+  when: _baseline_ccel.stat.exists
 
 - name: Note RTMR0 generation skipped (no baseline CCEL)
   ansible.builtin.debug:

@@ -419,6 +419,7 @@
   become: true
   tags:
     - compute-rtmr3
+    - compute-measurements
   tasks:
     - name: Compute RTMR3
       ansible.builtin.include_role:
@@ -451,6 +452,7 @@
   become: true
   tags:
     - gather-measurement-inputs
+    - compute-measurements
   tasks:
     - name: Stage direct-boot artifacts
       ansible.builtin.include_role:
