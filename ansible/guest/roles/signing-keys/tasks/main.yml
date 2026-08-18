@@ -65,3 +65,28 @@
     group: root
     mode: '0755'
   notify: update initramfs
+
+# ── Shared key-access group ──────────────────────────────────────────────────
+# The fetched keys land under 0700 /run/chutes owned root:root. Any service that
+# needs to verify signatures (admission-controller today, more later) joins the
+# chutes-keys group and binds /run/chutes/signing-keys into its namespace. The
+# signing-keys-config oneshot chgrp's the subtree to this group at boot.
+
+- name: Create chutes-keys group (shared read access to fetched signing keys)
+  ansible.builtin.group:
+    name: chutes-keys
+    system: true
+
+- name: Install signing-keys-config service
+  ansible.builtin.copy:
+    src: signing-keys-config.service
+    dest: /etc/systemd/system/signing-keys-config.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable signing-keys-config service
+  ansible.builtin.systemd:
+    name: signing-keys-config.service
+    enabled: true
+    daemon_reload: true
