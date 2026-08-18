@@ -1,6 +1,6 @@
 [Unit]
 Description=Grant chute-log-shipper group-read on the registry mTLS leaf
-Requires=chute-log-shipper-tls-perms.path
+Requires=chute-log-shipper-tls-config.path
 
 [Service]
 Type=oneshot

@@ -94,8 +94,8 @@
     group: root
     mode: '0644'
   loop:
-    - chute-log-shipper-tls-perms.path
-    - chute-log-shipper-tls-perms.service
+    - chute-log-shipper-tls-config.path
+    - chute-log-shipper-tls-config.service
 
 # Enable-only (no state: started) at build time: the registry mTLS leaf and the
 # cvm.chutes.ai endpoint do not exist on the build VM. On a real boot the
@@ -103,7 +103,7 @@
 # perms and the service auto-starts (WantedBy=multi-user.target).
 - name: Enable registry mTLS leaf permission path unit
   ansible.builtin.systemd:
-    name: chute-log-shipper-tls-perms.path
+    name: chute-log-shipper-tls-config.path
     enabled: true
     daemon_reload: true
 
