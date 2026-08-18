@@ -25,12 +25,11 @@
   register: rtmr1_2_compute
   changed_when: false
 
-- name: Show RTMR1/RTMR2 computation output
-  ansible.builtin.debug:
-    msg: "{{ rtmr1_2_compute.stderr_lines }}"
+- name: Register RTMR1/RTMR2 as build facts (no on-disk artifact)
+  ansible.builtin.set_fact:
+    rtmr1: "{{ rtmr1_2_compute.stdout | regex_search('RTMR1=([0-9A-Fa-f]+)', '\\1') | first }}"
+    rtmr2: "{{ rtmr1_2_compute.stdout | regex_search('RTMR2=([0-9A-Fa-f]+)', '\\1') | first }}"
 
-- name: Show RTMR1/RTMR2 output file locations
+- name: Show RTMR1/RTMR2
   ansible.builtin.debug:
-    msg:
-      - "RTMR1 written to {{ final_img_path | splitext | first }}.rtmr1"
-      - "RTMR2 written to {{ final_img_path | splitext | first }}.rtmr2"
+    msg: "RTMR1={{ rtmr1 }}  RTMR2={{ rtmr2 }}"

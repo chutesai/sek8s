@@ -64,11 +64,6 @@ if [ -z "$RTMR1" ] || [ -z "$RTMR2" ]; then
     exit 1
 fi
 
-OUT1="${IMG%.*}.rtmr1"
-OUT2="${IMG%.*}.rtmr2"
-printf '%s\n' "$RTMR1" > "$OUT1"
-printf '%s\n' "$RTMR2" > "$OUT2"
-
-echo >&2
-echo "==> Written: $OUT1  ($RTMR1)" >&2
-echo "==> Written: $OUT2  ($RTMR2)" >&2
+# Emit to stdout for the caller to capture into an Ansible fact — no on-disk
+# artifact, so a stale .rtmr1/.rtmr2 can't leak from a previous build.
+printf 'RTMR1=%s\nRTMR2=%s\n' "$RTMR1" "$RTMR2"

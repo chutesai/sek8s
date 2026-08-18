@@ -329,7 +329,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return overrides, out.get("mrtd", "")
 
     names = [args.profile] if args.profile else list(GPU_PROFILES)
-    generated, pending = [], []
+    hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
+    mrtds: set[str] = set()
+    pending: list[str] = []
     for name in names:
         profile = GPU_PROFILES.get(name)
         if profile is None:
@@ -338,17 +340,31 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         fps = sorted(profile.baselined_measurements.get(args.qemu, set()), key=str)
         if not fps:
             continue  # nothing baselined for this QEMU version
-        entries = []
-        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"] modeled)
-        # must not take down the whole publish — mark it PENDING and keep going.
+        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"]
+        # modeled) must not take down the whole publish — mark it PENDING and continue.
         try:
             for fp in fps:
                 overrides, mrtd = fork_overrides(profile, fp)
                 rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
-                key = Topology(name, args.qemu, fp).key()
-                entries.append({"topology": key, "rtmr0": rtmr0, "mrtd": mrtd})
+                mrtds.add(mrtd.upper())
+                gpu_count = getattr(fp, "gpu_count", None) or len(
+                    getattr(fp, "gpu_nodes", ())
+                )
+                hw_name = f"{profile.display_name} [{args.qemu}, {fp.variant_label}]"
+                hardware.append(
+                    {
+                        "name": hw_name,
+                        "description": (
+                            f"{gpu_count}x {profile.expected_gpus[0].upper()} "
+                            "GPU configuration"
+                        ),
+                        "rtmr0": rtmr0,
+                        "expected_gpus": list(profile.expected_gpus),
+                        "gpu_count": gpu_count,
+                    }
+                )
                 print(
-                    f"    {key}  rtmr0={rtmr0[:16]}…"
+                    f"    {hw_name}  rtmr0={rtmr0[:16]}…"
                     f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
                     file=sys.stderr,
                 )
@@ -358,21 +374,47 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr
             )
             continue
-        generated.append({"profile": name, "qemu_version": args.qemu, "rtmr0": entries})
 
-    block = {"version": args.version, "profiles": generated}
+    # Every hardware entry must have a globally-unique name — the computed
+    # display_name + variant_label guarantee this today; assert it so a future
+    # profile/topology collision fails the build loudly instead of silently merging.
+    counts: dict[str, int] = {}
+    for e in hardware:
+        counts[e["name"]] = counts.get(e["name"], 0) + 1
+    dupes = sorted(n for n, c in counts.items() if c > 1)
+    if dupes:
+        print(f"ERROR: duplicate hardware names: {dupes}", file=sys.stderr)
+        return 1
+    # MRTD is version-level (same OVMF/TDVF across every topology of a build).
+    if len(mrtds) > 1:
+        print(f"ERROR: MRTD differs across topologies: {sorted(mrtds)}", file=sys.stderr)
+        return 1
+
+    # Aggregate-ready block: version-level mrtd + a flat hardware list. rtmr1/rtmr2/
+    # runtime_rtmr3 are pinned by the sibling roles and joined by aggregate-measurements.
+    block: dict = {
+        "version": args.version,
+        "mrtd": next(iter(mrtds), ""),
+        "hardware": hardware,
+    }
     if pending:
         block["pending_profiles"] = sorted(set(pending))
-    out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(block, indent=2) + "\n")
+
+    payload = json.dumps(block, indent=2) + "\n"
+    if args.output == "-":
+        sys.stdout.write(payload)
+    else:
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload)
+        print(f"wrote {out}", file=sys.stderr)
     print(
-        f"wrote {out}: {len(generated)} profile(s) generated"
+        f"{len(hardware)} hardware entr{'y' if len(hardware) == 1 else 'ies'} generated"
         f"{f', pending: {block['pending_profiles']}' if pending else ''}",
         file=sys.stderr,
     )
     # Fail only when a specific profile was requested but couldn't be generated.
-    return 2 if (args.profile and not generated) else 0
+    return 2 if (args.profile and not hardware) else 0
 
 
 def _cmd_list(args: argparse.Namespace) -> int:

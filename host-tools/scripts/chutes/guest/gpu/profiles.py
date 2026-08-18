@@ -90,6 +90,13 @@ class GpuProfile(ABC):
     # GPU lives in passthrough["gpu"].
     pci_device_ids: list[str] = []
 
+    # Human-facing hardware identity for the generated teeMeasurements entry
+    # (e.g. "8xh200"), combined with the QEMU version + the topology's computed
+    # variant_label to form each hardware `name`. expected_gpus is the GPU-type
+    # id(s) surfaced in that entry. Override both per subclass.
+    display_name: str = ""
+    expected_gpus: list[str] = []
+
     # Every passthrough endpoint reproduced offline as a pci-bar-stub, keyed by the bus kind
     # _swap_endpoint matches: "gpu" (rp\d+), "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Captured
     # from `lspci -vvvnn` (discover-profile.sh). No "gpu" entry = not yet modeled for this
@@ -264,6 +271,8 @@ class B200Profile(GpuProfile):
     """
 
     pci_device_ids = ["2901"]
+    display_name = "8xb200"
+    expected_gpus = ["b200"]
 
     @property
     def name(self) -> str:
@@ -364,6 +373,7 @@ class B200Xeon6Profile(B200Profile):
     """
 
     pci_device_ids = ["2901"]
+    display_name = "8xb200-xeon6"  # inherits expected_gpus=["b200"] from B200Profile
 
     @property
     def name(self) -> str:
@@ -396,6 +406,8 @@ class B200Xeon6Profile(B200Profile):
 
 class B300Profile(GpuProfile):
     pci_device_ids = ["3182"]  # GB110 [B300 SXM6 AC]
+    display_name = "8xb300"
+    expected_gpus = ["b300"]
 
     @property
     def name(self) -> str:
@@ -447,6 +459,8 @@ class B300Profile(GpuProfile):
 
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
+    display_name = "8xh200"
+    expected_gpus = ["h200"]
     # lspci -vvvnn on dev-h200-tee: GPU 10de:2335 (BAR2 resizable, 256G) + NVSwitch
     # 10de:22a3 class 0680 (single 32M BAR).
     passthrough = {
@@ -554,6 +568,8 @@ class H200Profile(GpuProfile):
 class RTXPro6000Profile(GpuProfile):
     # 2bb1 = Workstation Edition, 2bb5 = Server Edition
     pci_device_ids = ["2bb1", "2bb5"]
+    display_name = "8xpro_6000"
+    expected_gpus = ["pro_6000"]
     # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
     # Stub id 2bb1 (pci_device_ids[0]); the device id is measurement-neutral.
     passthrough = {

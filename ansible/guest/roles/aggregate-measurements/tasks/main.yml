@@ -1,0 +1,46 @@
+---
+# aggregate-measurements — Combine the per-register measurement facts into a single
+# teeMeasurements-shaped YAML: the ONLY measurement artifact that persists on disk.
+#
+# All the raw values are in-play facts (no scattered .rtmrN / rtmr0.json files):
+#   - rtmr1 / rtmr2        (compute-rtmr1-2, version-level)
+#   - rtmr3               (compute-rtmr3, version-level, -> runtime_rtmr3)
+#   - rtmr0_data          (compute-rtmr0: {version, mrtd, hardware:[…], pending_profiles?})
+#
+# RTMR0 generation is best-effort (needs a captured baseline CCEL); when rtmr0_data
+# is absent we still emit the version-level registers with an empty hardware list.
+#
+# Output: measurements/<version>/measurements.yaml — one `measurements` list entry,
+# ready to merge into chutes-ops values.yaml teeMeasurements.measurements.
+
+- name: Assemble the teeMeasurements entry
+  ansible.builtin.set_fact:
+    _measurements_block:
+      measurements:
+        - version: "{{ vm_version }}"
+          mrtd: "{{ (rtmr0_data | default({})).mrtd | default('') }}"
+          rtmr1: "{{ rtmr1 | default('') }}"
+          rtmr2: "{{ rtmr2 | default('') }}"
+          runtime_rtmr3: "{{ rtmr3 | default('') }}"
+          hardware: "{{ (rtmr0_data | default({})).hardware | default([]) }}"
+
+- name: Ensure the measurements output directory exists
+  ansible.builtin.file:
+    path: "{{ repo_root }}/measurements/{{ vm_version }}"
+    state: directory
+    mode: '0755'
+
+- name: Write aggregated measurements YAML (the only persisted artifact)
+  ansible.builtin.copy:
+    content: "{{ _measurements_block | to_nice_yaml(indent=2) }}"
+    dest: "{{ repo_root }}/measurements/{{ vm_version }}/measurements.yaml"
+    mode: '0644'
+
+- name: Show aggregated measurements summary
+  ansible.builtin.debug:
+    msg: >-
+      Wrote measurements/{{ vm_version }}/measurements.yaml —
+      {{ ((rtmr0_data | default({})).hardware | default([])) | length }} hardware
+      entr{{ 'y' if (((rtmr0_data | default({})).hardware | default([])) | length) == 1 else 'ies' }}{{
+      ', pending: ' + ((rtmr0_data | default({})).pending_profiles | join(', '))
+      if ((rtmr0_data | default({})).pending_profiles | default([])) else '' }}

@@ -487,6 +487,11 @@
         name: compute-rtmr0
       when: (measurements | default('full')) != 'none'
 
+    - name: Aggregate all measurements into the single YAML artifact
+      ansible.builtin.include_role:
+        name: aggregate-measurements
+      when: (measurements | default('full')) != 'none'
+
 - name: Stage the published image-set manifest
   hosts: host
   become: true

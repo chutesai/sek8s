@@ -159,9 +159,6 @@ print(hex_val)
 PYEOF
 )
 
-# ── Write output file ─────────────────────────────────────────────────────────
+# ── Emit to stdout (captured into an Ansible fact; no on-disk artifact) ────────
 
-printf '%s\n' "$RTMR3_HEX" > "$OUT_FILE"
-
-echo >&2
-echo "==> Written to: $OUT_FILE" >&2
+printf '%s\n' "$RTMR3_HEX"
