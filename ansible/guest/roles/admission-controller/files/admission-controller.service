@@ -3,8 +3,8 @@ Description=Kubernetes Admission Controller
 # Requires=setup-storage-bind-mounts.service added via cleanup role drop-in; omitted here because
 # setup-storage-bind-mounts does not exist during build VM (storage volume not attached).
 # generate-admission-cert.service creates the per-VM server TLS cert before we start.
-After=network.target opa.service config-manager.service generate-admission-cert.service signing-keys-config.service
-Wants=opa.service generate-admission-cert.service signing-keys-config.service
+After=network.target opa.service config-manager.service generate-admission-cert.service
+Wants=opa.service generate-admission-cert.service
 Before=k3s.service
 
 [Service]
