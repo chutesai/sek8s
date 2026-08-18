@@ -11,11 +11,7 @@ from loguru import logger
 from sek8s.image_utils import normalize_registry_hostname
 
 from .models import ImageEntry
-from .util import (
-    parse_ctr_images_list,
-    resolve_to_full_ref,
-    validate_image_ref,
-)
+from .util import parse_ctr_images_list, resolve_to_full_ref, validate_image_ref
 
 K3S_IMAGES_HELPER = "/usr/local/bin/k3s-images-helper"
 
