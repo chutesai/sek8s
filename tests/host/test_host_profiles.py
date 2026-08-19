@@ -11,7 +11,6 @@ from chutes.host.profiles import (
     HOST_PROFILES,
     PPA,
     HostProfile,
-    Ubuntu2510Profile,
     Ubuntu2604Profile,
     resolve_profile,
 )
@@ -112,41 +111,9 @@ def test_describe_contains_version_and_codename(version):
     assert profile.codename in desc
 
 
-# ---------------------------------------------------------------------------
-# Ubuntu 25.10 specifics
-# ---------------------------------------------------------------------------
-
-
-def test_2510_has_no_ppas():
-    """25.10 uses Intel DCAP repo for attestation -- no PPAs needed."""
-    profile = Ubuntu2510Profile()
-    assert profile.ppas == []
-
-
-def test_2510_has_intel_sgx_repo():
-    """25.10 uses Intel's official SGX/DCAP repository (noble suite)."""
-    profile = Ubuntu2510Profile()
-    assert len(profile.repos) >= 1
-    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
-    assert len(intel_repos) == 1
-    assert intel_repos[0].suite == "noble"
-    assert "download.01.org" in intel_repos[0].uri
-
-
-def test_2510_pins_kernel_package():
-    profile = Ubuntu2510Profile()
-    assert profile.kernel_package == "linux-image-6.17.0-35-generic"
-
-
-def test_2510_enables_kvm_intel_tdx():
-    """25.10 requires explicit kvm_intel.tdx=1 kernel param."""
-    profile = Ubuntu2510Profile()
-    assert "kvm_intel.tdx=1" in profile.grub_cmdline_additions
-
-
 @pytest.mark.parametrize(
     "profile_cls",
-    [Ubuntu2510Profile, Ubuntu2604Profile],
+    [Ubuntu2604Profile],
 )
 def test_host_profiles_do_not_include_libvirt(profile_cls):
     """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
@@ -228,10 +195,16 @@ def test_resolve_profile_rejects_unsupported_version():
         resolve_profile("18.04")
 
 
-@patch("chutes.host.profiles.detect_ubuntu_version", return_value="25.10")
+def test_resolve_profile_rejects_2510():
+    # 26.04 is the only supported host OS; 25.10 hosts must upgrade first.
+    with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
+        resolve_profile("25.10")
+
+
+@patch("chutes.host.profiles.detect_ubuntu_version", return_value="26.04")
 def test_resolve_profile_auto_detects(mock_detect):
     profile = resolve_profile(None)
-    assert isinstance(profile, Ubuntu2510Profile)
+    assert isinstance(profile, Ubuntu2604Profile)
     mock_detect.assert_called_once()
 
 
@@ -276,7 +249,7 @@ def test_setup_host_calls_all_steps(
     mock_kvm,
     mock_install_deps,
 ):
-    profile = Ubuntu2510Profile()
+    profile = Ubuntu2604Profile()
     setup_host(profile)
 
     mock_kver.assert_called_once_with(profile.kernel_package)
@@ -310,6 +283,6 @@ def test_install_dependencies_exits_if_not_root(mock_euid):
 
 @patch("os.geteuid", return_value=1000)
 def test_setup_host_exits_if_not_root(mock_euid):
-    profile = Ubuntu2510Profile()
+    profile = Ubuntu2604Profile()
     with pytest.raises(SystemExit):
         setup_host(profile)

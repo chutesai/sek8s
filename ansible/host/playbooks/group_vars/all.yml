@@ -46,6 +46,6 @@ upgrade_reboot_timeout_seconds: 1800
 # To add a new hop, append an entry here.
 os_upgrade_path:
   "25.10": "26.04"
-  # 25.04 is EOL. setup.yml no longer supports it, but upgrade-host.yml can
-  # still advance it to 25.10 so the miner can then run setup.yml.
+  # 25.04 and 25.10 are EOL/unsupported waypoints — setup.yml has no profile for
+  # either, so always run with -e target_version=26.04 from them.
   "25.04": "25.10"

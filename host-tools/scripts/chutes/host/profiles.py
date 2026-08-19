@@ -103,51 +103,6 @@ class HostProfile(ABC):
         return f"Ubuntu {self.name} ({self.codename})"
 
 
-class Ubuntu2510Profile(HostProfile):
-    """Ubuntu 25.10 (Questing) — native TDX kernel, attestation via Intel DCAP repo."""
-
-    @property
-    def name(self) -> str:
-        return "25.10"
-
-    @property
-    def codename(self) -> str:
-        return "questing"
-
-    @property
-    def repos(self) -> list[APTRepo]:
-        # TDX kernel/QEMU are native in 25.10; Intel DCAP provides attestation packages.
-        # Intel has no questing suite yet; noble packages are ABI-compatible.
-        return [
-            APTRepo(
-                name="intel-sgx",
-                uri="https://download.01.org/intel-sgx/sgx_repo/ubuntu/",
-                suite="noble",
-                components="main",
-                signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
-            ),
-        ]
-
-    @property
-    def kernel_package(self) -> str:
-        return "linux-image-6.17.0-35-generic"
-
-    @property
-    def packages(self) -> list[str]:
-        return [
-            "qemu-system-x86",
-            "sgx-dcap-pccs",
-            "tdx-qgs",
-            "libsgx-dcap-default-qpl",
-            "sgx-ra-service",
-            "sgx-pck-id-retrieval-tool",
-        ]
-
-    @property
-    def grub_cmdline_additions(self) -> list[str]:
-        return ["nohibernate", "kvm_intel.tdx=1", "modprobe.blacklist=nouveau"]
-
-
 class Ubuntu2604Profile(HostProfile):
     """Ubuntu 26.04 (Resolute) — native TDX kernel and QEMU 10.2, attestation via Intel DCAP repo."""
 
@@ -199,7 +154,6 @@ class Ubuntu2604Profile(HostProfile):
 
 
 HOST_PROFILES: dict[str, HostProfile] = {
-    "25.10": Ubuntu2510Profile(),
     "26.04": Ubuntu2604Profile(),
 }
 

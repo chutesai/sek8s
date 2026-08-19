@@ -7,7 +7,7 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 ## Prerequisites
 
 - **Hardware**: Intel TDX-capable CPU and NVIDIA GPUs. See [Validated host topologies](#validated-host-topologies).
-- **OS**: Ubuntu **25.10** or **26.04** — both validated end-to-end. Ubuntu 25.04 is EOL and has no setup profile; use `upgrade-host.yml` to advance to 25.10 first.
+- **OS**: Ubuntu **26.04** — the only supported host OS. `setup-tdx-host` has no profile for 25.10 or 25.04, and no other release ships a baselined QEMU; advance an existing host with `upgrade-host.yml -e target_version=26.04` before setup.
 - **Access**: Root/sudo privileges on the host; SSH access from the Ansible control machine.
 
 ### Validated host topologies
@@ -16,9 +16,6 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 
 | Ubuntu | GPU SKU      | GPU count | Status              | Notes |
 |--------|--------------|-----------|---------------------|-------|
-| 25.10  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
-| 25.10  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
-| 25.10  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
 | 26.04  | H200         | 8         | Validated           | NVSwitch required. Intel DCAP attestation. |
 | 26.04  | B200         | 8         | Validated           | Host-side Fabric Manager. CX7 NVSwitch bridge PFs stay on host. See [Blackwell HGX notes](#blackwell-hgx-notes). |
 | 26.04  | RTX Pro 6000 | 8         | Validated           | No NVSwitch. Intel DCAP attestation. |
@@ -72,7 +69,7 @@ This renders `config.yaml` on the host, downloads the base image if missing, ver
 # Update guest image and relaunch:
 ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-guest.yml
 
-# Upgrade host OS (e.g. 25.10 → 26.04 when validated):
+# Upgrade host OS (e.g. 25.10 → 26.04):
 ansible-playbook -i ~/chutes/my-inventory.yml playbooks/upgrade-host.yml
 ```
 

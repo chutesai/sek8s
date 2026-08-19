@@ -393,11 +393,11 @@ class B200Xeon6Profile(B200Profile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # Xeon6 SNC3 (6 nodes -> flat fallback) has no 10.2.1 measurement, so an
+        # SNC3 host is refused at launch until one is registered.
         return {
             # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4.
             "10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
-            # Xeon6 SNC3 -> 6 nodes -> flat fallback.
-            "10.1.0": {FlatTopology(gpu_count=8)},
         }
 
     def describe_mode(self, total_gpus: int) -> str:
@@ -549,15 +549,9 @@ class H200Profile(GpuProfile):
         nvswitch_on_node0 = NumaTopology(  # e.g. KR6288
             gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 0, 0, 0)
         )
-        return {
-            # No 10.2.1 flat entry (no flat-path H200 baselined at 10.2.1 yet).
-            "10.1.0": {
-                nvswitch_on_node1,
-                nvswitch_on_node0,
-                FlatTopology(gpu_count=8, nvswitch_count=4),
-            },
-            "10.2.1": {nvswitch_on_node1, nvswitch_on_node0},
-        }
+        # No flat entry: no flat-path H200 is baselined at 10.2.1 (the only
+        # supported QEMU), so a >2-NUMA-node H200 host is refused at launch.
+        return {"10.2.1": {nvswitch_on_node1, nvswitch_on_node0}}
 
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
@@ -626,10 +620,8 @@ class RTXPro6000Profile(GpuProfile):
         # distinguished purely by NUMA node count:
         #   - 2 NUMA nodes -> guest-NUMA path, GPUs 4+4.
         #   - >2 NUMA nodes (e.g. 4) -> flat fallback; only GPU count matters.
-        # QEMU 10.2.1 = Ubuntu 26.04 (confirmed by discover-profile); the 10.1.0
-        # entry covers RTX hosts still on 25.10.
+        # QEMU 10.2.1 = Ubuntu 26.04, the only supported host OS.
         return {
-            "10.1.0": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
             "10.2.1": {
                 NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
                 FlatTopology(gpu_count=8),

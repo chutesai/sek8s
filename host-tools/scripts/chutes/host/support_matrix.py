@@ -5,14 +5,15 @@ hardware SKU having been end-to-end tested on that OS. This module records only
 combinations that have been explicitly validated in the field.
 
 Keys use GpuProfile ``name`` values (e.g. ``H200``, ``RTX_PRO_6000``).
+
+Ubuntu 26.04 is the only supported host OS. Ubuntu 25.10 has no host profile and no
+baselined QEMU — hosts still on it must advance with ``upgrade-host.yml`` before they
+are a supported topology.
 """
 
 # (ubuntu_version, gpu_sku, gpu_count) — gpu_sku matches GpuProfile.name
 _VALIDATED_TOPOLOGIES: frozenset[tuple[str, str, int]] = frozenset(
     {
-        ("25.10", "H200", 8),
-        ("25.10", "B200", 8),
-        ("25.10", "RTX_PRO_6000", 8),
         ("26.04", "H200", 8),
         ("26.04", "B200", 8),
         ("26.04", "RTX_PRO_6000", 8),
@@ -32,9 +33,6 @@ _HGX_NOTE = (
     "(excluded from passthrough)."
 )
 _VALIDATED_NOTES: dict[tuple[str, str, int], str] = {
-    ("25.10", "H200", 8): "NVSwitch required.",
-    ("25.10", "B200", 8): _HGX_NOTE,
-    ("25.10", "RTX_PRO_6000", 8): "No NVSwitch on this SKU.",
     ("26.04", "H200", 8): "NVSwitch required.",
     ("26.04", "B200", 8): _HGX_NOTE,
     ("26.04", "RTX_PRO_6000", 8): "No NVSwitch on this SKU.",
@@ -78,8 +76,9 @@ def format_topology_matrix() -> str:
     lines.extend(
         [
             "",
-            "Any other (Ubuntu, SKU, count) combination may still work — host profiles",
-            "are OS-driven — but is not listed as validated until added above.",
+            "Ubuntu 26.04 is the only supported host OS. Any other (SKU, count)",
+            "combination on it may still work, but is not listed as validated",
+            "until added above.",
         ]
     )
     return "\n".join(lines)

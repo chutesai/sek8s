@@ -17,8 +17,8 @@ from chutes.guest.gpu.profiles import GpuProfile
 from chutes.guest.gpu.topology import NumaTopology, TopologyFingerprint
 
 # QEMU version -> guest -cpu string (mirrors chutes.guest.__main__: "host" on
-# 24.04, else "host,-avx10"). 10.1.0 = 25.10, 10.2.1 = 26.04.
-_CPU_ARGS_BY_QEMU = {"10.1.0": "host,-avx10", "10.2.1": "host,-avx10"}
+# 24.04, else "host,-avx10"). 10.2.1 = 26.04, the only supported host OS.
+_CPU_ARGS_BY_QEMU = {"10.2.1": "host,-avx10"}
 
 # Offline measurement has no real GPU to pass through, but the launch command is
 # built the same way (a vfio-pci endpoint per root port). We hand every device
@@ -30,7 +30,7 @@ _PLACEHOLDER_BDF = "0000:00:00.0"
 
 
 def cpu_args_for_qemu_version(qemu_version: str) -> str:
-    """The guest -cpu args for a QEMU version. Defaults to the 25.10+/-avx10 form."""
+    """The guest -cpu args for a QEMU version. Defaults to the -avx10 form."""
     return _CPU_ARGS_BY_QEMU.get(qemu_version, "host,-avx10")
 
 

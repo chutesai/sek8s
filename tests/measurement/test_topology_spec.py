@@ -147,5 +147,5 @@ def test_h200_numa_with_nvswitches_matches_live_path():
 
 def test_cpu_args_for_qemu_version():
     assert cpu_args_for_qemu_version("10.2.1") == "host,-avx10"
-    assert cpu_args_for_qemu_version("10.1.0") == "host,-avx10"
+    # Unknown/unsupported QEMU versions fall back to the same -avx10 form.
     assert cpu_args_for_qemu_version("99.9.9") == "host,-avx10"

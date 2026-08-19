@@ -76,7 +76,6 @@ def detect_host_mem_gb() -> int | None:
 # Expected QEMU per Ubuntu release (each ships one build). Upstream version only;
 # distro "+ds-...ubuntuX.Y" SRU revisions do not move RTMR0.
 SUPPORTED_QEMU_BY_OS = {
-    "25.10": "10.1.0",
     "26.04": "10.2.1",
 }
 
