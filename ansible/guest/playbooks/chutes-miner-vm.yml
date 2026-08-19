@@ -471,8 +471,12 @@
 # The initrd is now final (luks rebuilt it for prod AND debug). Gather the two kinds
 # of measurement input, by their distinct mechanisms:
 #   - stage-boot-artifacts : extract this image's direct-boot vmlinuz/initrd/cmdline
-#   - capture-ccel         : boot the debug image on TDX hw → baseline CCEL + ACPI/SMBIOS
-# stage runs for offline+full; the CCEL capture is the full-only step (needs TDX hw).
+#                            (RTMR1/2 measure these exact bytes — always needed).
+#   - capture-ccel         : boot the debug image on TDX hw → a baseline CCEL.
+#     NO LONGER REQUIRED for measurements — the fork self-generates the full RTMR0
+#     offline. Kept as a full-only step to cross-validate the generated RTMR0/1/2
+#     against a real quote. `measurements=offline` now yields COMPLETE measurements
+#     with no TDX hardware; `measurements=full` adds the validating capture.
 - name: Gather measurement inputs from final image (post-luks)
   hosts: host
   become: true

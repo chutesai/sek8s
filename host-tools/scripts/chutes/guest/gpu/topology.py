@@ -1,24 +1,28 @@
-"""Topology fingerprints: the RTMR0-distinguishing shape of a host's passed-through devices.
+"""Topology fingerprints: the RTMR0-distinguishing shape of a host + its GPUs.
 
-RTMR0 = f(guest ACPI, QEMU). Two hosts on the *same* GpuProfile diverge in RTMR0
-only when their passed-through device topology differs, because that topology is
-what drives the guest NUMA / PXB-PCIe layout QEMU emits into the guest ACPI. These
-classes capture exactly that shape, so a profile can declare which topologies it
-has a registered measurement for (``baselined_measurements``) and detection can
-fingerprint a live host (``host_topology_fingerprint``) and compare the two.
+RTMR0 = f(guest ACPI, QEMU). A ``TopologyFingerprint`` captures every host-instance
+fact that moves RTMR0, as the three orthogonal host axes that produce it:
 
-They are value types (frozen dataclasses): hashable and compared by field value,
-so they live in sets and support ``fingerprint in baselined_topologies``. A
-``NumaTopology`` never equals a ``FlatTopology`` (different classes) — that is the
-"landed on the 2-node guest-NUMA path" vs "flat fallback" discriminator, replacing
-the old positional ``("numa", ...)`` / ``("flat", ...)`` string tag.
+  - ``cpu`` (``CpuTopology``) — guest ``-smp`` (``vcpus`` + ``sockets``) and CPU
+    identity (``cpu_vendor`` + ``cpu_processor_id``). Drives the SRAT memory-map (#13)
+    and the SMBIOS Type-4 Processor ID (#14).
+  - ``mem_gb`` — guest RAM. A scalar, but a distinct host feature from the CPU and the
+    GPUs, so it stands on its own rather than hiding inside CpuTopology.
+  - ``gpu`` (``GpuTopology`` = ``NumaTopology`` | ``FlatTopology``) — the passed-through
+    device layout, which drives the guest NUMA / PXB-PCIe grouping QEMU emits.
 
-Only *device* topology is captured — NOT CPU / socket / RAM counts. Those feed
-RTMR0 too, but a GpuProfile pins them to constants (fixed vcpus, ``-smp``, RAM),
-so they are identical across every host of a given profile; only the device
-NUMA/PXB layout varies host to host. A host with a different physical CPU count
-(e.g. an SMT host with twice the logical CPUs) therefore shares a fingerprint with
-its siblings, because the profile still hands the guest the same fixed ``-smp``.
+This split is what lets ONE ``GpuProfile`` (GPU-model policy only) cover several host
+configurations: a B200 on a 192-CPU/2 TB Xeon and on a 288-CPU/3 TB Xeon 6 are two
+fingerprints (different cpu + mem_gb, same gpu) of one profile, not two profiles.
+Profiles declare their known fingerprints in ``baselined_measurements`` (see
+``known_topologies``); detection builds a live one (``host_topology_fingerprint``) and
+matches by exact set membership. A fingerprint with ``cpu_processor_id=None`` is a
+placeholder (exact CPU model not captured) and so never matches a live host — the
+profile is refused at launch until discover-profile.sh fills it in.
+
+All of these are value types (frozen dataclasses): hashable and compared by value, so
+they live in sets. ``NumaTopology`` never equals ``FlatTopology`` (different classes),
+which is the "2-node guest-NUMA path" vs "flat fallback" discriminator.
 """
 
 from dataclasses import dataclass
@@ -34,59 +38,115 @@ def _node_sig(nodes: tuple[int, ...]) -> str:
 
 
 @dataclass(frozen=True)
+class CpuTopology:
+    """The CPU half of a fingerprint (RTMR0-determining).
+
+    ``vcpus`` + ``sockets`` become ``-smp``; ``cpu_vendor`` fixes the SRAT memory-hole
+    (#13) and ``cpu_processor_id`` (CPUID leaf-1, 8-byte hex) becomes the SMBIOS Type-4
+    Processor ID (#14). Guest RAM is a separate host axis — ``TopologyFingerprint.mem_gb``
+    — not carried here. Detection fills these from the live host; ``known_topologies``
+    declares the known values.
+    """
+
+    vcpus: int
+    sockets: int
+    cpu_vendor: str
+    # 8-byte-hex CPUID leaf-1 (SMBIOS Type-4 Processor ID). None = a PLACEHOLDER
+    # fingerprint whose exact CPU model has not been captured yet: it does NOT match a
+    # live host (which always has a real id), so such a profile is refused at launch
+    # until discover-profile.sh fills this in — and offline generation refuses None
+    # rather than emit a measurement for the generating host's CPU.
+    cpu_processor_id: "str | None" = None
+
+    @property
+    def smp_topology(self) -> str:
+        """QEMU ``-smp`` string. threads=1 disables guest SMT (each vCPU a core)."""
+        cores_per_socket = self.vcpus // self.sockets
+        return f"{self.vcpus},sockets={self.sockets},cores={cores_per_socket},threads=1"
+
+
+@dataclass(frozen=True)
 class NumaTopology:
-    """Guest-NUMA path (host has exactly 2 NUMA nodes and the profile enables it).
+    """GpuTopology, guest-NUMA path (host has exactly 2 NUMA nodes, profile enables it).
 
     Each field is the per-device host NUMA node, in sorted-BDF order. The
-    device->NUMA layout drives QEMU's guest PXB-PCIe grouping and thus RTMR0, so
-    the exact node vectors matter, not just how many devices there are. An empty
-    tuple means that device class is not passed through for this profile (e.g. no
-    NVSwitches / no IB).
+    device->NUMA layout drives QEMU's guest PXB-PCIe grouping and thus RTMR0, so the
+    exact node vectors matter, not just how many devices there are. An empty tuple
+    means that device class is not passed through for this profile (no NVSwitches / IB).
     """
 
     gpu_nodes: tuple[int, ...]
     nvswitch_nodes: tuple[int, ...] = ()
     ib_nodes: tuple[int, ...] = ()
 
+    path = "numa"
+
     @property
-    def variant_label(self) -> str:
-        """Deterministic, human-readable variant id computed from the fingerprint
-        (guest-NUMA path). The profile + gpu count + QEMU version prepend the rest
-        of the teeMeasurements hardware name, so this must be unique per
-        profile+qemu (asserted at generation time)."""
-        parts = ["numa"]
+    def device_parts(self) -> list[str]:
+        """Extra variant-label parts for the passed-through non-GPU devices."""
+        parts = []
         if self.nvswitch_nodes:
             parts.append("nvsw-" + _node_sig(self.nvswitch_nodes))
         if self.ib_nodes:
             parts.append("ib-" + _node_sig(self.ib_nodes))
-        return "-".join(parts)
+        return parts
 
 
 @dataclass(frozen=True)
 class FlatTopology:
-    """Flat fallback (host is not 2-NUMA-node, or the profile disables guest NUMA).
+    """GpuTopology, flat fallback (host is not 2-NUMA-node, or profile disables NUMA).
 
-    The guest is a single flat node with no PXB grouping, so RTMR0 depends only on
-    how many of each device is passed through — not which host NUMA node each sits
-    on. Counts default to 0 for device classes this profile does not pass through.
+    The guest is a single flat node with no PXB grouping, so RTMR0 depends only on how
+    many of each device is passed through — not which host NUMA node each sits on.
+    Counts default to 0 for device classes this profile does not pass through.
     """
 
     gpu_count: int
     nvswitch_count: int = 0
     ib_count: int = 0
 
+    path = "flat"
+
     @property
-    def variant_label(self) -> str:
-        """Deterministic variant id for the flat (single-node) path. ``nvswN`` /
-        ``ibN`` here are device *counts* (flat has no per-device node vector)."""
-        parts = ["flat"]
+    def device_parts(self) -> list[str]:
+        """Extra variant-label parts (device *counts*; flat has no per-device node)."""
+        parts = []
         if self.nvswitch_count:
             parts.append(f"nvsw{self.nvswitch_count}")
         if self.ib_count:
             parts.append(f"ib{self.ib_count}")
-        return "-".join(parts)
+        return parts
 
 
-# A profile declares these and detection produces them; the two are compared for
-# equality to decide whether a live host is baselined.
-TopologyFingerprint = NumaTopology | FlatTopology
+# The device-layout half of a fingerprint. NumaTopology != FlatTopology by class, so
+# they never compare equal — the guest-NUMA vs flat-fallback discriminator.
+GpuTopology = NumaTopology | FlatTopology
+
+
+@dataclass(frozen=True)
+class TopologyFingerprint:
+    """The full RTMR0-determining shape of a host: its CPU, memory, and GPU topology.
+
+    Three orthogonal host axes that each move RTMR0: ``cpu`` (CpuTopology), ``mem_gb``
+    (guest RAM — a scalar, but a distinct host feature from the CPU and GPUs), and
+    ``gpu`` (GpuTopology device layout). Value type (frozen): two fingerprints are equal
+    iff all three match, so a profile's ``baselined_measurements`` is a set of these.
+    """
+
+    cpu: CpuTopology
+    mem_gb: int
+    gpu: GpuTopology
+
+    @property
+    def mem(self) -> str:
+        """QEMU ``-m`` string (guest RAM)."""
+        return f"{self.mem_gb}G"
+
+    @property
+    def variant_label(self) -> str:
+        """Deterministic, human-readable variant id: ``<path>-<vcpus>c-<mem>g[-devices]``,
+        e.g. ``numa-176c-1944g`` or ``numa-124c-1128g-nvsw-node0``. The profile
+        display_name + QEMU version prepend the rest of the teeMeasurements hardware
+        name, so this must be unique per profile+qemu (asserted at generation time)."""
+        shape = f"{self.cpu.vcpus}c-{self.mem_gb}g"
+        return "-".join([self.gpu.path, shape, *self.gpu.device_parts])

@@ -13,13 +13,20 @@ the endpoint device type is settled here.
 from unittest.mock import patch
 
 from chutes.guest.command import build_qemu_command
+from chutes.guest.gpu import known_topologies as known
 from chutes.guest.gpu.profiles import GPU_PROFILES
-from chutes.guest.gpu.topology import FlatTopology, NumaTopology
+from chutes.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from chutes.guest.passthrough import _build_pci_topology
 from chutes.guest.qemu import build_base_cmd, use_numa_topology
 from topology_spec import build_topology_spec, cpu_args_for_qemu_version
 
 _FW = "OVMF.inteltdx.fd"
+
+# Host-shape fields the fingerprint now carries (drive -smp / -m). Mirror each
+# profile's real baselined shape so the synth and live commands agree on mem/smp.
+_RTX_SHAPE = dict(
+    vcpus=124, sockets=2, cpu_vendor="AuthenticAMD", cpu_processor_id=None
+)
 
 
 def _synth(profile, fingerprint):
@@ -53,8 +60,15 @@ def _topology_args(cmd):
     return out
 
 
-def _live_cmd(profile, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None):
-    """The command the real launch path produces, with sysfs lookups mocked."""
+def _live_cmd(
+    profile, fingerprint, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None
+):
+    """The command the real launch path produces, with sysfs lookups mocked.
+
+    ``mem`` / ``-smp`` now come from the matched fingerprint's host shape (the
+    launcher reads fingerprint.mem/.smp_topology), so the parity comparison uses
+    the same values build_topology_spec bakes into the synth command.
+    """
     with patch("chutes.guest.qemu.host_numa_nodes", return_value=host_nodes), patch(
         "chutes.guest.passthrough.read_pci_numa_node",
         side_effect=lambda b: node_by_bdf.get(b, -1),
@@ -64,8 +78,8 @@ def _live_cmd(profile, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None):
         # hand build_base_cmd the explicit list (it no longer reads sysfs).
         numa_active = use_numa_topology(profile.enable_numa_topology)
         cmd = build_base_cmd(
-            mem=f"{len(gpus) * profile.ram_per_gpu_gb}G",
-            smp_topology=profile.smp_topology,
+            mem=fingerprint.mem,
+            smp_topology=fingerprint.cpu.smp_topology,
             process_name="chutes-measure",
             cpu_args="host,-avx10",
             firmware=_FW,
@@ -94,12 +108,16 @@ def _bdfs(n, start=1):
 
 def test_numa_4_4_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
-    fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))
+    fp = known.RTX_NUMA
     synth = _synth(profile, fp)
 
     gpus = _bdfs(8)
     live = _live_cmd(
-        profile, node_by_bdf=dict(zip(gpus, fp.gpu_nodes)), host_nodes=[0, 1], gpus=gpus
+        profile,
+        fp,
+        node_by_bdf=dict(zip(gpus, fp.gpu.gpu_nodes)),
+        host_nodes=[0, 1],
+        gpus=gpus,
     )
     assert _topology_args(synth) == _topology_args(live)
     assert any("pxb-pcie" in a for a in synth)
@@ -109,37 +127,45 @@ def test_numa_4_4_matches_live_path():
 
 def test_numa_3_5_split_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
-    fp = NumaTopology(gpu_nodes=(0, 0, 0, 1, 1, 1, 1, 1))
+    fp = TopologyFingerprint(
+        CpuTopology(**_RTX_SHAPE), 768, NumaTopology(gpu_nodes=(0, 0, 0, 1, 1, 1, 1, 1))
+    )
     synth = _synth(profile, fp)
 
     gpus = _bdfs(8)
     live = _live_cmd(
-        profile, node_by_bdf=dict(zip(gpus, fp.gpu_nodes)), host_nodes=[0, 1], gpus=gpus
+        profile,
+        fp,
+        node_by_bdf=dict(zip(gpus, fp.gpu.gpu_nodes)),
+        host_nodes=[0, 1],
+        gpus=gpus,
     )
     assert _topology_args(synth) == _topology_args(live)
 
 
 def test_flat_topology_matches_live_path_and_has_no_pxb():
     profile = GPU_PROFILES["RTX_PRO_6000"]
-    fp = FlatTopology(gpu_count=8)
+    fp = known.RTX_FLAT
     synth = _synth(profile, fp)
 
     gpus = _bdfs(8)
-    live = _live_cmd(profile, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus)
+    live = _live_cmd(profile, fp, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus)
     assert _topology_args(synth) == _topology_args(live)
     assert not any("pxb-pcie" in a for a in synth)
 
 
 def test_h200_numa_with_nvswitches_matches_live_path():
     profile = GPU_PROFILES["H200"]
-    fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(1, 1, 1, 1))
+    fp = known.H200_XE9680
     synth = _synth(profile, fp)
 
     gpus = _bdfs(8)
     nvsw = _bdfs(4, start=0x20)
-    node_by_bdf = dict(zip(gpus, fp.gpu_nodes)) | dict(zip(nvsw, fp.nvswitch_nodes))
+    node_by_bdf = dict(zip(gpus, fp.gpu.gpu_nodes)) | dict(
+        zip(nvsw, fp.gpu.nvswitch_nodes)
+    )
     live = _live_cmd(
-        profile, node_by_bdf=node_by_bdf, host_nodes=[0, 1], gpus=gpus, nvsw=nvsw
+        profile, fp, node_by_bdf=node_by_bdf, host_nodes=[0, 1], gpus=gpus, nvsw=nvsw
     )
     assert _topology_args(synth) == _topology_args(live)
     assert any("rp_nvsw" in a for a in synth)

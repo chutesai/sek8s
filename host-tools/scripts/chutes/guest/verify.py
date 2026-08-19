@@ -13,36 +13,14 @@ import sys
 
 from chutes.guest.detection import (
     SUPPORTED_QEMU_BY_OS,
-    detect_cx7_bridge_pfs,
-    detect_infiniband_pfs,
-    detect_nvidia_gpus,
-    detect_nvswitches,
     detect_profile,
     detect_qemu_version,
-    get_gpu_bdfs,
-    host_topology_fingerprint,
     verify_host_qemu_supported,
 )
 
 READY = 0
 BLOCKED = 1
 WARNING = 2
-
-
-def _host_fingerprint(profile) -> tuple:
-    """Recompute the fingerprint for the resolved profile (detect_profile doesn't
-    return it)."""
-    gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
-    total_gpus = len(gpu_bdfs)
-    nvswitch_bdfs = (
-        detect_nvswitches() if profile.should_passthrough_nvswitches(total_gpus) else []
-    )
-    ib_bdfs = (
-        detect_infiniband_pfs(exclude_bdfs=detect_cx7_bridge_pfs())
-        if profile.should_passthrough_infiniband
-        else []
-    )
-    return host_topology_fingerprint(profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs)
 
 
 def verify_host(target_os: str | None = None) -> int:
@@ -74,13 +52,15 @@ def verify_host(target_os: str | None = None) -> int:
 
     # Gate B: topology hard-match (raises if uncharacterized).
     try:
-        profile = detect_profile()
+        profile, fingerprint = detect_profile()
     except ValueError as exc:
         print(f"BLOCKED (topology): {exc}")
         return BLOCKED
 
-    # Advisory: is there a measurement for this topology x QEMU?
-    fingerprint = _host_fingerprint(profile)
+    # Advisory: is there a registered MEASUREMENT for this exact fingerprint x QEMU?
+    # (Gate B / detect_profile already BLOCKED a host whose fingerprint isn't baselined,
+    # including a placeholder pending its cpu_processor_id capture — so we only reach
+    # here for a baselined fingerprint, and just report which QEMU it's registered at.)
     measured = profile.baselined_measurements
     if fingerprint in measured.get(qemu_for_measurement, set()):
         print(

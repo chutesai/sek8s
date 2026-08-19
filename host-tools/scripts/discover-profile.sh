@@ -100,6 +100,37 @@ CPU_SOCKETS=$(lscpu | awk '/^Socket\(s\):/ {print $2}')
 CPU_CORES_PER_SOCKET=$(lscpu | awk '/^Core\(s\) per socket:/ {print $NF}')
 CPU_THREADS_PER_CORE=$(lscpu | awk '/^Thread\(s\) per core:/ {print $NF}')
 
+# CPU identity for offline RTMR0 measurement reconstruction (the profile's
+# cpu_vendor / cpu_processor_id). RTMR0 is the only CPU-dependent measurement, and
+# only two things move it: the vendor drives #13 (QEMU shoves high memory past 1 TiB
+# for AMD guests → different SRAT), and the SMBIOS Type-4 Processor ID (#14) is the
+# guest's CPUID leaf-1. (phys-bits was measured to NOT affect RTMR0, so it is not
+# captured.) Both are CPU-model properties — computed here host-side, no TDX and no
+# guest capture. Set them once on the profile (they never vary by build or topology,
+# which is why the original single-CCEL method reused one #14 everywhere).
+CPU_VENDOR=$(lscpu | awk -F: '/^Vendor ID:/ {gsub(/^[ \t]+/,"",$2); print $2}')
+# SMBIOS Type-4 Processor ID = CPUID leaf-1 EAX|EDX as the TDX guest sees it:
+#   EAX = family/model/stepping (native — TDX passes it through), from lscpu.
+#   EDX = the TDX Module's fixed leaf-1 CPUID-virtualization baseline (NOT the host's
+#         raw EDX — TDX masks host-specific bits like PSE36). Constant for Intel TDX;
+#         re-verify against the TDX Module spec (or one real boot) only if the TDX
+#         module version changes — never per host/build.
+_TDX_LEAF1_EDX="0x1fa9fbff"
+_CPU_FAMILY=$(lscpu | awk -F: '/^CPU family:/ {gsub(/ /,"",$2);print $2}')
+_CPU_MODEL=$(lscpu | awk -F: '/^Model:/ {gsub(/ /,"",$2);print $2}')
+_CPU_STEPPING=$(lscpu | awk -F: '/^Stepping:/ {gsub(/ /,"",$2);print $2}')
+CPU_PROCESSOR_ID=$(python3 - "$_CPU_FAMILY" "$_CPU_MODEL" "$_CPU_STEPPING" "$_TDX_LEAF1_EDX" <<'PY' 2>/dev/null || true
+import sys
+fam, mod, step = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
+edx = int(sys.argv[4], 16)
+base_fam = fam if fam < 0xF else 0xF
+ext_fam = (fam - 0xF) if fam >= 0xF else 0
+ext_model, mod_lo = mod >> 4, mod & 0xF
+eax = (step & 0xF) | (mod_lo << 4) | ((base_fam & 0xF) << 8) | ((ext_model & 0xF) << 16) | ((ext_fam & 0xFF) << 20)
+print((eax.to_bytes(4, "little") + edx.to_bytes(4, "little")).hex())
+PY
+)
+
 # ---------------------------------------------------------------------------
 # Memory
 # ---------------------------------------------------------------------------
@@ -373,6 +404,8 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Sockets"           "$CPU_SOCKETS"
     row "Cores per socket"  "$CPU_CORES_PER_SOCKET"
     row "Threads per core"  "$CPU_THREADS_PER_CORE"
+    row "Vendor (cpu_vendor)"             "$CPU_VENDOR"
+    row "Processor ID (cpu_processor_id)" "$CPU_PROCESSOR_ID"
 
     section "Memory"
     row "Total host RAM"           "${MEM_TOTAL_GB} GB"
@@ -493,6 +526,14 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     json_escape product_name_esc  "$PRODUCT_NAME"
     json_escape os_version_esc    "$OS_VERSION_ID"
     json_escape cpu_args_esc      "$CPU_ARGS"
+    json_escape cpu_vendor_esc    "$CPU_VENDOR"
+    # cpu_processor_id is null when a field was unreadable.
+    if [[ -n "$CPU_PROCESSOR_ID" ]]; then
+        json_escape _pid_esc "$CPU_PROCESSOR_ID"
+        cpu_processor_id_json="\"${_pid_esc}\""
+    else
+        cpu_processor_id_json="null"
+    fi
     json_escape qemu_version_esc      "$QEMU_VERSION"
     json_escape qemu_version_full_esc "$QEMU_VERSION_FULL"
 
@@ -574,7 +615,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "total": ${CPU_TOTAL},
     "sockets": ${CPU_SOCKETS},
     "cores_per_socket": ${CPU_CORES_PER_SOCKET},
-    "threads_per_core": ${CPU_THREADS_PER_CORE}
+    "threads_per_core": ${CPU_THREADS_PER_CORE},
+    "cpu_vendor": "${cpu_vendor_esc}",
+    "cpu_processor_id": ${cpu_processor_id_json}
   },
   "memory": {
     "total_gb": ${MEM_TOTAL_GB},

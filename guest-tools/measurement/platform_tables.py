@@ -29,6 +29,7 @@ from functools import cached_property
 
 from chutes.guest.command import MachineSpec, build_qemu_command
 from chutes.guest.gpu.profiles import GpuProfile, PciBar
+from chutes.guest.gpu.topology import TopologyFingerprint
 from chutes.guest.qemu import QemuCommand
 
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
@@ -70,6 +71,7 @@ class MeasurementMetadata:
 
     spec: MachineSpec
     profile: GpuProfile
+    fingerprint: TopologyFingerprint
     acpi_tables: str
     with_smbios: bool = True
 
@@ -129,6 +131,18 @@ class MeasurementMetadata:
 
     def to_dict(self) -> dict:
         cmd = self.cmd
+        # Flat topologies wire the guest RAM to a machine-level memory-backend
+        # (`memory-backend=mem0`); NUMA wires per-node memdevs (`-numa … memdev=`)
+        # instead. The dump machine must keep whichever the launch used — without the
+        # flat memory-backend, QEMU falls back to allocating the full pc.ram, which a
+        # small generating host can't back (the mem0 object carries reserve=off).
+        dump_machine = _DUMP_MACHINE
+        mem_backend = next(
+            (p for p in cmd.machine.split(",") if p.startswith("memory-backend=")),
+            None,
+        )
+        if mem_backend:
+            dump_machine = f"{_DUMP_MACHINE},{mem_backend}"
         return {
             "boot_config": {
                 "cpus": int(cmd.smp_topology.split(",", 1)[0]),
@@ -136,7 +150,7 @@ class MeasurementMetadata:
                 "bios": cmd.firmware,
                 "acpi_tables": self.acpi_tables,
                 "qemu": {
-                    "machine": _DUMP_MACHINE,
+                    "machine": dump_machine,
                     "cpu": cmd.cpu_args,
                     "accel": cmd.accel,
                     "smp": cmd.smp_topology,
@@ -146,6 +160,10 @@ class MeasurementMetadata:
                     "serial": ["null"],  # adds COM1 to the DSDT
                     "devices": self.devices,
                     "fw_cfg": cmd.fw_cfg,
+                    # Pin the SMBIOS Type-4 Processor ID (#14) to the production
+                    # CPUID; tdx-measure patches it into the dumped SMBIOS (KVM
+                    # can't override the generating host's CPUID). None => unpatched.
+                    "processor_id": self.fingerprint.cpu.cpu_processor_id,
                 },
             },
             "direct": {"kernel": "/dev/null", "initrd": "/dev/null", "cmdline": ""},

@@ -7,12 +7,21 @@ tdx-measure container, not here.
 """
 
 import pytest
+from chutes.guest.gpu import known_topologies as known
 from chutes.guest.gpu.profiles import GPU_PROFILES
-from chutes.guest.gpu.topology import FlatTopology, NumaTopology
+from chutes.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from platform_tables import MeasurementMetadata
 from topology_spec import build_topology_spec
 
 _FW = "/opt/ovmf/OVMF.fd"
+
+# Host-shape fields the fingerprint carries (drive -smp / -m / #14 processor_id).
+_H200_SHAPE = dict(
+    vcpus=124,
+    sockets=2,
+    cpu_vendor="GenuineIntel",
+    cpu_processor_id="f2060c00fffba91f",
+)
 
 
 def _md(model, fingerprint, **kw):
@@ -21,12 +30,12 @@ def _md(model, fingerprint, **kw):
         profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
     )
     return MeasurementMetadata(
-        spec, profile, acpi_tables="/out/acpi.bin", **kw
+        spec, profile, fingerprint, acpi_tables="/out/acpi.bin", **kw
     ).to_dict()
 
 
 def _rtx_numa():
-    return _md("RTX_PRO_6000", NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)))
+    return _md("RTX_PRO_6000", known.RTX_NUMA)
 
 
 def test_machine_is_rewritten_to_non_tdx():
@@ -72,22 +81,14 @@ def test_serial_attached_for_com1():
 
 
 def test_smbios_can_be_dropped():
-    with_it = _md(
-        "RTX_PRO_6000",
-        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
-        with_smbios=True,
-    )
-    without = _md(
-        "RTX_PRO_6000",
-        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
-        with_smbios=False,
-    )
+    with_it = _md("RTX_PRO_6000", known.RTX_NUMA, with_smbios=True)
+    without = _md("RTX_PRO_6000", known.RTX_NUMA, with_smbios=False)
     assert with_it["boot_config"]["qemu"]["smbios"]
     assert without["boot_config"]["qemu"]["smbios"] == []
 
 
 def test_flat_topology_generates():
-    q = _md("RTX_PRO_6000", FlatTopology(gpu_count=8))["boot_config"]["qemu"]
+    q = _md("RTX_PRO_6000", known.RTX_FLAT)["boot_config"]["qemu"]
     assert not any("pxb-pcie" in d for d in q["devices"])
     assert sum(d.startswith("pci-bar-stub") for d in q["devices"]) == 8
 
@@ -102,7 +103,11 @@ def test_boot_config_scalars():
 def test_nvswitch_endpoint_modeled():
     # NVSwitch is a passthrough device too; its BARs shape the DSDT. H200 models it,
     # so each switch endpoint becomes a pci-bar-stub with the captured layout.
-    fp = NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1))
+    fp = TopologyFingerprint(
+        CpuTopology(**_H200_SHAPE),
+        1128,
+        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1)),
+    )
     q = _md("H200", fp)["boot_config"]["qemu"]
     nvsw = [
         d for d in q["devices"] if d.startswith("pci-bar-stub") and "bus=rp_nvsw" in d
@@ -117,11 +122,13 @@ def test_unmodeled_passthrough_raises():
     # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
     # unrecognized bus is NotImplementedError — never a silent wrong measurement.
     profile = GPU_PROFILES["H200"]
+    fp = TopologyFingerprint(
+        CpuTopology(**_H200_SHAPE), 1128, NumaTopology(gpu_nodes=(0,) * 8)
+    )
     md = MeasurementMetadata(
-        build_topology_spec(
-            profile, NumaTopology(gpu_nodes=(0,) * 8), cpu_args="host", firmware=_FW
-        ),
+        build_topology_spec(profile, fp, cpu_args="host", firmware=_FW),
         profile,
+        fp,
         acpi_tables="/out/a.bin",
     )
     with pytest.raises(ValueError, match=r"passthrough\['ib'\]"):

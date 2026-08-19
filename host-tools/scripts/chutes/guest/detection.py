@@ -12,10 +12,15 @@ import subprocess
 
 from chutes.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
 from chutes.guest.gpu.tools import ensure_gpu_tools_available
-from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
+from chutes.guest.gpu.topology import (
+    CpuTopology,
+    FlatTopology,
+    NumaTopology,
+    TopologyFingerprint,
+)
 
-_NVIDIA_VENDOR = '10de'
-_MELLANOX_VENDOR = '15b3'
+_NVIDIA_VENDOR = "10de"
+_MELLANOX_VENDOR = "15b3"
 
 
 def detect_host_cpus() -> int | None:
@@ -43,7 +48,9 @@ def detect_host_sockets() -> int | None:
     Returns None if the topology files are unreadable.
     """
     packages: set[str] = set()
-    for path in glob.glob("/sys/devices/system/cpu/cpu[0-9]*/topology/physical_package_id"):
+    for path in glob.glob(
+        "/sys/devices/system/cpu/cpu[0-9]*/topology/physical_package_id"
+    ):
         try:
             packages.add(open(path).read().strip())
         except OSError:
@@ -71,6 +78,57 @@ def detect_host_mem_gb() -> int | None:
     except (OSError, ValueError, IndexError):
         return None
     return None
+
+
+# The TDX Module's fixed leaf-1 CPUID EDX baseline. On a bare launch host the raw
+# host EDX differs (masked bits like PSE36), but the GUEST — and thus the SMBIOS
+# Type-4 Processor ID that lands in RTMR0 — always sees this constant, so we combine
+# it with the host's native leaf-1 EAX (family/model/stepping, which TDX passes
+# through) to reconstruct the guest processor_id host-side. Same value discover-
+# profile.sh uses; re-verify only if the TDX Module version changes.
+_TDX_LEAF1_EDX = 0x1FA9FBFF
+
+
+def detect_host_cpu_identity() -> "tuple[str | None, str | None]":
+    """(cpu_vendor, cpu_processor_id) as the TDX guest would present them, from
+    /proc/cpuinfo. ``cpu_processor_id`` is the 8-byte-hex CPUID leaf-1: EAX packed
+    from family/model/stepping + EDX = the TDX leaf-1 baseline. Returns None for a
+    field that can't be read. On a non-TDX (e.g. AMD) host the processor_id is not
+    meaningful, but such profiles carry cpu_processor_id=None and wildcard it."""
+    vendor = None
+    fam = model = step = None
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                key, _, val = line.partition(":")
+                key, val = key.strip(), val.strip()
+                if vendor is None and key == "vendor_id":
+                    vendor = val
+                elif fam is None and key == "cpu family":
+                    fam = int(val)
+                elif model is None and key == "model":
+                    model = int(val)
+                elif step is None and key == "stepping":
+                    step = int(val)
+                if None not in (vendor, fam, model, step):
+                    break
+    except (OSError, ValueError):
+        pass
+    processor_id = None
+    if None not in (fam, model, step):
+        base_fam = fam if fam < 0xF else 0xF
+        ext_fam = (fam - 0xF) if fam >= 0xF else 0
+        eax = (
+            (step & 0xF)
+            | ((model & 0xF) << 4)
+            | ((base_fam & 0xF) << 8)
+            | (((model >> 4) & 0xF) << 16)
+            | ((ext_fam & 0xFF) << 20)
+        )
+        processor_id = (
+            eax.to_bytes(4, "little") + _TDX_LEAF1_EDX.to_bytes(4, "little")
+        ).hex()
+    return vendor, processor_id
 
 
 # Expected QEMU per Ubuntu release (each ships one build). Upstream version only;
@@ -136,12 +194,12 @@ def verify_host_qemu_supported() -> None:
 
 
 # NVSwitch device ID (H100/H200 multi-GPU systems)
-_PCI_DEVICE_NVSWITCH = '22a3'
+_PCI_DEVICE_NVSWITCH = "22a3"
 
 
-def _extract_device_id(lspci_line: str, vendor: str = '10de') -> str | None:
+def _extract_device_id(lspci_line: str, vendor: str = "10de") -> str | None:
     """Extract PCI device ID from lspci line, e.g. [10de:2901] -> 2901."""
-    match = re.search(rf'\[{vendor}:([0-9a-f]{{4}})\]', lspci_line, re.IGNORECASE)
+    match = re.search(rf"\[{vendor}:([0-9a-f]{{4}})\]", lspci_line, re.IGNORECASE)
     return match.group(1).lower() if match else None
 
 
@@ -155,46 +213,30 @@ def _lspci_lines(vendor: str) -> list[str]:
     return [line for line in output.decode().splitlines() if vendor in line]
 
 
-def _match_gpu_model(lspci_line: str, host_cpus: int | None = None) -> str | None:
+def _match_gpu_model(lspci_line: str) -> str | None:
     """Return the GPU_PROFILES key for an lspci line, or None.
 
-    Uses PCI device ID as the primary discriminant. A profile must be an EXACT,
-    unambiguous match: when multiple profiles share the same device ID (e.g. B200
-    and B200_XEON6 both use 2901), host_cpus must select exactly one. If the
-    topology cannot be resolved to a single supported profile — no profile matches
-    the CPU count, or the CPU count is unavailable to disambiguate — a ValueError
-    is raised rather than guessing. An unsupported/undetermined topology has no
-    measurement baseline (MRTD/RTMR), so launching it with a guessed profile would
-    produce a VM that cannot attest; the caller must surface it instead.
+    The PCI device ID identifies the GPU-model profile uniquely — host-instance
+    differences (CPU count, RAM) that used to require sibling profiles (B200 vs
+    B200_XEON6) are now fingerprints of one profile, not separate device-ID matches.
+    A device ID that resolves to more than one profile is a profile-registry bug, so
+    we raise rather than guess (the wrong profile would carry the wrong measurements).
     """
     device_id = _extract_device_id(lspci_line, _NVIDIA_VENDOR)
     if not device_id:
         return None
-    matches = [(name, profile) for name, profile in GPU_PROFILES.items()
-               if profile.matches_device_id(device_id)]
+    matches = [
+        name for name, p in GPU_PROFILES.items() if p.matches_device_id(device_id)
+    ]
     if not matches:
         return None
-    if len(matches) == 1:
-        return matches[0][0]
-
-    # Multiple profiles share this device ID — require an exact CPU count match.
-    known = {name: p.host_cpus for name, p in matches}
-    if host_cpus is None:
-        # No CPU count to disambiguate — refuse to guess. Returning the first match
-        # could select a profile whose guest config (and therefore measurements)
-        # does not correspond to this host.
+    if len(matches) > 1:
         raise ValueError(
-            f"Device ID {device_id} matches multiple profiles {known} but the host "
-            f"CPU count could not be determined to disambiguate. Unsupported or "
-            f"undetermined topology — refusing to guess a profile."
+            f"Device ID {device_id} matches multiple profiles {matches}; GPU-model "
+            f"profiles must have distinct device IDs (host CPU/RAM variants are "
+            f"fingerprints, not profiles). Fix the profile registry."
         )
-    exact = [(name, p) for name, p in matches if p.host_cpus == host_cpus]
-    if len(exact) == 1:
-        return exact[0][0]
-    raise ValueError(
-        f"Device ID {device_id} matches multiple profiles {known} but none "
-        f"has host_cpus={host_cpus}. Add a new profile for this CPU topology."
-    )
+    return matches[0]
 
 
 def _is_known_gpu(lspci_line: str) -> bool:
@@ -227,7 +269,7 @@ def detect_gpu_numa_nodes(gpu_bdfs: list[str]) -> list[int]:
     """
     nodes: set[int] = set()
     for bdf in gpu_bdfs:
-        numa_path = f'/sys/bus/pci/devices/{bdf}/numa_node'
+        numa_path = f"/sys/bus/pci/devices/{bdf}/numa_node"
         try:
             with open(numa_path) as f:
                 node = int(f.read().strip())
@@ -246,7 +288,7 @@ def get_gpu_bdfs() -> list[str] | None:
     try:
         cmd = ensure_gpu_tools_available()
         out = subprocess.run(
-            [cmd, '--query-cc-mode'],
+            [cmd, "--query-cc-mode"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -254,11 +296,11 @@ def get_gpu_bdfs() -> list[str] | None:
         if out.returncode != 0:
             return None
         bdf_re = re.compile(
-            r'\s+\d+\s+GPU\s+([0-9a-f]{4}:[0-9a-f]{2,4}:[0-9a-f]{2}\.[0-9])',
+            r"\s+\d+\s+GPU\s+([0-9a-f]{4}:[0-9a-f]{2,4}:[0-9a-f]{2}\.[0-9])",
             re.IGNORECASE,
         )
         bdfs = []
-        for line in (out.stdout or '').splitlines():
+        for line in (out.stdout or "").splitlines():
             m = bdf_re.search(line)
             if m:
                 bdfs.append(m.group(1))
@@ -286,23 +328,41 @@ def host_topology_fingerprint(
     nvswitch_bdfs: list[str],
     ib_bdfs: list[str],
 ) -> TopologyFingerprint:
-    """RTMR0-impacting topology fingerprint of passed-through devices (GPUs,
-    NVSwitches, IB PFs). On the 2-node NUMA path, device->NUMA layout drives the
-    guest PXB grouping (NumaTopology); otherwise the guest is flat and only counts
-    matter (FlatTopology). ``ib_bdfs`` is empty for profiles that don't pass IB.
+    """The RTMR0-determining fingerprint of THIS live host for ``profile``.
+
+    Carries every RTMR0-impacting host-instance fact: the passed-through device
+    layout AND the host shape (vcpus = host_cpus − host_reserved_cpus; sockets; guest
+    mem from profile.guest_mem_gb; CPU vendor + reconstructed Processor ID). On the
+    2-node NUMA path the device->NUMA layout drives the guest PXB grouping
+    (NumaTopology); otherwise the guest is flat and only counts matter (FlatTopology).
     Same fingerprint => same RTMR0 for a given profile + QEMU + image."""
+    host_cpus = detect_host_cpus()
+    vcpus = host_cpus - profile.host_reserved_cpus if host_cpus is not None else None
+    host_gb = detect_host_mem_gb()
+    mem_gb = (
+        profile.guest_mem_gb(host_gb, len(gpu_bdfs)) if host_gb is not None else None
+    )
+    cpu_vendor, cpu_processor_id = detect_host_cpu_identity()
+    cpu = CpuTopology(
+        vcpus=vcpus,
+        sockets=detect_host_sockets(),
+        cpu_vendor=cpu_vendor,
+        cpu_processor_id=cpu_processor_id,
+    )
     node_count = detect_numa_node_count()
     if profile.enable_numa_topology and node_count == 2:
-        return NumaTopology(
+        gpu = NumaTopology(
             gpu_nodes=_device_numa_layout(gpu_bdfs),
             nvswitch_nodes=_device_numa_layout(nvswitch_bdfs),
             ib_nodes=_device_numa_layout(ib_bdfs),
         )
-    return FlatTopology(
-        gpu_count=len(gpu_bdfs),
-        nvswitch_count=len(nvswitch_bdfs),
-        ib_count=len(ib_bdfs),
-    )
+    else:
+        gpu = FlatTopology(
+            gpu_count=len(gpu_bdfs),
+            nvswitch_count=len(nvswitch_bdfs),
+            ib_count=len(ib_bdfs),
+        )
+    return TopologyFingerprint(cpu, mem_gb, gpu)
 
 
 def detect_nvswitches() -> list[str]:
@@ -321,11 +381,9 @@ def detect_nvswitches() -> list[str]:
 def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
     """Map each GPU BDF to its GPU_PROFILES key (or 'default') via lspci.
 
-    Host topology (CPU count) is detected automatically from sysfs to
-    disambiguate profiles that share the same PCI device ID. Raises ValueError
-    if the detected topology doesn't match any known profile for that device ID.
+    The PCI device ID resolves the profile directly (see _match_gpu_model); host
+    CPU/RAM variants are fingerprints of one profile, not separate profiles.
     """
-    host_cpus = detect_host_cpus()
     bdf_set = set(bdfs)
     result = {}
     for line in _lspci_lines(_NVIDIA_VENDOR):
@@ -335,17 +393,17 @@ def get_gpu_models_from_lspci(bdfs: list[str]) -> dict[str, str]:
         bdf = parts[0]
         if bdf not in bdf_set:
             continue
-        result[bdf] = _match_gpu_model(line, host_cpus=host_cpus) or 'default'
+        result[bdf] = _match_gpu_model(line) or "default"
     return result
 
 
 # PCI class 0207 = InfiniBand controller. Excludes Ethernet [0200], DMA [0801], etc.
-_PCI_CLASS_INFINIBAND = '0207'
+_PCI_CLASS_INFINIBAND = "0207"
 
 
 def _is_vf(bdf: str) -> bool:
     """Return True if device is an SR-IOV Virtual Function (has physfn)."""
-    physfn = f'/sys/bus/pci/devices/{bdf}/physfn'
+    physfn = f"/sys/bus/pci/devices/{bdf}/physfn"
     return os.path.exists(physfn)
 
 
@@ -370,7 +428,7 @@ def detect_cx7_bridge_pfs() -> list[str]:
         parts = line.strip().split()
         if not parts:
             continue
-        if f'[{_PCI_CLASS_INFINIBAND}]' not in line:
+        if f"[{_PCI_CLASS_INFINIBAND}]" not in line:
             continue
         bdf = parts[0]
         if _is_vf(bdf):
@@ -404,7 +462,7 @@ def detect_infiniband_pfs(exclude_bdfs: list[str] | None = None) -> list[str]:
         parts = line.strip().split()
         if not parts:
             continue
-        if f'[{_PCI_CLASS_INFINIBAND}]' not in line:
+        if f"[{_PCI_CLASS_INFINIBAND}]" not in line:
             continue
         bdf = parts[0]
         if _is_vf(bdf):
@@ -423,13 +481,13 @@ def detect_infiniband_vfs(pf_bdfs: list[str]) -> list[str]:
         parts = line.strip().split()
         if not parts:
             continue
-        if f'[{_PCI_CLASS_INFINIBAND}]' not in line:
+        if f"[{_PCI_CLASS_INFINIBAND}]" not in line:
             continue
         bdf = parts[0]
         if not _is_vf(bdf):
             continue
         try:
-            physfn_path = os.path.realpath(f'/sys/bus/pci/devices/{bdf}/physfn')
+            physfn_path = os.path.realpath(f"/sys/bus/pci/devices/{bdf}/physfn")
             pf_bdf = os.path.basename(physfn_path)
             if pf_bdf in pf_set:
                 vfs.append(bdf)
@@ -456,13 +514,15 @@ def detect_infiniband_devices() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def detect_profile() -> GpuProfile:
-    """Probe host hardware topology and match to a registered GpuProfile.
+def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
+    """Probe host hardware and resolve the (profile, live fingerprint) pair.
 
-    Collects GPU PCI device IDs, CPU count, socket count, NVSwitch presence,
-    and InfiniBand PF presence, then verifies the detected topology matches a
-    registered profile exactly. Raises ValueError on any mismatch — there is
-    no partial match or advisory path.
+    Resolves the GPU-model profile from the PCI device ID, then builds this host's
+    full RTMR0 fingerprint (device layout + vcpus/sockets/mem + CPU identity). If the
+    profile declares baselined fingerprints, the live one must be exactly among them
+    (a placeholder with cpu_processor_id=None never matches, so a profile pending its
+    capture is refused). Raises ValueError on any mismatch. The returned fingerprint is
+    the source of the launch -smp / -m.
     """
     gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
     if not gpu_bdfs:
@@ -471,14 +531,6 @@ def detect_profile() -> GpuProfile:
     gpu_models = get_gpu_models_from_lspci(gpu_bdfs)
     profile = resolve_profile(gpu_models)
     total_gpus = len(gpu_bdfs)
-
-    detected_sockets = detect_host_sockets()
-    if detected_sockets is not None and detected_sockets != profile.host_sockets:
-        raise ValueError(
-            f"Socket count mismatch: profile '{profile.name}' expects "
-            f"{profile.host_sockets} socket(s), detected {detected_sockets}. "
-            f"Verify lscpu and add a new profile if this is a different server SKU."
-        )
 
     nvswitch_bdfs: list[str] = []
     if profile.should_passthrough_nvswitches(total_gpus):
@@ -499,19 +551,20 @@ def detect_profile() -> GpuProfile:
                 f"but no IB devices detected on this host — skipping IB passthrough."
             )
 
-    # Topology hard-match: the live topology must be one we've baselined for this
-    # profile (it drives the guest ACPI and thus RTMR0). Empty set = not enforced.
-    baselined = profile.baselined_topologies
-    if baselined:
-        fingerprint = host_topology_fingerprint(
-            profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs
-        )
-        if fingerprint not in baselined:
-            raise ValueError(
-                f"Host topology {fingerprint} is not baselined for profile "
-                f"'{profile.name}'. Known: {sorted(baselined)}. This host would "
-                f"attest with an unbaselined RTMR0 and be rejected. Run "
-                f"discover-profile.sh and send the output to baseline it."
-            )
+    fingerprint = host_topology_fingerprint(profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs)
 
-    return profile
+    # Topology hard-match: the live fingerprint must be one we've baselined for this
+    # profile (it drives the guest ACPI and thus RTMR0). Empty set = not enforced
+    # (uncharacterized profile — launches on the live-detected shape, ungated). A
+    # baselined placeholder (cpu_processor_id=None) can't match a live host, so a
+    # profile pending its capture is refused here until discover-profile.sh fills it in.
+    baselined = profile.baselined_topologies
+    if baselined and fingerprint not in baselined:
+        raise ValueError(
+            f"Host fingerprint {fingerprint} is not baselined for profile "
+            f"'{profile.name}'. Known: {sorted(baselined, key=str)}. This host would "
+            f"attest with an unbaselined RTMR0 and be rejected. Run "
+            f"discover-profile.sh and send the output to baseline it."
+        )
+
+    return profile, fingerprint

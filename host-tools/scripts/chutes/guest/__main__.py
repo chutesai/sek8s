@@ -20,7 +20,9 @@ from chutes.guest.detection import (
     get_gpu_bdfs,
     verify_host_qemu_supported,
 )
-from chutes.guest.gpu.profiles import GPU_PROFILES  # noqa: F401 — available for introspection
+from chutes.guest.gpu.profiles import (  # noqa: F401 — available for introspection
+    GPU_PROFILES,
+)
 from chutes.guest.passthrough import setup_passthrough
 from chutes.guest.post_launch import apply_post_launch_tuning
 from chutes.guest.qemu import (
@@ -47,7 +49,9 @@ _DEFAULT_FIRMWARE = "OVMF.inteltdx.fd"
 
 
 def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
-    scripts_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    scripts_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
     return os.path.join(scripts_dir, "../../firmware", filename)
 
 
@@ -89,17 +93,20 @@ def launch_vm(args) -> int:
     gpus = []
 
     if args.pass_gpus:
-        profile = detect_profile()
+        # detect_profile resolves the GPU-model profile AND this host's full RTMR0
+        # fingerprint, and raises if the live host isn't baselined (the fingerprint
+        # match subsumes the old separate CPU-identity guard: device layout + vendor +
+        # vcpus + mem, plus the exact CPU model once its processor_id is captured).
+        profile, fingerprint = detect_profile()
         gpus = get_gpu_bdfs() or detect_nvidia_gpus()
         total_gpus = len(gpus)
-        # Guest RAM is a FIXED, profile-determined value: it shapes the guest
-        # ACPI/memory-map tables and therefore the TDX measurements, so it must
-        # be identical across every host running this profile. We never resize
-        # it to the host. We do refuse to launch if it cannot physically fit:
-        # TDX guest memory is pinned and unreclaimable, so an over-large guest
-        # OOM-kills the host instead of paging. Aborting is measurement-safe —
-        # it never changes the VM.
-        mem_gb = total_gpus * profile.ram_per_gpu_gb
+        # Guest -smp / RAM come from the matched fingerprint, not the host's raw
+        # capacity: they shape the guest ACPI/memory-map and therefore RTMR0, so they
+        # must be the exact baselined values. We never resize to the host — but we do
+        # refuse to launch if the guest RAM cannot physically fit: TDX guest memory is
+        # pinned and unreclaimable, so an over-large guest OOM-kills the host instead
+        # of paging. Aborting is measurement-safe — it never changes the VM.
+        mem_gb = fingerprint.mem_gb
         host_gb = detect_host_mem_gb()
         safe_gb = safe_vm_mem_gb(mem_gb, host_gb) if host_gb is not None else mem_gb
         if safe_gb < mem_gb:
@@ -113,9 +120,9 @@ def launch_vm(args) -> int:
                 file=sys.stderr,
             )
             return 1
-        mem = f"{mem_gb}G"
-        vcpus = str(profile.vcpus)
-        smp_topology = profile.smp_topology
+        mem = fingerprint.mem
+        vcpus = str(fingerprint.cpu.vcpus)
+        smp_topology = fingerprint.cpu.smp_topology
         print(
             f"  GPU passthrough: {total_gpus}x {profile.name}"
             f" ({profile.vram_gb}GB VRAM each)"
@@ -211,7 +218,9 @@ def launch_vm(args) -> int:
         # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
         # CPU power tuning is separate and operator-driven; see
         # `python -m chutes.host.tune` (tune-host.sh / restore-host.sh).
-        pin_threads = numa_active and profile is not None and profile.enable_post_launch_tuning
+        pin_threads = (
+            numa_active and profile is not None and profile.enable_post_launch_tuning
+        )
         if pin_threads:
             apply_post_launch_tuning(
                 pidfile=PIDFILE,
@@ -233,7 +242,11 @@ def main() -> int:
     parser.add_argument("--pass-gpus", action="store_true")
     parser.add_argument("--foreground", action="store_true")
     parser.add_argument("--clean", action="store_true")
-    parser.add_argument("--ssh", action="store_true", help="Show SSH login hint after launch (benchmark and debug modes)")
+    parser.add_argument(
+        "--ssh",
+        action="store_true",
+        help="Show SSH login hint after launch (benchmark and debug modes)",
+    )
 
     parser.add_argument("--config-volume", type=str)
     parser.add_argument("--cache-volume", type=str)

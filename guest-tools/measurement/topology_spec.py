@@ -30,8 +30,35 @@ _PLACEHOLDER_BDF = "0000:00:00.0"
 
 
 def cpu_args_for_qemu_version(qemu_version: str) -> str:
-    """The guest -cpu args for a QEMU version. Defaults to the -avx10 form."""
+    """The guest -cpu args for a QEMU version. Defaults to the -avx10 form.
+    This is the LAUNCH form (`-cpu host`); measurement uses measurement_cpu_args."""
     return _CPU_ARGS_BY_QEMU.get(qemu_version, "host,-avx10")
+
+
+def measurement_cpu_args(fingerprint: TopologyFingerprint, qemu_version: str) -> str:
+    """The -cpu string for offline MEASUREMENT generation: the launch base plus an
+    explicit reconstruction of the fingerprint's production CPU identity, so any host
+    (incl. non-Intel) regenerates the production RTMR0. `vendor` fixes #13 (the SRAT
+    memory-hole is AMD-guest-gated); the Type-4 Processor ID (#14) is patched in
+    separately by tdx-measure from ``fingerprint.cpu_processor_id`` — so BOTH must be
+    set.
+
+    Raises if the fingerprint carries no captured CPU model (cpu_processor_id=None):
+    generating with the launch base alone would silently emit a measurement for the
+    *generating host's* CPU (verified: an unpinned AMD host yields a different, wrong
+    RTMR0), so we refuse rather than publish a plausible-but-wrong value. Capture it
+    with discover-profile.sh on a host of that class and fill in the fingerprint.
+    Launch always uses cpu_args_for_qemu_version."""
+    if fingerprint.cpu.cpu_vendor is None or fingerprint.cpu.cpu_processor_id is None:
+        raise ValueError(
+            f"fingerprint {fingerprint.variant_label!r} has no captured CPU model "
+            f"(cpu_processor_id is None); offline RTMR0 would be generated for the "
+            f"generating host's CPU. Run discover-profile.sh on a host of this class "
+            f"and fill in the fingerprint's cpu_processor_id before generating."
+        )
+    return (
+        f"{cpu_args_for_qemu_version(qemu_version)},vendor={fingerprint.cpu.cpu_vendor}"
+    )
 
 
 def build_topology_spec(
@@ -45,19 +72,20 @@ def build_topology_spec(
 
     A ``NumaTopology`` reproduces the guest-NUMA / PXB-PCIe path (per-device node
     from the fingerprint's vectors); a ``FlatTopology`` reproduces the flat path
-    (only device counts matter). ``mem`` and ``-smp`` come from the profile; no
-    ``host_bdf`` is set, so only root ports are emitted (the vfio endpoints are
-    not part of the measured ACPI).
+    (only device counts matter). ``mem`` and ``-smp`` come from the fingerprint's
+    host shape; no ``host_bdf`` is set, so only root ports are emitted (the vfio
+    endpoints are not part of the measured ACPI).
     """
-    numa = isinstance(fingerprint, NumaTopology)
+    gpu_topology = fingerprint.gpu
+    numa = isinstance(gpu_topology, NumaTopology)
     if numa:
-        gpu_nodes: list[int] = list(fingerprint.gpu_nodes)
-        nvsw_nodes: list[int] = list(fingerprint.nvswitch_nodes)
-        ib_nodes: list[int] = list(fingerprint.ib_nodes)
+        gpu_nodes: list[int] = list(gpu_topology.gpu_nodes)
+        nvsw_nodes: list[int] = list(gpu_topology.nvswitch_nodes)
+        ib_nodes: list[int] = list(gpu_topology.ib_nodes)
     else:  # FlatTopology — node is irrelevant, only counts matter
-        gpu_nodes = [-1] * fingerprint.gpu_count
-        nvsw_nodes = [-1] * fingerprint.nvswitch_count
-        ib_nodes = [-1] * fingerprint.ib_count
+        gpu_nodes = [-1] * gpu_topology.gpu_count
+        nvsw_nodes = [-1] * gpu_topology.nvswitch_count
+        ib_nodes = [-1] * gpu_topology.ib_count
 
     gpu_count = len(gpu_nodes)
     devices: list[DeviceSpec] = []
@@ -94,8 +122,8 @@ def build_topology_spec(
         )
 
     return MachineSpec(
-        mem=f"{gpu_count * profile.ram_per_gpu_gb}G",
-        smp_topology=profile.smp_topology,
+        mem=fingerprint.mem,
+        smp_topology=fingerprint.cpu.smp_topology,
         cpu_args=cpu_args,
         firmware=firmware,
         host_nodes=[0, 1] if numa else [],

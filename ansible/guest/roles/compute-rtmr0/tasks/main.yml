@@ -2,28 +2,22 @@
 # compute-rtmr0 — generate the per-topology RTMR0 measurements (post-luks).
 #
 # Peer of compute-rtmr1-2 (RTMR1/2) and compute-rtmr3 (RTMR3). For each supported
-# topology it runs the tdx-measure fork to get that topology's #0/#11-13, splices
-# them into the gathered baseline CCEL (keeping its #14/#2-4/constants), and replays
-# → RTMR0. See guest-tools/measurement/generate_measurements.py.
+# topology it runs the tdx-measure fork, which now self-generates the COMPLETE
+# 15-event RTMR0 (firmware + QEMU-generated ACPI + fw_cfg + SMBIOS) — no captured
+# baseline CCEL, no splice. See guest-tools/measurement/generate_measurements.py.
 #
 # measurement_profile:
 #   - a name (e.g. RTX_PRO_6000) → generate just that profile (debug-VM case).
-#   - empty → generate ALL profiles (prod publish). Today the single captured baseline
-#     only supplies #14 for its own (mem,cpu) class, so "all" emits the profile whose
-#     class the baseline matches and lists the rest as pending; it covers every profile
-#     once the Phase-2 fork change computes #14 (then no per-class baseline is needed).
+#   - empty → generate ALL profiles (prod publish).
 #
-# Runs OFFLINE — the fork + Docker (with buildx; it uses `docker build --progress plain`)
-# on any x86-64 Linux (no TDX, no GPUs); only the baseline CAPTURE (capture-ccel) needs TDX
-# hardware. build-setup.yml installs both. Non-fatal: a missing baseline or pending profiles
-# never fail the build.
+# Fully OFFLINE — the fork + Docker (with buildx; it uses `docker build --progress
+# plain`) on ANY x86-64 Linux (no TDX, no GPUs). Determinism across generating hosts
+# comes from the profile's captured CPU identity (vendor/phys-bits/processor_id),
+# reconstructed into the measurement -cpu; a non-matching host still reproduces the
+# production RTMR0. Non-fatal: a profile that can't be generated (e.g. no
+# passthrough["gpu"] modeled, or missing CPU identity) is listed PENDING, not fatal.
 
-- name: Check for a captured baseline CCEL
-  ansible.builtin.stat:
-    path: "{{ repo_root }}/measurements/{{ vm_version }}/ccel_data.bin"
-  register: _baseline_ccel
-
-- name: Generate per-topology RTMR0
+- name: Generate per-topology RTMR0 (self-contained — no baseline CCEL)
   ansible.builtin.command:
     argv:
       - python3
@@ -31,8 +25,6 @@
       - generate
       - --profile
       - "{{ measurement_profile | default('') }}"
-      - --baseline
-      - "{{ repo_root }}/measurements/{{ vm_version }}/ccel_data.bin"
       - --version
       - "{{ vm_version }}"
       - --output
@@ -48,30 +40,24 @@
   register: _rtmr0_gen
   changed_when: _rtmr0_gen.rc == 0
   failed_when: false
-  when: _baseline_ccel.stat.exists
 
 - name: Show RTMR0 generation output
   ansible.builtin.debug:
     var: _rtmr0_gen.stderr_lines
-  when: _baseline_ccel.stat.exists
 
 - name: Register RTMR0 measurements as a build fact (from the transient JSON)
   ansible.builtin.set_fact:
     rtmr0_data: "{{ lookup('file', '/tmp/rtmr0-' + vm_version + '.json') | from_json }}"
-  when:
-    - _baseline_ccel.stat.exists
-    - _rtmr0_gen.rc == 0
+  when: _rtmr0_gen.rc == 0
 
 - name: Remove the transient RTMR0 JSON (the fact holds it now — no persisted artifact)
   ansible.builtin.file:
     path: "/tmp/rtmr0-{{ vm_version }}.json"
     state: absent
-  when: _baseline_ccel.stat.exists
 
-- name: Note RTMR0 generation skipped (no baseline CCEL)
+- name: Note RTMR0 generation failed (non-fatal)
   ansible.builtin.debug:
     msg: >-
-      RTMR0 generation skipped: no baseline CCEL at
-      measurements/{{ vm_version }}/ccel_data.bin. Run with measurements=full to
-      capture one (needs a TDX host), then this step generates RTMR0 offline.
-  when: not _baseline_ccel.stat.exists
+      RTMR0 generation returned {{ _rtmr0_gen.rc }} — see the output above. The
+      aggregate step will warn about the missing fact and the tags to re-run.
+  when: _rtmr0_gen.rc != 0

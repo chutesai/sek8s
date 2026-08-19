@@ -300,22 +300,22 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     Needs the fork + Docker (offline, any x86-64 Linux — no TDX/GPU)."""
     from chutes.guest.gpu.profiles import GPU_PROFILES
     from platform_tables import MeasurementMetadata
-    from topology_spec import build_topology_spec, cpu_args_for_qemu_version
+    from topology_spec import build_topology_spec, measurement_cpu_args
 
-    baseline = cc.parse_event_log(Path(args.baseline).read_bytes())
-    baseline_rtmr0 = cc.replay(baseline, 1).hex().upper()
-    tdhob_idx, acpi_idx = locate_rtmr0_events(baseline)
-
-    def fork_overrides(profile, fp):
+    def fork_rtmr0(profile, fp):
+        """Run the fork to self-generate this topology's COMPLETE RTMR0 — all 15
+        events, no CCEL, no splice. The measurement -cpu reconstructs the profile's
+        production CPU vendor and the SMBIOS Type-4 Processor ID is patched in, so any
+        host reproduces the production RTMR0. Returns (rtmr0, mrtd)."""
         spec = build_topology_spec(
             profile,
             fp,
-            cpu_args=cpu_args_for_qemu_version(args.qemu),
+            cpu_args=measurement_cpu_args(fp, args.qemu),
             firmware=str(Path(args.bios_dir) / profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
             meta = MeasurementMetadata(
-                spec, profile, acpi_tables=str(Path(td) / "acpi.bin")
+                spec, profile, fp, acpi_tables=str(Path(td) / "acpi.bin")
             ).to_dict()
             out = generate_acpi_blobs(
                 meta,
@@ -323,10 +323,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                 tdx_measure_bin=args.tdx_measure_bin,
                 dist=args.dist,
             )
-        overrides = overrides_from_fork_log(
-            out.get("rtmr0_log") or [], tdhob_idx, acpi_idx
-        )
-        return overrides, out.get("mrtd", "")
+        return (out.get("rtmr0") or "").upper(), out.get("mrtd", "")
 
     names = [args.profile] if args.profile else list(GPU_PROFILES)
     hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
@@ -344,11 +341,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         # modeled) must not take down the whole publish — mark it PENDING and continue.
         try:
             for fp in fps:
-                overrides, mrtd = fork_overrides(profile, fp)
-                rtmr0 = replay_with_overrides(baseline, overrides).hex().upper()
+                rtmr0, mrtd = fork_rtmr0(profile, fp)
                 mrtds.add(mrtd.upper())
-                gpu_count = getattr(fp, "gpu_count", None) or len(
-                    getattr(fp, "gpu_nodes", ())
+                gpu_count = getattr(fp.gpu, "gpu_count", None) or len(
+                    getattr(fp.gpu, "gpu_nodes", ())
                 )
                 hw_name = f"{profile.display_name} [{args.qemu}, {fp.variant_label}]"
                 hardware.append(
@@ -364,8 +360,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                     }
                 )
                 print(
-                    f"    {hw_name}  rtmr0={rtmr0[:16]}…"
-                    f"{'  (reproduces baseline)' if rtmr0 == baseline_rtmr0 else ''}",
+                    f"    {hw_name}  rtmr0={rtmr0[:16]}…",
                     file=sys.stderr,
                 )
         except Exception as exc:
@@ -387,7 +382,9 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         return 1
     # MRTD is version-level (same OVMF/TDVF across every topology of a build).
     if len(mrtds) > 1:
-        print(f"ERROR: MRTD differs across topologies: {sorted(mrtds)}", file=sys.stderr)
+        print(
+            f"ERROR: MRTD differs across topologies: {sorted(mrtds)}", file=sys.stderr
+        )
         return 1
 
     # Aggregate-ready block: version-level mrtd + a flat hardware list. rtmr1/rtmr2/
@@ -453,8 +450,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     gen.add_argument(
         "--baseline",
-        required=True,
-        help="baseline CCEL blob (data/CCEL) captured from this profile's debug image",
+        default="",
+        help="DEPRECATED (no longer used): the fork now self-generates the complete "
+        "RTMR0, so no baseline CCEL is required. Retained as an accepted-but-ignored "
+        "flag for callers mid-migration.",
     )
     gen.add_argument(
         "--version", required=True, help="image version (recorded in the output)"

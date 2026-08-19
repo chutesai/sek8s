@@ -6,45 +6,37 @@ Adding a new GPU type requires one subclass and one GPU_PROFILES entry.
 
 ## Adding a new GPU profile
 
-Before writing a subclass, run the following on the bare-metal host to
-determine the correct CPU topology values:
+A GpuProfile holds only GPU-MODEL policy that is identical on every host the GPU
+ships on. The host-instance facts that feed RTMR0 — the guest -smp (vcpus +
+sockets), guest RAM, and CPU identity (vendor + SMBIOS Type-4 Processor ID) — are
+NOT profile constants: they live on the topology fingerprint (gpu/topology.py),
+detected from the live host and declared in ``baselined_measurements``. So "same
+GPU, different CPU/RAM host" is two fingerprints of one profile, not two profiles
+(e.g. B200 on a 192-CPU Xeon vs a 288-CPU Xeon 6).
 
-    lscpu | grep -E "Socket|Core\\(s\\) per|Thread|NUMA node\\(s\\)|CPU\\(s\\):"
+To add a profile:
+  1. Encode GPU-model policy on the subclass: pci_device_ids, BAR/VRAM, CC/PPCIe
+     mode, NVSwitch/IB policy, firmware. Override ``host_reserved_cpus`` if the
+     host runs a heavy fixed workload (B200 = 16 for FabricManager; default 4);
+     override ``guest_mem_gb`` if guest RAM is derived from host RAM rather than
+     pinned to aggregate VRAM (B200 does, most don't). Keep host_reserved_cpus EVEN
+     so vcpus divides across sockets.
+  2. Run ``discover-profile.sh`` on each host CLASS the GPU ships on to capture its
+     shape (cpu_vendor, cpu_processor_id, plus the CPU/RAM the fingerprint's
+     vcpus/mem derive from), and declare one fingerprint per class in
+     ``baselined_measurements`` (see H200Profile). A fingerprint with
+     cpu_processor_id=None is launch-gated but not yet generatable — fill it in from
+     discover-profile before generating that class's measurement.
 
-Example output for a 2-socket Xeon system:
-
-    CPU(s):                    128
-    Thread(s) per core:        2
-    Core(s) per socket:        32
-    Socket(s):                 2
-    NUMA node(s):              2
-
-Map these to the profile properties:
-
-    host_cpus    = CPU(s)                            → 128
-    host_sockets = Socket(s)                         → 2
-    vcpus        = host_cpus - host_reserved_cpus    → 124  (derived, no override needed)
-    smp_topology = derived automatically from the above (no override needed)
-
-host_reserved_cpus is the number of logical CPUs kept for the host OS. It
-defaults to HOST_RESERVED_CPUS (4) and is a per-profile property so a GPU type
-with a heavier host workload can reserve more without shifting the vcpu count —
-and therefore RTMR0 — of unrelated profiles. B200/B200_XEON6 override it to 16
-because the host runs FabricManager alongside QEMU's iothreads and, under heavy
-NVLink/NCCL I/O, a thin reserve starves those threads (observed as
-cudaErrorNvlinkUncorrectable in the guest).
-
-Keep any override EVEN: vcpus must divide across host_sockets (2) for a clean
--smp topology. Changing host_reserved_cpus changes vcpus → smp_topology →
-RTMR0, so any change requires re-baselining that profile's attestation policy.
-vcpus and smp_topology are otherwise computed automatically — only override
-host_cpus/host_sockets if the server has a non-standard layout.
+Changing host_reserved_cpus / guest_mem_gb moves the fingerprint's vcpus/mem →
+RTMR0, so it requires re-baselining that profile's attestation policy.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from chutes.guest.gpu.topology import FlatTopology, NumaTopology, TopologyFingerprint
+from chutes.guest.gpu import known_topologies as known
+from chutes.guest.gpu.topology import TopologyFingerprint
 
 HOST_RESERVED_CPUS = 4
 
@@ -136,43 +128,24 @@ class GpuProfile(ABC):
         ...
 
     @property
-    @abstractmethod
-    def host_cpus(self) -> int:
-        """Total physical CPU count (CPU(s) from lscpu). See module docstring."""
-        ...
-
-    @property
-    def host_sockets(self) -> int:
-        """Physical socket count (Socket(s) from lscpu). Override per profile."""
-        return 1
-
-    @property
     def host_reserved_cpus(self) -> int:
         """Logical CPUs kept for the host OS (not handed to the guest).
 
         Defaults to HOST_RESERVED_CPUS. Override per profile when the host
         carries a heavier fixed workload (e.g. FabricManager on NVSwitch HGX
-        systems). Must be even so vcpus divides across host_sockets. Changing
-        it changes vcpus → smp_topology → RTMR0; re-baseline attestation.
+        systems). Must be even so vcpus divides across sockets. Detection uses it
+        to derive the guest vcpus (host_cpus − this) for the fingerprint; changing
+        it changes vcpus → the fingerprint → RTMR0, so re-baseline attestation.
         """
         return HOST_RESERVED_CPUS
 
-    @property
-    def vcpus(self) -> int:
-        """vCPUs allocated to the VM (host CPUs minus reserve)."""
-        return self.host_cpus - self.host_reserved_cpus
-
-    @property
-    def smp_topology(self) -> str:
-        """Full QEMU -smp topology string.
-
-        Mirrors the physical socket layout so QEMU synthesizes CPUID topology
-        leaves that match the host structure. threads=1 disables SMT in the
-        guest — each vCPU appears as an independent core, which produces a
-        clean scheduler topology without requiring guest HT awareness.
-        """
-        cores_per_socket = self.vcpus // self.host_sockets
-        return f"{self.vcpus},sockets={self.host_sockets},cores={cores_per_socket},threads=1"
+    # The host-instance facts that feed RTMR0 — the guest -smp (vcpus + sockets),
+    # guest RAM, and CPU identity (vendor + SMBIOS Type-4 Processor ID) — are NOT
+    # profile constants: they vary host to host and live on the topology fingerprint
+    # (gpu/topology.py). Detection derives them from the LIVE host (vcpus =
+    # host_cpus − host_reserved_cpus; sockets; mem via guest_mem_gb; CPU via
+    # /proc/cpuinfo) and matches the result against baselined_measurements. The
+    # profile supplies only host_reserved_cpus (workload policy) and guest_mem_gb.
 
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -200,12 +173,15 @@ class GpuProfile(ABC):
         """Whether InfiniBand devices should be detected and passed through."""
         return False
 
-    @property
-    def ram_per_gpu_gb(self) -> int:
-        """VM RAM allocated per GPU in GB. Defaults to vram_gb; override when
-        host RAM allows more headroom than VRAM (e.g. B200 with 3 TB host RAM).
+    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
+        """Total guest RAM in GB for ``gpu_count`` GPUs on a host with ``host_gb`` RAM.
+
+        The default pins guest RAM to aggregate VRAM (host RAM irrelevant). Override
+        when a GPU type is deployed on hosts with more RAM than VRAM and should use it
+        (e.g. B200). Detection bakes the result into the fingerprint's ``mem_gb``, so
+        it feeds RTMR0 — changing the rule re-baselines attestation.
         """
-        return self.vram_gb
+        return self.vram_gb * gpu_count
 
     @property
     def enable_numa_topology(self) -> bool:
@@ -264,10 +240,11 @@ class GpuProfile(ABC):
 
 
 class B200Profile(GpuProfile):
-    """B200 on a standard Intel Xeon host (2×48c×2t = 192 CPUs, ~2 TB RAM).
-
-    Confirmed from discover-profile.sh on am-b200-57.
-    2 NUMA nodes with GPUs split 4+4 across sockets.
+    """B200 (GPU-model policy). Covers both Intel host classes it ships on — a
+    192-CPU/~2 TB Xeon and a 288-CPU/~3 TB Xeon 6 — as two fingerprints of this one
+    profile (see baselined_measurements), not two classes. 2 NUMA nodes with GPUs
+    split 4+4 across sockets. Confirmed from discover-profile.sh on am-b200-57
+    (Xeon) and chutes-miner-gpu-0 (Xeon 6).
     """
 
     pci_device_ids = ["2901"]
@@ -287,31 +264,22 @@ class B200Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 192  # B200 HBM3e
 
-    @property
-    def ram_per_gpu_gb(self) -> int:
-        # Host has ~2 TB RAM (2015 GB observed); leave ~64 GB for host OS.
-        # 8 GPUs → (2015 - 64) / 8 ≈ 244 GB per GPU.
-        # Confirmed from discover-profile.sh on am-b200-57.
-        return 243
-
-    @property
-    def host_cpus(self) -> int:
-        # 2 sockets × 48 cores × 2 threads = 192.
-        # Confirmed from discover-profile.sh on am-b200-57.
-        return 192
-
-    @property
-    def host_sockets(self) -> int:
-        return 2
+    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
+        # B200 hosts carry far more RAM than VRAM, so guest RAM is DERIVED from the
+        # host: leave ~64 GB for the host OS, floor-divide the rest per GPU (the floor
+        # absorbs few-GB same-tier variance), re-multiply. ~2 TB host → 243/GPU → 1944
+        # total; ~3 TB Xeon 6 host → 369/GPU → 2952 total. This derivation is what makes
+        # "B200 vs Xeon 6" two fingerprints of one profile rather than two classes.
+        return ((host_gb - 64) // gpu_count) * gpu_count
 
     @property
     def host_reserved_cpus(self) -> int:
-        # 16 logical (8 physical cores, 4/socket) → 176 vcpus, 88 cores/socket.
-        # The host runs FabricManager alongside QEMU's iothreads/vhost workers;
-        # the default reserve of 4 starves them under heavy NVLink/NCCL I/O,
-        # surfacing as cudaErrorNvlinkUncorrectable in the guest. The reserved
-        # cores also widen the gap the iothreads pin into (see post_launch.py).
-        # Inherited by B200Xeon6Profile. Even, so vcpus stays socket-divisible.
+        # 16 logical (8 physical cores, 4/socket). The host runs FabricManager
+        # alongside QEMU's iothreads/vhost workers; the default reserve of 4 starves
+        # them under heavy NVLink/NCCL I/O, surfacing as cudaErrorNvlinkUncorrectable
+        # in the guest. The reserved cores also widen the gap the iothreads pin into
+        # (see post_launch.py). Even, so vcpus stays socket-divisible. Applies to both
+        # the 192-CPU Xeon and 288-CPU Xeon 6 host classes.
         return 16
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -328,7 +296,9 @@ class B200Profile(GpuProfile):
 
     @property
     def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
+        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets. (A Xeon 6 SNC3
+        # host exposes 6 nodes, so use_numa_topology falls back to flat there; the
+        # flag stays True so it activates when SNC is off / 2-node.)
         return True
 
     @property
@@ -341,67 +311,13 @@ class B200Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # No NVSwitch and no IB passthrough -> only gpu_nodes set. Every B200 maps
-        # here regardless of NIC loadout. QEMU 10.2.1 (26.04).
-        return {"10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))}}
+        # ONE profile, two host classes — same 4+4 GPU layout, different CPU/RAM (the
+        # B200-vs-Xeon6 collapse: two fingerprints, not two classes). Both Intel; each
+        # cpu_processor_id PENDING a discover-profile.sh capture. QEMU 10.2.1 (26.04).
+        return {"10.2.1": {known.B200_XEON_FP, known.B200_XEON6_FP}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
-
-
-class B200Xeon6Profile(B200Profile):
-    """B200 on an Intel Xeon 6 host (2×72c×2t = 288 CPUs, ~3 TB RAM, SNC3).
-
-    Same GPU and passthrough behavior as B200Profile but different host CPU
-    topology. Uses Sub-NUMA Clustering (SNC3): 3 nodes per socket → 6 nodes
-    total. use_numa_topology() requires exactly 2 nodes, so enable_numa_topology
-    has no effect on current SNC3 hardware and falls back to numactl --interleave.
-    Flag kept True so it activates automatically when SNC3 support is added.
-
-    Confirmed from discover-profile.sh on chutes-miner-gpu-0.
-
-    NOTE (revisit next release): this subclass exists only because host_cpus
-    (288 vs 192) and ram_per_gpu_gb (369 vs 243) differ from B200Profile — both
-    are host-instance facts, not GPU-model policy. The plan is to fold vcpus (from
-    the live host) and guest mem (B200 derives it from host RAM: (host_gb-64)//gpus
-    — see discover-profile.sh) into the topology fingerprint and collapse this into
-    a single B200Profile, so "B200 vs Xeon6" becomes two fingerprints rather than
-    two classes. Deferred now because it would move RTMR0 for off-nominal hosts
-    (e.g. a 192-CPU/3 TB B200 currently pinned to mem=1944 would derive 2952); once
-    the next-release flow captures+validates+reports topology, updating those
-    measurements is cheap. See gpu/topology.py.
-    """
-
-    pci_device_ids = ["2901"]
-    display_name = "8xb200-xeon6"  # inherits expected_gpus=["b200"] from B200Profile
-
-    @property
-    def name(self) -> str:
-        return "B200_XEON6"
-
-    @property
-    def ram_per_gpu_gb(self) -> int:
-        # Host has ~3 TB RAM (3022 GB observed); leave ~64 GB for host OS.
-        # 8 GPUs → (3022 - 64) / 8 ≈ 369 GB per GPU.
-        return 369
-
-    @property
-    def host_cpus(self) -> int:
-        # 2 sockets × 72 cores × 2 threads = 288.
-        # Confirmed from discover-profile.sh on chutes-miner-gpu-0.
-        return 288
-
-    @property
-    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # Xeon6 SNC3 (6 nodes -> flat fallback) has no 10.2.1 measurement, so an
-        # SNC3 host is refused at launch until one is registered.
-        return {
-            # gd-251: SNC off -> 2 NUMA nodes -> NUMA path, GPUs 4+4.
-            "10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))},
-        }
-
-    def describe_mode(self, total_gpus: int) -> str:
-        return "CC mode (B200 Xeon6)"
 
 
 class B300Profile(GpuProfile):
@@ -422,14 +338,9 @@ class B300Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 288  # B300 HBM3e (SXM6 AC)
 
-    @property
-    def host_cpus(self) -> int:
-        # 2 sockets x 48 cores x 2 threads = 192 (confirmed from lscpu on am-b300-61).
-        return 192
-
-    @property
-    def host_sockets(self) -> int:
-        return 2
+    # Host: 2 sockets x 48 cores x 2 threads = 192 (Intel, from lscpu on am-b300-61)
+    # → 188 vcpus. No baselined_measurements yet (uncharacterized): run
+    # discover-profile.sh on a B300 host and declare its fingerprint (see H200Profile).
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
@@ -486,27 +397,6 @@ class H200Profile(GpuProfile):
         return 141  # H200 HBM3e
 
     @property
-    def host_cpus(self) -> int:
-        # 2 sockets × 32 cores × 2 threads = 128.
-        # Confirmed from discover-profile.sh on dev-h200-tee.
-        #
-        # NOTE (revisit next release): this is pinned at 128, so EVERY H200 host
-        # attests at vcpus=124 regardless of its real CPU count. The 192-CPU H200
-        # hosts (e.g. h200-ar6, h200-gd-245) therefore run with 124 vcpus — 68
-        # physical cores unused — and match the single 124-vcpu H200 measurement.
-        # The intended fix (aligned with the B200 direction) is to derive vcpus
-        # from the live host and carry the resulting -smp in the topology
-        # fingerprint, so a 192-CPU H200 runs 188 vcpus with its own baseline.
-        # Deferred here to avoid re-baselining those hosts mid-stream; when it
-        # lands, register the 192-CPU H200 RTMR0 in chutes-ops teeMeasurements
-        # first. See gpu/topology.py for the fingerprint the smp/mem would join.
-        return 128
-
-    @property
-    def host_sockets(self) -> int:
-        return 2
-
-    @property
     def enable_numa_topology(self) -> bool:
         # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
         # Confirmed from discover-profile.sh on dev-h200-tee.
@@ -540,18 +430,14 @@ class H200Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # No IB passthrough -> ib_nodes empty. Mirrors chutes-ops teeMeasurements.
-        # The two NUMA fingerprints differ only in which host NUMA node the four
-        # NVSwitches attach to (chassis-dependent); GPUs are always 4+4.
-        nvswitch_on_node1 = NumaTopology(  # e.g. Dell XE9680
-            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(1, 1, 1, 1)
-        )
-        nvswitch_on_node0 = NumaTopology(  # e.g. KR6288
-            gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 0, 0, 0)
-        )
-        # No flat entry: no flat-path H200 is baselined at 10.2.1 (the only
-        # supported QEMU), so a >2-NUMA-node H200 host is refused at launch.
-        return {"10.2.1": {nvswitch_on_node1, nvswitch_on_node0}}
+        # Mirrors chutes-ops teeMeasurements. The two fingerprints differ only in which
+        # host NUMA node the four NVSwitches attach to (chassis-dependent); GPUs always
+        # 4+4. No flat entry: no flat-path H200 is baselined at 10.2.1 (the only
+        # supported QEMU), so a >2-NUMA-node H200 host is refused at launch. NOTE: a
+        # 192-CPU H200 host now derives 188 vcpus (its own fingerprint) instead of being
+        # pinned to 124; capture its CPU with discover-profile.sh and register that
+        # RTMR0 before running one.
+        return {"10.2.1": {known.H200_KR6288, known.H200_XE9680}}
 
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
@@ -588,15 +474,8 @@ class RTXPro6000Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 96  # GDDR7
 
-    @property
-    def host_cpus(self) -> int:
-        # 2 sockets × 64 cores × 1 thread = 128 (AMD EPYC Genoa, no SMT).
-        # Confirmed from discover-profile.sh on eu1-hpe1-rtx6000pro-se-001.
-        return 128
-
-    @property
-    def host_sockets(self) -> int:
-        return 2
+    # Host: 2 sockets × 64 cores × 1 thread = 128 Intel Xeon (Sierra Forest E-core,
+    # no SMT) → 124 vcpus. From discover-profile.sh on eu1-hpe1-rtx6000pro-se-008.
 
     @property
     def enable_numa_topology(self) -> bool:
@@ -616,17 +495,10 @@ class RTXPro6000Profile(GpuProfile):
 
     @property
     def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # No NVSwitch/IB -> only gpu_nodes / gpu_count set. Two host shapes,
-        # distinguished purely by NUMA node count:
-        #   - 2 NUMA nodes -> guest-NUMA path, GPUs 4+4.
-        #   - >2 NUMA nodes (e.g. 4) -> flat fallback; only GPU count matters.
-        # QEMU 10.2.1 = Ubuntu 26.04, the only supported host OS.
-        return {
-            "10.2.1": {
-                NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
-                FlatTopology(gpu_count=8),
-            },
-        }
+        # Two host shapes distinguished purely by NUMA node count: 2 nodes → guest-NUMA
+        # path (GPUs 4+4); >2 nodes → flat fallback (only GPU count matters). Intel Xeon
+        # host, CPU captured (see known.RTX_XEON). QEMU 10.2.1 = Ubuntu 26.04.
+        return {"10.2.1": {known.RTX_NUMA, known.RTX_FLAT}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (RTX Pro 6000)"
@@ -634,7 +506,6 @@ class RTXPro6000Profile(GpuProfile):
 
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
-    "B200_XEON6": B200Xeon6Profile(),
     "B300": B300Profile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),

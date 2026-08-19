@@ -24,10 +24,10 @@ def _block_format(path: str | None) -> str:
 # otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
 #
 # This is a FLAT reserve, deliberately not a percentage. It must stay aligned with
-# how the GpuProfiles size guest RAM: each profile sets ram_per_gpu_gb so that
-# gpu_count * ram_per_gpu_gb ~= host_RAM - VM_MEM_RESERVE_GB (e.g. B200_XEON6:
-# "(3022 - 64) / 8 ~= 369"). A percentage reserve breaks that: 12% over-reserved
-# ~360 GB on a 3 TB host and wrongly rejected valid B200 / B200_XEON6 launches,
+# how the GpuProfiles size guest RAM: a RAM-derived profile's guest_mem_gb leaves
+# exactly this much for the host (B200: "(host_gb - 64) // gpu_count * gpu_count",
+# e.g. (3022 - 64) // 8 * 8 = 2952). A percentage reserve breaks that: 12% over-
+# reserved ~360 GB on a 3 TB host and wrongly rejected valid B200 launches,
 # and any fraction would re-introduce the same mismatch once a host exceeds
 # (reserve / fraction). The only overhead that scales with size is the TDX PAMT
 # (~0.4% of guest), and 64 GB covers PAMT for guests up to ~16 TB, so a flat
@@ -112,7 +112,9 @@ def read_pci_numa_node(bdf: str) -> int:
     return node if node >= 0 else -1
 
 
-def _append_numa_memory(cmd: "QemuCommand", mem_mib: int, host_nodes: list[int]) -> None:
+def _append_numa_memory(
+    cmd: "QemuCommand", mem_mib: int, host_nodes: list[int]
+) -> None:
     """Add per-node memory backends and guest NUMA topology to ``cmd``.
 
     NB: do NOT set prealloc=on on these backends. Under TDX
@@ -171,19 +173,23 @@ class PciTopologyState:
         """
         if self.func == 0:
             cmd.devices.append(
-                f'pcie-root-port,port={self.port},chassis={chassis},id={rp_id},'
-                f'bus=pcie.0,multifunction=on,addr={self.slot:#x}'
+                f"pcie-root-port,port={self.port},chassis={chassis},id={rp_id},"
+                f"bus=pcie.0,multifunction=on,addr={self.slot:#x}"
             )
         else:
             cmd.devices.append(
-                f'pcie-root-port,port={self.port},chassis={chassis},id={rp_id},'
-                f'bus=pcie.0,addr={self.slot:#x}.{self.func:#x}'
+                f"pcie-root-port,port={self.port},chassis={chassis},id={rp_id},"
+                f"bus=pcie.0,addr={self.slot:#x}.{self.func:#x}"
             )
 
-        cmd.devices.append(f'vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0')
+        cmd.devices.append(
+            f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
+        )
 
         if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(f'name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}')
+            cmd.fw_cfg.append(
+                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
+            )
 
         self.port += 1
         self.func = (self.func + 1) % 8
@@ -212,7 +218,9 @@ class NumaPciTopologyState:
             self.pxb_created[numa_node] = pxb_id
             self.pxb_port_idx[numa_node] = 0
             self.pxb_busnr += 32
-            print(f"    Created PXB-PCIe for NUMA node {numa_node} (bus_nr={self.pxb_busnr - 32})")
+            print(
+                f"    Created PXB-PCIe for NUMA node {numa_node} (bus_nr={self.pxb_busnr - 32})"
+            )
         return self.pxb_created[numa_node]
 
     def add_device(
@@ -251,9 +259,13 @@ class NumaPciTopologyState:
         cmd.devices.append(
             f"pcie-root-port,port={self.port},chassis={chassis},id={rp_id},bus={pxb_bus},addr={rp_addr}"
         )
-        cmd.devices.append(f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0")
+        cmd.devices.append(
+            f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
+        )
         if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}")
+            cmd.fw_cfg.append(
+                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
+            )
         print(f"    {host_bdf} -> PXB NUMA node {numa_node}")
         self.port += 1
 
@@ -307,24 +319,45 @@ class QemuCommand:
         """Render the flat ``qemu-system-x86_64`` argument list."""
         args = [
             "qemu-system-x86_64",
-            "-accel", self.accel,
-            "-m", self.mem,
-            "-smp", self.smp_topology,
-            "-name", f"{self.process_name},process={self.process_name},debug-threads=on",
-            "-cpu", self.cpu_args,
-            "-object", self.tdx_guest,
+            "-accel",
+            self.accel,
+            "-m",
+            self.mem,
+            "-smp",
+            self.smp_topology,
+            "-name",
+            f"{self.process_name},process={self.process_name},debug-threads=on",
+            "-cpu",
+            self.cpu_args,
+            "-object",
+            self.tdx_guest,
         ]
         for o in self.objects:
             args += ["-object", o]
         for n in self.numa:
             args += ["-numa", n]
-        args += ["-machine", self.machine, "-bios", self.firmware, "-nodefaults", "-vga", "none"]
+        args += [
+            "-machine",
+            self.machine,
+            "-bios",
+            self.firmware,
+            "-nodefaults",
+            "-vga",
+            "none",
+        ]
         for s in self.smbios:
             args += ["-smbios", s]
         if self.foreground:
             args += ["-nographic", "-serial", "mon:stdio"]
         else:
-            args += ["-nographic", "-serial", f"file:{self.logfile}", "-daemonize", "-pidfile", self.pidfile]
+            args += [
+                "-nographic",
+                "-serial",
+                f"file:{self.logfile}",
+                "-daemonize",
+                "-pidfile",
+                self.pidfile,
+            ]
         if self.kernel:
             args += ["-kernel", self.kernel]
         if self.initrd:
@@ -421,7 +454,7 @@ def build_base_cmd(
     cmd.append = cmdline
 
     img_fmt = _block_format(img_path)
-    drive_opts = f'file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}'
+    drive_opts = f"file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}"
     if img_fmt == "qcow2":
         drive_opts += ",discard=unmap"
     elif img_fmt == "raw":
@@ -451,18 +484,20 @@ def build_network(
             print("ERROR: --network-type tap requires --net-iface")
             sys.exit(1)
         vectors = 2 * net_queues + 2
-        print(f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)")
+        print(
+            f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
+        )
         cmd.netdevs.append(
-            f'tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}'
+            f"tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}"
         )
         cmd.devices.append(
-            f'virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on'
-            f'{pinning.device_suffix()}'
+            f"virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on"
+            f"{pinning.device_suffix()}"
         )
     else:
         print("Networking: Canonical user-mode networking")
-        cmd.devices.append(f'virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}')
-        cmd.netdevs.append(f'user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22')
+        cmd.devices.append(f"virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}")
+        cmd.netdevs.append(f"user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22")
 
 
 def add_volumes(
@@ -479,8 +514,13 @@ def add_volumes(
         cmd.drives.append(
             f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on"
         )
-        cmd.devices.append(f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}")
-    for vol_path, vol_id in [(cache_volume, "virtio-cache"), (storage_volume, "virtio-storage")]:
+        cmd.devices.append(
+            f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}"
+        )
+    for vol_path, vol_id in [
+        (cache_volume, "virtio-cache"),
+        (storage_volume, "virtio-storage"),
+    ]:
         if not vol_path:
             continue
         vol_fmt = _block_format(vol_path)
@@ -497,4 +537,4 @@ def add_volumes(
 def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning | None = None):
     """Add vhost-vsock device to the QemuCommand."""
     pinning = pci_pinning or PcieRootPinning(False)
-    cmd.devices.append(f'vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}')
+    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}")
