@@ -15,6 +15,7 @@ copy_exec /usr/sbin/cryptsetup
 copy_exec /usr/bin/tdx-quote-generator
 copy_exec /usr/bin/base64
 copy_exec /usr/bin/openssl
+copy_exec /usr/bin/chown
 copy_exec /usr/bin/sha256sum
 copy_exec /usr/bin/sha384sum
 
@@ -70,7 +71,16 @@ manual_add_modules vmw_vsock_virtio_transport_common
 # XFS module for cache/storage volume mounts
 manual_add_modules xfs
 
-# Shared LUKS helpers (plain shell script, not a binary)
+# Shared shell libraries sourced by the boot scripts (luks-helpers, attest-common,
+# provision-common, and — debug images only — rc-sign). These live as regular files
+# directly under /etc/initramfs-tools/scripts/; the init-top/init-premount/init-bottom
+# stages are subdirectories staged by initramfs-tools itself, so a non-recursive
+# regular-file glob picks up only the libs. Copy exactly the libs installed for THIS
+# image: a prod image never installs rc-sign, so prod never stages it and keeps a
+# distinct measurement — the hook itself carries no debug-specific reference.
 mkdir -p "$DESTDIR/scripts"
-cp /etc/initramfs-tools/scripts/luks-helpers "$DESTDIR/scripts/luks-helpers"
-chmod 755 "$DESTDIR/scripts/luks-helpers"
+for _lib in /etc/initramfs-tools/scripts/*; do
+    [ -f "$_lib" ] || continue
+    cp "$_lib" "$DESTDIR/scripts/$(basename "$_lib")"
+    chmod 755 "$DESTDIR/scripts/$(basename "$_lib")"
+done

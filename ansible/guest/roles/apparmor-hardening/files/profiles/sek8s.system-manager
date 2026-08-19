@@ -5,6 +5,8 @@
 
 abi <abi/4.0>,
 
+include <tunables/global>
+
 profile sek8s.system-manager flags=(enforce) {
   include <abstractions/base>
   include <abstractions/nameservice>

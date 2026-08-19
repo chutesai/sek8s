@@ -108,11 +108,6 @@ class ImageConfig(AuthConfig):
         alias="IMAGE_PULL_ALLOWED_REGISTRIES",
         description="JSON array or comma-separated list of allowed registries for image pull",
     )
-    cosign_public_key_path: Path = Field(
-        default=Path("/etc/admission-controller/cosign/cosign.pub"),
-        alias="COSIGN_PUBLIC_KEY_PATH",
-        description="Path to cosign public key for image verification",
-    )
     image_pull_timeout_seconds: float = Field(
         default=1200.0,
         alias="IMAGE_PULL_TIMEOUT_SECONDS",

@@ -75,15 +75,6 @@
         group: root
         mode: "0644"
 
-    - name: Copy debug encryption drop-in (copies build-time key to /run/chutes/ on boot)
-      ansible.builtin.copy:
-        src: files/k3s.service.d/debug-encryption.conf
-        dest: /etc/systemd/system/k3s.service.d/debug-encryption.conf
-        owner: root
-        group: root
-        mode: "0644"
-      when: debug_build | default(false)
-
     - name: Set sysctl parameters for mount security
       ansible.posix.sysctl:
         name: "{{ item.name }}"

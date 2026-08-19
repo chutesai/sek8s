@@ -38,6 +38,7 @@
   become: true
   tags:
     - common
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -51,6 +52,7 @@
   become: true
   tags:
     - gpu
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -64,6 +66,7 @@
   become: true
   tags:
     - checkpoint-gpu
+    - build
   tasks:
     - name: Save GPU checkpoint
       ansible.builtin.include_role:
@@ -76,6 +79,7 @@
   become: true
   tags:
     - k3s
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -89,6 +93,7 @@
   become: true
   tags:
     - gpu-verify
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -102,6 +107,7 @@
   become: true
   tags:
     - chutes-gpu
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -117,6 +123,7 @@
   become: true
   tags:
     - sek8s
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -132,6 +139,7 @@
   become: true
   tags:
     - attestation-service
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -147,6 +155,7 @@
   become: true
   tags:
     - admission-controller
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -162,6 +171,7 @@
   become: true
   tags:
     - signing-keys
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -177,6 +187,7 @@
   become: true
   tags:
     - vm-tls
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -192,6 +203,7 @@
   become: true
   tags:
     - system-manager
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -207,6 +219,7 @@
   become: true
   tags:
     - chute-log-shipper
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -222,6 +235,7 @@
   become: true
   tags:
     - cache-volume
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -237,6 +251,7 @@
   become: true
   tags:
     - apparmor-hardening
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -253,6 +268,7 @@
   any_errors_fatal: false
   tags:
     - config
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -268,6 +284,7 @@
   become: true
   tags:
     - lock-accounts
+    - build
   tasks:
     - name: Lock accounts
       ansible.builtin.include_role:
@@ -279,6 +296,7 @@
   become: true
   tags:
     - disable-console
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -293,6 +311,7 @@
   become: true
   tags:
     - debug-credentials
+    - build
   tasks:
     - name: Set known root password for console access (debug builds only)
       ansible.builtin.user:
@@ -328,6 +347,7 @@
   become: true
   tags:
     - security
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -341,6 +361,7 @@
   become: true
   tags:
     - rtmr3-measure
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -355,6 +376,7 @@
   any_errors_fatal: false
   tags:
     - cleanup-orchestration
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -369,6 +391,7 @@
   any_errors_fatal: false
   tags:
     - cleanup-build-vm
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -382,6 +405,7 @@
   become: true
   tags:
     - remove-ssh
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -396,6 +420,7 @@
   become: true
   tags:
     - finalize-vm-image
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
@@ -404,41 +429,117 @@
       ansible.builtin.include_role:
         name: finalize-vm-image
 
-- name: Compute expected RTMRs from final image
+# RTMR3 is derived from userspace files only (luks-independent) and is easiest to
+# compute against the plaintext image, so it runs PRE-luks. The initrd-dependent
+# RTMR1/2 + boot-artifact staging run POST-luks (below), because luks rebuilds the
+# initrd for both prod and debug.
+# `measurements` gates the whole measurement phase, as a ladder (see host.yml):
+#   none    → skip everything (pure image build — non-TDX / local dev iteration)
+#   offline → RTMR1/2/3 (any x86-64 Linux; no CCEL capture)
+#   full    → + capture the baseline CCEL (needs a TDX host)   [default]
+# RTMR0 generation runs whenever a baseline CCEL is present (compute-rtmr0 skips cleanly
+# without one); measurement_profile selects which profile(s).
+- name: Compute expected RTMR3 from final image (pre-luks)
   hosts: host
   become: true
   tags:
-    - compute-rtmrs
+    - compute-rtmr3
+    - compute-measurements
   tasks:
-    - name: Compute RTMR1/RTMR2/RTMR3
+    - name: Compute RTMR3
       ansible.builtin.include_role:
-        name: compute-rtmrs
+        name: compute-rtmr3
+      when: (measurements | default('full')) != 'none'
 
-- name: Encrypt disk
+- name: Provision root filesystem (encrypt for prod / install debug initramfs)
   hosts: host
   become: true
   tags:
     - luks
+    - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Encrypt disk
+    - name: Provision root filesystem
       ansible.builtin.include_role:
         name: luks
         apply:
           tags: luks
-      when: not (debug_build | default(false))
 
-- name: Prime VM for stable TDX measurements
+# ── Measurement GATHER (post-luks) ────────────────────────────────────────────
+# The initrd is now final (luks rebuilt it for prod AND debug). Gather the two kinds
+# of measurement input, by their distinct mechanisms:
+#   - stage-boot-artifacts : extract this image's direct-boot vmlinuz/initrd/cmdline
+#   - capture-ccel         : boot the debug image on TDX hw → baseline CCEL + ACPI/SMBIOS
+# stage runs for offline+full; the CCEL capture is the full-only step (needs TDX hw).
+- name: Gather measurement inputs from final image (post-luks)
   hosts: host
   become: true
   tags:
-    - prime-vm
+    - gather-measurement-inputs
+    - compute-measurements
   tasks:
-    - name: Prime VM EFI boot variable state
+    - name: Stage direct-boot artifacts
       ansible.builtin.include_role:
-        name: prime-vm
-        apply:
-          tags: prime-vm
+        name: stage-boot-artifacts
+      when: (measurements | default('full')) != 'none'
+
+    - name: Capture baseline CCEL + ACPI/SMBIOS from the debug image (needs TDX)
+      ansible.builtin.include_role:
+        name: capture-ccel
+      when: (measurements | default('full')) == 'full'
+
+# ── Measurement COMPUTE (post-luks) ───────────────────────────────────────────
+# One peer role per register: compute-rtmr1-2 (RTMR1/2) and compute-rtmr0 (per-topology
+# RTMR0, splice+replay against the baseline). RTMR3 is computed pre-luks. tdx-measure
+# builds the shared fork engine both use. All run offline (no TDX/GPU).
+- name: Compute measurements from gathered inputs (post-luks)
+  hosts: host
+  become: true
+  tags:
+    - compute-measurements
+  tasks:
+    - name: Provision the tdx-measure fork (RTMR0/1/2 engine)
+      ansible.builtin.include_role:
+        name: tdx-measure
+      when: (measurements | default('full')) != 'none'
+
+    - name: Compute RTMR1/RTMR2
+      ansible.builtin.include_role:
+        name: compute-rtmr1-2
+      when: (measurements | default('full')) != 'none'
+
+    - name: Generate per-topology RTMR0
+      ansible.builtin.include_role:
+        name: compute-rtmr0
+      when: (measurements | default('full')) != 'none'
+
+    - name: Aggregate all measurements into the single YAML artifact
+      ansible.builtin.include_role:
+        name: aggregate-measurements
+      when: (measurements | default('full')) != 'none'
+
+- name: Stage the published image-set manifest
+  hosts: host
+  become: true
+  tags:
+    - image-manifest
+  tasks:
+    # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
+    # manifest.json tying them together. chutes.guest.image_set is the single manifest
+    # generator (also used by publish and the launcher), so the schema never drifts.
+    # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
+    # download, and for whichever variant this build produced (debug or prod) — so the
+    # build (ansible) owns the published sha for both. Depends on the direct-boot sidecars
+    # from stage-boot-artifacts, hence the same measurements!=none gate.
+    - name: Generate manifest.json for the finished image set
+      ansible.builtin.command:
+        chdir: "{{ repo_root }}/host-tools/scripts"
+        argv: >-
+          {{ ['python3', '-m', 'chutes.guest.image_set', 'manifest', final_img_path,
+              '--version', vm_version]
+             + (['--debug'] if (debug_build | default(false)) else []) }}
+      changed_when: true
+      when: (measurements | default('full')) != 'none'
 

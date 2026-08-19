@@ -14,63 +14,40 @@
   ansible.builtin.include_role:
     name: chutes_vm_config
 
-- name: Check if base image exists
+# ── Image-set pre-flight ─────────────────────────────────────────────────────
+# Launch is decoupled from download: the image set must already be staged (by
+# upgrade-guest.yml, or `quick-launch --download`). We do NOT auto-download here — a
+# missing set is an explicit failure with a remediation hint, not a silent fetch.
+# When present, verify it is coherent against its manifest (chutes.guest.image_set
+# resolve — presence/size, cheap, the bytes were fully hashed when staged) so a stale or
+# out-of-sync set fails here with a clear message rather than cryptically inside quick-launch.
+
+- name: Check the base image set exists
   ansible.builtin.stat:
     path: "{{ upgrade_default_base_image }}"
     get_checksum: false
   register: _base_img_stat
 
-- name: Download base image when missing
-  ansible.builtin.shell: |
-    set -euo pipefail
-    ./quick-launch.sh --download 2>&1 | tee /tmp/chutes-download.log
-    exit ${PIPESTATUS[0]}
-  args:
-    chdir: "{{ sek8s_remote_host_tools }}/scripts"
-    executable: /bin/bash
-  when: not _base_img_stat.stat.exists
-  changed_when: true
-
-# ── Image integrity pre-flight ───────────────────────────────────────────────
-# Validate the base image SHA256 against what quick-launch.sh expects before
-# attempting to start the VM. Failing here gives a clear actionable message;
-# failing inside quick-launch.sh produces a cryptic checksum error with no
-# remediation hint.
-
-- name: Read expected base image SHA256 from quick-launch.sh
-  ansible.builtin.shell: |
-    grep -E '^EXPECTED_BASE_SHA256=' "{{ sek8s_remote_host_tools }}/scripts/quick-launch.sh" \
-      | head -1 | cut -d= -f2 | tr -d '"' | tr -d "'"
-  args:
-    executable: /bin/bash
-  register: _launch_expected_sha
-  changed_when: false
-
-- name: Compute SHA256 of current base image
-  ansible.builtin.command:
-    argv:
-      - sha256sum
-      - "{{ upgrade_default_base_image }}"
-  register: _launch_actual_sha
-  changed_when: false
-  # Skip when the caller already verified this image (e.g. upgrade-guest.yml just
-  # promoted a freshly checksummed staged image). Nothing touched the file between
-  # verification and launch, so recomputing is pure waste (~111s on a large qcow2).
-  when: (_prevalidated_base_sha | default('')) != (_launch_expected_sha.stdout | trim)
-
-- name: Use pre-validated SHA when available
-  ansible.builtin.set_fact:
-    _launch_actual_sha: "{{ _launch_actual_sha | combine({'stdout': (_prevalidated_base_sha | default('')) + '  ' + upgrade_default_base_image}) }}"
-  when: (_prevalidated_base_sha | default('')) == (_launch_expected_sha.stdout | trim)
-
-- name: Fail with clear message when base image SHA does not match
+- name: Fail clearly when the base image set is missing
   ansible.builtin.fail:
     msg: >-
-      Base image checksum mismatch — cannot launch safely.
-      Expected: {{ _launch_expected_sha.stdout | trim }}.
-      Actual:   {{ _launch_actual_sha.stdout.split()[0] }}.
-      Run upgrade-guest.yml to download and promote the correct image before launching.
-  when: _launch_actual_sha.stdout.split()[0] != (_launch_expected_sha.stdout | trim)
+      Base image set not found at {{ upgrade_default_base_image }}. Launch does not
+      auto-download — stage it first with `upgrade-guest.yml` or
+      `./quick-launch.sh --download` (populates the set + manifest), then relaunch.
+  when: not (_base_img_stat.stat.exists and _base_img_stat.stat.isdir)
+
+- name: Verify the base image set against its manifest
+  ansible.builtin.command:
+    chdir: "{{ sek8s_remote_host_tools }}/scripts"
+    argv:
+      - python3
+      - -m
+      - chutes.guest.image_set
+      - resolve
+      - "{{ upgrade_default_base_image }}"
+  register: _image_set_resolve
+  changed_when: false
+  failed_when: _image_set_resolve.rc != 0
 
 # ── PCI passthrough wedge guard ──────────────────────────────────────────────
 # GPU passthrough hosts occasionally wedge the PCI subsystem: a vfio-pci unbind

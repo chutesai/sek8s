@@ -851,19 +851,18 @@ def test_detect_profile_skips_topology_check_for_unbaselined_profile():
 
 @pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
 def test_pci_bars_vram_matches_bar_size_hint(key):
-    # For profiles that declare a full BAR layout, the largest BAR (VRAM) must
+    # For profiles that model the GPU endpoint, the largest BAR (VRAM) must
     # equal bar_size_mb: the fw_cfg MMIO hint and the actual VRAM BAR describe
     # the same window and must not drift apart.
-    profile = GPU_PROFILES[key]
-    assert profile.pci_bars, f"{key} should declare pci_bars"
-    vram = max(profile.pci_bars, key=lambda b: b.size_mb)
-    assert vram.size_mb == profile.bar_size_mb
+    bars = GPU_PROFILES[key].passthrough["gpu"].bars
+    assert bars, f"{key} should model passthrough['gpu']"
+    vram = max(bars, key=lambda b: b.size_mb)
+    assert vram.size_mb == GPU_PROFILES[key].bar_size_mb
 
 
 @pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
 def test_pci_bars_are_well_formed(key):
-    profile = GPU_PROFILES[key]
-    for bar in profile.pci_bars:
+    for bar in GPU_PROFILES[key].passthrough["gpu"].bars:
         assert 0 <= bar.index <= 5
         assert bar.kind in ("m32", "m64", "p32", "p64")
         # A 64-bit BAR consumes two slots, so it lands on an even index.
@@ -872,7 +871,6 @@ def test_pci_bars_are_well_formed(key):
 
 
 def test_pci_bars_default_empty_when_uncaptured():
-    # Profiles without an lspci capture yet expose an empty layout (offline
+    # Profiles without an lspci capture yet model no GPU endpoint (offline
     # measurement generation is simply unavailable for them, not broken).
-    profile = GPU_PROFILES["B300"]
-    assert profile.pci_bars == []
+    assert "gpu" not in GPU_PROFILES["B300"].passthrough

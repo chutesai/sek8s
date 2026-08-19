@@ -1,55 +1,50 @@
 #!/bin/bash
-# prepare-vm-image.sh - Verify base image SHA256 and create/reuse per-VM image copy
-# Usage: VM_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE" "$HOSTNAME" "$EXPECTED_BASE_SHA256" "$VM_IMAGE_DIR" [skip_checksum])
-# Exits 1 on verification failure; prints VM image path on success.
-# Optional 5th arg: "1", "true", or "yes" to skip checksum verification (for debug with custom images)
+# prepare-vm-image.sh - Instantiate the per-VM copy of a published image SET.
+# Usage: VM_IMAGE=$(./prepare-vm-image.sh "$BASE_IMAGE_SET_DIR" "$HOSTNAME" "$VM_IMAGE_DIR")
+# Exits 1 on verification failure; prints the per-VM image path on success.
 #
-# The per-VM image is a full copy of the base image (not a qcow2 overlay).
-# This means luksRemoveKey destroys the old key slot in-place on the only copy,
-# matching the security model of the storage and cache volumes.
-# Stale per-VM images from a previous base image version are removed on upgrade.
+# $BASE_IMAGE_SET_DIR is a published image-set DIRECTORY — the qcow2 plus its
+# .vmlinuz/.initrd/.cmdline and a manifest.json. There is exactly one image format: the
+# set. chutes.guest.image_set verifies the set is coherent (all files present, sizes match
+# the manifest) and returns the qcow2 path + its manifest-recorded sha256, so we neither
+# re-hash a multi-GB image on every launch nor rely on a pinned expected-hash constant.
+#
+# The per-VM image is a full copy of the base qcow2 (not a qcow2 overlay). luksRemoveKey
+# destroys the old key slot in-place on the only copy, matching the security model of the
+# storage and cache volumes. Stale per-VM images from a previous base version are removed.
 
 set -e
 
 BASE_IMAGE="$1"
 HOSTNAME="$2"
-EXPECTED_SHA="$3"
-VM_IMAGE_DIR="$4"
-SKIP_VERIFY="${5:-}"
+VM_IMAGE_DIR="$3"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-[[ ! -f "$BASE_IMAGE" ]] && { echo "ERROR: base image not found: $BASE_IMAGE" >&2; exit 1; }
-[[ "$BASE_IMAGE" != *.qcow2 ]] && { echo "ERROR: base image must be qcow2 (got: $BASE_IMAGE)" >&2; exit 1; }
+[[ -z "$BASE_IMAGE" ]] && { echo "ERROR: base image set not provided" >&2; exit 1; }
 [[ -z "$VM_IMAGE_DIR" ]] && { echo "ERROR: VM image directory not provided" >&2; exit 1; }
+[[ -d "$BASE_IMAGE" ]] || {
+  echo "ERROR: base image must be a published image-set directory (got: $BASE_IMAGE)." >&2
+  echo "  Stage it with 'quick-launch.sh --download' or via ansible before launching." >&2
+  exit 1
+}
 
-ACTUAL_SHA=$(sha256sum "$BASE_IMAGE" | awk '{print $1}')
-
-if [[ "$SKIP_VERIFY" == "1" || "$SKIP_VERIFY" == "true" || "$SKIP_VERIFY" == "yes" ]]; then
-  echo "Skipping base image checksum verification (debug mode)" >&2
-  SHA_FOR_IMAGE="$ACTUAL_SHA"
-else
-  [[ -z "$EXPECTED_SHA" ]] && { echo "ERROR: expected SHA256 not provided (use --skip-checksum for debug)" >&2; exit 1; }
-  if [[ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]]; then
-    echo "ERROR: base image hash mismatch" >&2
-    echo "  This quick-launch expects: $EXPECTED_SHA" >&2
-    echo "  Actual base image hash:    $ACTUAL_SHA" >&2
-    echo "  Run: quick-launch.sh --download  (to fetch the correct VM from https://vm.chutes.ai)" >&2
-    echo "  Or use --skip-checksum for debug with a custom image" >&2
-    exit 1
-  fi
-  echo "Verified base image: $BASE_IMAGE (sha256=$ACTUAL_SHA)" >&2
-  SHA_FOR_IMAGE="$EXPECTED_SHA"
-fi
+# Verify the set against its manifest; get back the qcow2 path + its manifest sha256.
+RESOLVE_OUT=$(PYTHONPATH="$SCRIPT_DIR" python3 -m chutes.guest.image_set resolve "$BASE_IMAGE") || exit 1
+eval "$RESOLVE_OUT"   # sets QCOW2 and SHA256
+BASE_IMAGE="$QCOW2"
+SHA_FOR_IMAGE="$SHA256"
+echo "Verified image set via manifest: $BASE_IMAGE (sha256=$SHA_FOR_IMAGE)" >&2
 
 [[ -d "$VM_IMAGE_DIR" ]] || sudo mkdir -p "$VM_IMAGE_DIR"
 
 VM_IMAGE="${VM_IMAGE_DIR}/tdx-${HOSTNAME}-${SHA_FOR_IMAGE:0:16}.qcow2"
 
-# Remove stale per-VM images from previous base image versions.
+# Remove stale per-VM images (and their direct-boot sidecars) from previous base versions.
 for stale in "${VM_IMAGE_DIR}"/tdx-"${HOSTNAME}"-*.qcow2; do
   [[ -f "$stale" ]] || continue
   [[ "$stale" == "$VM_IMAGE" ]] && continue
   echo "Removing stale VM image: $stale" >&2
-  rm -f "$stale"
+  rm -f "$stale" "${stale%.qcow2}".vmlinuz "${stale%.qcow2}".initrd "${stale%.qcow2}".cmdline
 done
 
 if [[ -f "$VM_IMAGE" ]]; then
@@ -61,5 +56,23 @@ else
     exit 1
   fi
 fi
+
+# Stage the direct-boot sidecars (1.4.0+) next to the per-VM image. The launcher resolves
+# <image-base>.{vmlinuz,initrd,cmdline} next to the *per-VM* copy it boots, so they must
+# travel with the copy — not just live next to the base image. Copy unconditionally so a
+# reused per-VM image also re-syncs. Missing base sidecars are fatal: without them run-td
+# cannot direct-boot.
+BASE_BASE="${BASE_IMAGE%.qcow2}"
+VM_BASE="${VM_IMAGE%.qcow2}"
+for ext in vmlinuz initrd cmdline; do
+  src="${BASE_BASE}.${ext}"
+  if [[ ! -f "$src" ]]; then
+    echo "ERROR: direct-boot artifact missing next to base image: $src" >&2
+    echo "  The image must ship with .vmlinuz/.initrd/.cmdline (built by the" >&2
+    echo "  stage-boot-artifacts step, published to R2 alongside the qcow2)." >&2
+    exit 1
+  fi
+  cp "$src" "${VM_BASE}.${ext}"
+done
 
 echo "$VM_IMAGE"

@@ -1,0 +1,247 @@
+"""Published image-set manifest: the coherence contract for a direct-boot VM image.
+
+A published image set is a directory holding the qcow2 and its direct-boot sidecars
+plus a manifest that ties them together as one coherent unit::
+
+    <dir>/<name>.qcow2   <dir>/<name>.vmlinuz   <dir>/<name>.initrd
+    <dir>/<name>.cmdline <dir>/manifest.json
+
+``manifest.json`` records artifacts by *role*, not filename, so the same manifest
+verifies the set across the three places its files carry different names — the build
+output (``<version>[-debug].*``), the R2 objects (``tdx-guest[-debug].*``), and the
+local download (``tdx-guest[-debug].*`` inside a per-variant dir)::
+
+    {
+      "version": "1.4.0",
+      "debug": false,
+      "artifacts": {
+        "qcow2":   {"sha256": "<hex>", "size": <int>},
+        "vmlinuz": {"sha256": "<hex>", "size": <int>},
+        "initrd":  {"sha256": "<hex>", "size": <int>},
+        "cmdline": {"sha256": "<hex>", "size": <int>}
+      }
+    }
+
+The manifest is *the* integrity source — it replaces the hand-bumped expected-hash
+constant, and it is the first thing that ties the boot artifacts to their qcow2
+(previously the artifacts had no checksum at all, so a stale/mismatched set only surfaced
+as an opaque boot or attestation failure). It is generated once over the finished
+artifacts (``manifest``), published to R2 alongside the qcow2, and verified on the way in
+(``resolve``).
+
+``quick-launch --download`` fetches the manifest and runs ``resolve --full`` to verify
+every downloaded byte once. The launcher runs ``resolve`` (size-only, cheap) to confirm
+the on-disk set still matches — without re-hashing a multi-GB qcow2 on every boot.
+
+Usage::
+
+    # Generate the manifest for a finished image (build / publish / capture staging).
+    # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars.
+    python3 -m chutes.guest.image_set manifest <qcow2> [-o OUT] [--version V] [--debug]
+
+    # Verify an image-set directory and print QCOW2=/SHA256= for the caller to eval.
+    python3 -m chutes.guest.image_set resolve [--full] <image-set-dir>
+
+``resolve`` prints shell assignments for the caller to ``eval``::
+
+    QCOW2=<path-to-qcow2>
+    SHA256=<qcow2 sha256 from the manifest>
+
+and exits non-zero with a clear message if the set is missing, incomplete, or does not
+match the manifest.
+"""
+
+import argparse
+import glob
+import hashlib
+import json
+import os
+import shlex
+import sys
+
+# Roles in the manifest. The on-disk filename for each is the qcow2 basename with the
+# role as its extension (<base>.qcow2 / <base>.vmlinuz / <base>.initrd / <base>.cmdline).
+ROLES = ("qcow2", "vmlinuz", "initrd", "cmdline")
+
+_CHUNK = 1024 * 1024
+
+
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _find_qcow2(image_dir: str) -> str:
+    """Return the single ``*.qcow2`` in ``image_dir`` (error if zero or many)."""
+    matches = sorted(glob.glob(os.path.join(image_dir, "*.qcow2")))
+    if not matches:
+        raise FileNotFoundError(f"no *.qcow2 in image-set directory: {image_dir}")
+    if len(matches) > 1:
+        raise ValueError(
+            "multiple *.qcow2 in image-set directory "
+            f"{image_dir}: {', '.join(os.path.basename(m) for m in matches)} "
+            "— an image set holds exactly one image"
+        )
+    return matches[0]
+
+
+def _role_paths(qcow2: str) -> dict[str, str]:
+    """Map each role to its on-disk path, derived from the qcow2 by shared basename."""
+    base = qcow2[: -len(".qcow2")]
+    return {"qcow2": qcow2, **{r: f"{base}.{r}" for r in ROLES if r != "qcow2"}}
+
+
+def write_manifest(
+    qcow2: str, output: str, version: str = "", debug: bool = False
+) -> None:
+    """Hash the qcow2 + its sidecars and write the manifest to ``output``.
+
+    Fails loudly if any of the four artifacts is missing — a manifest must describe a
+    complete set. This is the single generator used by the build, publish, and capture
+    staging so the schema never drifts from what ``resolve`` verifies.
+    """
+    role_path = _role_paths(qcow2)
+    missing = [f"{r} ({p})" for r, p in role_path.items() if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(
+            "cannot write manifest — image set is incomplete, missing: "
+            + ", ".join(missing)
+        )
+    artifacts = {
+        role: {"sha256": _sha256(path), "size": os.path.getsize(path)}
+        for role, path in role_path.items()
+    }
+    with open(output, "w") as f:
+        json.dump(
+            {"version": version, "debug": debug, "artifacts": artifacts},
+            f,
+            indent=2,
+            sort_keys=True,
+        )
+        f.write("\n")
+
+
+def _load_manifest(image_dir: str) -> dict:
+    path = os.path.join(image_dir, "manifest.json")
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"manifest.json missing in {image_dir} — the image set is incomplete; "
+            "re-run `quick-launch --download`"
+        )
+    with open(path) as f:
+        manifest = json.load(f)
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, dict) or any(r not in artifacts for r in ROLES):
+        raise ValueError(f"manifest.json in {image_dir} is missing artifact roles")
+    return manifest
+
+
+def resolve(image_dir: str, full: bool) -> tuple[str, str]:
+    """Verify the image set against its manifest; return ``(qcow2_path, qcow2_sha256)``.
+
+    ``full`` re-hashes every file (download-time). Otherwise only presence and size are
+    checked (launch-time) — the bytes were already verified when downloaded.
+    """
+    qcow2 = _find_qcow2(image_dir)
+    manifest = _load_manifest(image_dir)
+    artifacts = manifest["artifacts"]
+
+    role_path = _role_paths(qcow2)
+
+    problems: list[str] = []
+    for role in ROLES:
+        path = role_path[role]
+        expected = artifacts[role]
+        if not os.path.exists(path):
+            problems.append(f"missing {role}: {path}")
+            continue
+        actual_size = os.path.getsize(path)
+        if actual_size != expected.get("size"):
+            problems.append(
+                f"{role} size mismatch: {path} is {actual_size}, "
+                f"manifest says {expected.get('size')}"
+            )
+            continue
+        if full:
+            actual_sha = _sha256(path)
+            if actual_sha != expected.get("sha256"):
+                problems.append(
+                    f"{role} sha256 mismatch: {path}\n"
+                    f"    manifest: {expected.get('sha256')}\n"
+                    f"    actual:   {actual_sha}"
+                )
+
+    if problems:
+        raise ValueError(
+            "image set does not match its manifest — the qcow2 and its boot artifacts "
+            "are out of sync:\n  " + "\n  ".join(problems)
+        )
+
+    return qcow2, artifacts["qcow2"]["sha256"]
+
+
+def _cmd_resolve(args: argparse.Namespace) -> int:
+    try:
+        qcow2, sha256 = resolve(args.image_dir, args.full)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"QCOW2={shlex.quote(qcow2)}")
+    print(f"SHA256={sha256}")
+    return 0
+
+
+def _cmd_manifest(args: argparse.Namespace) -> int:
+    if not args.qcow2.endswith(".qcow2"):
+        print(f"ERROR: expected a .qcow2 path, got {args.qcow2}", file=sys.stderr)
+        return 1
+    output = args.output or (args.qcow2[: -len(".qcow2")] + ".manifest.json")
+    try:
+        write_manifest(args.qcow2, output, version=args.version, debug=args.debug)
+    except FileNotFoundError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(output)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="chutes.guest.image_set")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_resolve = sub.add_parser(
+        "resolve", help="verify an image-set directory and print QCOW2=/SHA256="
+    )
+    p_resolve.add_argument("image_dir", help="path to the image-set directory")
+    p_resolve.add_argument(
+        "--full",
+        action="store_true",
+        help="re-hash every file (download-time); default checks presence and size only",
+    )
+    p_resolve.set_defaults(func=_cmd_resolve)
+
+    p_manifest = sub.add_parser(
+        "manifest", help="generate manifest.json for a finished image + its sidecars"
+    )
+    p_manifest.add_argument("qcow2", help="path to the finished .qcow2")
+    p_manifest.add_argument(
+        "-o",
+        "--output",
+        default="",
+        help="manifest path (default: <base>.manifest.json next to the qcow2)",
+    )
+    p_manifest.add_argument("--version", default="", help="image version (metadata)")
+    p_manifest.add_argument(
+        "--debug", action="store_true", help="mark the set as a debug build (metadata)"
+    )
+    p_manifest.set_defaults(func=_cmd_manifest)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

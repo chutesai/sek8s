@@ -1,71 +1,23 @@
 ---
-# Fail fast if passphrase is missing; avoid wiping the disk then failing at LUKS create.
-- name: Validate LUKS passphrase is set
-  ansible.builtin.assert:
-    that:
-      - luks_passphrase is defined
-      - luks_passphrase | length > 0
-    fail_msg: "LUKS_PASSPHRASE environment variable must be set and non-empty for disk encryption. Export it before running the playbook."
-  no_log: true
+# The luks role runs for ALL guest images (the chutes-miner-vm playbook no longer
+# gates the play). The prod-vs-debug split is decided HERE, in one place, so it is
+# auditable at a glance: exactly one of the two task sets runs, and each is
+# all-or-nothing. This mirrors the k3s role convention — gate the include, never
+# individual tasks inside a security-critical set.
+#
+#   prod.yml  — encrypts the root filesystem and installs the fail-CLOSED prod
+#               initramfs (LUKS unlock + root rotation). Distinct measurement.
+#   debug.yml — installs the fail-OPEN debug initramfs (operator-key RC provisioning,
+#               static k3s key, no LUKS) and performs NO encryption. Distinct
+#               measurement. The debug-only scripts (rc-sign, *_debug entries) are
+#               installed ONLY by this set, so prod carries none of that code.
 
-- name: Check if LUKS container is open
-  ansible.builtin.stat:
-    path: "/dev/mapper/{{ encrypted_root_name }}"
-  register: luks_stat
+- name: Encrypt root filesystem and install production initramfs
+  ansible.builtin.include_tasks: prod.yml
+  tags: luks-prod
+  when: not (debug_build | default(false))
 
-- name: Close LUKS container if open
-  community.crypto.luks_device:
-    name: "{{ encrypted_root_name }}"
-    state: closed
-  when: luks_stat.stat.exists
-  ignore_errors: true
-
-- name: Check if nbd device is connected
-  ansible.builtin.command: qemu-nbd --check {{ nbd_device }}
-  register: nbd_check_result
-  failed_when: false
-  changed_when: false
-
-- name: Disconnect nbd device if connected
-  ansible.builtin.command: qemu-nbd --disconnect {{ nbd_device }}
-  when: nbd_check_result.rc == 0
-  register: nbd_disconnect_result
-  changed_when: nbd_disconnect_result.rc == 0
-  ignore_errors: true
-
-- name: Unmount all possible partitions if mounted
-  ansible.builtin.mount:
-    path: "{{ item }}"
-    state: unmounted
-  ignore_errors: true
-  loop:
-    - "{{ newroot_mount }}/sys/firmware/efi/efivars"
-    - "{{ newroot_mount }}/proc"
-    - "{{ newroot_mount }}/sys"
-    - "{{ newroot_mount }}/dev"
-    - "{{ newroot_mount }}/run"
-    - "{{ newroot_mount }}/boot/efi"
-    - "{{ newroot_mount }}/boot"
-    - "{{ newroot_mount }}"
-    - "{{ root_mount }}/boot/efi"
-    - "{{ root_mount }}/boot"
-    - "{{ root_mount }}"
-
-- name: Clean up temporary directories if leftover
-  ansible.builtin.file:
-    path: "{{ item }}"
-    state: absent
-  ignore_errors: true
-  loop:
-    - "{{ root_mount }}"
-    - "{{ newroot_mount }}"
-    - "{{ backup_dir }}"
-
-# Main encryption work. always runs cleanup even on failure to avoid leaving nbd connected.
-- name: LUKS encryption
-  block:
-    - name: Run encryption tasks
-      ansible.builtin.include_tasks: luks_encrypt.yml
-  always:
-    - name: Cleanup on success or failure
-      ansible.builtin.include_tasks: luks_cleanup.yml
+- name: Install debug initramfs (no encryption)
+  ansible.builtin.include_tasks: debug.yml
+  tags: luks-debug
+  when: debug_build | default(false)

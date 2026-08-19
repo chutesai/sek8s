@@ -31,11 +31,6 @@ from chutes.guest.command import MachineSpec, build_qemu_command
 from chutes.guest.gpu.profiles import GpuProfile, PciBar
 from chutes.guest.qemu import QemuCommand
 
-# NVIDIA vendor; all supported GPUs report class 0x0302 (3D controller). The
-# stub impersonates this identity so the generated ACPI matches a real device.
-_NVIDIA_VENDOR = 0x10DE
-_GPU_CLASS = 0x0302
-
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
 # container QEMU has no confidential-guest support.
 _DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
@@ -102,30 +97,30 @@ class MeasurementMetadata:
         return out
 
     def _swap_endpoint(self, dev: str) -> str:
-        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` with the GPU's BARs."""
+        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` built from the profile's
+        ``passthrough`` spec for that bus kind (gpu / nvswitch / ib)."""
         bus = re.search(r"bus=([^,]+)", dev)
         if not bus:
             raise ValueError(f"vfio-pci device without a bus=: {dev!r}")
         rp = bus.group(1)
-        if not re.fullmatch(r"rp\d+", rp):
-            # NVSwitch (rp_nvsw*) / InfiniBand (rp_ib*) are passthrough devices
-            # too; their BARs also shape the DSDT and need their own captured
-            # layout.
-            raise NotImplementedError(
-                f"endpoint on {rp!r} has no BAR layout yet — capture "
-                f"lspci -vvvnn for that device type and extend the profile "
-                f"(only GPU BARs are modeled today)"
-            )
-        if not self.profile.pci_bars:
+        if re.fullmatch(r"rp\d+", rp):
+            kind = "gpu"
+        elif rp.startswith("rp_nvsw"):
+            kind = "nvswitch"
+        elif rp.startswith("rp_ib"):
+            kind = "ib"
+        else:
+            raise NotImplementedError(f"unrecognized passthrough bus {rp!r}")
+        spec = self.profile.passthrough.get(kind)
+        if not spec:
             raise ValueError(
-                f"profile {self.profile.name!r} has no pci_bars — run "
-                f"discover-profile.sh on a host with this GPU and add the "
-                f"layout before generating"
+                f"profile {self.profile.name!r} has no passthrough[{kind!r}] — capture "
+                f"lspci -vvvnn for that device and add it (see discover-profile.sh)"
             )
-        device_id = int(self.profile.pci_device_ids[0], 16)
         return (
-            f"pci-bar-stub,bus={rp},bars={_bars_arg(self.profile.pci_bars)},"
-            f"vendor={_NVIDIA_VENDOR:#06x},device={device_id:#06x},class={_GPU_CLASS:#06x}"
+            f"pci-bar-stub,bus={rp},bars={_bars_arg(spec.bars)},"
+            f"vendor={spec.vendor:#06x},device={int(spec.device_id, 16):#06x},"
+            f"class={spec.pci_class:#06x}"
         )
 
     @property

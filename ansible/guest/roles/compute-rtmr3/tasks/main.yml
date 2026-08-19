@@ -8,7 +8,14 @@
 # Output: <final_img_path without extension>.rtmr3  (bare uppercase hex)
 # The per-file hash detail is emitted to the Ansible debug task for the build log.
 #
-# Prerequisite on the build host: sudo apt install libguestfs-tools
+# RTMR3 is derived from userspace files only, so it is luks-independent and computed
+# pre-luks against the plaintext image (guestmount reads it directly, no passphrase).
+
+- name: Ensure guestmount is installed
+  ansible.builtin.apt:
+    name: libguestfs-tools
+    state: present
+    update_cache: true
 
 - name: Check guestmount is available
   ansible.builtin.command: which guestmount
@@ -22,10 +29,10 @@
   register: rtmr3_compute
   changed_when: false
 
-- name: Show RTMR3 computation output
-  ansible.builtin.debug:
-    msg: "{{ rtmr3_compute.stderr_lines }}"
+- name: Register RTMR3 as a build fact (no on-disk artifact)
+  ansible.builtin.set_fact:
+    rtmr3: "{{ rtmr3_compute.stdout | trim }}"
 
-- name: Show RTMR3 output file location
+- name: Show RTMR3
   ansible.builtin.debug:
-    msg: "RTMR3 written to {{ final_img_path | splitext | first }}.rtmr3"
+    msg: "RTMR3={{ rtmr3 }}"

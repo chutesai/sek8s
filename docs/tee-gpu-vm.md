@@ -76,7 +76,7 @@ cp config/config.benchmark.example.yaml config.yaml
 ```
 
 The `--benchmark` flag:
-- Sets the default base image to `tdx-guest-benchmark.qcow2`
+- Sets the default base image to the `tdx-guest-benchmark/` image set
 - Skips cache and config volume setup
 - Auto-installs and starts the `benchmark-netlog` service on the host
 - Skips miner credential validation (only hostname is checked)

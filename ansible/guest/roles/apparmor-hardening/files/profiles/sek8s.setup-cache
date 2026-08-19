@@ -5,8 +5,15 @@
 
 abi <abi/4.0>,
 
+include <tunables/global>
+
 profile sek8s.setup-cache flags=(enforce) {
   include <abstractions/base>
+
+  # chown -R / chmod 2775 on the cache tree (owned 1000:1000, not root)
+  capability chown,
+  capability fowner,
+  capability fsetid,
 
   # The script and its interpreter
   /usr/local/bin/setup-cache.sh r,

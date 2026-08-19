@@ -7,9 +7,13 @@
 #   <version>[-debug].vmlinuz -> <bucket>/tdx-guest[-debug].vmlinuz
 #   <version>[-debug].initrd  -> <bucket>/tdx-guest[-debug].initrd
 #   <version>[-debug].cmdline -> <bucket>/tdx-guest[-debug].cmdline
+#   manifest.json (generated)  -> <bucket>/tdx-guest[-debug].manifest.json
 #
 # The .vmlinuz/.initrd/.cmdline are produced by stage-boot-artifacts.sh during the
-# build; all four must travel together so the fleet boots byte-identical bits.
+# build; all four must travel together so the fleet boots byte-identical bits. The
+# manifest (sha256 + size per artifact, keyed by role) is the coherence contract that
+# ties the set together — `quick-launch --download` verifies against it, so a stale or
+# mismatched artifact fails loudly instead of as an opaque boot/attestation error.
 #
 # rclone remote "r2" must be configured. If the rclone config is password
 # protected, export RCLONE_CONFIG_PASS (otherwise rclone prompts on each call).
@@ -56,6 +60,16 @@ for ext in "${ARTIFACTS[@]}"; do
     }
 done
 
+# Generate the coherence manifest with the single generator (chutes.guest.image_set), the
+# same one the build and the launcher use, so the schema never drifts. It hashes the qcow2
+# and its <base>.{vmlinuz,initrd,cmdline} sidecars.
+MANIFEST="$LOCAL_BASE.manifest.json"
+echo "Generating manifest -> $MANIFEST"
+DEBUG_FLAG=()
+[ "$DEBUG" = true ] && DEBUG_FLAG=(--debug)
+PYTHONPATH="$REPO_ROOT/host-tools/scripts" python3 -m chutes.guest.image_set manifest \
+    "$LOCAL_BASE.qcow2" -o "$MANIFEST" --version "$VERSION" "${DEBUG_FLAG[@]}"
+
 echo "Publishing ${VERSION}${SUFFIX} ($ENV) -> $BUCKET/$REMOTE.*"
 for ext in "${ARTIFACTS[@]}"; do
     src="$LOCAL_BASE.$ext"
@@ -63,4 +77,9 @@ for ext in "${ARTIFACTS[@]}"; do
     echo "==> $src -> $dst"
     rclone copyto --progress --s3-chunk-size 64M --transfers 4 "$src" "$dst"
 done
-echo "✓ Published ${VERSION}${SUFFIX} (image + direct-boot artifacts)"
+
+# Publish the manifest last, so it never advertises a set that isn't fully uploaded yet.
+echo "==> $MANIFEST -> $BUCKET/$REMOTE.manifest.json"
+rclone copyto --progress "$MANIFEST" "$BUCKET/$REMOTE.manifest.json"
+
+echo "✓ Published ${VERSION}${SUFFIX} (image + direct-boot artifacts + manifest)"

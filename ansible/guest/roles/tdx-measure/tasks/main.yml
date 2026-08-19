@@ -1,30 +1,46 @@
 ---
 # tdx-measure — Provision the virtee/tdx-measure fork binary on the build host.
 #
-# compute-rtmr1-2 needs the fork's CLI to compute RTMR1/RTMR2. This role clones
-# the fork (only if absent — an existing checkout is used as-is) and builds it
-# with cargo, then sets the `tdx_measure_bin` fact to the built binary. Runs in
-# user space (invoke with become: false): rust toolchains and the build tree are
-# per-user.
+# compute-rtmr0/rtmr1-2 need the fork's CLI. This role clones the fork and always
+# fast-forwards it to `tdx_measure_ref` from origin — so a build host never silently
+# rebuilds a stale binary when the pinned branch moves — then builds it with cargo and
+# sets the `tdx_measure_bin` fact. Runs in user space (invoke with become: false): rust
+# toolchains and the build tree are per-user.
 #
-# Skip entirely by setting `tdx_measure_bin` to a prebuilt binary. Note: cloning a
-# fresh copy of the (private) fork needs git credentials; the default src dir is a
-# sibling checkout so local-dev builds reuse what's already there and never clone.
+# To iterate on a local tdx-measure, set `tdx_measure_bin` to your own build — the whole
+# provision block (clone/update + build) is skipped. Cloning the (private) fork needs git
+# credentials; the default src dir is a sibling checkout of this repo.
 
 - name: Provision tdx-measure from source (skipped when tdx_measure_bin is preset)
   when: (tdx_measure_bin | default('')) | length == 0
+  # The clone + cargo build run in user space (per-user rust toolchain / build tree);
+  # the apt installs below opt back into root per-task.
+  become: false
   block:
-    - name: Ensure git is available
-      ansible.builtin.command: which git
-      changed_when: false
-      register: _tdxm_git
-      failed_when: _tdxm_git.rc != 0
+    # This role is invoked become: false (the build tree is per-user), so the apt
+    # installs opt back into root per-task. git clones the fork; cargo builds it.
+    - name: Ensure git is installed
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+      become: true
 
-    - name: Ensure cargo is available
+    # Detect cargo as the build user (respect an existing rustup toolchain in
+    # ~/.cargo/bin) and only apt-install if truly absent — never clobber a newer
+    # rustup cargo with the older apt one.
+    - name: Detect cargo on the build user's PATH
       ansible.builtin.command: which cargo
-      changed_when: false
       register: _tdxm_cargo
-      failed_when: _tdxm_cargo.rc != 0
+      changed_when: false
+      failed_when: false
+
+    - name: Install a cargo toolchain when the build user has none
+      ansible.builtin.apt:
+        name: cargo
+        state: present
+      become: true
+      when: _tdxm_cargo.rc != 0
 
     - name: Clone the tdx-measure fork if not already checked out
       # update: false — never disturb an existing checkout (a dev's working tree

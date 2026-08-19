@@ -118,7 +118,7 @@ spec:
       # and fail its /health probe (503: unix socket unavailable). Gate on the real socket
       # file here so the proxy only starts once the UDS is actually bound.
       - name: wait-for-attestation-socket
-        image: parachutes/kubectl:{{ kubectl_image_tag }}
+        image: parachutes/busybox:{{ busybox_image_tag }}
         command:
         - /bin/sh
         - -c

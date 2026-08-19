@@ -8,6 +8,7 @@ admission_port: 8080
 # Override via inventory to use dev/test images (e.g., sek8s_image_tag: "dev-latest")
 sek8s_image_tag: "latest"
 
-# Kubectl image configuration (parachutes/kubectl, cosign-signed with dockerhub.pub)
-# Override via inventory to pin to a specific built+signed tag (e.g., kubectl_image_tag: "1.35")
-kubectl_image_tag: "latest"
+# Busybox image for the attestation-proxy wait-for-socket init container
+# (parachutes/busybox — a signed shell image, cosign-signed with dockerhub.pub).
+# Override via inventory to pin to a specific built+signed tag (e.g., busybox_image_tag: "1.37")
+busybox_image_tag: "latest"

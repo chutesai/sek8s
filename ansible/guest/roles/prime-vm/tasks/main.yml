@@ -121,11 +121,11 @@
       register: primed_image_sha256
       changed_when: false
 
-    - name: Output primed image SHA256 for quick-launch.sh
+    - name: Output primed image SHA256 (recorded in the manifest at publish)
       ansible.builtin.debug:
         msg:
-          - "Prime succeeded. Update EXPECTED_BASE_SHA256 in host-tools/scripts/quick-launch.sh:"
-          - "  EXPECTED_BASE_SHA256=\"{{ primed_image_sha256.stdout }}\""
+          - "Prime succeeded. No constant to hand-edit: publish-image.sh records this"
+          - "sha256 in the set's manifest.json, which the launcher verifies at download."
           - ""
           - "Image: {{ final_img_path }}"
           - "SHA256: {{ primed_image_sha256.stdout }}"

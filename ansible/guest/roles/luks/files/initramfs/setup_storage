@@ -6,6 +6,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 . /scripts/luks-helpers
+. /scripts/provision-common
 
 # The initramfs stops udevd after mounting the root filesystem (local-bottom),
 # but leaves /run/udev/control behind.  libdevmapper sees this stale socket,
@@ -73,25 +74,8 @@ trap clear_sensitive_data EXIT INT TERM
 
 log_begin_msg "Starting storage setup"
 
-# Function to load VM name and hotkey
-load_vm_data() {
-    if [ ! -f /run/chutes/vm-name ]; then
-        log_failure_msg "VM name not found in /run/chutes/vm-name"
-        return 1
-    fi
-
-    VM_NAME=$(cat /run/chutes/vm-name)
-
-    if [ ! -f /run/chutes/hotkey ]; then
-        log_failure_msg "Hotkey not found in /run/chutes/hotkey"
-        return 1
-    fi
-
-    HOTKEY=$(cat /run/chutes/hotkey)
-
-    log_success_msg "Loaded VM name: $VM_NAME, hotkey loaded from config"
-    return 0
-}
+# load_vm_data, provision_request, and write_k3s_encryption_config are sourced from
+# /scripts/provision-common (the shared init-bottom /provision flow).
 
 # ── Device detection ─────────────────────────────────────────────────────────
 
@@ -186,85 +170,12 @@ detect_cache_device() {
 # API-process compromise has access to the boot token header regardless.
 
 post_sync_keys() {
-    local response_file="/tmp/luks_response"
-    local quote_file="/tmp/luks_quote.bin"
     local volumes_json="\"${STORAGE_LABEL}\",\"${CACHE_LABEL}\""
 
-    if [ -z "$TDX_BASE_URL" ]; then
-        log_failure_msg "TDX_BASE_URL not configured in /etc/tdx-luks.conf"
-        return 1
-    fi
-
-    local timeout="${TDX_TIMEOUT:-30}"
-    local ca_cert="/etc/ssl/certs/ca-certificates.crt"
-    local client_cert="/run/chutes/vm-root-ca/ca.crt"
-    local client_key="/run/chutes/vm-root-ca/ca.key"
-    local endpoint_url="${TDX_BASE_URL}/servers/${VM_NAME}/provision"
-
-    # Read the single-use nonce issued alongside the root LUKS key in boot attestation.
-    # Embed it as REPORTDATA so the quote is cryptographically bound to this specific call;
-    # also send it as X-Quote-Nonce so the API can validate and consume it without
-    # decoding the full quote first.
-    local quote_nonce
-    quote_nonce=$(cat /run/chutes/luks-quote-nonce 2>/dev/null | tr -d '\n')
-    if [ -z "$quote_nonce" ]; then
-        log_failure_msg "luks-quote-nonce not found — boot attestation did not provide it"
-        return 1
-    fi
-
-    # Read the cert hash saved by fetch_key_and_unlock so the quote REPORTDATA binds
-    # this call to the VM root CA — the same mTLS cert used during boot attestation
-    # (nonce + cert_hash). The validator records this CA as the VM root CA from this
-    # RTMR3-attested /provision call, so no separate registration round-trip is needed.
-    local cert_hash
-    cert_hash=$(cat /run/chutes/cert-hash 2>/dev/null | tr -d '\n')
-    if [ -z "$cert_hash" ]; then
-        log_failure_msg "cert-hash not found in /run/chutes — boot attestation did not save it"
-        return 1
-    fi
-
-    # Generate a fresh TDX quote with nonce + cert_hash as REPORTDATA (mirrors boot attestation).
-    # RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
-    local report_data
-    report_data=$(echo -n "${quote_nonce}${cert_hash}" | cut -c1-128)
-    log_begin_msg "Generating TDX quote for /provision"
-    if ! /usr/bin/tdx-quote-generator --report-data "$report_data" --hex \
-            -o "$quote_file" 2>/dev/null; then
-        log_end_msg 1
-        log_failure_msg "Failed to generate TDX quote"
-        return 1
-    fi
-    local quote_b64
-    quote_b64=$(base64 -w 0 < "$quote_file")
-    rm -f "$quote_file"
-    log_end_msg 0
-
-    log_begin_msg "POST /provision (volumes=${STORAGE_LABEL},${CACHE_LABEL})"
-
-    # NO-LOG INVARIANT: the response body contains plaintext LUKS passphrases and
-    # the k3s encryption key.  $response_file must NEVER be logged or echoed.
-    # Use 'curl -s' (silent) and always rm -f $response_file before returning.
-    # Do not add -v / --verbose flags to this curl call.
-    http_code=$(curl -s -w "%{http_code}" \
-        -X POST \
-        -H "X-Quote-Nonce: $quote_nonce" \
-        -H "X-Chutes-Hotkey: $HOTKEY" \
-        -H "User-Agent: TDX-LUKS-Storage/1.0" \
-        -H "Content-Type: application/json" \
-        --max-time "$timeout" \
-        --retry 0 \
-        --cacert "$ca_cert" \
-        --cert "$client_cert" \
-        --key "$client_key" \
-        -d "{\"quote\":\"${quote_b64}\",\"volumes\":[${volumes_json}]}" \
-        -o "$response_file" \
-        "$endpoint_url")
-
-    if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
-        rm -f "$response_file"
-        log_failure_msg "POST LUKS sync failed (HTTP $http_code)"
-        return 1
-    fi
+    # The /provision POST (quote generation, headers, curl) lives in provision-common;
+    # it leaves the response at $PROVISION_RESPONSE. Parsing the rotation payload stays here.
+    provision_request "$volumes_json" || return 1
+    local response_file="$PROVISION_RESPONSE"
 
     # The API always returns the rotation format for this VM version (determined
     # by the attestation measurements fixed at image build time).  Any other
@@ -668,56 +579,9 @@ finalize_rotation() {
     fi
 }
 
-# ── k3s EncryptionConfiguration ─────────────────────────────────────────────
-#
-# Write a Kubernetes EncryptionConfiguration YAML to /run/chutes/ (tmpfs).
-# k3s is pointed at this file via encryption-provider-config; because /run is
-# tmpfs the key is never written to any persistent storage and evaporates when
-# the VM dies.  The same key is re-fetched from the API on every boot, so
-# existing state.db entries remain readable across reboots and image upgrades.
-#
-# If no key was received the VM powers off — a VM without secrets encryption
-# cannot run securely and must not proceed.
-
-write_k3s_encryption_config() {
-    local config_path="/run/chutes/k3s-encryption-config.yaml"
-
-    mkdir -m 700 -p /run/chutes
-
-    if [ -n "$K3S_ENCRYPTION_KEY" ]; then
-        # NO-LOG INVARIANT: $K3S_ENCRYPTION_KEY is plaintext key material.
-        # This heredoc writes it directly to file — do NOT echo, log, or
-        # set -x around this block.  The file mode (600) restricts access.
-        # Full config: secretbox encryption with the API-supplied key.
-        # identity provider listed last so existing unencrypted secrets
-        # (written before this feature was enabled) can still be read.
-        cat > "$config_path" << EOF
-apiVersion: apiserver.config.k8s.io/v1
-kind: EncryptionConfiguration
-resources:
-  - resources:
-      - secrets
-      - configmaps
-    providers:
-      - secretbox:
-          keys:
-            - name: key1
-              secret: ${K3S_ENCRYPTION_KEY}
-      - identity: {}
-EOF
-        chmod 600 "$config_path"
-        log_success_msg "k3s encryption config written (secretbox)"
-    else
-        log_failure_msg "k3s encryption key not returned by API — VM cannot run securely"
-        echo "K3S-ENCRYPTION-KEY-MISSING: API did not return k3s_encryption_key" > /dev/kmsg
-        sleep 5
-        poweroff -f
-        return 1
-    fi
-
-    chmod 600 "$config_path"
-    return 0
-}
+# write_k3s_encryption_config is sourced from /scripts/provision-common (shared with
+# the debug setup_storage entry). Prod supplies $K3S_ENCRYPTION_KEY from the /provision
+# response; a missing key routes through handle_failure below (fail closed).
 
 handle_failure() {
     local reason="$1"

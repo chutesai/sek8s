@@ -59,9 +59,10 @@ Primary references:
 5. **PCCS automation**
    - Interactive **`pccs-configure`** has no useful non-interactive flags on target Ubuntu; automation **templates** `/opt/intel/sgx-dcap-pccs/config/default.json`, generates TLS key/cert under `pccs_ssl_dir`, restarts **`pccs`**, runs **`PCKIDRetrievalTool`** with the Vault password. **Intel `ApiKey` is stored plaintext in that JSON on the host** (PCCS requirement); protect with Vault on the controller and filesystem permissions on metal. On failure, operator follows [host-tools/README.md](../../host-tools/README.md) Step 2 manually. **`setup.yml`** always includes **`pccs_configure`**: if **`pccs_api_key`** and **`pccs_password`** are **both** set, the role runs; if **neither** is set, the role prints why it skipped and exits the role; **only one** set fails the play with an inventory remediation message.
 
-6. **Launch vs upgrade (checksum drift)**  
-   - **Launch:** `quick-launch.sh --download` **only** when the default base image path is **missing**. If the file **exists** and verification fails → **fail** and direct to **`upgrade-guest.yml`** (no auto-download overwrite).  
-   - **Upgrade:** Stage with **`aria2c`** to **`tdx-guest-staged.qcow2`**, verify SHA256 matches **`EXPECTED_BASE_SHA256`** from synced `quick-launch.sh`, then after shutdown **rename** current `tdx-guest.qcow2` → `tdx-guest-<YYYY-MM-DD>.qcow2`, **rename** staged → `tdx-guest.qcow2`, **relaunch** with default path (no `--base-image` override).
+6. **Launch vs upgrade (image-set coherence)**  
+   - The base image is a published **image set** — a per-variant directory holding the qcow2, its direct-boot `.vmlinuz`/`.initrd`/`.cmdline`, and a `manifest.json` (sha256 + size per artifact). Coherence is verified against the manifest by `chutes.guest.image_set` (full hash at download, presence/size at launch); there is no hand-maintained `EXPECTED_BASE_SHA256`.  
+   - **Launch:** `quick-launch.sh --download` **only** when the default base-image **directory** is **missing**. If it **exists** and manifest verification fails → **fail** and direct to **`upgrade-guest.yml`** (no auto-download overwrite).  
+   - **Upgrade:** Stage the full set with **`aria2c`** into **`tdx-guest.staged/`** and verify it with **`image_set resolve --full`**; then after shutdown **rename** current `tdx-guest/` → `tdx-guest-<YYYY-MM-DD>/`, **rename** staged → `tdx-guest/`, **relaunch** with the default directory (no `--base-image` override).
 
 7. **Host content on metal**  
    - **rsync** `host-tools/` from the controller checkout to **`sek8s_remote_host_tools`** (default `/opt/sek8s/host-tools`), not full-repo clone.
@@ -147,15 +148,15 @@ or fix/remove the qcow2 manually.
 
 ### Upgrade — ordered phases (implemented)
 
-1. Rsync **host-tools** (updates **`EXPECTED_BASE_SHA256`** / URL expectations).  
-2. **Stage** with **`aria2c`** to **`/var/lib/chutes/base-images/tdx-guest-staged.qcow2`**; verify SHA256.  
+1. Rsync **host-tools** (syncs the launcher + `chutes.guest.image_set` verifier).  
+2. **Stage** the image set with **`aria2c`** into **`/var/lib/chutes/base-images/tdx-guest.staged/`**; verify with **`image_set resolve --full`** against the manifest.  
 3. **`chutes-miner tee start-maintenance`**.  
 4. **`chutes-miner sync-kubeconfig`**.  
 5. **`kubectl delete pods -n chutes -l chutes/chute=true --wait=true`** (optional force path).  
 6. **`chutes-miner tee shutdown --confirm`**.  
 7. Poll **`/tmp/tdx-guest-td.log`** for **`Power down`** (same substring as [`ansible/guest/roles/prime-vm/tasks/main.yml`](../../ansible/guest/roles/prime-vm/tasks/main.yml)).  
-8. **`mv`** current **`tdx-guest.qcow2`** → dated backup; **`mv`** staged → **`tdx-guest.qcow2`**.  
-9. **`quick-launch.sh`** with default base path.  
+8. **`mv`** current **`tdx-guest/`** → dated backup directory; **`mv`** staged **`tdx-guest.staged/`** → **`tdx-guest/`**.  
+9. **`quick-launch.sh`** with the default base directory.  
 10. **`chutes-miner tee node-health`** poll.  
 11. **`chutes-miner unlock`** — resumes gepetto scheduling (validator does not auto-clear the maintenance lock).
 

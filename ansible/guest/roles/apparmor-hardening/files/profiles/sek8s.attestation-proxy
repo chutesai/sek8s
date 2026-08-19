@@ -9,6 +9,8 @@
 
 abi <abi/4.0>,
 
+include <tunables/global>
+
 profile sek8s.attestation-proxy flags=(enforce) {
   include <abstractions/base>
   include <abstractions/nameservice>
