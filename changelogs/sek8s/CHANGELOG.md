@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-08-04
+## [0.4.0] - 2026-08-19
 
 ### Added
 - `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
@@ -66,6 +66,13 @@ Version source of truth: `src/sek8s/VERSION`
   dynamically-fetched cosign keys are now RSA-verified (not PGP-verified)
   against the attested root key before being written to tmpfs. Key paths and
   behavior are unchanged.
+
+### Removed
+- system-manager's `ImageManager` no longer pulls images. Removed the cosign-verified pull
+  path (`start_pull` / pull-status tracking, `PullStatusEnum` / `PullSnapshot`), the
+  `COSIGN_PUBLIC_KEY_PATH` (`cosign_public_key_path`) setting, and the `CosignClient`
+  dependency. It now only lists, deletes, and prunes containerd images; image signature
+  verification stays with the admission controller.
 
 ## [0.3.1] - 2026-06-20
 

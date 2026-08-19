@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.1] - 2026-08-04
+## [2026.07.1] - 2026-08-19
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -23,6 +23,23 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - **RTX Pro 6000 4-NUMA-node host support**: added the flat-fallback fingerprint `FlatTopology(gpu_count=8)` at QEMU `10.2.1` to `RTXPro6000Profile.baselined_measurements`. Hosts with more than 2 NUMA nodes fail `use_numa_topology`'s 2-node gate and launch on the flat path (single memory-backend, no PXB-PCIe grouping), which is a distinct guest topology → distinct RTMR0 from the 2-node NUMA hosts. The RTX entries are keyed under `10.2.1` (Ubuntu 26.04, confirmed by `discover-profile.sh` on `se-028` and `tlusa-9`), with the prior `10.1.0` numa entry retained for RTX hosts still on 25.10. **The matching RTMR0 for RTX flat @ 10.2.1 must be registered in chutes-ops `teeMeasurements` before this host can attest — the profile carries the fingerprint; the measurement follows.**
 - `discover-profile.sh`: capture per-NVSwitch host NUMA node (`nvswitch.numa_nodes` in JSON, plus a report row) — the field that distinguishes otherwise-identical H200 chassis whose NVSwitches attach to a different NUMA node (e.g. Dell XE9680 node 1 vs KR6288 node 0), which changes RTMR0.
 - `discover-profile.sh`: capture per-IB-PF host NUMA node for the passthrough candidates (`nic.passthrough_numa_nodes` in JSON, plus a report row) — retained as a diagnostic. The topology fingerprint keeps an IB axis (`ib_nodes` / `ib_count`) wired to `should_passthrough_infiniband`, so it is empty for every profile now that IB passthrough is removed (see Removed) but would automatically capture IB again if any profile re-enabled it.
+- `build-setup.yml` now installs and enables Docker **with the buildx plugin** on build
+  hosts. Offline RTMR0 generation (the `compute-rtmr0` role) builds the tdx-measure fork's
+  patched QEMU via `docker build --progress plain`, which needs BuildKit/buildx. A build host
+  without it reported every profile PENDING with "Failed to invoke `docker build`" (no
+  docker) or "unknown flag: --progress" (no buildx).
+- Image-set coherence checking, as the single image format. A VM image is a set — the
+  qcow2 plus its direct-boot `.vmlinuz`/`.initrd`/`.cmdline` and a `manifest.json` (sha256 +
+  size per artifact) — verified as a matched unit against the manifest at download (full
+  hash) and at launch (presence/size). A stale or mismatched artifact now fails with a clear
+  "out of sync" error instead of an opaque boot/attestation failure. `chutes.guest.image_set`
+  is the single manifest generator/verifier, used by the build, `publish-image.sh`, and the
+  launcher; the boot artifacts previously had no integrity link at all.
+- `make images` builds **standalone docker images** — `docker/<name>` dirs that have a
+  `Dockerfile` but no matching `src/` package (e.g. `docker/busybox`). Build all, or one by
+  name: `make images busybox`. Images are tagged with a `latest`-style tag (`latest` on
+  `main`, `<branch>-latest` otherwise), and `tag`/`push`/`sign` now work for these
+  standalone images too (versioned `dev` when no package `VERSION` applies).
 
 ### Changed
 - **Per-profile host CPU reserve.** `HOST_RESERVED_CPUS` is no longer a single
@@ -62,6 +79,19 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   `--download-debug` fetch them next to the image, and `chutes.guest.direct_boot` resolves
   them at launch — no per-launch extraction and no `guestfish` on fleet hosts. The launcher
   and the build read the *same* staged files, so the pinned RTMR1/2 match the running VM.
+- `base_image` is a published **image-set directory** (qcow2 + boot artifacts +
+  `manifest.json`), not a bare qcow2 — the only supported format. `quick-launch --download` /
+  `--download-debug` fetch the whole set into `/var/lib/chutes/base-images/<variant>/` and
+  verify it; the build (ansible) emits the per-variant `manifest.json` for both debug and
+  prod. Keeping an old build means moving its directory aside before re-downloading
+  (downloads overwrite in place).
+- Launch is decoupled from download: a missing image set fails with a clear remediation
+  message rather than being auto-downloaded. Stage sets explicitly with `--download` (or, in
+  a build, via ansible).
+- Base-image integrity is carried entirely by the manifest instead of a hand-maintained
+  `EXPECTED_BASE_SHA256` (removed) — no per-release hash bump, no per-launch re-hash of the
+  multi-GB image, and per-variant shas for debug and prod (the old single constant could
+  represent only one).
 
 ### Fixed
 - **B200/B200_XEON6 reserve 16 host CPUs** (up from the default 4), leaving 176
@@ -100,6 +130,8 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 
 ### Removed
 - **InfiniBand passthrough for B200 / B200_XEON6** (`should_passthrough_infiniband` → `False`, matching H200/B300/RTX). It added no value — guest networking is virtio-net and NVLink fabric is host-side Fabric Manager (which works with IB off). Its only effect was to make RTMR0 vary by each host's IB NIC loadout (e.g. `am-b200-20` with 4 IB PFs vs `am-b200-57` with 20), forcing a separate measurement per loadout. With IB off, every B200 converges to one fingerprint `NumaTopology(gpu_nodes=(0,0,0,0,1,1,1,1))`. The new no-IB RTMR0 is submitted to chutes-ops `teeMeasurements` after the fact (the profile carries the fingerprint; the measurement follows).
+- The bare-qcow2 launch path and `quick-launch --skip-checksum`. Every image — including
+  benchmark and custom images — is consumed as a verified image set.
 
 ## [2026.07.0] - 2026-07-01
 

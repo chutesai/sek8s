@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-08-04
+## [1.4.0] - 2026-08-19
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -89,6 +89,19 @@ Version source of truth: `ansible/guest/VERSION`
     egress to the validator.
   - **Measurement:** adds guest image content (package + systemd unit + crictl wrapper + AppArmor
     profile) → shifts **RTMR3**. Regenerate expected-measurement baselines before rollout.
+- RC gate for debug/RC VMs: the debug image boots a fail-open initramfs that provisions
+  against the production network (validator auth, VM root CA registration, k3s encryption)
+  by proving possession of an authorized operator key — a detached RSA signature over the
+  boot nonce sent in `X-Operator-Signature`. Only an authorized operator can bring a debug
+  VM up against prod, and it can never join real traffic; the debug initramfs carries a
+  distinct measurement (registered `rc: true`).
+- Offline per-topology RTMR0 generation (`guest-tools/measurement/generate_measurements.py`,
+  wired via the new `compute-rtmr0` role): reconstructs RTMR0 for every supported GPU
+  topology by splicing per-topology events from the `tdx-measure` fork into a captured
+  baseline CCEL — no per-topology hardware boot. `measurement_profile` selects one profile
+  or, when empty, all profiles.
+- Debug images now compute full RTMR1/2/3 (registered `rc: true`) so they attest under the
+  RC gate.
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -185,6 +198,28 @@ Version source of truth: `ansible/guest/VERSION`
   carried in the CN — the validator resolves `(miner_hotkey, vm_name)` by verifying the leaf against
   the registered per-boot VM CA — so the CN is intentionally generic, not per-VM. Edits initramfs →
   shifts **RTMR2**; regenerate measurement baselines before rollout.
+- The `luks` role now runs for **all** guest images and gates internally on the build type:
+  prod encrypts the root filesystem and installs the fail-closed initramfs; debug installs
+  the fail-open RC initramfs and performs no encryption. Prod and debug carry distinct
+  initramfs measurements.
+- Boot and storage-provisioning logic refactored into shared initramfs libraries
+  (`attest-common`, `provision-common`) sourced by both prod and debug entry scripts, so the
+  two stay in sync without leaking debug code into prod.
+- Measurement pipeline restructured into explicit phases with one peer role per register —
+  gather (`stage-boot-artifacts` + `capture-ccel`) then compute (`compute-rtmr1-2` +
+  `compute-rtmr0`); RTMR1/2 now computed post-luks (after the initrd is final). Measurement
+  controls collapsed to a single `measurements: none | offline | full` flag.
+- CVM mTLS operations now use the `cvm.chutes.ai` domain.
+- HWE kernel bumped to `7.0.0-28.28~24.04.1`.
+- The compute phase now aggregates every register into a single
+  `measurements/<version>/measurements.yaml` (teeMeasurements-shaped, ready to merge into
+  chutes-ops values) instead of scattered per-register files; the raw registers are carried
+  as in-play facts, and per-topology hardware entries are named from each topology
+  fingerprint (computed, not hand-curated). A single `compute-measurements` tag runs the
+  whole phase (gather → compute → aggregate); a `build` tag runs the image-production plays.
+- The attestation proxy's init container now runs a cosign-signed `parachutes/busybox`
+  image (verified with `dockerhub.pub`) so it passes the admission controller instead of
+  being rejected as an unsigned image.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
@@ -193,6 +228,12 @@ Version source of truth: `ansible/guest/VERSION`
   (`PasswordAuthentication no`) is Included first and won first-match precedence, so
   password/console access never took effect. The play now writes a `00-debug-access.conf`
   drop-in that sorts ahead of the cloud-init one, restoring root password SSH login.
+- AppArmor service profiles now load and enforce — they were missing
+  `include <tunables/global>`, so the policy failed to parse and silently did not confine.
+  Each profile now carries a least-privilege capability set (e.g. `setup-cache` gets
+  `chown`/`fowner`/`fsetid`; the shared default allows the base set but denies
+  `sys_module`/`mac_admin`/`mac_override`/`sys_rawio`/`sys_boot`). Debug builds load the
+  profiles in complain mode so a policy gap logs a denial instead of poweroff-bricking the VM.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
@@ -211,6 +252,9 @@ Version source of truth: `ansible/guest/VERSION`
 - `setup_vm_tls` no longer generates or registers the VM root CA. It now only signs the leaf certs from the CA generated in init-premount and deletes `ca.key` before `pivot_root`. The dedicated `PUT /servers/{vm}/vm-root-ca` registration call (and its nonce-less quote) is gone.
 - The `signing-keys` role no longer installs or stages `gpgv`; the RSA verifier
   (`openssl`) is already staged for the LUKS/TLS paths and is reused.
+- Retired the userspace debug k3s secrets-encryption path (build-time static key baked at
+  `/etc/chutes` + k3s systemd drop-in). Debug now writes the k3s EncryptionConfiguration from
+  initramfs like prod (from a static well-known key), so debug and prod share the boot flow.
 
 ### Notes
 - This change alters the RTMR3 measurement baseline (new AppArmor profile, edited
