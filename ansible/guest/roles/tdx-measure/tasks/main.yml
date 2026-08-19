@@ -42,14 +42,42 @@
       become: true
       when: _tdxm_cargo.rc != 0
 
-    - name: Clone the tdx-measure fork if not already checked out
-      # update: false — never disturb an existing checkout (a dev's working tree
-      # may have local changes); only clone when the dir is missing.
+    - name: Clone and fast-forward the tdx-measure fork to the pinned ref
+      # update: true + force: true — always advance an existing checkout to
+      # tdx_measure_ref, so a moved branch tip (e.g. an RTMR1/2 fix) can't leave a
+      # build host rebuilding stale source into a wrong-measurement binary. Local
+      # iteration is served by presetting tdx_measure_bin (skips this whole block),
+      # so nothing here clobbers a dev's working tree.
       ansible.builtin.git:
         repo: "{{ tdx_measure_repo_url }}"
         dest: "{{ tdx_measure_src_dir }}"
         version: "{{ tdx_measure_ref }}"
-        update: false
+        update: true
+        force: true
+
+    - name: Refuse to build a tdx-measure that is behind origin
+      # Hard guarantee on top of the forced update: compiling a fork behind
+      # origin/tdx_measure_ref silently produces WRONG RTMR measurements (this is
+      # exactly how a stale RTMR1/2 shipped once). Fail the run instead of building
+      # stale — HEAD must equal the remote tip.
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          cd "{{ tdx_measure_src_dir }}"
+          git fetch --quiet origin "{{ tdx_measure_ref }}"
+          local_sha=$(git rev-parse HEAD)
+          remote_sha=$(git rev-parse FETCH_HEAD)
+          if [ "$local_sha" != "$remote_sha" ]; then
+            echo "STALE tdx-measure: HEAD $local_sha != origin/{{ tdx_measure_ref }} $remote_sha" >&2
+            exit 1
+          fi
+          echo "tdx-measure at origin/{{ tdx_measure_ref }}: $local_sha"
+      changed_when: false
+      register: _tdxm_freshness
+
+    - name: Show the verified tdx-measure commit
+      ansible.builtin.debug:
+        msg: "{{ _tdxm_freshness.stdout }}"
 
     - name: Build the tdx-measure CLI (release)
       ansible.builtin.command:
