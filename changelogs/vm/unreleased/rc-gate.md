@@ -27,8 +27,25 @@
   controls collapsed to a single `measurements: none | offline | full` flag.
 - CVM mTLS operations now use the `cvm.chutes.ai` domain.
 - HWE kernel bumped to `7.0.0-28.28~24.04.1`.
+- The compute phase now aggregates every register into a single
+  `measurements/<version>/measurements.yaml` (teeMeasurements-shaped, ready to merge into
+  chutes-ops values) instead of scattered per-register files; the raw registers are carried
+  as in-play facts, and per-topology hardware entries are named from each topology
+  fingerprint (computed, not hand-curated). A single `compute-measurements` tag runs the
+  whole phase (gather → compute → aggregate); a `build` tag runs the image-production plays.
+- The attestation proxy's init container now runs a cosign-signed `parachutes/busybox`
+  image (verified with `dockerhub.pub`) so it passes the admission controller instead of
+  being rejected as an unsigned image.
 
 ### Removed
 - Retired the userspace debug k3s secrets-encryption path (build-time static key baked at
   `/etc/chutes` + k3s systemd drop-in). Debug now writes the k3s EncryptionConfiguration from
   initramfs like prod (from a static well-known key), so debug and prod share the boot flow.
+
+### Fixed
+- AppArmor service profiles now load and enforce — they were missing
+  `include <tunables/global>`, so the policy failed to parse and silently did not confine.
+  Each profile now carries a least-privilege capability set (e.g. `setup-cache` gets
+  `chown`/`fowner`/`fsetid`; the shared default allows the base set but denies
+  `sys_module`/`mac_admin`/`mac_override`/`sys_rawio`/`sys_boot`). Debug builds load the
+  profiles in complain mode so a policy gap logs a denial instead of poweroff-bricking the VM.

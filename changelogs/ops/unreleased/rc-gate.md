@@ -12,6 +12,12 @@
   is the single manifest generator/verifier, used by the build, `publish-image.sh`, and the
   launcher; the boot artifacts previously had no integrity link at all.
 
+- `make images` builds **standalone docker images** — `docker/<name>` dirs that have a
+  `Dockerfile` but no matching `src/` package (e.g. `docker/busybox`). Build all, or one by
+  name: `make images busybox`. Images are tagged with a `latest`-style tag (`latest` on
+  `main`, `<branch>-latest` otherwise), and `tag`/`push`/`sign` now work for these
+  standalone images too (versioned `dev` when no package `VERSION` applies).
+
 ### Changed
 - `base_image` is a published **image-set directory** (qcow2 + boot artifacts +
   `manifest.json`), not a bare qcow2 — the only supported format. `quick-launch --download` /
