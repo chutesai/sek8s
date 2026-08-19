@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.1] - 2026-08-19
+## [2026.07.4] - 2026-08-19
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -14,15 +14,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   `quick-launch --download` fetches; pre-flight fails if any of the four is missing, so a
   qcow2 is never published without its matching boot artifacts. Prompts once for the
   rclone config password (`RCLONE_CONFIG_PASS`).
-- VM launch now hard-matches the host's RTMR0-impacting configuration before launching, so an unbaselined host fails fast with an actionable message instead of a silent attestation 403 later. Two checks:
-  - **QEMU host-readiness gate** (`verify_host_qemu_supported`, run before profile resolution): the host QEMU must be the build its OS release ships (`SUPPORTED_QEMU_BY_OS = {"25.10": "10.1.0", "26.04": "10.2.1"}`). QEMU generates the guest ACPI tables measured into RTMR0, so a different QEMU attests with an unbaselined RTMR0; tying it to the OS also enforces hosts run the release's security-patched build. Proactive operator check, not a security boundary — the real gate is the control-plane RTMR0 match.
-  - **Topology hard-match** in `detect_profile`: each `GpuProfile` declares `baselined_measurements`, a map of `QEMU version → set of host topology fingerprints` (`detection.host_topology_fingerprint`) with a registered RTMR0 measurement (RTMR0 = f(topology, QEMU), so a measurement is only valid for a specific topology×QEMU pair). `baselined_topologies` derives from it as the union across QEMU versions. Fingerprints are self-documenting value types in the new `chutes.guest.gpu.topology` module (see below): `NumaTopology(gpu_nodes, nvswitch_nodes, ib_nodes)` on the 2-node NUMA path (where each device→NUMA vector drives the guest PXB-PCIe grouping and thus RTMR0) or `FlatTopology(gpu_count, nvswitch_count, ib_count)` otherwise. The launch-time hard-match is deliberately QEMU-agnostic (uses the union): a host whose live topology isn't characterized at all is refused with "run discover-profile.sh and send the output." Populated for H200 / B200 / B200_XEON6 / RTX_PRO_6000 to mirror the authoritative chutes-ops `teeMeasurements` v1.3.1 (`values/chutes-api/values.yaml`). An empty map (e.g. B300, not yet characterized in sek8s) skips the launch check; verify-host will advise on such hosts since it can't confirm the measurement.
-- **`chutes.guest.gpu.topology` module** — `NumaTopology` / `FlatTopology` frozen dataclasses that name every field of a topology fingerprint (per-device host-NUMA vectors vs device counts), replacing the previous opaque positional tuples (`("numa", …)` / `("flat", …)`). They are hashable value types, so they live in the `baselined_measurements` sets and support `fingerprint in baselined_topologies`; a `NumaTopology` never equals a `FlatTopology`, which is the guest-NUMA-path vs flat-fallback discriminator the string tag used to carry. Only *device* topology is captured — CPU/socket/RAM are pinned to profile constants and identical across a profile's hosts, so a host that differs only in NUMA-node count (the RTX 4-node case) or logical-CPU count is characterized by its topology, not named after the host.
-- **`chutes.guest.verify` — standalone host-readiness check** (`verify-host` CLI, mirrors `run-td`): runs the launch gates without launching a VM, so it can be run **before an upgrade** to confirm a node will relaunch and re-attest rather than going offline. Exit codes: `0` ready, `1` blocked (QEMU wrong for OS, or topology uncharacterized — won't relaunch), `2` warning (gates pass but no registered measurement for this topology×QEMU — would 403 at attestation). `--target-os VERSION_ID` checks against the QEMU an OS upgrade would bring (skipping the live-QEMU hygiene gate, since the upgrade replaces it) so an OS upgrade can be pre-flighted. The QEMU-keyed `baselined_measurements` is what lets it distinguish "OS/QEMU is supported" from "we actually have a measurement for it" — the case where an H200 on 26.04/10.2.1 resolves and gates cleanly but has no registered 10.2.1 RTMR0.
-- **`upgrade-host.yml` pre-flight gate**: runs `verify-host --target-os <final hop>` after computing the upgrade path and **before draining/shutting down the guest**; aborts the upgrade (unless `upgrade_preflight_override=true`) if the host wouldn't relaunch or attest at the target OS's QEMU — so an OS upgrade can't strand a node whose topology×QEMU has no registered measurement.
-- **RTX Pro 6000 4-NUMA-node host support**: added the flat-fallback fingerprint `FlatTopology(gpu_count=8)` at QEMU `10.2.1` to `RTXPro6000Profile.baselined_measurements`. Hosts with more than 2 NUMA nodes fail `use_numa_topology`'s 2-node gate and launch on the flat path (single memory-backend, no PXB-PCIe grouping), which is a distinct guest topology → distinct RTMR0 from the 2-node NUMA hosts. The RTX entries are keyed under `10.2.1` (Ubuntu 26.04, confirmed by `discover-profile.sh` on `se-028` and `tlusa-9`), with the prior `10.1.0` numa entry retained for RTX hosts still on 25.10. **The matching RTMR0 for RTX flat @ 10.2.1 must be registered in chutes-ops `teeMeasurements` before this host can attest — the profile carries the fingerprint; the measurement follows.**
-- `discover-profile.sh`: capture per-NVSwitch host NUMA node (`nvswitch.numa_nodes` in JSON, plus a report row) — the field that distinguishes otherwise-identical H200 chassis whose NVSwitches attach to a different NUMA node (e.g. Dell XE9680 node 1 vs KR6288 node 0), which changes RTMR0.
-- `discover-profile.sh`: capture per-IB-PF host NUMA node for the passthrough candidates (`nic.passthrough_numa_nodes` in JSON, plus a report row) — retained as a diagnostic. The topology fingerprint keeps an IB axis (`ib_nodes` / `ib_count`) wired to `should_passthrough_infiniband`, so it is empty for every profile now that IB passthrough is removed (see Removed) but would automatically capture IB again if any profile re-enabled it.
 - `build-setup.yml` now installs and enables Docker **with the buildx plugin** on build
   hosts. Offline RTMR0 generation (the `compute-rtmr0` role) builds the tdx-measure fork's
   patched QEMU via `docker build --progress plain`, which needs BuildKit/buildx. A build host
@@ -42,12 +33,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   standalone images too (versioned `dev` when no package `VERSION` applies).
 
 ### Changed
-- **Per-profile host CPU reserve.** `HOST_RESERVED_CPUS` is no longer a single
-  global constant applied to every GPU profile. `GpuProfile` now exposes a
-  per-profile `host_reserved_cpus` property (default 4) that feeds
-  `vcpus = host_cpus - host_reserved_cpus`. This lets a GPU type with a heavier
-  fixed host workload reserve more cores without shifting the vcpu count — and
-  therefore the RTMR0 measurement — of unrelated profiles.
 - Pin host kernel to `linux-image-6.17.0-35-generic` in both Ubuntu 25.10 and
   26.04 host profiles to guarantee RTMR0 measurement consistency across the
   fleet. Previously the `linux-image-generic` metapackage was used, which
@@ -94,26 +79,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   represent only one).
 
 ### Fixed
-- **B200/B200_XEON6 reserve 16 host CPUs** (up from the default 4), leaving 176
-  vcpus on the 192-thread B200 (8 physical cores, 4/socket; clean 88 cores/socket
-  topology). The B200 host runs FabricManager alongside QEMU's iothread/vhost
-  workers; a thin 4-CPU reserve starved those threads under heavy NVLink/NCCL
-  I/O, which surfaced in the guest as `cudaErrorNvlinkUncorrectable` during
-  distributed init. The wider reserve also enlarges the CPU gap that QEMU
-  iothreads pin into (`post_launch.py`).
-  **Attestation impact:** changing B200/B200_XEON6 vcpus changes their `-smp`
-  topology and thus RTMR0. The B200 and B200_XEON6 attestation baselines must be
-  re-measured. H200, RTX_PRO_6000, and B300 keep the default reserve of 4 and are
-  byte-identical — no re-baseline needed for those.
-- **Re-incorporated per-profile `host_reserved_cpus` (#113)**, which landed on `main` after this branch forked from `07470ca`. Without it, B200/B200_XEON6 fell back to the global 4-CPU reserve (188/284 vCPUs) instead of their 16-CPU reserve (176/272 vCPUs), producing a different `-smp` topology → a different RTMR0 than `main`'s baselined B200 measurements. Restored byte-identical to `main` so a later merge/rebase reconciles cleanly; B300 / H200 / RTX_PRO_6000 are unaffected (they use the default reserve).
-- `nvidia-gpu-tools` (and `chutes-reset-gpus`) now self-heal after a host OS
-  upgrade that changes the system Python (e.g. 25.10 → 26.04, Python 3.13 →
-  3.14). `ensure_gpu_tools_available()` verifies the CLI actually runs instead
-  of trusting its presence on `PATH`, and rebuilds the bundled-wheel venv when
-  it was built for a different Python version. Previously the orphaned venv left
-  the CLI broken with `ModuleNotFoundError: No module named 'entry_point'` — and
-  re-running `setup-tdx-host` did not fix it because the stale symlink still
-  resolved on `PATH`.
 - 25.10 → 26.04 host upgrade no longer stalls on `sgx-dcap-pccs`. Intel's
   `noble`-suite PCCS now depends on `nodejs (>= 22.13)`, which is unsatisfiable
   on 25.10 (questing ships nodejs 20.x), so apt parks it as permanently
@@ -129,9 +94,65 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   `setup-tdx-host`).
 
 ### Removed
-- **InfiniBand passthrough for B200 / B200_XEON6** (`should_passthrough_infiniband` → `False`, matching H200/B300/RTX). It added no value — guest networking is virtio-net and NVLink fabric is host-side Fabric Manager (which works with IB off). Its only effect was to make RTMR0 vary by each host's IB NIC loadout (e.g. `am-b200-20` with 4 IB PFs vs `am-b200-57` with 20), forcing a separate measurement per loadout. With IB off, every B200 converges to one fingerprint `NumaTopology(gpu_nodes=(0,0,0,0,1,1,1,1))`. The new no-IB RTMR0 is submitted to chutes-ops `teeMeasurements` after the fact (the profile carries the fingerprint; the measurement follows).
 - The bare-qcow2 launch path and `quick-launch --skip-checksum`. Every image — including
   benchmark and custom images — is consumed as a verified image set.
+
+## [2026.07.3] - 2026-07-24
+
+### Changed
+- Reconciled the validated host-topology matrix (`support_matrix.py` and the
+  host-tools / ansible READMEs). H200, B200, and RTX Pro 6000 (all 8-GPU) are now
+  listed as validated on both Ubuntu 25.10 and 26.04. Removed the stale
+  `25.04 / H200` (EOL OS) and `26.04 / B300` (not yet validated end-to-end) rows.
+
+## [2026.07.2] - 2026-07-09
+
+### Added
+- VM launch now hard-matches the host's RTMR0-impacting configuration before launching, so an unbaselined host fails fast with an actionable message instead of a silent attestation 403 later. Two checks:
+  - **QEMU host-readiness gate** (`verify_host_qemu_supported`, run before profile resolution): the host QEMU must be the build its OS release ships (`SUPPORTED_QEMU_BY_OS = {"25.10": "10.1.0", "26.04": "10.2.1"}`). QEMU generates the guest ACPI tables measured into RTMR0, so a different QEMU attests with an unbaselined RTMR0; tying it to the OS also enforces hosts run the release's security-patched build. Proactive operator check, not a security boundary — the real gate is the control-plane RTMR0 match.
+  - **Topology hard-match** in `detect_profile`: each `GpuProfile` declares `baselined_measurements`, a map of `QEMU version → set of host topology fingerprints` (`detection.host_topology_fingerprint`) with a registered RTMR0 measurement (RTMR0 = f(topology, QEMU), so a measurement is only valid for a specific topology×QEMU pair). `baselined_topologies` derives from it as the union across QEMU versions. Fingerprints are self-documenting value types in the new `chutes.guest.gpu.topology` module (see below): `NumaTopology(gpu_nodes, nvswitch_nodes, ib_nodes)` on the 2-node NUMA path (where each device→NUMA vector drives the guest PXB-PCIe grouping and thus RTMR0) or `FlatTopology(gpu_count, nvswitch_count, ib_count)` otherwise. The launch-time hard-match is deliberately QEMU-agnostic (uses the union): a host whose live topology isn't characterized at all is refused with "run discover-profile.sh and send the output." Populated for H200 / B200 / B200_XEON6 / RTX_PRO_6000 to mirror the authoritative chutes-ops `teeMeasurements` v1.3.1 (`values/chutes-api/values.yaml`). An empty map (e.g. B300, not yet characterized in sek8s) skips the launch check; verify-host will advise on such hosts since it can't confirm the measurement.
+- **`chutes.guest.gpu.topology` module** — `NumaTopology` / `FlatTopology` frozen dataclasses that name every field of a topology fingerprint (per-device host-NUMA vectors vs device counts), replacing the previous opaque positional tuples (`("numa", …)` / `("flat", …)`). They are hashable value types, so they live in the `baselined_measurements` sets and support `fingerprint in baselined_topologies`; a `NumaTopology` never equals a `FlatTopology`, which is the guest-NUMA-path vs flat-fallback discriminator the string tag used to carry. Only *device* topology is captured — CPU/socket/RAM are pinned to profile constants and identical across a profile's hosts, so a host that differs only in NUMA-node count (the RTX 4-node case) or logical-CPU count is characterized by its topology, not named after the host.
+- **`chutes.guest.verify` — standalone host-readiness check** (`verify-host` CLI, mirrors `run-td`): runs the launch gates without launching a VM, so it can be run **before an upgrade** to confirm a node will relaunch and re-attest rather than going offline. Exit codes: `0` ready, `1` blocked (QEMU wrong for OS, or topology uncharacterized — won't relaunch), `2` warning (gates pass but no registered measurement for this topology×QEMU — would 403 at attestation). `--target-os VERSION_ID` checks against the QEMU an OS upgrade would bring (skipping the live-QEMU hygiene gate, since the upgrade replaces it) so an OS upgrade can be pre-flighted. The QEMU-keyed `baselined_measurements` is what lets it distinguish "OS/QEMU is supported" from "we actually have a measurement for it" — the case where an H200 on 26.04/10.2.1 resolves and gates cleanly but has no registered 10.2.1 RTMR0.
+- **`upgrade-host.yml` pre-flight gate**: runs `verify-host --target-os <final hop>` after computing the upgrade path and **before draining/shutting down the guest**; aborts the upgrade (unless `upgrade_preflight_override=true`) if the host wouldn't relaunch or attest at the target OS's QEMU — so an OS upgrade can't strand a node whose topology×QEMU has no registered measurement.
+- **RTX Pro 6000 4-NUMA-node host support**: added the flat-fallback fingerprint `FlatTopology(gpu_count=8)` at QEMU `10.2.1` to `RTXPro6000Profile.baselined_measurements`. Hosts with more than 2 NUMA nodes fail `use_numa_topology`'s 2-node gate and launch on the flat path (single memory-backend, no PXB-PCIe grouping), which is a distinct guest topology → distinct RTMR0 from the 2-node NUMA hosts. The RTX entries are keyed under `10.2.1` (Ubuntu 26.04, confirmed by `discover-profile.sh` on `se-028` and `tlusa-9`), with the prior `10.1.0` numa entry retained for RTX hosts still on 25.10. **The matching RTMR0 for RTX flat @ 10.2.1 must be registered in chutes-ops `teeMeasurements` before this host can attest — the profile carries the fingerprint; the measurement follows.**
+- `discover-profile.sh`: capture per-NVSwitch host NUMA node (`nvswitch.numa_nodes` in JSON, plus a report row) — the field that distinguishes otherwise-identical H200 chassis whose NVSwitches attach to a different NUMA node (e.g. Dell XE9680 node 1 vs KR6288 node 0), which changes RTMR0.
+- `discover-profile.sh`: capture per-IB-PF host NUMA node for the passthrough candidates (`nic.passthrough_numa_nodes` in JSON, plus a report row) — retained as a diagnostic. The topology fingerprint keeps an IB axis (`ib_nodes` / `ib_count`) wired to `should_passthrough_infiniband`, so it is empty for every profile now that IB passthrough is removed (see Removed) but would automatically capture IB again if any profile re-enabled it.
+
+### Fixed
+- `nvidia-gpu-tools` (and `chutes-reset-gpus`) now self-heal after a host OS
+  upgrade that changes the system Python (e.g. 25.10 → 26.04, Python 3.13 →
+  3.14). `ensure_gpu_tools_available()` verifies the CLI actually runs instead
+  of trusting its presence on `PATH`, and rebuilds the bundled-wheel venv when
+  it was built for a different Python version. Previously the orphaned venv left
+  the CLI broken with `ModuleNotFoundError: No module named 'entry_point'` — and
+  re-running `setup-tdx-host` did not fix it because the stale symlink still
+  resolved on `PATH`.
+
+### Removed
+- **InfiniBand passthrough for B200 / B200_XEON6** (`should_passthrough_infiniband` → `False`, matching H200/B300/RTX). It added no value — guest networking is virtio-net and NVLink fabric is host-side Fabric Manager (which works with IB off). Its only effect was to make RTMR0 vary by each host's IB NIC loadout , forcing a separate measurement per loadout. With IB off, every B200 converges to one fingerprint `NumaTopology(gpu_nodes=(0,0,0,0,1,1,1,1))`. The new no-IB RTMR0 is submitted to chutes-ops `teeMeasurements` after the fact (the profile carries the fingerprint; the measurement follows).
+
+## [2026.07.1] - 2026-07-01
+
+### Changed
+- **Per-profile host CPU reserve.** `HOST_RESERVED_CPUS` is no longer a single
+  global constant applied to every GPU profile. `GpuProfile` now exposes a
+  per-profile `host_reserved_cpus` property (default 4) that feeds
+  `vcpus = host_cpus - host_reserved_cpus`. This lets a GPU type with a heavier
+  fixed host workload reserve more cores without shifting the vcpu count — and
+  therefore the RTMR0 measurement — of unrelated profiles.
+
+### Fixed
+- **B200/B200_XEON6 reserve 16 host CPUs** (up from the default 4), leaving 176
+  vcpus on the 192-thread B200 (8 physical cores, 4/socket; clean 88 cores/socket
+  topology). The B200 host runs FabricManager alongside QEMU's iothread/vhost
+  workers; a thin 4-CPU reserve starved those threads under heavy NVLink/NCCL
+  I/O, which surfaced in the guest as `cudaErrorNvlinkUncorrectable` during
+  distributed init. The wider reserve also enlarges the CPU gap that QEMU
+  iothreads pin into (`post_launch.py`).
+  **Attestation impact:** changing B200/B200_XEON6 vcpus changes their `-smp`
+  topology and thus RTMR0. The B200 and B200_XEON6 attestation baselines must be
+  re-measured. H200, RTX_PRO_6000, and B300 keep the default reserve of 4 and are
+  byte-identical — no re-baseline needed for those.
 
 ## [2026.07.0] - 2026-07-01
 
