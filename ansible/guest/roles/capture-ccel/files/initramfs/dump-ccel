@@ -14,6 +14,12 @@ case $1 in prereqs) prereqs; exit 0;; esac
 . /scripts/functions
 
 modprobe qemu_fw_cfg 2>/dev/null || true
+# The /sys/firmware/qemu_fw_cfg/by_name tree appears only once the driver probes;
+# give it a moment so the fw_cfg/SMBIOS blobs below are not silently missed.
+i=0
+while [ ! -d /sys/firmware/qemu_fw_cfg/by_name ] && [ "$i" -lt 50 ]; do
+  i=$((i + 1)); sleep 0.1
+done
 
 # Silence the kernel console so our base64 is not interleaved with printk on the serial.
 echo 0 > /proc/sys/kernel/printk 2>/dev/null || true
@@ -36,6 +42,8 @@ dump table_loader  /sys/firmware/qemu_fw_cfg/by_name/etc/table-loader/raw
 dump rsdp          /sys/firmware/qemu_fw_cfg/by_name/etc/acpi/rsdp/raw
 dump smbios_tables /sys/firmware/qemu_fw_cfg/by_name/etc/smbios/smbios-tables/raw
 dump smbios_anchor /sys/firmware/qemu_fw_cfg/by_name/etc/smbios/smbios-anchor/raw
+dump extra_pci_roots /sys/firmware/qemu_fw_cfg/by_name/etc/extra-pci-roots/raw
+dump bootorder     /sys/firmware/qemu_fw_cfg/by_name/bootorder/raw
 
 echo "MEAS-DUMP-COMPLETE" > "$S"
 sleep 1

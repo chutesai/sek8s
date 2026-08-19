@@ -156,6 +156,16 @@
         owner: root
         group: root
 
+    - name: Ensure qemu_fw_cfg ships in the capture initramfs (fw_cfg/SMBIOS dump needs it)
+      # Without the module in the initramfs, `modprobe qemu_fw_cfg` at init-premount finds
+      # nothing, /sys/firmware/qemu_fw_cfg is never created, and every fw_cfg/SMBIOS dump
+      # misses (only the ACPI-sourced ccel_data survives).
+      ansible.builtin.lineinfile:
+        path: "{{ measurement_mnt }}/etc/initramfs-tools/modules"
+        line: qemu_fw_cfg
+        create: true
+        mode: "0644"
+
     - name: Rebuild the initramfs in the chroot
       ansible.builtin.command: "chroot {{ measurement_mnt }} update-initramfs -u -k all"
       changed_when: true
@@ -243,7 +253,7 @@
         set -uo pipefail
         log="{{ measurement_serial_log }}"
         out="{{ _baseline_dir }}"
-        for label in ccel_data ccel acpi_tables table_loader rsdp smbios_tables smbios_anchor; do
+        for label in ccel_data ccel acpi_tables table_loader rsdp smbios_tables smbios_anchor extra_pci_roots bootorder; do
           awk -v L="$label" '
             $0 ~ ("MEAS-DUMP-BEGIN " L "( |$)") {f=1; next}
             $0 ~ ("MEAS-DUMP-END " L "( |$)")   {f=0}
