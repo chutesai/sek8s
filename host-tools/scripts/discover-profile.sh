@@ -139,7 +139,7 @@ MEM_TOTAL_GB=$(( MEM_TOTAL_KB / 1024 / 1024 ))
 
 # ---------------------------------------------------------------------------
 # OS release + derived QEMU -cpu args
-# Mirrors run-td (chutes/guest/__main__.py): the avx10 mask is gated purely on
+# Mirrors chutes-cvm launch (chutes/guest/__main__.py): the avx10 mask is gated purely on
 # the host's Ubuntu VERSION_ID. -cpu shapes the CPUID leaves the guest sees, so
 # two hosts on different OS releases launch the VM differently — capture it here
 # so a measurement divergence can be traced back to host OS drift.
@@ -314,7 +314,7 @@ if have nvidia-smi; then
 fi
 
 # Full PCIe topology tree (device ordering / enumeration). Enumeration order
-# drives PXB-PCIe root-port assignment in run-td, which the guest sees as its
+# drives PXB-PCIe root-port assignment in chutes-cvm launch, which the guest sees as its
 # PCI bus layout — another RTMR0 input. No root required.
 PCI_TOPOLOGY=$(lspci -tv 2>/dev/null || true)
 
@@ -435,7 +435,7 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Host CPU topology"         "sockets=${CPU_SOCKETS}, cores/socket=${CPU_CORES_PER_SOCKET}, threads/core=${CPU_THREADS_PER_CORE}"
     if [[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]]; then
         warn "Guest RAM (mem=GPU_count × profile.ram_per_gpu_gb) is profile-derived;"
-        warn "this script is profile-free — read it from run-td's launch log to confirm."
+        warn "this script is profile-free — read it from chutes-cvm launch's launch log to confirm."
     fi
 
     section "Mellanox / InfiniBand NICs"

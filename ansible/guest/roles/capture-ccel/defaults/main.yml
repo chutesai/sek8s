@@ -27,7 +27,7 @@ measurement_nbd_device: /dev/nbd0
 measurement_mnt: /mnt/ccel-capture
 # stage-boot-artifacts.sh re-extracts the (dumper-carrying) kernel/initrd/cmdline.
 measurement_stage_boot_script: "{{ repo_root }}/ansible/guest/roles/stage-boot-artifacts/files/stage-boot-artifacts.sh"
-# run-td logs the guest serial here; the dumper's base64 lands in it.
+# chutes-cvm launch logs the guest serial here; the dumper's base64 lands in it.
 measurement_serial_log: /tmp/tdx-guest-td.log
 # Max seconds to wait for the dump to finish (a minimal boot + dump is ~1-2 min).
 measurement_dump_wait_seconds: 300

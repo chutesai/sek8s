@@ -80,7 +80,7 @@ if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
     echo "  Location: ${TARGET_DIR}/${WHEEL_NAME}"
     echo ""
     echo "The wheel file is ready to be committed to the repository."
-    echo "The run-td script will automatically install it if nvidia-gpu-tools is not in PATH."
+    echo "The chutes-cvm launch command will automatically install it if nvidia-gpu-tools is not in PATH."
 else
     echo "Error: Could not find built wheel file"
     exit 1

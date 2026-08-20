@@ -69,6 +69,27 @@ def _cmd_discover_profile(args: argparse.Namespace) -> int:
     return _run_script("discover-profile.sh", forwarded)
 
 
+def _cmd_tune_host(args: argparse.Namespace) -> int:
+    """Apply NVIDIA-recommended host CPU tuning."""
+    from chutes.host.tune import apply_tuning
+
+    apply_tuning()
+    return 0
+
+
+def _cmd_restore_host(args: argparse.Namespace) -> int:
+    """Restore host CPU settings saved by tune-host."""
+    from chutes.host.tune import restore_tuning
+
+    restore_tuning()
+    return 0
+
+
+def _cmd_reset_gpus(args: argparse.Namespace) -> int:
+    """Reset all GPUs via nvidia-gpu-tools SBR (delegates to devices/reset-gpus.sh)."""
+    return _run_script("devices/reset-gpus.sh", [])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chutes-cvm",
@@ -114,11 +135,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover.set_defaults(func=_cmd_discover_profile)
 
+    # Pass-through commands (see _PASSTHROUGH / main): everything after the subcommand is
+    # forwarded verbatim to the underlying launcher/setup, which own their own --help. These
+    # entries exist for `chutes-cvm --help` visibility; main() intercepts them before argparse
+    # (argparse REMAINDER mishandles leading options like --help/--image), so no func is set.
+    sub.add_parser(
+        "launch",
+        add_help=False,
+        help="Launch the TDX guest VM (args forwarded; `chutes-cvm launch --help`).",
+    )
+    sub.add_parser(
+        "setup-host",
+        add_help=False,
+        help="Set up this TDX host (args forwarded; `chutes-cvm setup-host --help`).",
+    )
+
+    tune = sub.add_parser(
+        "tune-host",
+        help="Apply NVIDIA-recommended host CPU tuning (performance governor, no C1E/C6).",
+    )
+    tune.set_defaults(func=_cmd_tune_host)
+
+    restore = sub.add_parser(
+        "restore-host",
+        help="Restore host CPU settings saved by tune-host (no-op if never tuned).",
+    )
+    restore.set_defaults(func=_cmd_restore_host)
+
+    reset = sub.add_parser(
+        "reset-gpus",
+        help="Reset all GPUs via nvidia-gpu-tools SBR (stop the VM first).",
+    )
+    reset.set_defaults(func=_cmd_reset_gpus)
+
     return parser
 
 
+# Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
+# before argparse because REMAINDER mishandles leading options (e.g. `launch --image`,
+# `setup-host --help`). Each underlying main owns its own --help.
+_PASSTHROUGH = ("launch", "setup-host")
+
+
 def main(argv: "list[str] | None" = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] in _PASSTHROUGH:
+        forward = raw[1:]
+        if raw[0] == "launch":
+            from chutes.guest.__main__ import main as _launch_main
+
+            return _launch_main(forward)
+        from chutes.host.setup import main as _setup_main
+
+        return _setup_main(forward)
+    args = build_parser().parse_args(raw)
     return args.func(args)
 
 

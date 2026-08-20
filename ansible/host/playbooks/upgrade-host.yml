@@ -70,7 +70,10 @@
       ansible.builtin.command:
         chdir: "{{ sek8s_remote_host_tools }}/scripts"
         argv:
-          - ./verify-host
+          - python3
+          - -m
+          - chutes.guest.cli
+          - verify-host
           - --target-os
           - "{{ _upgrade_hops[-1] }}"
       register: _relaunch_preflight
@@ -84,7 +87,7 @@
     - name: Abort upgrade — host would not relaunch/attest after upgrade
       ansible.builtin.fail:
         msg: >-
-          Pre-flight (verify-host --target-os {{ _upgrade_hops[-1] }}) returned
+          Pre-flight (chutes-cvm verify-host --target-os {{ _upgrade_hops[-1] }}) returned
           rc={{ _relaunch_preflight.rc }}: this host would not relaunch, or would
           fail attestation, after the upgrade (no registered measurement for its
           topology x the target QEMU). Aborting so the node stays online. Register

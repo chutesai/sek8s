@@ -76,7 +76,9 @@ def _add_ppa(ppa: PPA, codename: str):
         _run(["sudo", "add-apt-repository", "-y", ppa.uri])
 
     distro_id = f"LP-PPA-{ppa.team}-{ppa.name}"
-    pin_file = f"/etc/apt/preferences.d/kobuk-tdx-{ppa.team}-{ppa.name}-pin-{ppa.pin_priority}"
+    pin_file = (
+        f"/etc/apt/preferences.d/kobuk-tdx-{ppa.team}-{ppa.name}-pin-{ppa.pin_priority}"
+    )
     pin_content = (
         f"Package: *\n"
         f"Pin: release o={distro_id}\n"
@@ -86,9 +88,9 @@ def _add_ppa(ppa: PPA, codename: str):
 
     unattended_file = f"/etc/apt/apt.conf.d/99unattended-upgrades-kobuk-{ppa.name}"
     unattended_content = (
-        f'Unattended-Upgrade::Allowed-Origins {{\n'
+        f"Unattended-Upgrade::Allowed-Origins {{\n"
         f'  "{distro_id}:{suite}";\n'
-        f'}};\n'
+        f"}};\n"
         f'Unattended-Upgrade::Allow-downgrade "true";\n'
     )
     _write_system_file(unattended_file, unattended_content)
@@ -126,10 +128,7 @@ def _fetch_signing_key(fingerprint: str, dest: str):
     Saves the ASCII-armored key directly -- modern apt (2.4+, i.e. Ubuntu
     24.04+) accepts armored keys in Signed-By without dearmoring.
     """
-    url = (
-        f"https://keyserver.ubuntu.com/pks/lookup"
-        f"?op=get&search=0x{fingerprint}"
-    )
+    url = f"https://keyserver.ubuntu.com/pks/lookup" f"?op=get&search=0x{fingerprint}"
     print(f"  Fetching signing key {fingerprint[:16]}...")
     subprocess.run(
         ["sudo", "curl", "-fsSL", "-o", dest, url],
@@ -227,19 +226,23 @@ def _grub_set_kernel(kernel_version: str):
         check=True,
     ).stdout.strip()
     if not kid:
-        raise RuntimeError(
-            f"Could not parse grub menu id for kernel {kernel_version}"
-        )
+        raise RuntimeError(f"Could not parse grub menu id for kernel {kernel_version}")
 
     saved_entry = f"{mid}>{kid}" if mid else kid
 
     grub_default_cfg = "/etc/default/grub.d/99-tdx-kernel.cfg"
     _write_system_file(
         grub_default_cfg,
-        'GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n',
+        "GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n",
     )
     _run(
-        ["sudo", "grub-editenv", "/boot/grub/grubenv", "set", f"saved_entry={saved_entry}"],
+        [
+            "sudo",
+            "grub-editenv",
+            "/boot/grub/grubenv",
+            "set",
+            f"saved_entry={saved_entry}",
+        ],
     )
     _run(["sudo", "update-grub"])
 
@@ -258,7 +261,7 @@ def _grub_update_cmdline(additions: list[str]):
         print(f"  Adding '{param}' to GRUB cmdline")
         content = re.sub(
             r'(GRUB_CMDLINE_LINUX="[^"]*)',
-            rf'\1 {param}',
+            rf"\1 {param}",
             content,
         )
         modified = True
@@ -269,8 +272,6 @@ def _grub_update_cmdline(additions: list[str]):
         # --no-nvram prevents grub-install from updating EFI boot order
         # (important for MAAS-managed machines that expect PXE boot)
         _run(["sudo", "grub-install", "--no-nvram"])
-
-
 
 
 _BLACKWELL_HGX_GPU_IDS = ("10de:2901", "10de:3182")  # B200, B300
@@ -321,7 +322,9 @@ def _setup_host_fabric_manager():
     # ib_umad must be loaded before fabricmanager starts so it can open
     # the InfiniBand management datagram interface to the CX7 bridge PFs.
     ib_umad_conf = "/etc/modules-load.d/ib_umad.conf"
-    ib_umad_content = "# Required for B200/B300 Fabric Manager CX7 bridge communication\nib_umad\n"
+    ib_umad_content = (
+        "# Required for B200/B300 Fabric Manager CX7 bridge communication\nib_umad\n"
+    )
     already_current = False
     if os.path.exists(ib_umad_conf):
         with open(ib_umad_conf) as f:
@@ -352,7 +355,9 @@ def _setup_host_fabric_manager():
     try:
         dpkg_out = subprocess.run(
             ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         stale_fm = [
             line.split()[1]
@@ -374,12 +379,18 @@ def _setup_host_fabric_manager():
 
     # Pin to the exact version — matches how the Ansible guest role pins
     # nvidia packages via /etc/apt/preferences.d/nvidia-version-pin.
-    _run(["apt", "install", "--yes", "--allow-downgrades",
-          fm_pkg_pinned,
-          "nvlsm",
-          "libibumad3",
-          "infiniband-diags",
-          ])
+    _run(
+        [
+            "apt",
+            "install",
+            "--yes",
+            "--allow-downgrades",
+            fm_pkg_pinned,
+            "nvlsm",
+            "libibumad3",
+            "infiniband-diags",
+        ]
+    )
     print(f"  ✓ Fabric Manager {FM_PKG_VERSION} installed")
 
     # Patch fabricmanager.cfg: PARTITION_RAIL_POLICY must be symmetric for
@@ -403,17 +414,24 @@ def _setup_host_fabric_manager():
         else:
             print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
     else:
-        print(f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly")
+        print(
+            f"  Warning: {fm_cfg} not found after install — FM may not be configured correctly"
+        )
 
     # Check if already running before enable/start to avoid unnecessary restarts.
-    already_running = subprocess.run(
-        ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
-        check=False,
-    ).returncode == 0
+    already_running = (
+        subprocess.run(
+            ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
+            check=False,
+        ).returncode
+        == 0
+    )
 
     _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
     if already_running:
-        print("  nvidia-fabricmanager.service already running — restarting to pick up config changes")
+        print(
+            "  nvidia-fabricmanager.service already running — restarting to pick up config changes"
+        )
         _run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
     else:
         _run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
@@ -446,7 +464,7 @@ def _blacklist_gpu_drivers():
     )
     already_current = False
     if os.path.exists(blacklist_path):
-        with open(blacklist_path, 'r') as f:
+        with open(blacklist_path, "r") as f:
             if f.read() == blacklist_content:
                 print(f"  {blacklist_path} already up to date")
                 already_current = True
@@ -524,7 +542,9 @@ def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
     with open(conf_path) as f:
         original = f.read()
 
-    updated = _re.sub(r"^#?\s*port\s*=.*$", "port = 4050", original, flags=_re.MULTILINE)
+    updated = _re.sub(
+        r"^#?\s*port\s*=.*$", "port = 4050", original, flags=_re.MULTILINE
+    )
 
     if updated == original:
         print(f"  {conf_path} already set to vsock port 4050")
@@ -559,7 +579,9 @@ def _ensure_pccs_node_modules(pccs_dir: str = "/opt/intel/sgx-dcap-pccs"):
 
     package_json = os.path.join(pccs_dir, "package.json")
     if not os.path.exists(package_json):
-        print(f"  {pccs_dir}/package.json not found — sgx-dcap-pccs not installed, skipping")
+        print(
+            f"  {pccs_dir}/package.json not found — sgx-dcap-pccs not installed, skipping"
+        )
         return
 
     print(f"  node_modules missing in {pccs_dir}, running npm install...")
@@ -688,34 +710,24 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     print(f"{'=' * 60}\n")
 
 
-def _symlink_host_bin_tools() -> None:
-    """Symlink host-tools/bin executables into /usr/local/bin/."""
-    scripts_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    bin_dir = os.path.join(os.path.dirname(scripts_dir), "bin")
-
-    if not os.path.isdir(bin_dir):
-        print(f"  Warning: {bin_dir} not found, skipping CLI symlinks")
+def _install_chutes_cvm() -> None:
+    """Install the chutes-cvm CLI (venv + PATH shim) via the provision script — the
+    single PATH entrypoint for host operations (replaces the old bin/ symlinks)."""
+    scripts_dir = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    setup_script = os.path.join(scripts_dir, "provision", "setup-chutes-cvm.sh")
+    if not os.path.isfile(setup_script):
+        print(f"  Warning: {setup_script} not found, skipping chutes-cvm install")
         return
-
-    for tool in os.listdir(bin_dir):
-        src = os.path.join(bin_dir, tool)
-        dst = f"/usr/local/bin/{tool}"
-        if not os.access(src, os.X_OK):
-            continue
-        if os.path.lexists(dst):
-            if os.path.islink(dst):
-                os.remove(dst)
-            else:
-                print(f"  Warning: {dst} exists and is not a symlink, skipping")
-                continue
-        print(f"  Linking {tool} -> {dst}")
-        os.symlink(os.path.abspath(src), dst)
+    print("  Installing chutes-cvm CLI...")
+    subprocess.run(["bash", setup_script], check=True)
 
 
 def install_dependencies() -> None:
-    """Symlink host-tools/bin into /usr/local/bin and ensure nvidia-gpu-tools is available.
+    """Install the chutes-cvm CLI and ensure nvidia-gpu-tools is available.
 
-    When the CLI is missing, installs from the bundled wheel (venv under gpu-tools/).
+    When the GPU CLI is missing, installs from the bundled wheel (venv under gpu-tools/).
     Must run as root.
     """
     if os.geteuid() != 0:
@@ -723,9 +735,73 @@ def install_dependencies() -> None:
         sys.exit(1)
 
     print("\n=== Install dependencies ===\n")
-    _symlink_host_bin_tools()
+    _install_chutes_cvm()
     print("\nEnsuring nvidia-gpu-tools (bundled wheel if missing)...")
     from chutes.guest.gpu.tools import ensure_gpu_tools_available
 
     ensure_gpu_tools_available()
     print("\nDone.\n")
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    """CLI entry for host setup: `chutes-cvm setup-host` (or `python -m chutes.host.setup`).
+
+    Detects the Ubuntu version, resolves the matching host profile, and executes the
+    setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
+    """
+    import argparse
+
+    from chutes.host.profiles import resolve_profile
+    from chutes.host.support_matrix import format_topology_matrix
+
+    parser = argparse.ArgumentParser(
+        prog="chutes-cvm setup-host",
+        description="Set up TDX host for confidential GPU computing",
+    )
+    parser.add_argument(
+        "--topology-matrix",
+        action="store_true",
+        help="Print lab-validated Ubuntu × GPU × count combinations and exit",
+    )
+    parser.add_argument(
+        "--install-tools-only",
+        action="store_true",
+        help="Install host dependencies (chutes-cvm CLI + nvidia-gpu-tools); then exit",
+    )
+    parser.add_argument(
+        "--noninteractive",
+        action="store_true",
+        help=(
+            "Suppress apt/debconf prompts (sets DEBIAN_FRONTEND=noninteractive). "
+            "Use when an external tool (e.g. Ansible) handles post-install "
+            "configuration such as PCCS setup."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    if args.topology_matrix:
+        print(format_topology_matrix())
+        return 0
+
+    if args.install_tools_only:
+        install_dependencies()
+        return 0
+
+    try:
+        profile = resolve_profile()
+    except (ValueError, RuntimeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    setup_host(profile, noninteractive=args.noninteractive)
+    print()
+    print(
+        "Validated hardware topologies are listed in the support matrix "
+        "(not every OS profile × GPU SKU has been lab-tested):"
+    )
+    print("  chutes-cvm setup-host --topology-matrix")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

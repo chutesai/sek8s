@@ -34,7 +34,7 @@ if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
     exit 1
 fi
 
-# ── Virtualenv (deps for config-driven commands; verify-host is pure stdlib) ──
+# ── Virtualenv (deps for config-driven commands; chutes-cvm verify-host is pure stdlib) ──
 log "venv: $VENV_DIR"
 mkdir -p "$(dirname "$VENV_DIR")"
 python3 -m venv "$VENV_DIR"          # reuses an existing venv without clobbering it

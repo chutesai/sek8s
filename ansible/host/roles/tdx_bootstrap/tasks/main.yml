@@ -1,8 +1,12 @@
 ---
-- name: Run setup-tdx-host (idempotent — installs packages, kernel, PPAs, tools)
+- name: Run host setup (idempotent — installs packages, kernel, PPAs, tools)
   ansible.builtin.command:
+    chdir: "{{ sek8s_remote_host_tools }}/scripts"
     argv:
-      - "{{ sek8s_remote_host_tools }}/scripts/setup-tdx-host"
+      - python3
+      - -m
+      - chutes.guest.cli
+      - setup-host
       - "--noninteractive"
   register: setup_tdx
   changed_when: setup_tdx.rc == 0

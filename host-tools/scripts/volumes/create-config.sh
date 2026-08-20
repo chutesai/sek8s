@@ -474,8 +474,8 @@ if [[ -n "$DOCKER_HUB_USER" && -n "$DOCKER_HUB_TOKEN" ]]; then
     print_info "  /docker-hub-token    : [credential file]"
 fi
 print_info ""
-print_info "To use with run-td:"
-print_info "  python3 ./run-td --config-volume $OUTPUT_PATH [other options...]"
+print_info "To use with chutes-cvm launch:"
+print_info "  chutes-cvm launch --config-volume $OUTPUT_PATH [other options...]"
 print_info ""
 print_info "To verify the volume contents later:"
 print_info "  sudo qemu-nbd --connect=/dev/nbd0 $OUTPUT_PATH"

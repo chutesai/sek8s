@@ -33,12 +33,12 @@ This script will:
 
 ### Usage
 
-The `run-td` script automatically handles installation:
+The `chutes-cvm launch` command automatically handles installation:
 
 1. **Checks for installed package** - If `nvidia-gpu-tools` command is in PATH, uses it
 2. **Installs from bundled wheel** - If not installed, automatically installs from the wheel file in this directory into a venv and creates a system-wide symlink
 
-Users don't need to manually install anything - the `run-td` script handles it automatically.
+Users don't need to manually install anything - the `chutes-cvm launch` command handles it automatically.
 
 ### License
 

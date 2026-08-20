@@ -1,6 +1,6 @@
 """CLI entry point for TDX VM launch.
 
-Invoked via: python3 ./run-td [args]
+Invoked via: chutes-cvm launch [args]
 """
 
 import argparse
@@ -217,7 +217,7 @@ def launch_vm(args) -> int:
         # vCPU thread pinning is gated on the profile enabling NUMA topology
         # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
         # CPU power tuning is separate and operator-driven; see
-        # `python -m chutes.host.tune` (tune-host.sh / restore-host.sh).
+        # `python -m chutes.host.tune` (chutes-cvm tune-host / restore-host).
         pin_threads = (
             numa_active and profile is not None and profile.enable_post_launch_tuning
         )
@@ -235,8 +235,10 @@ def launch_vm(args) -> int:
     return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Launch a TDX VM with GPU passthrough")
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="chutes-cvm launch", description="Launch a TDX VM with GPU passthrough"
+    )
 
     parser.add_argument("--image", type=str, help="Path to VM image")
     parser.add_argument("--pass-gpus", action="store_true")
@@ -266,7 +268,7 @@ def main() -> int:
         help="Virtio-net multiqueue count for TAP mode (default: 4)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     try:
         stop_existing_vm()

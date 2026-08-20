@@ -56,7 +56,7 @@
 # host is rebooted". Only a reboot clears it. We detect this up front, and again
 # if the launch itself wedges the host, rebooting and waiting for SSH to return
 # before (re)trying the launch. chutes.guest.vfio.pci_operations_wedged() is the
-# same predicate run-td uses internally (scans ps for D-state vfio/gpu-tools).
+# same predicate chutes-cvm launch uses internally (scans ps for D-state vfio/gpu-tools).
 
 - name: Pre-flight — detect a wedged PCI subsystem
   ansible.builtin.command:
@@ -88,7 +88,7 @@
   rescue:
     # Authoritative signal: the D-state tasks that wedge the PCI subsystem persist
     # until reboot, so re-running the predicate after the failure tells us directly
-    # whether a reboot would help. Fall back to matching run-td's error text.
+    # whether a reboot would help. Fall back to matching chutes-cvm launch's error text.
     - name: Re-check PCI wedge state after launch failure
       ansible.builtin.command:
         chdir: "{{ sek8s_remote_host_tools }}/scripts"

@@ -43,7 +43,9 @@
         prime_launched: false
 
     - name: Stop any existing TDX VM
-      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
+      ansible.builtin.command:
+        cmd: python3 -m chutes.guest.cli launch --clean
+        chdir: "{{ host_tools_scripts }}"
       changed_when: false
       failed_when: false
 
@@ -59,7 +61,7 @@
     - name: Launch VM for prime (user-mode networking, no volumes)
       ansible.builtin.shell: |
         cd {{ host_tools_scripts }}
-        python3 ./run-td \
+        python3 -m chutes.guest.cli launch \
           --image {{ final_img_path }} \
           --network-type user
       args:
@@ -70,12 +72,12 @@
       ansible.builtin.set_fact:
         prime_launched: true
 
-    - name: Debug run-td launch output
+    - name: Debug chutes-cvm launch output
       ansible.builtin.debug:
         msg:
-          - "run-td exit code: {{ launch_result.rc }}"
-          - "run-td stdout: {{ launch_result.stdout | default('') | trim }}"
-          - "run-td stderr: {{ launch_result.stderr | default('') | trim }}"
+          - "chutes-cvm launch exit code: {{ launch_result.rc }}"
+          - "chutes-cvm launch stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "chutes-cvm launch stderr: {{ launch_result.stderr | default('') | trim }}"
 
     - name: Wait for kernel boot signal in console log
       ansible.builtin.shell: |
@@ -134,9 +136,9 @@
     - name: Prime failed — debug output
       ansible.builtin.debug:
         msg:
-          - "run-td exit code: {{ launch_result.rc | default('N/A') }}"
-          - "run-td stdout: {{ launch_result.stdout | default('') | trim }}"
-          - "run-td stderr: {{ launch_result.stderr | default('') | trim }}"
+          - "chutes-cvm launch exit code: {{ launch_result.rc | default('N/A') }}"
+          - "chutes-cvm launch stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "chutes-cvm launch stderr: {{ launch_result.stderr | default('') | trim }}"
       when: launch_result is defined
 
     - name: Dump QEMU log on failure
@@ -159,12 +161,14 @@
     - name: Fail with verbose message for investigation
       ansible.builtin.fail:
         msg: |
-          Prime VM failed. Check run-td output and /tmp/tdx-guest-td.log above.
+          Prime VM failed. Check chutes-cvm launch output and /tmp/tdx-guest-td.log above.
           Re-run with --tags prime-vm after resolving the root cause.
 
   always:
     - name: Ensure VM is stopped after prime
-      ansible.builtin.command: "{{ host_tools_scripts }}/run-td --clean"
+      ansible.builtin.command:
+        cmd: python3 -m chutes.guest.cli launch --clean
+        chdir: "{{ host_tools_scripts }}"
       changed_when: false
       failed_when: false
       when: prime_launched | default(false) | bool

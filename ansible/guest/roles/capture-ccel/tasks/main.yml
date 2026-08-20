@@ -309,7 +309,7 @@
     - name: Stop the capture VM (leave the shared bridge in place)
       ansible.builtin.command:
         chdir: "{{ _host_tools_scripts }}"
-        argv: [./run-td, --clean]
+        argv: [python3, -m, chutes.guest.cli, launch, --clean]
       changed_when: true
       failed_when: false
 

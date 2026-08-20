@@ -29,9 +29,9 @@
 # Back up the PCCS artifacts (config/ holds the API key + token hashes + cached
 # collateral; ssl_key/ holds the self-signed TLS cert), then remove the package
 # so do-release-upgrade can proceed. On 26.04 the init_2604 hook restores these
-# artifacts before setup-tdx-host reinstalls sgx-dcap-pccs from the resolute
+# artifacts before chutes-cvm setup-host reinstalls sgx-dcap-pccs from the resolute
 # suite (nodejs 22.13+ is available there). Preserving them is required because
-# the upgrade path re-runs setup-tdx-host but does not re-apply the PCCS config
+# the upgrade path re-runs chutes-cvm setup-host but does not re-apply the PCCS config
 # (API key), unlike a fresh setup.yml provision.
 
 - name: "Pre 25.10: query sgx-dcap-pccs install state"
@@ -167,7 +167,7 @@
 
 - name: "Pre 25.10: remove stale PCCS directory left by apt purge"
   # apt purge warns "directory not empty so not removed" and leaves the tree
-  # behind. The fresh install via setup-tdx-host --noninteractive would then
+  # behind. The fresh install via chutes-cvm setup-host --noninteractive would then
   # skip npm install (directory already exists), producing a broken install
   # with no node_modules. Remove it so the reinstall starts clean.
   ansible.builtin.file:

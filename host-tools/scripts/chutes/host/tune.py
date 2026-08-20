@@ -110,7 +110,7 @@ def apply_tuning() -> None:
             print(f"Warning: could not write restore script: {exc}")
 
     print("\nHost tuning applied. Revert with:")
-    print("    chutes-restore-host   (or: python -m chutes.host.tune restore)")
+    print("    chutes-cvm restore-host   (or: python -m chutes.host.tune restore)")
 
 
 def restore_tuning() -> None:

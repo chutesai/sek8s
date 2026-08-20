@@ -1,4 +1,4 @@
-"""Tests for chutes.guest.__main__ (run-td launcher)."""
+"""Tests for chutes.guest.__main__ (chutes-cvm launch launcher)."""
 
 from unittest.mock import MagicMock, patch
 

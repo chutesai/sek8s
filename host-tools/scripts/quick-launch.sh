@@ -261,11 +261,11 @@ Runtime:
   --ephemeral               Use ephemeral per-VM image in /tmp/ (discarded on reboot)
 
 Host CPU tuning is a separate, operator-driven step (decoupled from launch):
-  sudo chutes-tune-host      Apply NVIDIA-recommended tuning
+  sudo chutes-cvm tune-host      Apply NVIDIA-recommended tuning
                              (governor=performance, disable C1E/C6)
-  sudo chutes-restore-host   Revert to the saved settings
+  sudo chutes-cvm restore-host   Revert to the saved settings
 
-Resource sizing is fixed inside run-td to preserve RTMR determinism.
+Resource sizing is fixed inside chutes-cvm launch to preserve RTMR determinism.
 
 Benchmark Mode:
   --benchmark               Launch in benchmark mode (no miner creds, no cache/config volume,
@@ -422,14 +422,12 @@ fi
 # --------------------------------------------------------------------
 if [[ "$CLI_CLEAN" == "true" ]]; then
   echo "=== Cleaning Up TEE VM Environment ==="
-  if [[ -x "./run-td" ]]; then
-    echo "Stopping Chutes VM (if running)..."
-    ./run-td --clean 2>/dev/null || true
-  fi
+  echo "Stopping Chutes VM (if running)..."
+  python3 -m chutes.guest.cli launch --clean 2>/dev/null || true
 
   echo "Waiting for VM processes to exit..."
   for i in {1..15}; do
-    if ! pgrep -f 'qemu-system|qemu-kvm|run-td' >/dev/null 2>&1; then
+    if ! pgrep -f 'qemu-system|qemu-kvm|chutes.guest.cli' >/dev/null 2>&1; then
       echo "No VM processes found. Proceeding with bridge cleanup."
       break
     fi
@@ -607,7 +605,7 @@ echo "✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)"
 echo "✓ Host configuration verified"
 echo ""
 
-# Device binding to vfio-pci is handled inside run-td (chutes.guest.passthrough)
+# Device binding to vfio-pci is handled inside chutes-cvm launch (chutes.guest.passthrough)
 echo ""
 
 
@@ -792,7 +790,7 @@ LAUNCH_ARGS=(
 )
 # GPU passthrough is on by default; --no-gpus omits it (e.g. the measurement capture VM,
 # which must boot without the physical GPUs/NVSwitches — their fabric never trains in a
-# capture VM and stalls the boot before multi-user/sshd). run-td then uses its GPU-less
+# capture VM and stalls the boot before multi-user/sshd). chutes-cvm launch then uses its GPU-less
 # defaults (DEFAULT_MEM, single socket, no vfio devices).
 [[ "$PASS_GPUS" == "true" ]] && LAUNCH_ARGS+=(--pass-gpus)
 
@@ -814,9 +812,9 @@ fi
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner
-if ! python3 ./run-td "${LAUNCH_ARGS[@]}"; then
+if ! python3 -m chutes.guest.cli launch "${LAUNCH_ARGS[@]}"; then
   echo ""
-  echo "Error: VM launch failed (run-td exited non-zero). See output above and /tmp/tdx-guest-td.log if daemonized."
+  echo "Error: VM launch failed (chutes-cvm launch exited non-zero). See output above and /tmp/tdx-guest-td.log if daemonized."
   exit 1
 fi
 

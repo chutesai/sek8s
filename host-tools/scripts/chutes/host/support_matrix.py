@@ -54,7 +54,7 @@ def validated_topology_rows() -> list[tuple[str, str, int]]:
 
 
 def format_topology_matrix() -> str:
-    """Plain-text table for README / ``setup-tdx-host --topology-matrix``."""
+    """Plain-text table for README / ``chutes-cvm setup-host --topology-matrix``."""
     lines = [
         "Validated host topologies (end-to-end tested: TDX host + VM + GPUs)",
         "",

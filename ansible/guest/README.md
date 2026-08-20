@@ -169,7 +169,7 @@ See role-specific defaults for component configuration.
 This Ansible playbook builds the VM image only. The following are handled by host-tools:
 
 - ❌ TDX-enabled host system setup → See `host-tools/scripts/chutes/host/`
-- ❌ GPU passthrough configuration → Handled automatically by `run-td`
+- ❌ GPU passthrough configuration → Handled automatically by `chutes-cvm launch`
 - ❌ Network infrastructure → See `host-tools/scripts/network/setup-bridge.sh`
 - ❌ Config/cache/storage volume creation → See `host-tools/scripts/volumes/create-*.sh`
 - ❌ VM launch and orchestration → See `host-tools/scripts/quick-launch.sh`

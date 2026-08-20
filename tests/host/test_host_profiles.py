@@ -265,13 +265,13 @@ def test_setup_host_calls_all_steps(
 
 
 @patch("chutes.guest.gpu.tools.ensure_gpu_tools_available")
-@patch("chutes.host.setup._symlink_host_bin_tools")
+@patch("chutes.host.setup._install_chutes_cvm")
 @patch("os.geteuid", return_value=0)
-def test_install_dependencies_runs_symlink_and_gpu_tools(
-    mock_euid, mock_symlink, mock_ensure_gpu
+def test_install_dependencies_installs_cli_and_gpu_tools(
+    mock_euid, mock_install_cli, mock_ensure_gpu
 ):
     install_dependencies()
-    mock_symlink.assert_called_once()
+    mock_install_cli.assert_called_once()
     mock_ensure_gpu.assert_called_once()
 
 
