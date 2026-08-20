@@ -6,17 +6,17 @@
 # be the single source of truth for CLI setup — a miner can run it directly (no Ansible
 # needed), and Ansible host-setup can `command:` the same script.
 #
-#   sudo host-tools/provision/setup-chutes-cvm.sh
+#   sudo host-tools/scripts/provision/setup-chutes-cvm.sh
 #
 # Overridable via env: CHUTES_CVM_VENV (default /opt/chutes-cvm/venv),
 # CHUTES_CVM_BIN (default /usr/local/bin). The defaults need root; point them at a
 # user-writable path to run without sudo.
 set -euo pipefail
 
-# host-tools/scripts holds the chutes.guest package. This script lives at
-# host-tools/provision/, so scripts/ is one level up and over.
+# This script lives at host-tools/scripts/provision/, so the scripts/ dir holding the
+# chutes.guest package is one level up.
 PROVISION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPTS_DIR="$(cd "$PROVISION_DIR/../scripts" && pwd)"
+SCRIPTS_DIR="$(cd "$PROVISION_DIR/.." && pwd)"
 
 VENV_DIR="${CHUTES_CVM_VENV:-/opt/chutes-cvm/venv}"
 BIN_DIR="${CHUTES_CVM_BIN:-/usr/local/bin}"
