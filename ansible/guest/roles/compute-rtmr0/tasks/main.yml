@@ -1,21 +1,17 @@
 ---
 # compute-rtmr0 — generate the per-topology RTMR0 measurements (post-luks).
 #
-# Peer of compute-rtmr1-2 (RTMR1/2) and compute-rtmr3 (RTMR3). For each supported
-# topology it runs the tdx-measure fork, which now self-generates the COMPLETE
-# 15-event RTMR0 (firmware + QEMU-generated ACPI + fw_cfg + SMBIOS) — no captured
+# Peer of compute-rtmr1-2 (RTMR1/2) and compute-rtmr3 (RTMR3). For every supported
+# topology of every profile it runs the tdx-measure fork, which self-generates the
+# COMPLETE 15-event RTMR0 (firmware + QEMU-generated ACPI + fw_cfg + SMBIOS) — no captured
 # baseline CCEL, no splice. See guest-tools/measurement/generate_measurements.py.
-#
-# measurement_profile:
-#   - a name (e.g. RTX_PRO_6000) → generate just that profile (debug-VM case).
-#   - empty → generate ALL profiles (prod publish).
 #
 # Fully OFFLINE — the fork + Docker (with buildx; it uses `docker build --progress
 # plain`) on ANY x86-64 Linux (no TDX, no GPUs). Determinism across generating hosts
-# comes from the profile's captured CPU identity (vendor/phys-bits/processor_id),
-# reconstructed into the measurement -cpu; a non-matching host still reproduces the
-# production RTMR0. Non-fatal: a profile that can't be generated (e.g. no
-# passthrough["gpu"] modeled, or missing CPU identity) is listed PENDING, not fatal.
+# comes from each fingerprint's CPU identity (vendor + Processor ID), reconstructed into
+# the measurement -cpu; a non-matching host still reproduces the production RTMR0.
+# Non-fatal: a profile that can't be generated (e.g. no passthrough["gpu"] modeled, or a
+# placeholder cpu_processor_id) is listed PENDING, not fatal.
 
 - name: Generate per-topology RTMR0 (self-contained — no baseline CCEL)
   ansible.builtin.command:
@@ -23,8 +19,6 @@
       - python3
       - "{{ repo_root }}/guest-tools/measurement/generate_measurements.py"
       - generate
-      - --profile
-      - "{{ measurement_profile | default('') }}"
       - --version
       - "{{ vm_version }}"
       - --output

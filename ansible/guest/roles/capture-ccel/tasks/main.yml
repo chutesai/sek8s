@@ -2,6 +2,12 @@
 # capture-ccel — MINIMAL-boot capture of the CCEL (RTMR0 baseline) into
 # measurements/<version>/.
 #
+# STANDALONE / DEBUG ONLY — this role is NOT part of the build (chutes-miner-vm.yml).
+# The tdx-measure fork self-generates the complete RTMR0 offline, so a real CCEL is no
+# longer needed to produce measurements. Kept on disk for the occasional cross-check of a
+# new CPU generation against a real quote, or for debugging a suspected fork divergence;
+# needs a TDX host. Invoke it deliberately (e.g. from a one-off playbook), not in the flow.
+#
 # RTMR0 is extended by TDX firmware (TD-HOB / ACPI / SMBIOS) BEFORE the kernel starts, and
 # the CCEL is a firmware-populated ACPI table readable the moment the kernel is up — it is
 # completely independent of userspace. So instead of booting the full debug control plane
