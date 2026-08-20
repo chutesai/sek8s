@@ -12,7 +12,15 @@ stdlib). New commands (launch, create-config, discover-profile, …) slot in via
 
 import argparse
 import os
+import subprocess
 import sys
+from pathlib import Path
+
+# host-tools/scripts/ — the dir holding the shell entrypoints the CLI delegates to
+# (cli.py lives at .../scripts/chutes/guest/cli.py). Kept as the front door while the
+# implementations stay in their current form; individual commands get ported to modules
+# over time without changing their CLI interface.
+_SCRIPTS_DIR = Path(__file__).resolve().parents[2]
 
 # verify_host's exit codes → (banner label, ANSI attributes). Kept here so the CLI owns
 # presentation while chutes.guest.verify stays a plain int-returning gate.
@@ -21,6 +29,15 @@ _VERIFY_STATUS = {
     1: ("BLOCKED", "1;31"),  # bold red
     2: ("WARNING", "1;33"),  # bold yellow
 }
+
+
+def _run_script(name: str, argv: "list[str]") -> int:
+    """Exec a host-tools/scripts/<name> shell entrypoint, forwarding argv."""
+    script = _SCRIPTS_DIR / name
+    if not script.exists():
+        print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
+        return 1
+    return subprocess.call(["bash", str(script), *argv])
 
 
 def _color(text: str, attrs: str) -> str:
@@ -40,6 +57,16 @@ def _cmd_verify_host(args: argparse.Namespace) -> int:
     label, attrs = _VERIFY_STATUS.get(rc, (f"EXIT {rc}", "1"))
     print(_color(f"\nResult: {label}", attrs))
     return rc
+
+
+def _cmd_discover_profile(args: argparse.Namespace) -> int:
+    """Capture this host's GPU/CPU/NUMA profile (delegates to discover-profile.sh)."""
+    forwarded = []
+    if args.json_only:
+        forwarded.append("--json-only")
+    if args.no_json:
+        forwarded.append("--no-json")
+    return _run_script("discover-profile.sh", forwarded)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +91,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Verify against a target OS release's QEMU (pre-upgrade check), e.g. 26.04.",
     )
     verify.set_defaults(func=_cmd_verify_host)
+
+    discover = sub.add_parser(
+        "discover-profile",
+        help="Capture this host's GPU/CPU/NUMA profile as JSON (to baseline a new host class).",
+        description=(
+            "Probe the host's GPUs, CPU, NUMA and PCI topology and write a discover-profile "
+            "JSON (plus a terminal report). Send that JSON to Chutes to baseline a new host "
+            "class and generate its measurements."
+        ),
+    )
+    output = discover.add_mutually_exclusive_group()
+    output.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Write only the JSON file (skip the terminal report).",
+    )
+    output.add_argument(
+        "--no-json",
+        action="store_true",
+        help="Print the terminal report only (skip the JSON file).",
+    )
+    discover.set_defaults(func=_cmd_discover_profile)
 
     return parser
 
