@@ -150,3 +150,8 @@ class TopologyFingerprint:
         name, so this must be unique per profile+qemu (asserted at generation time)."""
         shape = f"{self.cpu.vcpus}c-{self.mem_gb}g"
         return "-".join([self.gpu.path, shape, *self.gpu.device_parts])
+
+    def __str__(self) -> str:
+        # Human-readable form for messages/logs (the full dataclass repr is unreadable);
+        # repr() still gives the exhaustive field dump for debugging.
+        return self.variant_label

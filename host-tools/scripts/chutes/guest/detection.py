@@ -560,11 +560,11 @@ def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
     # profile pending its capture is refused here until discover-profile.sh fills it in.
     baselined = profile.baselined_topologies
     if baselined and fingerprint not in baselined:
+        known = ", ".join(sorted(b.variant_label for b in baselined))
         raise ValueError(
-            f"Host fingerprint {fingerprint} is not baselined for profile "
-            f"'{profile.name}'. Known: {sorted(baselined, key=str)}. This host would "
-            f"attest with an unbaselined RTMR0 and be rejected. Run "
-            f"discover-profile.sh and send the output to baseline it."
+            f"Host fingerprint '{fingerprint.variant_label}' is not baselined for profile "
+            f"'{profile.name}'. Known: {known}. This host would attest with an unbaselined "
+            f"RTMR0 and be rejected. Run discover-profile.sh and send the output to baseline it."
         )
 
     return profile, fingerprint
