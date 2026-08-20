@@ -270,7 +270,7 @@ nvevidence).
   - Keep bridge+TAP networking (default, unchanged).
   - Keep storage volume creation and attachment (raw block device for partner).
   - Start `benchmark-netlog.service` after bridge setup.
-  - Pass `run-td` without `--config-volume` or `--cache-volume`, only `--storage-volume`.
+  - Pass `chutes-cvm launch` without `--config-volume` or `--cache-volume`, only `--storage-volume`.
 
 **4.2** New `host-tools/scripts/config/config.benchmark.example.yaml`:
 - Minimal config: hostname, network (tap mode), storage volume (multi-TB), no miner

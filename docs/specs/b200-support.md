@@ -22,7 +22,7 @@
 
 - **Fabric Manager runs on the host, not the guest.** B200 NVSwitches are not PCIe devices — they are managed by Fabric Manager through ConnectX-7 bridge PFs. In Blackwell MPT CC mode, NVLink traffic is hardware-encrypted, so host-side FM can manage routing without being able to snoop GPU data. This is the NVIDIA-recommended and architecturally secure configuration for B200 CC workloads.
 
-- **FM setup lives in `chutes.host.setup`, not a new Ansible role.** The `chutes.host` Python package owns GPU-specific idempotent host configuration. Ansible handles generic host orchestration and calls `setup-tdx-host --noninteractive` which runs `setup_host()`. Adding a new step there keeps the domain boundary clean and requires no Ansible changes.
+- **FM setup lives in `chutes.host.setup`, not a new Ansible role.** The `chutes.host` Python package owns GPU-specific idempotent host configuration. Ansible handles generic host orchestration and calls `chutes-cvm setup-host --noninteractive` which runs `setup_host()`. Adding a new step there keeps the domain boundary clean and requires no Ansible changes.
 
 - **CX7 bridge PF detection uses VPD, not device ID.** Both bridge PFs (`SMDL=SW_MNG` in VPD) and NIC PFs share the same PCI device ID (`15b3:1021`). The VPD Vendor-specific field `SMDL=SW_MNG` is the only reliable way to distinguish them. This was confirmed on a reference B200 host: 4 bridge PFs at `0000:23:00.{0-3}` all carry the marker; 8 NIC PFs (one per GPU) do not.
 

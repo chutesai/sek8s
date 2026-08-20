@@ -20,7 +20,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 
 ## ✅ Pre-flight Checklist
 
-- Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies) and `./setup-tdx-host --topology-matrix`.
+- Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies) and `chutes-cvm setup-host --topology-matrix`.
 - Intel PCCS access + API key (for PCK cert registration)
 - The VM image downloaded via `./quick-launch.sh --download` (requires `aria2`)
 - Miner credentials: SS58 address and secret seed without `0x`
@@ -60,7 +60,7 @@ Each step is detailed in the following sections.
 Follow the dedicated [TDX VM Host Setup Guide](../host-tools/README.md). High-level tasks:
 
 1. Clone this repository.
-2. Run `cd host-tools/scripts && sudo ./setup-tdx-host` (auto-detects Ubuntu version, installs kernel, QEMU, attestation services).
+2. Run `cd host-tools/scripts && sudo chutes-cvm setup-host` (auto-detects Ubuntu version, installs kernel, QEMU, attestation services).
 3. Reboot into the TDX-enabled kernel and verify `dmesg | grep -i tdx`.
 4. Configure PCCS (`pccs-configure`, restart the service, run `PCKIDRetrievalTool`).
 5. Install Python + PyYAML (`pip3 install pyyaml`) and aria2 (`sudo apt install aria2`) for the orchestration scripts.
@@ -123,7 +123,7 @@ volumes:
 
 Behind the scenes `quick-launch.sh` calls `create-config.sh`, which writes hostname, credentials, network config, and optional Docker Hub auth into a qcow2 volume mounted at `/var/config` inside the VM. First-boot scripts pick those up and create the `chutes/miner-credentials` Kubernetes secret automatically.
 
-Memory, vCPU count, and PCI sizing are fixed inside `run-td` to preserve RTMR determinism and are not configurable. See [`host-tools/scripts/config/CONFIG-GUIDE.md`](../host-tools/scripts/config/CONFIG-GUIDE.md) for the full schema reference.
+Memory, vCPU count, and PCI sizing are fixed inside `chutes-cvm launch` to preserve RTMR determinism and are not configurable. See [`host-tools/scripts/config/CONFIG-GUIDE.md`](../host-tools/scripts/config/CONFIG-GUIDE.md) for the full schema reference.
 
 ---
 
@@ -142,7 +142,7 @@ What this does:
 3. Creates or refreshes the config volume with current credentials and Docker Hub auth.
 4. Verifies the base image SHA256 and creates/reuses a qcow2 overlay.
 5. Builds the NAT-backed bridge network (`br0` + TAP) tied to `public_interface`.
-6. Invokes `run-td`, which detects GPUs, configures CC/PPCIe modes, binds to `vfio-pci`, and boots the VM.
+6. Invokes `chutes-cvm launch`, which detects GPUs, configures CC/PPCIe modes, binds to `vfio-pci`, and boots the VM.
 
 Add `--foreground` to stream output to your terminal instead of daemonizing.
 
@@ -206,7 +206,7 @@ You can still use `kubectl` from your workstation to spot-check pods, but day-to
 
 - **Lifecycle** – Stop everything with `./quick-launch.sh --clean` (tears down bridge and stops VM). Relaunch with the same config when ready. GPUs are reconfigured and rebound automatically on next launch.
 - **Logs** – Host-side QEMU output lives in `/tmp/tdx-guest-td.log`; Kubernetes events stay inside the guest (`kubectl get events -n chutes`).
-- **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (auto-installed by `run-td`).
+- **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (auto-installed by `chutes-cvm launch`).
 - **Upgrades** – Download the new image with `./quick-launch.sh --download`, then rerun `./quick-launch.sh config.yaml`. The overlay is recreated when the base image SHA256 changes.
 - **Restart workloads** – The miner kubeconfig has get/list/watch/patch on all deployments and daemonsets in all namespaces (ClusterRole `miner-rollout-restart`). Outside the chutes namespace, the admission controller OPA policy allows only patches to `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]` (rollout restart). Example: `kubectl rollout restart daemonset/attestation-proxy -n attestation-system`.
 - **Security** – Protect the config volume—it holds the plain-text miner seed and Docker Hub token. Rotate credentials by editing `config.yaml` and relaunching (the config volume is refreshed each launch).

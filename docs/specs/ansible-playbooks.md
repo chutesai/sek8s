@@ -7,7 +7,7 @@
 
 ## Context
 
-Operational Ansible for **bare-metal TDX hosts** that run the sek8s VM stack (`host-tools/scripts`: `setup-tdx-host`, `quick-launch.sh`, etc.). This is **separate** from the **guest VM image build** Ansible under [`ansible/guest/`](../../ansible/guest/) (formerly `ansible/k3s/`).
+Operational Ansible for **bare-metal TDX hosts** that run the sek8s VM stack (`host-tools/scripts`: `chutes-cvm setup-host`, `quick-launch.sh`, etc.). This is **separate** from the **guest VM image build** Ansible under [`ansible/guest/`](../../ansible/guest/) (formerly `ansible/k3s/`).
 
 Primary references:
 
@@ -23,7 +23,7 @@ Primary references:
 **Dependencies**
 
 - **Operator machine:** Ansible, `chutes-miner`, `kubectl` (upgrade only), `rsync`
-- **Bare metal:** Ubuntu 25.10 or 26.04 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `setup-tdx-host`)
+- **Bare metal:** Ubuntu 25.10 or 26.04 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `chutes-cvm setup-host`)
 
 ### External tooling contract (v1)
 
@@ -93,7 +93,7 @@ Operators **provision**, **launch**, and **upgrade** TDX hosts from one inventor
 
 ### 1. Host setup (`setup.yml`)
 
-- Rsync **`host-tools/`**, **`aria2`** + **`python3-yaml`**, **`setup-tdx-host`** (full or **`--install-tools-only`** if TDX already up), **reboot** if `/var/run/reboot-required`, **TDX dmesg** check, **`/var/lib/chutes/*` dirs**, **`pccs_configure`** (automated PCCS when **both** **`pccs_api_key`** and **`pccs_password`** are set; otherwise a notice and no-op; partial config fails).  
+- Rsync **`host-tools/`**, **`aria2`** + **`python3-yaml`**, **`chutes-cvm setup-host`** (full or **`--install-tools-only`** if TDX already up), **reboot** if `/var/run/reboot-required`, **TDX dmesg** check, **`/var/lib/chutes/*` dirs**, **`pccs_configure`** (automated PCCS when **both** **`pccs_api_key`** and **`pccs_password`** are set; otherwise a notice and no-op; partial config fails).  
 - **Does not** launch the VM.
 
 ### 2. Launch (`launch.yml`)

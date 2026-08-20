@@ -117,7 +117,7 @@ os_upgrade_path:
 
 25.10 is a waypoint only — it has no `setup.yml` profile either, so from 25.04 always
 pass `-e target_version=26.04` rather than taking single hops. A run whose final hop is
-25.10 is refused by the `verify-host` pre-flight (that OS ships no baselined QEMU), which
+25.10 is refused by the `chutes-cvm verify-host` pre-flight (that OS ships no baselined QEMU), which
 is what keeps a node from landing on an OS it cannot be provisioned on or launch from.
 
 To add future upgrade hops (e.g. `26.04 -> 26.10`), add an entry to `os_upgrade_path`.
@@ -232,6 +232,6 @@ upgrade-host.yml                   upgrade-guest.yml
      "26.04": "26.10"   # new
    ```
 2. Optionally add `roles/os_upgrade/tasks/pre_2604.yml` with any migration tasks to run before `do-release-upgrade` on that version (e.g. removing stale repos). Omit the file if no pre-upgrade work is needed.
-3. Add a host profile in `host-tools/scripts/chutes/host/profiles.py` for the new target version so `setup-tdx-host` (called automatically by the hop) can configure it correctly.
+3. Add a host profile in `host-tools/scripts/chutes/host/profiles.py` for the new target version so `chutes-cvm setup-host` (called automatically by the hop) can configure it correctly.
 
 See [docs/specs/ansible-playbooks.md](../../docs/specs/ansible-playbooks.md) for the full contract.
