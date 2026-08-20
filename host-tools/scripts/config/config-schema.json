@@ -178,6 +178,19 @@
           "maxLength": 128
         }
       }
+    },
+    "rc": {
+      "type": "object",
+      "description": "Release-candidate (rc=true) launches only: operator signing key for RC-gate proof-of-possession. The private key at this host path is copied onto the config volume as operator-signing-key.pem; add the matching PUBLIC key to the API's accepted RC measurement so it can verify the VM's signature.",
+      "additionalProperties": false,
+      "required": ["operator_signing_key"],
+      "properties": {
+        "operator_signing_key": {
+          "type": "string",
+          "description": "Host path to the operator RSA private key (PEM). Referenced by path — the key itself is never stored in this config file.",
+          "minLength": 1
+        }
+      }
     }
   },
   "additionalProperties": false

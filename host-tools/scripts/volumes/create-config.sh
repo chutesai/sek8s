@@ -96,30 +96,50 @@ EOF
         chmod 600 "$MOUNT_DIR/docker-hub-username" "$MOUNT_DIR/docker-hub-token"
         print_info "  ✓ Docker Hub credential files"
     fi
+
+    # RC-gate only (OPERATOR_SIGNING_KEY = host path to the operator RSA private key, from
+    # arg 10 or the env var). Copied to the config volume as operator-signing-key.pem; the
+    # RTMR2-measured initramfs (rc-sign) signs the attestation nonce with it for rc=true
+    # measurements, and the API verifies with the matching public key. The private key never
+    # leaves the per-VM config volume + the initramfs /run tmpfs — not baked into any image.
+    if [[ -n "$OPERATOR_SIGNING_KEY" ]]; then
+        if [[ ! -f "$OPERATOR_SIGNING_KEY" ]]; then
+            print_error "Operator signing key not found: $OPERATOR_SIGNING_KEY"
+            exit 1
+        fi
+        install -m 600 "$OPERATOR_SIGNING_KEY" "$MOUNT_DIR/operator-signing-key.pem"
+        print_info "  ✓ operator signing key (RC-gate)"
+    fi
 }
 
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
-Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]
+Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [operator-signing-key]
 
 Create a new config qcow2, or refresh an existing one (same path, ext4 label $LABEL).
 
-Arguments:
-  output-path    qcow2 path (created if missing; updated in place if it already exists)
-  hostname       VM hostname
-  miner-ss58     Miner SS58 credential
-  miner-seed     Miner seed credential  
-  vm-ip          VM IP address
-  vm-gateway     VM gateway IP
-  vm-dns         VM DNS server (optional if only 6 base args; default: 8.8.8.8)
-  docker-hub-user   Optional Docker Hub username (requires docker-hub-token and vm-dns)
-  docker-hub-token  Optional Docker Hub PAT/password (requires docker-hub-user)
+Every value may be given as a positional arg OR its same-named env var (the positional
+wins when present, else the env var, else the default) — so callers can export a few env
+vars and invoke with just <output-path> instead of a long positional list.
+
+Values (positional order = env var name):
+  output-path / OUTPUT_PATH    qcow2 path (created if missing; refreshed in place otherwise)
+  hostname    / HOSTNAME       VM hostname
+  miner-ss58  / MINER_SS58     Miner SS58 credential
+  miner-seed  / MINER_SEED     Miner seed credential
+  vm-ip       / VM_IP          VM IP address
+  vm-gateway  / VM_GATEWAY     VM gateway IP
+  vm-dns      / VM_DNS         VM DNS server (default: 8.8.8.8)
+  docker-hub-user  / DOCKER_HUB_USER   Optional Docker Hub username (with token)
+  docker-hub-token / DOCKER_HUB_TOKEN  Optional Docker Hub PAT/password (with user)
+  operator-signing-key / OPERATOR_SIGNING_KEY  RC-gate only: host path to the operator
+                               RSA private key (PEM), copied on as operator-signing-key.pem
 
 Examples:
   $0 config.qcow2 chutes-miner "5abc..." "seed123" 192.168.100.2 192.168.100.1
-  $0 /path/to/config.qcow2 my-miner "5def..." "seed456" 192.168.100.3 192.168.100.1 1.1.1.1
-  $0 config.qcow2 miner "5..." "seed..." 192.168.100.2 192.168.100.1 8.8.8.8 "dockeruser" "dckr_pat_xxx"
+  HOSTNAME=chutes-miner MINER_SS58="5abc..." MINER_SEED=seed VM_IP=192.168.100.2 \\
+    VM_GATEWAY=192.168.100.1 $0 config.qcow2
 
 The volume will contain:
   /hostname         - VM hostname
@@ -127,6 +147,7 @@ The volume will contain:
   /miner-seed       - Miner seed credential
   /network-config.yaml - Netplan network configuration
   /docker-hub-username, /docker-hub-token - optional Docker Hub credentials (mode 0600)
+  /operator-signing-key.pem - optional RC-gate operator key (mode 0600, via OPERATOR_SIGNING_KEY)
 
 The volume will be formatted with:
   - Filesystem: ext4
@@ -143,32 +164,27 @@ EOF
     exit 0
 fi
 
-# Validate arguments: 6 (no dns), 7 (with dns), or 9 (dns + docker hub pair)
-if [ $# -lt 6 ] || [ $# -eq 8 ] || [ $# -gt 9 ]; then
-    print_error "Invalid number of arguments"
-    echo "Usage: $0 <output-path> <hostname> <miner-ss58> <miner-seed> <vm-ip> <vm-gateway> [vm-dns] [docker-hub-user] [docker-hub-token]"
-    echo "Example: $0 config.qcow2 chutes-miner 'ss58_value' 'seed_value' 192.168.100.2 192.168.100.1"
-    echo "Run '$0 --help' for more information"
+# Config values come from a positional arg OR the same-named environment variable —
+# the positional wins when given, else the env var, else the default. This lets a caller
+# (quick-launch.sh) set a handful of env vars and invoke with just the output path instead
+# of a long, order-fragile positional list, while direct/manual callers can still pass
+# everything positionally. See --help for the full name list.
+OUTPUT_PATH="${1:-${OUTPUT_PATH:-}}"
+HOSTNAME="${2:-${HOSTNAME:-}}"
+MINER_SS58="${3:-${MINER_SS58:-}}"
+MINER_SEED="${4:-${MINER_SEED:-}}"
+VM_IP="${5:-${VM_IP:-}}"
+VM_GATEWAY="${6:-${VM_GATEWAY:-}}"
+VM_DNS="${7:-${VM_DNS:-8.8.8.8}}"
+DOCKER_HUB_USER="${8:-${DOCKER_HUB_USER:-}}"
+DOCKER_HUB_TOKEN="${9:-${DOCKER_HUB_TOKEN:-}}"
+OPERATOR_SIGNING_KEY="${10:-${OPERATOR_SIGNING_KEY:-}}"
+
+if [[ -z "$OUTPUT_PATH" ]]; then
+    print_error "Output path is required (arg 1 or \$OUTPUT_PATH)"
+    echo "Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [operator-signing-key]"
+    echo "  Any value may instead be supplied via its same-named env var. Run '$0 --help'."
     exit 1
-fi
-
-OUTPUT_PATH="$1"
-HOSTNAME="$2"
-MINER_SS58="$3"
-MINER_SEED="$4"
-VM_IP="$5"
-VM_GATEWAY="$6"
-DOCKER_HUB_USER=""
-DOCKER_HUB_TOKEN=""
-
-if [ $# -eq 6 ]; then
-    VM_DNS="8.8.8.8"
-elif [ $# -eq 7 ]; then
-    VM_DNS="$7"
-elif [ $# -eq 9 ]; then
-    VM_DNS="$7"
-    DOCKER_HUB_USER="$8"
-    DOCKER_HUB_TOKEN="$9"
 fi
 
 # Basic validation

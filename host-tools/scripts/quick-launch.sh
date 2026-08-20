@@ -6,11 +6,20 @@ set -e
 
 run_create_config() {
   local vol_path="$1"
-  if [[ -n "$DOCKER_HUB_USERNAME" && -n "$DOCKER_HUB_TOKEN" ]]; then
-    sudo ./volumes/create-config.sh "$vol_path" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS" "$DOCKER_HUB_USERNAME" "$DOCKER_HUB_TOKEN"
-  else
-    sudo ./volumes/create-config.sh "$vol_path" "$HOSTNAME" "$MINER_SS58" "$MINER_SEED" "$VM_IP" "${BRIDGE_IP%/*}" "$VM_DNS"
-  fi
+  # Pass config values by NAME through the environment (create-config.sh reads these,
+  # positional args optional) rather than a long positional list. Empty values are fine —
+  # create-config.sh skips the optional files (docker creds, operator key) when unset.
+  sudo \
+    HOSTNAME="$HOSTNAME" \
+    MINER_SS58="$MINER_SS58" \
+    MINER_SEED="$MINER_SEED" \
+    VM_IP="$VM_IP" \
+    VM_GATEWAY="${BRIDGE_IP%/*}" \
+    VM_DNS="$VM_DNS" \
+    DOCKER_HUB_USER="$DOCKER_HUB_USERNAME" \
+    DOCKER_HUB_TOKEN="$DOCKER_HUB_TOKEN" \
+    OPERATOR_SIGNING_KEY="$OPERATOR_SIGNING_KEY" \
+    ./volumes/create-config.sh "$vol_path"
 }
 
 # Download a full image set (1.4.0+) into its own per-variant directory: the qcow2, the
@@ -86,6 +95,7 @@ EPHEMERAL="false"
 BENCHMARK="false"
 DOCKER_HUB_USERNAME=""
 DOCKER_HUB_TOKEN=""
+OPERATOR_SIGNING_KEY=""
 
 # --------------------------------------------------------------------
 # Temporary CLI containers
@@ -114,6 +124,7 @@ CLI_BENCHMARK=""
 CLI_DOWNLOAD=""
 CLI_DOCKER_HUB_USERNAME=""
 CLI_DOCKER_HUB_TOKEN=""
+CLI_OPERATOR_SIGNING_KEY=""
 CLI_FORCE=""
 CLI_CLEAN=""
 
@@ -177,6 +188,7 @@ while [[ $# -gt 0 ]]; do
     --benchmark) CLI_BENCHMARK="true"; shift ;;
     --docker-hub-username) CLI_DOCKER_HUB_USERNAME="$2"; shift 2 ;;
     --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
+    --operator-signing-key) CLI_OPERATOR_SIGNING_KEY="$2"; shift 2 ;;
     --force) CLI_FORCE="true"; shift ;;
     --clean) CLI_CLEAN="true"; shift ;;
     --download)
@@ -225,6 +237,8 @@ Command Line Options (CLI overrides YAML when provided):
   --miner-seed VALUE        Miner seed credential (required)
   --docker-hub-username U   Docker Hub username (optional; use with --docker-hub-token; overrides config.yaml)
   --docker-hub-token T      Docker Hub PAT or password (optional; overrides config.yaml)
+  --operator-signing-key P  RC-gate only: host path to the operator RSA private key, copied onto the
+                            config volume (overrides config.yaml rc.operator_signing_key)
 
 Network:
   --vm-ip IP
@@ -374,6 +388,9 @@ if [[ -n "$CLI_DOCKER_HUB_USERNAME" || -n "$CLI_DOCKER_HUB_TOKEN" ]]; then
   DOCKER_HUB_USERNAME="$CLI_DOCKER_HUB_USERNAME"
   DOCKER_HUB_TOKEN="$CLI_DOCKER_HUB_TOKEN"
 fi
+
+# RC-gate only: operator RSA private key (path). CLI wins over config.yaml's rc.operator_signing_key.
+[[ -n "$CLI_OPERATOR_SIGNING_KEY" ]] && OPERATOR_SIGNING_KEY="$CLI_OPERATOR_SIGNING_KEY"
 
 # --------------------------------------------------------------------
 # Resolve public interface

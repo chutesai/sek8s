@@ -131,6 +131,14 @@ def main():
     docker_hub_username = docker_hub.get('username', '') or ''
     docker_hub_token = docker_hub.get('token', '') or ''
 
+    # RC-gate only: host path to the operator RSA private key. create-config.sh copies
+    # it onto the config volume as operator-signing-key.pem (the initramfs rc-sign
+    # signs the attestation nonce with it for rc=true measurements).
+    rc = config.get('rc') or {}
+    if not isinstance(rc, dict):
+        rc = {}
+    operator_signing_key = rc.get('operator_signing_key', '') or ''
+
     print(f"HOSTNAME={shlex.quote(hostname)}")
     print(f"BASE_IMAGE={shlex.quote(base_image)}")
     print(f"VM_IMAGE_DIR={shlex.quote(vm_image_directory)}")
@@ -151,6 +159,7 @@ def main():
     print(f"FOREGROUND={'true' if foreground else 'false'}")
     print(f"DOCKER_HUB_USERNAME={shlex.quote(docker_hub_username)}")
     print(f"DOCKER_HUB_TOKEN={shlex.quote(docker_hub_token)}")
+    print(f"OPERATOR_SIGNING_KEY={shlex.quote(operator_signing_key)}")
 
 
 if __name__ == '__main__':
