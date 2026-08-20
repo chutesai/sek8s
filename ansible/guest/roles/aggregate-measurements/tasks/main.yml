@@ -50,8 +50,13 @@
     mode: '0755'
 
 - name: Write aggregated measurements YAML (the only persisted artifact)
+  # sort_keys=False preserves the insertion order of _measurements_block and each
+  # hardware dict (version → mrtd → rtmr1/2 → runtime_rtmr3 → hardware; and name →
+  # description → rtmr0 → expected_gpus → gpu_count) — matching the layout of the
+  # chutes-ops values.yaml teeMeasurements it merges into. to_nice_yaml alphabetizes
+  # by default, which buried `version` under `hardware`.
   ansible.builtin.copy:
-    content: "{{ _measurements_block | to_nice_yaml(indent=2) }}"
+    content: "{{ _measurements_block | to_nice_yaml(indent=2, sort_keys=False) }}"
     dest: "{{ repo_root }}/measurements/{{ vm_version }}/measurements.yaml"
     mode: '0644'
 
