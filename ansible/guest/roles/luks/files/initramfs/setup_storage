@@ -260,7 +260,7 @@ confirm_rotation() {
 
     log_begin_msg "Confirming LUKS passphrase rotation"
 
-    local http_code
+    local http_code resp_file=/tmp/confirm_response
     http_code=$(curl -s -w "%{http_code}" \
         -X POST \
         -H "X-Confirm-Nonce: $CONFIRM_NONCE" \
@@ -273,7 +273,7 @@ confirm_rotation() {
         --cert "$client_cert" \
         --key "$client_key" \
         -d "$body" \
-        -o /dev/null \
+        -o "$resp_file" \
         "$confirm_url")
 
     # The cert-hash scratch file is done after this call. Do NOT delete the VM
@@ -282,11 +282,16 @@ confirm_rotation() {
     rm -f /run/chutes/cert-hash
 
     if [ "$http_code" = "200" ]; then
+        rm -f "$resp_file"
         log_success_msg "LUKS passphrase rotation confirmed by API"
         return 0
     fi
 
-    log_failure_msg "LUKS rotation confirm failed (HTTP $http_code)"
+    # Surface the API's own reason if it sent one (FastAPI `detail`; message/error too).
+    local api_msg
+    api_msg=$(jq -r '.detail // .message // .error // empty' "$resp_file" 2>/dev/null | tr '\n' ' ' | cut -c1-300)
+    rm -f "$resp_file"
+    log_failure_msg "LUKS rotation confirm failed (HTTP $http_code)${api_msg:+: $api_msg}"
     return 1
 }
 

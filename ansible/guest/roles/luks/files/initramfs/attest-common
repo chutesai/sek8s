@@ -248,6 +248,10 @@ fetch_nonce() {
         --key "$CLIENT_KEY" \
         -o "$response_file" \
         "${NONCE_ENDPOINT}?miner_hotkey=${HOTKEY}")
+    # The API's own explanation, if it sent one. FastAPI puts it in `detail`; accept
+    # message/error too. Single-lined and capped so a body can't mangle the console.
+    local api_msg
+    api_msg=$(jq -r '.detail // .message // .error // empty' "$response_file" 2>/dev/null | tr '\n' ' ' | cut -c1-300)
     case "$http_code" in
         200)
             NONCE=$(jq -r '.nonce // empty' "$response_file" 2>/dev/null)
@@ -257,12 +261,12 @@ fetch_nonce() {
                 error_detail="API response missing nonce field"
             fi
             ;;
-        401|403) error_detail="Authentication failed (HTTP $http_code)" ;;
-        404)     error_detail="Nonce endpoint not found (HTTP $http_code)" ;;
-        429)     error_detail="Rate limited (HTTP $http_code)" ;;
-        5*)      error_detail="Server error (HTTP $http_code)" ;;
+        401|403) error_detail="Authentication failed (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+        404)     error_detail="Nonce endpoint not found (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+        429)     error_detail="Rate limited (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+        5*)      error_detail="Server error (HTTP $http_code)${api_msg:+: $api_msg}" ;;
         000)     error_detail="Connection failed" ;;
-        *)       error_detail="Unexpected HTTP response: $http_code" ;;
+        *)       error_detail="Unexpected HTTP response: $http_code${api_msg:+: $api_msg}" ;;
     esac
     log_end_msg $result
     [ -n "$error_detail" ] && log_failure_msg "$error_detail"
@@ -333,6 +337,10 @@ fetch_luks_key() {
             -o "$response_file" \
             "$API_ENDPOINT")
 
+        # The API's own explanation, if it sent one (FastAPI `detail`; message/error too).
+        # This is the attestation verdict path — surface the reason, not just the code.
+        local api_msg
+        api_msg=$(jq -r '.detail // .message // .error // empty' "$response_file" 2>/dev/null | tr '\n' ' ' | cut -c1-300)
         case "$http_code" in
             200)
                 LUKS_KEY=$(jq -r '.key // empty' "$response_file" 2>/dev/null)
@@ -347,12 +355,12 @@ fetch_luks_key() {
                     send_error="API response missing key, luks_quote_nonce, or vm_auth_ss58 field"
                 fi
                 ;;
-            401|403) send_error="Authentication failed (HTTP $http_code)" ;;
-            404)     send_error="API endpoint not found (HTTP $http_code)" ;;
-            429)     send_error="Rate limited (HTTP $http_code)" ;;
-            5*)      send_error="Server error (HTTP $http_code)" ;;
+            401|403) send_error="Attestation rejected (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+            404)     send_error="API endpoint not found (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+            429)     send_error="Rate limited (HTTP $http_code)${api_msg:+: $api_msg}" ;;
+            5*)      send_error="Server error (HTTP $http_code)${api_msg:+: $api_msg}" ;;
             000)     send_error="Connection failed" ;;
-            *)       send_error="Unexpected HTTP response: $http_code" ;;
+            *)       send_error="Unexpected HTTP response: $http_code${api_msg:+: $api_msg}" ;;
         esac
 
         log_end_msg $send_result
