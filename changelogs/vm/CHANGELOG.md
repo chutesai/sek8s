@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-08-19
+## [1.4.0] - 2026-08-22
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -263,6 +263,14 @@ Version source of truth: `ansible/guest/VERSION`
   baseline). These are declared once per host class in a profile's fingerprint; a
   fingerprint with `cpu_processor_id=None` stays launch-gated but refuses offline generation
   rather than silently emitting a measurement for the generating host's CPU.
+- **Boot attestation failures now surface the API's reason.** The initramfs LUKS client
+  (`attest-common`, `setup_storage`) previously logged only a generic string and the HTTP
+  status (e.g. `Authentication failed (HTTP 403)`) when the nonce fetch, attestation POST, or
+  rotation confirm failed. It now reads the response body for a `detail` / `message` / `error`
+  field (FastAPI's `detail` first) and appends it — single-lined and capped at 300 chars so a
+  body can't mangle the console — so a miner sees the actual cause. The 401/403 case on the
+  attestation POST is relabeled `Attestation rejected` (it is a measurement verdict, not an
+  auth failure). Falls back to the prior generic string when the body carries no message.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
