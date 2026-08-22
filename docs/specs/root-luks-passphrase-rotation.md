@@ -77,7 +77,7 @@ Input:  BASE_IMAGE_SET_DIR, HOSTNAME, VM_IMAGE_DIR
 Output: path to per-VM image (stdout)
 
 Logic:
-  1. Verify the set against its manifest (chutes.guest.image_set resolve); read the qcow2 sha256 from the manifest
+  1. Verify the set against its manifest (chutes_cvm.guest.image_set resolve); read the qcow2 sha256 from the manifest
   2. VM_IMAGE="$VM_IMAGE_DIR/tdx-${HOSTNAME}-${SHA:0:16}.qcow2"
   3. If exists: reuse
   4. If not: cp "$BASE_IMAGE" "$VM_IMAGE"

@@ -6,7 +6,7 @@ import struct
 import pytest
 
 # sys.path is wired to guest-tools/measurement by tests/measurement/conftest.py.
-from ccel_replay import (
+from chutes_cvm.measurement.ccel_replay import (
     EV_NO_ACTION,
     RTMR_ALG,
     RTMR_LEN,
@@ -199,7 +199,7 @@ def test_discover_mapping_matches_replay_to_quote_rtmr():
 
 
 def test_diff_cli_flags_constant_vs_varying(tmp_path, capsys):
-    import ccel_replay as cc
+    from chutes_cvm.measurement import ccel_replay as cc
 
     const = _sha384(b"firmware-derived")  # same in both captures
     topo_a, topo_b = _sha384(b"topoA"), _sha384(b"topoB")  # topology-varying
@@ -239,7 +239,7 @@ def test_discover_mapping_from_reference_value_only():
 def test_replay_cli_validates_against_expect_without_quote(tmp_path, capsys):
     import struct as _struct
 
-    import ccel_replay as cc
+    from chutes_cvm.measurement import ccel_replay as cc
 
     da = _sha384(b"boot")
     blob = _header() + _record(1, 0x80000008, [(TPM_ALG_SHA384, da)])

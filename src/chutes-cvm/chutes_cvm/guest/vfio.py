@@ -14,21 +14,21 @@ def ensure_sriov_vfs(pf_bdf: str, num_vfs: int = IB_VFS_PER_PF) -> bool:
 
     Writes to /sys/bus/pci/devices/<pf>/sriov_numvfs. PF stays bound to mlx5_core.
     """
-    sriov_path = f'/sys/bus/pci/devices/{pf_bdf}/sriov_numvfs'
+    sriov_path = f"/sys/bus/pci/devices/{pf_bdf}/sriov_numvfs"
     if not os.path.exists(sriov_path):
         return False
     try:
-        with open(sriov_path, 'r') as f:
+        with open(sriov_path, "r") as f:
             current = int(f.read().strip())
         if current >= num_vfs:
             return True
         if current > 0:
-            with open(sriov_path, 'w') as f:
-                f.write('0')
+            with open(sriov_path, "w") as f:
+                f.write("0")
     except (OSError, ValueError):
         return False
     try:
-        with open(sriov_path, 'w') as f:
+        with open(sriov_path, "w") as f:
             f.write(str(num_vfs))
         return True
     except OSError:
@@ -37,10 +37,10 @@ def ensure_sriov_vfs(pf_bdf: str, num_vfs: int = IB_VFS_PER_PF) -> bool:
 
 def load_vfio_modules():
     """Load VFIO kernel modules required for PCI passthrough."""
-    modules = ['vfio_pci', 'vfio_iommu_type1', 'vfio_virqfd']
+    modules = ["vfio_pci", "vfio_iommu_type1", "vfio_virqfd"]
     for module in modules:
         try:
-            subprocess.run(['modprobe', module], check=False, capture_output=True)
+            subprocess.run(["modprobe", module], check=False, capture_output=True)
         except Exception:
             pass
 
@@ -51,28 +51,28 @@ def bind_device_to_vfio(device_bdf: str):
     If the device is already bound (e.g. mlx5_core for Mellanox IB), we must
     unbind it first; driver_override + probe alone may not take over.
     """
-    driver_override_path = f'/sys/bus/pci/devices/{device_bdf}/driver_override'
-    driver_link = f'/sys/bus/pci/devices/{device_bdf}/driver'
+    driver_override_path = f"/sys/bus/pci/devices/{device_bdf}/driver_override"
+    driver_link = f"/sys/bus/pci/devices/{device_bdf}/driver"
     try:
-        with open(driver_override_path, 'w') as f:
-            f.write('vfio-pci')
+        with open(driver_override_path, "w") as f:
+            f.write("vfio-pci")
         # Unbind from current driver if bound (e.g. mlx5_core for Mellanox IB)
         if os.path.islink(driver_link):
             driver_name = os.path.basename(os.path.realpath(driver_link))
-            if driver_name != 'vfio-pci':
-                unbind_path = f'/sys/bus/pci/drivers/{driver_name}/unbind'
+            if driver_name != "vfio-pci":
+                unbind_path = f"/sys/bus/pci/drivers/{driver_name}/unbind"
                 if os.path.exists(unbind_path):
-                    with open(unbind_path, 'w') as f:
+                    with open(unbind_path, "w") as f:
                         f.write(device_bdf)
-        with open('/sys/bus/pci/drivers_probe', 'w') as f:
+        with open("/sys/bus/pci/drivers_probe", "w") as f:
             f.write(device_bdf)
     except Exception as e:
-        print(f'  Warning: Failed to bind {device_bdf} to vfio-pci: {e}')
+        print(f"  Warning: Failed to bind {device_bdf} to vfio-pci: {e}")
 
 
 def _get_bound_driver(device_bdf: str) -> str | None:
     """Return the driver name currently bound to a PCI device, or None."""
-    driver_link = f'/sys/bus/pci/devices/{device_bdf}/driver'
+    driver_link = f"/sys/bus/pci/devices/{device_bdf}/driver"
     if os.path.islink(driver_link):
         return os.path.basename(os.path.realpath(driver_link))
     return None
@@ -86,10 +86,10 @@ def _is_vfio_bound(device_bdf: str) -> bool:
     after a CC/PPCIe-mode reset) is not yet usable for passthrough, so both
     conditions must hold.
     """
-    if _get_bound_driver(device_bdf) != 'vfio-pci':
+    if _get_bound_driver(device_bdf) != "vfio-pci":
         return False
     try:
-        return bool(os.listdir(f'/sys/bus/pci/devices/{device_bdf}/vfio-dev'))
+        return bool(os.listdir(f"/sys/bus/pci/devices/{device_bdf}/vfio-dev"))
     except OSError:
         return False
 
@@ -123,18 +123,18 @@ def bind_explicit_devices_to_vfio(devices: list[str], settle_timeout: float = 15
 
     for device in devices:
         if device not in pending:
-            print(f'    {device} → vfio-pci')
+            print(f"    {device} → vfio-pci")
 
     if pending:
-        details = ', '.join(
+        details = ", ".join(
             f'{d} (driver={_get_bound_driver(d) or "none"})' for d in pending
         )
         raise RuntimeError(
-            f'Failed to bind device(s) to vfio-pci after {settle_timeout:.0f}s: '
-            f'{details}. A GPU that did not survive its CC/PPCIe-mode reset '
-            f'(config space reads 0xffff) or was re-claimed by the nvidia driver '
-            f'causes this. Check `lspci -nnks <bdf>` and `dmesg`; a host reboot '
-            f'usually clears a wedged GPU. Aborting before QEMU launch.'
+            f"Failed to bind device(s) to vfio-pci after {settle_timeout:.0f}s: "
+            f"{details}. A GPU that did not survive its CC/PPCIe-mode reset "
+            f"(config space reads 0xffff) or was re-claimed by the nvidia driver "
+            f"causes this. Check `lspci -nnks <bdf>` and `dmesg`; a host reboot "
+            f"usually clears a wedged GPU. Aborting before QEMU launch."
         )
 
 
@@ -148,7 +148,7 @@ def _sysfs_write(path: str, value: str, timeout: float = 10.0) -> bool:
     """
     try:
         subprocess.run(
-            ['sudo', 'bash', '-c', f'echo {value} > {path}'],
+            ["sudo", "bash", "-c", f"echo {value} > {path}"],
             timeout=timeout,
             capture_output=True,
         )
@@ -161,14 +161,14 @@ def _sysfs_write(path: str, value: str, timeout: float = 10.0) -> bool:
 
 def has_stale_vfio_devices(devices: list[str]) -> bool:
     """Return True if any device in the list is currently bound to vfio-pci."""
-    return any(_get_bound_driver(bdf) == 'vfio-pci' for bdf in devices)
+    return any(_get_bound_driver(bdf) == "vfio-pci" for bdf in devices)
 
 
 def _d_state_pci_tasks() -> list[str]:
     """Return cmdlines of D-state vfio unbind or nvidia-gpu-tools tasks."""
     try:
         result = subprocess.run(
-            ['ps', '-eo', 'stat,args'],
+            ["ps", "-eo", "stat,args"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -179,9 +179,9 @@ def _d_state_pci_tasks() -> list[str]:
         return []
     tasks: list[str] = []
     for line in result.stdout.splitlines():
-        if not line.startswith('D'):
+        if not line.startswith("D"):
             continue
-        if 'nvidia-gpu-tools' in line or 'vfio-pci/unbind' in line:
+        if "nvidia-gpu-tools" in line or "vfio-pci/unbind" in line:
             tasks.append(line.strip())
     return tasks
 
@@ -222,16 +222,16 @@ def unbind_non_vfio_drivers(devices: list[str]) -> list[str]:
     unbound = []
     for bdf in devices:
         driver = _get_bound_driver(bdf)
-        if driver is None or driver == 'vfio-pci':
+        if driver is None or driver == "vfio-pci":
             continue
-        print(f'    {bdf} bound to {driver} — unbinding...')
-        unbind_path = f'/sys/bus/pci/drivers/{driver}/unbind'
+        print(f"    {bdf} bound to {driver} — unbinding...")
+        unbind_path = f"/sys/bus/pci/drivers/{driver}/unbind"
         ok = _sysfs_write(unbind_path, bdf, timeout=10.0)
         if ok:
             unbound.append(bdf)
-            print(f'    {bdf} unbound from {driver}')
+            print(f"    {bdf} unbound from {driver}")
         else:
-            print(f'    Warning: could not unbind {bdf} from {driver} (timeout)')
+            print(f"    Warning: could not unbind {bdf} from {driver} (timeout)")
     return unbound
 
 
@@ -257,19 +257,19 @@ def unbind_stale_vfio_devices(
     On first boot (no previous QEMU session), devices won't be on vfio-pci
     and this function is a no-op.
     """
-    stale = [bdf for bdf in devices if _get_bound_driver(bdf) == 'vfio-pci']
+    stale = [bdf for bdf in devices if _get_bound_driver(bdf) == "vfio-pci"]
     if not stale:
         return 0
 
     def _unbind_one(bdf: str) -> tuple[str, bool]:
-        unbind_path = '/sys/bus/pci/drivers/vfio-pci/unbind'
-        override_path = f'/sys/bus/pci/devices/{bdf}/driver_override'
+        unbind_path = "/sys/bus/pci/drivers/vfio-pci/unbind"
+        override_path = f"/sys/bus/pci/devices/{bdf}/driver_override"
         ok = _sysfs_write(unbind_path, bdf, timeout=per_device_timeout)
         if ok:
-            _sysfs_write(override_path, '', timeout=5.0)
+            _sysfs_write(override_path, "", timeout=5.0)
         return bdf, ok
 
-    print(f'    Unbinding {len(stale)} device(s) in parallel...', flush=True)
+    print(f"    Unbinding {len(stale)} device(s) in parallel...", flush=True)
     results: dict[str, bool] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(stale)) as pool:
         futures = {pool.submit(_unbind_one, bdf): bdf for bdf in stale}
@@ -277,41 +277,45 @@ def unbind_stale_vfio_devices(
             bdf, ok = future.result()
             results[bdf] = ok
             if ok:
-                print(f'    {bdf} unbound')
+                print(f"    {bdf} unbound")
             else:
-                print(f'    Warning: {bdf} unbind timed out after {per_device_timeout}s')
+                print(
+                    f"    Warning: {bdf} unbind timed out after {per_device_timeout}s"
+                )
 
     succeeded = sum(1 for v in results.values() if v)
     failed = sum(1 for v in results.values() if not v)
     if succeeded:
-        print(f'  Unbound {succeeded} stale vfio-pci device(s)')
+        print(f"  Unbound {succeeded} stale vfio-pci device(s)")
     if failed:
-        print(f'  Warning: {failed} device(s) could not be unbound (may need host reboot)')
+        print(
+            f"  Warning: {failed} device(s) could not be unbound (may need host reboot)"
+        )
     return failed
 
 
 def install_udev_rules(scripts_dir: str):
     """Install vfio-passthrough udev rules if not already present."""
-    udev_rules_src = os.path.join(scripts_dir, 'devices', 'vfio-passthrough.rules')
-    udev_rules_dst = '/etc/udev/rules.d/vfio-passthrough.rules'
+    udev_rules_src = os.path.join(scripts_dir, "devices", "vfio-passthrough.rules")
+    udev_rules_dst = "/etc/udev/rules.d/vfio-passthrough.rules"
     if not os.path.exists(udev_rules_src):
         raise FileNotFoundError(
             f"Udev rules file not found: {udev_rules_src}. "
             "This file should be in the scripts directory."
         )
     if not os.path.exists(udev_rules_dst):
-        print('  Installing udev rules...')
+        print("  Installing udev rules...")
         subprocess.check_call(
-            ['sudo', 'cp', udev_rules_src, '/etc/udev/rules.d/'],
+            ["sudo", "cp", udev_rules_src, "/etc/udev/rules.d/"],
             stderr=subprocess.STDOUT,
         )
         subprocess.check_call(
-            ['sudo', 'udevadm', 'control', '--reload-rules'],
+            ["sudo", "udevadm", "control", "--reload-rules"],
             stderr=subprocess.STDOUT,
         )
         subprocess.check_call(
-            ['sudo', 'udevadm', 'trigger'],
+            ["sudo", "udevadm", "trigger"],
             stderr=subprocess.STDOUT,
         )
     else:
-        print('  Udev rules already present (skipping install)')
+        print("  Udev rules already present (skipping install)")

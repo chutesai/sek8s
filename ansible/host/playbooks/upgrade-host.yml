@@ -68,11 +68,8 @@
 
     - name: Pre-flight — verify host will relaunch/attest at the target OS
       ansible.builtin.command:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
         argv:
-          - python3
-          - -m
-          - chutes.guest.cli
+          - chutes-cvm
           - verify-host
           - --target-os
           - "{{ _upgrade_hops[-1] }}"

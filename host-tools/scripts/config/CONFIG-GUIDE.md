@@ -93,7 +93,7 @@ verifies the set against the manifest (so a stale/mismatched artifact fails loud
 an opaque boot error) and reads the qcow2's sha256 from the manifest instead of re-hashing
 it each launch. Launch does not auto-download: a missing set fails with a clear message,
 and you stage it explicitly with `--download` (or, in a build, via ansible). Custom or
-benchmark images must likewise be assembled into a set (`chutes.guest.image_set manifest`).
+benchmark images must likewise be assembled into a set (`chutes_cvm.guest.image_set manifest`).
 
 ## Docker Hub (optional)
 

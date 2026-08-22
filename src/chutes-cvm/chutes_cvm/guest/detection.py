@@ -4,15 +4,15 @@ Most functions are self-contained: they read lspci / sysfs / nvidia-gpu-tools
 output and return BDF lists or model mappings without modifying system state.
 """
 
-import os
 import glob
+import os
 import platform
 import re
 import subprocess
 
-from chutes.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
-from chutes.guest.gpu.tools import ensure_gpu_tools_available
-from chutes.guest.gpu.topology import (
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
+from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
+from chutes_cvm.guest.gpu.topology import (
     CpuTopology,
     FlatTopology,
     NumaTopology,

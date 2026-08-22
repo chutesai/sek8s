@@ -1,7 +1,7 @@
 """Tests for lab-validated host topology matrix."""
 
-import chutes.host.support_matrix as support_matrix
-from chutes.host.support_matrix import (
+import chutes_cvm.host.support_matrix as support_matrix
+from chutes_cvm.host.support_matrix import (
     format_topology_matrix,
     is_validated_topology,
     validated_topology_rows,

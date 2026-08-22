@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "chutes-cvm"
+version = "0.1.0"
+description = "CLI and toolkit for operating Chutes confidential GPU VMs (host inspection, launch, attestation preflight, measurement generation)"
+authors = ["Kyle Widmann <kyle@chutes.ai>"]
+readme = "README.md"
+packages = [{include = "chutes_cvm"}]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<3.15"
+pyyaml = "^6.0.2"
+jsonschema = "^4.23.0"
+
+[tool.poetry.scripts]
+chutes-cvm = "chutes_cvm.guest.cli:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

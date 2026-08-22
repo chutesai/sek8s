@@ -8,7 +8,7 @@
 # hosts end immediately — no download, no hash. When an upgrade IS needed the new
 # image SET (qcow2 + direct-boot artifacts + manifest.json) is fetched once into a
 # staged directory and verified as a coherent unit against its manifest (via
-# chutes.guest.image_set), which is then trusted at launch. So running with no
+# chutes_cvm.guest.image_set), which is then trusted at launch. So running with no
 # --limit safely walks the whole fleet and only touches hosts behind.
 #
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/upgrade-guest.yml
@@ -94,7 +94,7 @@
     # Reached only for hosts the control plane flagged needs_upgrade (the no-op
     # ended the run above otherwise). Download the whole image set into a clean
     # staged directory and verify it as a coherent unit against its manifest
-    # (chutes.guest.image_set resolve --full re-hashes every file and exits non-zero
+    # (chutes_cvm.guest.image_set resolve --full re-hashes every file and exits non-zero
     # on any mismatch), replacing the old single-qcow2 aria2 --checksum pass.
     - name: Download the staged image set (qcow2 + boot artifacts + manifest) and verify
       ansible.builtin.shell: |
@@ -108,8 +108,7 @@
           aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "$base.$ext" "$url/$base.$ext"
         done
         aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "manifest.json" "$url/$base.manifest.json"
-        PYTHONPATH="{{ sek8s_remote_host_tools }}/scripts" \
-          python3 -m chutes.guest.image_set resolve --full "$dir"
+        chutes-cvm image-set resolve --full "$dir"
       args:
         executable: /bin/bash
       register: staged_dl

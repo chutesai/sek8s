@@ -16,7 +16,7 @@ so the profile is refused at launch (and offline generation refuses it) until th
 value is filled in.
 """
 
-from chutes.guest.gpu.topology import (
+from chutes_cvm.guest.gpu.topology import (
     CpuTopology,
     FlatTopology,
     NumaTopology,

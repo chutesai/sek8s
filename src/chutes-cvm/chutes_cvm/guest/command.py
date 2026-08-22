@@ -5,7 +5,7 @@ and PCIe device layout) into the qemu-system-x86_64 command. It is pure — give
 fully-resolved ``MachineSpec`` it reads no live hardware — so both callers share
 it and get a byte-identical command for the same spec:
 
-  - the launcher (``chutes.guest``) resolves the spec from live detection/sysfs;
+  - the launcher (``chutes_cvm.guest``) resolves the spec from live detection/sysfs;
   - offline measurement (``guest-tools/measurement``) resolves it from a topology
     fingerprint.
 
@@ -15,7 +15,7 @@ PCI-topology state machines).
 
 from dataclasses import dataclass, field
 
-from chutes.guest.qemu import (
+from chutes_cvm.guest.qemu import (
     NumaPciTopologyState,
     PciTopologyState,
     QemuCommand,

@@ -3,7 +3,7 @@
 from unittest.mock import patch
 
 import pytest
-from chutes.guest.qemu import (
+from chutes_cvm.guest.qemu import (
     PcieRootPinning,
     QemuCommand,
     _append_numa_memory,
@@ -90,13 +90,13 @@ def test_parse_mem_mib_rejects_invalid():
 
 
 def test_use_numa_topology_requires_two_host_nodes():
-    with patch("chutes.guest.qemu.host_numa_nodes", return_value=[0, 1]):
+    with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=[0, 1]):
         assert use_numa_topology(True) is True
         assert use_numa_topology(False) is False
 
 
 def test_use_numa_topology_falls_back_for_non_dual_node():
-    with patch("chutes.guest.qemu.host_numa_nodes", return_value=[0]):
+    with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=[0]):
         assert use_numa_topology(True) is False
 
 

@@ -29,6 +29,16 @@
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
+    # Install the chutes-cvm CLI from THIS checkout (editable venv + PATH shim) so the
+    # build's `chutes-cvm` calls (launch, image-set — here and in prime-vm/capture-ccel)
+    # run the code being built and get the package's deps. Runs once; the console script
+    # is then on PATH for every later play.
+    - name: Install the chutes-cvm CLI from this checkout
+      ansible.builtin.command:
+        cmd: "{{ repo_root }}/host-tools/scripts/provision/setup-chutes-cvm.sh"
+      register: _cvm_install
+      changed_when: "'Installed chutes-cvm' in _cvm_install.stdout"
+
     - name: Include run TDX vm role
       ansible.builtin.include_role:
         name: run-vm
@@ -523,7 +533,7 @@
     - compute-measurements
   tasks:
     # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
-    # manifest.json tying them together. chutes.guest.image_set is the single manifest
+    # manifest.json tying them together. chutes_cvm.guest.image_set is the single manifest
     # generator (also used by publish and the launcher), so the schema never drifts.
     # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
     # download, and for whichever variant this build produced (debug or prod) — so the
@@ -534,7 +544,7 @@
       ansible.builtin.command:
         chdir: "{{ repo_root }}/host-tools/scripts"
         argv: >-
-          {{ ['python3', '-m', 'chutes.guest.image_set', 'manifest', final_img_path,
+          {{ ['chutes-cvm', 'image-set', 'manifest', final_img_path,
               '--version', vm_version]
              + (['--debug'] if (debug_build | default(false)) else []) }}
       changed_when: true

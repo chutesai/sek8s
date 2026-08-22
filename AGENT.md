@@ -61,7 +61,7 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **src/sek8s-common/sek8s_common/** | Shared config, server, auth, and constants for all sek8s packages |
 | **src/attestation-proxy/attestation_proxy/** | Dual-port attestation proxy (separate lean Docker image) |
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
-| **host-tools/** | Host setup (`chutes.host`), GPU binding/VM launch (`chutes.guest`), networking, orchestration (`quick-launch.sh`) |
+| **host-tools/** | Host setup (`chutes_cvm.host`), GPU binding/VM launch (`chutes_cvm.guest`), networking, orchestration (`quick-launch.sh`) |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
 | **ansible/guest/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **ansible/host/** | Operational Ansible (setup / launch / upgrade) for bare-metal TDX hosts over SSH |

@@ -420,7 +420,7 @@
       # On kernel 7.0+ the in-tree Rust nova_core (and nvidiafb/nouveau) match the
       # GPU PCI class and claim the passthrough GPUs before the 595 nvidia driver,
       # leaving them unbound (no /dev/nvidia0) so the NVLink fabric never completes
-      # SOE/TNVL training. Mirror of the host blacklist (chutes.host.setup).
+      # SOE/TNVL training. Mirror of the host blacklist (chutes_cvm.host.setup).
       blacklist nova_core
       blacklist nouveau
       blacklist nvidiafb

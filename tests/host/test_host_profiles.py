@@ -7,14 +7,14 @@ orchestration logic (mocking all subprocess/OS calls).
 from unittest.mock import patch
 
 import pytest
-from chutes.host.profiles import (
+from chutes_cvm.host.profiles import (
     HOST_PROFILES,
     PPA,
     HostProfile,
     Ubuntu2604Profile,
     resolve_profile,
 )
-from chutes.host.setup import _get_kernel_version, install_dependencies, setup_host
+from chutes_cvm.host.setup import _get_kernel_version, install_dependencies, setup_host
 
 # ---------------------------------------------------------------------------
 # PPA dataclass
@@ -201,14 +201,14 @@ def test_resolve_profile_rejects_2510():
         resolve_profile("25.10")
 
 
-@patch("chutes.host.profiles.detect_ubuntu_version", return_value="26.04")
+@patch("chutes_cvm.host.profiles.detect_ubuntu_version", return_value="26.04")
 def test_resolve_profile_auto_detects(mock_detect):
     profile = resolve_profile(None)
     assert isinstance(profile, Ubuntu2604Profile)
     mock_detect.assert_called_once()
 
 
-@patch("chutes.host.profiles.detect_ubuntu_version", return_value="99.99")
+@patch("chutes_cvm.host.profiles.detect_ubuntu_version", return_value="99.99")
 def test_resolve_profile_auto_detect_unsupported(mock_detect):
     with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
         resolve_profile(None)
@@ -233,12 +233,12 @@ def test_get_kernel_version_rejects_metapackage():
 # ---------------------------------------------------------------------------
 
 
-@patch("chutes.host.setup.install_dependencies")
-@patch("chutes.host.setup._add_user_to_kvm")
-@patch("chutes.host.setup._grub_update_cmdline")
-@patch("chutes.host.setup._grub_set_kernel")
-@patch("chutes.host.setup._get_kernel_version", return_value="6.17.0-15-generic")
-@patch("chutes.host.setup._run")
+@patch("chutes_cvm.host.setup.install_dependencies")
+@patch("chutes_cvm.host.setup._add_user_to_kvm")
+@patch("chutes_cvm.host.setup._grub_update_cmdline")
+@patch("chutes_cvm.host.setup._grub_set_kernel")
+@patch("chutes_cvm.host.setup._get_kernel_version", return_value="6.17.0-15-generic")
+@patch("chutes_cvm.host.setup._run")
 @patch("os.geteuid", return_value=0)
 def test_setup_host_calls_all_steps(
     mock_euid,
@@ -264,8 +264,8 @@ def test_setup_host_calls_all_steps(
     assert len(install_calls) > 0, "apt install should have been called"
 
 
-@patch("chutes.guest.gpu.tools.ensure_gpu_tools_available")
-@patch("chutes.host.setup._install_chutes_cvm")
+@patch("chutes_cvm.guest.gpu.tools.ensure_gpu_tools_available")
+@patch("chutes_cvm.host.setup._install_chutes_cvm")
 @patch("os.geteuid", return_value=0)
 def test_install_dependencies_installs_cli_and_gpu_tools(
     mock_euid, mock_install_cli, mock_ensure_gpu

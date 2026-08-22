@@ -195,9 +195,8 @@
   ansible.builtin.command:
     chdir: "{{ _host_tools_scripts }}"
     argv:
-      - python3
-      - -m
-      - chutes.guest.image_set
+      - chutes-cvm
+      - image-set
       - manifest
       - "{{ measurement_work_image }}"
       - -o
@@ -309,7 +308,7 @@
     - name: Stop the capture VM (leave the shared bridge in place)
       ansible.builtin.command:
         chdir: "{{ _host_tools_scripts }}"
-        argv: [python3, -m, chutes.guest.cli, launch, --clean]
+        argv: [chutes-cvm, launch, --clean]
       changed_when: true
       failed_when: false
 

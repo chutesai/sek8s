@@ -7,11 +7,11 @@ tdx-measure container, not here.
 """
 
 import pytest
-from chutes.guest.gpu import known_topologies as known
-from chutes.guest.gpu.profiles import GPU_PROFILES
-from chutes.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
-from platform_tables import MeasurementMetadata
-from topology_spec import build_topology_spec
+from chutes_cvm.guest.gpu import known_topologies as known
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
+from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
+from chutes_cvm.measurement.platform_tables import MeasurementMetadata
+from chutes_cvm.measurement.topology_spec import build_topology_spec
 
 _FW = "/opt/ovmf/OVMF.fd"
 

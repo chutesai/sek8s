@@ -4,7 +4,7 @@ import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
-from chutes.guest.gpu.tools import _cli_healthy, _venv_matches_system_python
+from chutes_cvm.guest.gpu.tools import _cli_healthy, _venv_matches_system_python
 
 
 def _completed(returncode):
@@ -18,14 +18,14 @@ def _completed(returncode):
 # ---------------------------------------------------------------------------
 
 
-@patch("chutes.guest.gpu.tools.subprocess.run")
+@patch("chutes_cvm.guest.gpu.tools.subprocess.run")
 def test_cli_healthy_false_when_not_on_path(mock_run):
     mock_run.return_value = _completed(1)  # `which` fails
     assert _cli_healthy() is False
     mock_run.assert_called_once()  # never probes --help when absent
 
 
-@patch("chutes.guest.gpu.tools.subprocess.run")
+@patch("chutes_cvm.guest.gpu.tools.subprocess.run")
 def test_cli_healthy_false_when_cli_errors(mock_run):
     # On PATH, but --help fails — e.g. ModuleNotFoundError after a Python bump.
     mock_run.side_effect = [_completed(0), _completed(1)]
@@ -33,13 +33,13 @@ def test_cli_healthy_false_when_cli_errors(mock_run):
     assert mock_run.call_count == 2
 
 
-@patch("chutes.guest.gpu.tools.subprocess.run")
+@patch("chutes_cvm.guest.gpu.tools.subprocess.run")
 def test_cli_healthy_true_when_help_succeeds(mock_run):
     mock_run.side_effect = [_completed(0), _completed(0)]
     assert _cli_healthy() is True
 
 
-@patch("chutes.guest.gpu.tools.subprocess.run")
+@patch("chutes_cvm.guest.gpu.tools.subprocess.run")
 def test_cli_healthy_false_on_probe_timeout(mock_run):
     mock_run.side_effect = [
         _completed(0),

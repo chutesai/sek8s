@@ -25,7 +25,7 @@ future work — see utils/smbios_match.py.)
 
 Verified end-to-end against local/acpi_real (box-028, RTX_PRO_6000) — see `selftest`.
 
-Requires host-tools/scripts on sys.path (for chutes.guest / GPU_PROFILES) and, for
+Requires host-tools/scripts on sys.path (for chutes_cvm.guest / GPU_PROFILES) and, for
 actual per-topology ACPI generation, the chutesai/tdx-measure fork + Docker on any
 x86-64 Linux (NO TDX, NO GPUs — that's the point of offline measurement). The
 splice/replay/recompute/assembly path is pure stdlib and runs anywhere.
@@ -42,10 +42,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE))
-sys.path.insert(0, str(_HERE.parent.parent / "host-tools" / "scripts"))
 
-import ccel_replay as cc  # noqa: E402
+from chutes_cvm.measurement import ccel_replay as cc  # noqa: E402
 
 # The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
 # not by fixed position: the boot method sets how many CONSTANT events surround them
@@ -219,7 +217,7 @@ def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
     """Every registered (profile, qemu_version, fingerprint) from the profiles'
     `baselined_measurements` — the hand-curated offline registry (no live host).
     `qemu_filter` (e.g. "10.2.1") restricts to this release's supported QEMU."""
-    from chutes.guest.gpu.profiles import GPU_PROFILES
+    from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 
     out: list[Topology] = []
     for name, profile in GPU_PROFILES.items():
@@ -298,9 +296,12 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     generated rtmr0 is validated against a live quote. Writes the profiles to --output.
 
     Needs the fork + Docker (offline, any x86-64 Linux — no TDX/GPU)."""
-    from chutes.guest.gpu.profiles import GPU_PROFILES
-    from platform_tables import MeasurementMetadata
-    from topology_spec import build_topology_spec, measurement_cpu_args
+    from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
+    from chutes_cvm.measurement.platform_tables import MeasurementMetadata
+    from chutes_cvm.measurement.topology_spec import (
+        build_topology_spec,
+        measurement_cpu_args,
+    )
 
     def fork_rtmr0(profile, fp):
         """Run the fork to self-generate this topology's COMPLETE RTMR0 — all 15

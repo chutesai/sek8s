@@ -11,8 +11,7 @@ import subprocess
 import sys
 import time
 
-from chutes.guest.direct_boot import direct_boot_artifacts
-from chutes.guest.detection import (
+from chutes_cvm.guest.detection import (
     detect_gpu_numa_nodes,
     detect_host_mem_gb,
     detect_nvidia_gpus,
@@ -20,12 +19,13 @@ from chutes.guest.detection import (
     get_gpu_bdfs,
     verify_host_qemu_supported,
 )
-from chutes.guest.gpu.profiles import (  # noqa: F401 — available for introspection
+from chutes_cvm.guest.direct_boot import direct_boot_artifacts
+from chutes_cvm.guest.gpu.profiles import (  # noqa: F401 — available for introspection
     GPU_PROFILES,
 )
-from chutes.guest.passthrough import setup_passthrough
-from chutes.guest.post_launch import apply_post_launch_tuning
-from chutes.guest.qemu import (
+from chutes_cvm.guest.passthrough import setup_passthrough
+from chutes_cvm.guest.post_launch import apply_post_launch_tuning
+from chutes_cvm.guest.qemu import (
     PcieRootPinning,
     add_volumes,
     add_vsock,
@@ -61,7 +61,7 @@ def print_vm_status(ssh_port: int, show_ssh: bool = False):
             pid = int(pid_file.read())
             print(f"TDX VM running with PID: {pid}")
             if show_ssh:
-                print(f"Login:")
+                print("Login:")
                 print(f"   ssh -p {ssh_port} root@<host-ip>")
     except Exception:
         pass
@@ -217,7 +217,7 @@ def launch_vm(args) -> int:
         # vCPU thread pinning is gated on the profile enabling NUMA topology
         # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
         # CPU power tuning is separate and operator-driven; see
-        # `python -m chutes.host.tune` (chutes-cvm tune-host / restore-host).
+        # `python -m chutes_cvm.host.tune` (chutes-cvm tune-host / restore-host).
         pin_threads = (
             numa_active and profile is not None and profile.enable_post_launch_tuning
         )

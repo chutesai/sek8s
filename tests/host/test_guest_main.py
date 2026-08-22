@@ -1,9 +1,9 @@
-"""Tests for chutes.guest.__main__ (chutes-cvm launch launcher)."""
+"""Tests for chutes_cvm.guest.__main__ (chutes-cvm launch launcher)."""
 
 from unittest.mock import MagicMock, patch
 
-import chutes.guest.__main__ as guest_main
-from chutes.guest.qemu import QemuCommand
+import chutes_cvm.guest.__main__ as guest_main
+from chutes_cvm.guest.qemu import QemuCommand
 
 _FAKE_CMD = QemuCommand(
     mem="1G",
@@ -19,16 +19,16 @@ _FAKE_CMD = QemuCommand(
 
 
 @patch(
-    "chutes.guest.__main__.direct_boot_artifacts",
+    "chutes_cvm.guest.__main__.direct_boot_artifacts",
     return_value=("/k", "/i", "root=UUID=x ro"),
 )
-@patch("chutes.guest.__main__.verify_host_qemu_supported")
-@patch("chutes.guest.__main__.subprocess.run")
-@patch("chutes.guest.__main__.setup_passthrough")
-@patch("chutes.guest.__main__.add_vsock")
-@patch("chutes.guest.__main__.add_volumes")
-@patch("chutes.guest.__main__.build_network")
-@patch("chutes.guest.__main__.build_base_cmd", return_value=_FAKE_CMD)
+@patch("chutes_cvm.guest.__main__.verify_host_qemu_supported")
+@patch("chutes_cvm.guest.__main__.subprocess.run")
+@patch("chutes_cvm.guest.__main__.setup_passthrough")
+@patch("chutes_cvm.guest.__main__.add_vsock")
+@patch("chutes_cvm.guest.__main__.add_volumes")
+@patch("chutes_cvm.guest.__main__.build_network")
+@patch("chutes_cvm.guest.__main__.build_base_cmd", return_value=_FAKE_CMD)
 def test_launch_vm_returns_qemu_nonzero(
     _mock_base,
     _mock_net,

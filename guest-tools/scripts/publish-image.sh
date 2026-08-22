@@ -60,14 +60,14 @@ for ext in "${ARTIFACTS[@]}"; do
     }
 done
 
-# Generate the coherence manifest with the single generator (chutes.guest.image_set), the
+# Generate the coherence manifest with the single generator (chutes_cvm.guest.image_set), the
 # same one the build and the launcher use, so the schema never drifts. It hashes the qcow2
 # and its <base>.{vmlinuz,initrd,cmdline} sidecars.
 MANIFEST="$LOCAL_BASE.manifest.json"
 echo "Generating manifest -> $MANIFEST"
 DEBUG_FLAG=()
 [ "$DEBUG" = true ] && DEBUG_FLAG=(--debug)
-PYTHONPATH="$REPO_ROOT/host-tools/scripts" python3 -m chutes.guest.image_set manifest \
+PYTHONPATH="$REPO_ROOT/src/chutes-cvm" python3 -m chutes_cvm.guest.image_set manifest \
     "$LOCAL_BASE.qcow2" -o "$MANIFEST" --version "$VERSION" "${DEBUG_FLAG[@]}"
 
 echo "Publishing ${VERSION}${SUFFIX} ($ENV) -> $BUCKET/$REMOTE.*"

@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 
-from chutes.host.profiles import APTRepo, HostProfile, PPA
+from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile
 
 # Fabric Manager version must match the NVIDIA driver version in the guest
 # image.  FM communicates with GPU firmware shared between host and guest;
@@ -737,22 +737,22 @@ def install_dependencies() -> None:
     print("\n=== Install dependencies ===\n")
     _install_chutes_cvm()
     print("\nEnsuring nvidia-gpu-tools (bundled wheel if missing)...")
-    from chutes.guest.gpu.tools import ensure_gpu_tools_available
+    from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
 
     ensure_gpu_tools_available()
     print("\nDone.\n")
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    """CLI entry for host setup: `chutes-cvm setup-host` (or `python -m chutes.host.setup`).
+    """CLI entry for host setup: `chutes-cvm setup-host` (or `python -m chutes_cvm.host.setup`).
 
     Detects the Ubuntu version, resolves the matching host profile, and executes the
     setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
     """
     import argparse
 
-    from chutes.host.profiles import resolve_profile
-    from chutes.host.support_matrix import format_topology_matrix
+    from chutes_cvm.host.profiles import resolve_profile
+    from chutes_cvm.host.support_matrix import format_topology_matrix
 
     parser = argparse.ArgumentParser(
         prog="chutes-cvm setup-host",

@@ -37,10 +37,10 @@ Usage::
 
     # Generate the manifest for a finished image (build / publish / capture staging).
     # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars.
-    python3 -m chutes.guest.image_set manifest <qcow2> [-o OUT] [--version V] [--debug]
+    python3 -m chutes_cvm.guest.image_set manifest <qcow2> [-o OUT] [--version V] [--debug]
 
     # Verify an image-set directory and print QCOW2=/SHA256= for the caller to eval.
-    python3 -m chutes.guest.image_set resolve [--full] <image-set-dir>
+    python3 -m chutes_cvm.guest.image_set resolve [--full] <image-set-dir>
 
 ``resolve`` prints shell assignments for the caller to ``eval``::
 
@@ -209,7 +209,7 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="chutes.guest.image_set")
+    parser = argparse.ArgumentParser(prog="chutes_cvm.guest.image_set")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_resolve = sub.add_parser(

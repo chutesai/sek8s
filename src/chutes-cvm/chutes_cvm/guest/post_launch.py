@@ -1,7 +1,7 @@
 """Post-launch QEMU vCPU/IOthread pinning to host NUMA-local CPUs.
 
 Host-wide CPU power tuning (governor, C-states) is a separate, operator-driven
-concern handled by ``chutes.host.tune`` -- it is intentionally decoupled from
+concern handled by ``chutes_cvm.host.tune`` -- it is intentionally decoupled from
 the VM lifecycle. Thread pinning here is scoped to QEMU's own threads and
 reverts automatically when the process exits.
 """
@@ -195,7 +195,7 @@ def apply_post_launch_tuning(
 
     Scoped to QEMU's own threads and reverts automatically when the process
     exits. Host-wide CPU power tuning is handled separately by
-    ``chutes.host.tune`` and is not tied to the VM lifecycle.
+    ``chutes_cvm.host.tune`` and is not tied to the VM lifecycle.
     """
     if not pin_threads:
         return

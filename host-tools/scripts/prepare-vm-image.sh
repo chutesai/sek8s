@@ -5,7 +5,7 @@
 #
 # $BASE_IMAGE_SET_DIR is a published image-set DIRECTORY — the qcow2 plus its
 # .vmlinuz/.initrd/.cmdline and a manifest.json. There is exactly one image format: the
-# set. chutes.guest.image_set verifies the set is coherent (all files present, sizes match
+# set. chutes_cvm.guest.image_set verifies the set is coherent (all files present, sizes match
 # the manifest) and returns the qcow2 path + its manifest-recorded sha256, so we neither
 # re-hash a multi-GB image on every launch nor rely on a pinned expected-hash constant.
 #
@@ -29,7 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 }
 
 # Verify the set against its manifest; get back the qcow2 path + its manifest sha256.
-RESOLVE_OUT=$(PYTHONPATH="$SCRIPT_DIR" python3 -m chutes.guest.image_set resolve "$BASE_IMAGE") || exit 1
+RESOLVE_OUT=$(PYTHONPATH="$SCRIPT_DIR/../../src/chutes-cvm" python3 -m chutes_cvm.guest.image_set resolve "$BASE_IMAGE") || exit 1
 eval "$RESOLVE_OUT"   # sets QCOW2 and SHA256
 BASE_IMAGE="$QCOW2"
 SHA_FOR_IMAGE="$SHA256"

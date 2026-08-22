@@ -4,6 +4,10 @@
 
 set -e
 
+# chutes-cvm is installed as a console script by host setup (setup-chutes-cvm.sh:
+# editable venv + /usr/local/bin/chutes-cvm). The image-set / config / launch calls
+# below use it directly, so its deps (pyyaml/jsonschema) are always available.
+
 run_create_config() {
   local vol_path="$1"
   # Pass config values by NAME through the environment (create-config.sh reads these,
@@ -55,7 +59,7 @@ download_image_set() {
   }
 
   echo "Verifying the downloaded image set against its manifest..."
-  python3 -m chutes.guest.image_set resolve --full "$dir" >/dev/null || {
+  chutes-cvm image-set resolve --full "$dir" >/dev/null || {
     echo "ERROR: downloaded image set failed manifest verification (see above)."
     exit 1
   }
@@ -64,7 +68,7 @@ download_image_set() {
 }
 
 # Integrity is carried entirely by the per-image-set manifest.json (verified at download
-# and launch by chutes.guest.image_set) — there is no pinned base-image hash to maintain.
+# and launch by chutes_cvm.guest.image_set) — there is no pinned base-image hash to maintain.
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
@@ -336,7 +340,7 @@ if [[ -n "$CONFIG_FILE" ]]; then
   [[ "$CLI_BENCHMARK" == "true" ]] && CONFIG_SCHEMA_FLAG="--benchmark"
 
   set +e
-  CONFIG_OUTPUT=$(python3 -m chutes.guest.config $CONFIG_SCHEMA_FLAG "$CONFIG_FILE" 2>&1)
+  CONFIG_OUTPUT=$(chutes-cvm config $CONFIG_SCHEMA_FLAG "$CONFIG_FILE" 2>&1)
   CONFIG_EXIT_CODE=$?
   set -e
 
@@ -423,11 +427,11 @@ fi
 if [[ "$CLI_CLEAN" == "true" ]]; then
   echo "=== Cleaning Up TEE VM Environment ==="
   echo "Stopping Chutes VM (if running)..."
-  python3 -m chutes.guest.cli launch --clean 2>/dev/null || true
+  chutes-cvm launch --clean 2>/dev/null || true
 
   echo "Waiting for VM processes to exit..."
   for i in {1..15}; do
-    if ! pgrep -f 'qemu-system|qemu-kvm|chutes.guest.cli' >/dev/null 2>&1; then
+    if ! pgrep -f 'qemu-system|qemu-kvm|chutes-cvm' >/dev/null 2>&1; then
       echo "No VM processes found. Proceeding with bridge cleanup."
       break
     fi
@@ -452,7 +456,7 @@ fi
 
 # Benchmark mode: set defaults before the general defaults below. The benchmark image is
 # a published image set (directory) like every other image — assemble one with
-# `chutes.guest.image_set manifest` if you're pointing at a loose qcow2.
+# `chutes_cvm.guest.image_set manifest` if you're pointing at a loose qcow2.
 if [[ "$BENCHMARK" == "true" ]]; then
   [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest-benchmark"
   # Miner credentials are not used in benchmark mode; set placeholders to satisfy any downstream checks
@@ -605,7 +609,7 @@ echo "✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)"
 echo "✓ Host configuration verified"
 echo ""
 
-# Device binding to vfio-pci is handled inside chutes-cvm launch (chutes.guest.passthrough)
+# Device binding to vfio-pci is handled inside chutes-cvm launch (chutes_cvm.guest.passthrough)
 echo ""
 
 
@@ -812,7 +816,7 @@ fi
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
 # Call Python runner
-if ! python3 -m chutes.guest.cli launch "${LAUNCH_ARGS[@]}"; then
+if ! chutes-cvm launch "${LAUNCH_ARGS[@]}"; then
   echo ""
   echo "Error: VM launch failed (chutes-cvm launch exited non-zero). See output above and /tmp/tdx-guest-td.log if daemonized."
   exit 1

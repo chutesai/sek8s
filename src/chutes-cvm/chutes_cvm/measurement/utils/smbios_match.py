@@ -25,15 +25,9 @@ DMI, smbios_entry_point; and a CCEL blob (ccel_data.bin or data/CCEL) unless
 
 import argparse
 import hashlib
-import sys
 from pathlib import Path
 
-# ccel_replay.py lives in the parent measurement/ package (this is a util/helper).
-_MEASUREMENT = Path(__file__).resolve().parent.parent
-if str(_MEASUREMENT) not in sys.path:
-    sys.path.insert(0, str(_MEASUREMENT))
-
-from ccel_replay import RTMR_ALG, parse_event_log  # noqa: E402
+from chutes_cvm.measurement.ccel_replay import RTMR_ALG, parse_event_log
 
 SMBIOS_HANDOFF_TYPE = "EV_EFI_HANDOFF_TABLES"
 

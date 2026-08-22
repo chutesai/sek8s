@@ -1,11 +1,8 @@
 ---
 - name: Run host setup (idempotent — installs packages, kernel, PPAs, tools)
   ansible.builtin.command:
-    chdir: "{{ sek8s_remote_host_tools }}/scripts"
     argv:
-      - python3
-      - -m
-      - chutes.guest.cli
+      - chutes-cvm
       - setup-host
       - "--noninteractive"
   register: setup_tdx

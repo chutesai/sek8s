@@ -1,22 +1,22 @@
 """Determine the QEMU machine spec for a supported topology, offline.
 
 The measurement side's input-determination: given a ``GpuProfile`` and a topology
-fingerprint (``chutes.guest.gpu.topology``), produce the ``MachineSpec`` that
-``chutes.guest.command.build_qemu_command`` turns into the exact QEMU command a
+fingerprint (``chutes_cvm.guest.gpu.topology``), produce the ``MachineSpec`` that
+``chutes_cvm.guest.command.build_qemu_command`` turns into the exact QEMU command a
 matching host would launch — with no live hardware. The launcher resolves the
 same spec from live detection, so both yield a byte-identical command for a given
 topology (see the parity test).
 
-Imports the shared VM lib from the launcher package (``chutes.guest``); callers
+Imports the shared VM lib from the launcher package (``chutes_cvm.guest``); callers
 must have ``host-tools/scripts`` on ``sys.path`` (the measurement entrypoints and
 tests/measurement/conftest.py arrange this).
 """
 
-from chutes.guest.command import DeviceSpec, MachineSpec
-from chutes.guest.gpu.profiles import GpuProfile
-from chutes.guest.gpu.topology import NumaTopology, TopologyFingerprint
+from chutes_cvm.guest.command import DeviceSpec, MachineSpec
+from chutes_cvm.guest.gpu.profiles import GpuProfile
+from chutes_cvm.guest.gpu.topology import NumaTopology, TopologyFingerprint
 
-# QEMU version -> guest -cpu string (mirrors chutes.guest.__main__: "host" on
+# QEMU version -> guest -cpu string (mirrors chutes_cvm.guest.__main__: "host" on
 # 24.04, else "host,-avx10"). 10.2.1 = 26.04, the only supported host OS.
 _CPU_ARGS_BY_QEMU = {"10.2.1": "host,-avx10"}
 

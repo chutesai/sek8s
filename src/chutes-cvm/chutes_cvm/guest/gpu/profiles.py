@@ -35,8 +35,8 @@ RTMR0, so it requires re-baselining that profile's attestation policy.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from chutes.guest.gpu import known_topologies as known
-from chutes.guest.gpu.topology import TopologyFingerprint
+from chutes_cvm.guest.gpu import known_topologies as known
+from chutes_cvm.guest.gpu.topology import TopologyFingerprint
 
 HOST_RESERVED_CPUS = 4
 

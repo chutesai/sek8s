@@ -20,17 +20,17 @@ dump-side rewrites:
 
 Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no GPU
 present (validated against box-028). Imports the shared VM lib from
-``chutes.guest``; callers must have ``host-tools/scripts`` on ``sys.path``.
+``chutes_cvm.guest``; callers must have ``host-tools/scripts`` on ``sys.path``.
 """
 
 import re
 from dataclasses import dataclass
 from functools import cached_property
 
-from chutes.guest.command import MachineSpec, build_qemu_command
-from chutes.guest.gpu.profiles import GpuProfile, PciBar
-from chutes.guest.gpu.topology import TopologyFingerprint
-from chutes.guest.qemu import QemuCommand
+from chutes_cvm.guest.command import MachineSpec, build_qemu_command
+from chutes_cvm.guest.gpu.profiles import GpuProfile, PciBar
+from chutes_cvm.guest.gpu.topology import TopologyFingerprint
+from chutes_cvm.guest.qemu import QemuCommand
 
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
 # container QEMU has no confidential-guest support.

@@ -8,8 +8,8 @@ and never touch SMBIOS (#14).
 """
 
 import pytest
-from ccel_replay import RTMR_ALG, Event
-from generate_measurements import (
+from chutes_cvm.measurement.ccel_replay import RTMR_ALG, Event
+from chutes_cvm.measurement.generate_measurements import (
     FORK_ACPI_IDX,
     FORK_TDHOB_IDX,
     locate_rtmr0_events,

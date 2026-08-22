@@ -5,7 +5,7 @@ Tools to **extract, verify, and reproduce** a TDX guest VM's measurements
 central validator / `chutes-ops`, and so an independent party can verify them.
 
 This directory imports the launcher's QEMU-arg builders from
-`host-tools/scripts/chutes/guest` (a one-way dependency: verification reuses the
+`the chutes-cvm package (chutes_cvm.guest)` (a one-way dependency: verification reuses the
 *exact* launch code, so reproduced measurements can't drift from a real launch).
 
 Design + rationale: [`docs/specs/offline-rtmr0-measurement.md`](../../docs/specs/offline-rtmr0-measurement.md).

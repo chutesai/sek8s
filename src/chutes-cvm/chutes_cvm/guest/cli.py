@@ -1,8 +1,8 @@
 """chutes-cvm — CLI for confidential-VM host operations.
 
 Invoked as ``chutes-cvm <command>`` via the shim installed by
-``host-tools/provision/setup-chutes-cvm.sh`` (which runs ``python3 -m chutes.guest.cli``),
-or directly as ``python3 -m chutes.guest.cli <command>``.
+``host-tools/provision/setup-chutes-cvm.sh`` (which runs ``python3 -m chutes_cvm.guest.cli``),
+or directly as ``python3 -m chutes_cvm.guest.cli <command>``.
 
 Stdlib-only dispatcher. Subcommands import their implementation lazily, so a command
 that needs extra dependencies never burdens one that doesn't (``verify-host`` is pure
@@ -20,10 +20,17 @@ from pathlib import Path
 # (cli.py lives at .../scripts/chutes/guest/cli.py). Kept as the front door while the
 # implementations stay in their current form; individual commands get ported to modules
 # over time without changing their CLI interface.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[2]
+# Transitional: two commands still delegate to bash under the repo's host-tools/scripts
+# (discover-profile.sh, devices/reset-gpus.sh). Resolve them relative to the repo root when
+# running from a source checkout; override with CHUTES_CVM_SCRIPTS_DIR when the package is
+# pip-installed and host-tools isn't on disk. TODO: port these to Python and drop _run_script.
+_SCRIPTS_DIR = Path(
+    os.environ.get("CHUTES_CVM_SCRIPTS_DIR")
+    or (Path(__file__).resolve().parents[4] / "host-tools" / "scripts")
+)
 
 # verify_host's exit codes → (banner label, ANSI attributes). Kept here so the CLI owns
-# presentation while chutes.guest.verify stays a plain int-returning gate.
+# presentation while chutes_cvm.guest.verify stays a plain int-returning gate.
 _VERIFY_STATUS = {
     0: ("READY", "1;32"),  # bold green
     1: ("BLOCKED", "1;31"),  # bold red
@@ -50,7 +57,7 @@ def _color(text: str, attrs: str) -> str:
 
 def _cmd_verify_host(args: argparse.Namespace) -> int:
     """Run the host-readiness gates and print a colored result banner."""
-    from chutes.guest.verify import verify_host
+    from chutes_cvm.guest.verify import verify_host
 
     print(_color("── chutes-cvm: host verification ──", "1;36"))
     rc = verify_host(target_os=args.target_os)
@@ -71,7 +78,7 @@ def _cmd_discover_profile(args: argparse.Namespace) -> int:
 
 def _cmd_tune_host(args: argparse.Namespace) -> int:
     """Apply NVIDIA-recommended host CPU tuning."""
-    from chutes.host.tune import apply_tuning
+    from chutes_cvm.host.tune import apply_tuning
 
     apply_tuning()
     return 0
@@ -79,7 +86,7 @@ def _cmd_tune_host(args: argparse.Namespace) -> int:
 
 def _cmd_restore_host(args: argparse.Namespace) -> int:
     """Restore host CPU settings saved by tune-host."""
-    from chutes.host.tune import restore_tuning
+    from chutes_cvm.host.tune import restore_tuning
 
     restore_tuning()
     return 0
@@ -88,6 +95,15 @@ def _cmd_restore_host(args: argparse.Namespace) -> int:
 def _cmd_reset_gpus(args: argparse.Namespace) -> int:
     """Reset all GPUs via nvidia-gpu-tools SBR (delegates to devices/reset-gpus.sh)."""
     return _run_script("devices/reset-gpus.sh", [])
+
+
+def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
+    """Exit 0 if host PCI passthrough operations are wedged (a reset is needed before
+    launch), else 1. Lets orchestration gate a launch/reset on the machine-parseable code.
+    """
+    from chutes_cvm.guest.vfio import pci_operations_wedged
+
+    return 0 if pci_operations_wedged() else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -168,13 +184,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reset.set_defaults(func=_cmd_reset_gpus)
 
+    vfio = sub.add_parser(
+        "vfio-wedged",
+        help="Exit 0 if host PCI passthrough is wedged and needs a reset before launch, else 1.",
+    )
+    vfio.set_defaults(func=_cmd_vfio_wedged)
+
+    # Pass-through modules with their own argparse (see _PASSTHROUGH / main).
+    sub.add_parser(
+        "image-set",
+        add_help=False,
+        help="Build/verify a base image-set manifest (args forwarded; `chutes-cvm image-set --help`).",
+    )
+    sub.add_parser(
+        "config",
+        add_help=False,
+        help="Render/validate a config.yaml to KEY=value env (args forwarded).",
+    )
+
     return parser
 
 
 # Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
 # before argparse because REMAINDER mishandles leading options (e.g. `launch --image`,
 # `setup-host --help`). Each underlying main owns its own --help.
-_PASSTHROUGH = ("launch", "setup-host")
+_PASSTHROUGH = ("launch", "setup-host", "image-set", "config")
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -182,12 +216,20 @@ def main(argv: "list[str] | None" = None) -> int:
     if raw and raw[0] in _PASSTHROUGH:
         forward = raw[1:]
         if raw[0] == "launch":
-            from chutes.guest.__main__ import main as _launch_main
+            from chutes_cvm.guest.__main__ import main as _launch_main
 
             return _launch_main(forward)
-        from chutes.host.setup import main as _setup_main
+        if raw[0] == "setup-host":
+            from chutes_cvm.host.setup import main as _setup_main
 
-        return _setup_main(forward)
+            return _setup_main(forward)
+        if raw[0] == "image-set":
+            from chutes_cvm.guest.image_set import main as _image_set_main
+
+            return _image_set_main(forward)
+        from chutes_cvm.guest.config import main as _config_main
+
+        return _config_main(forward)
     args = build_parser().parse_args(raw)
     return args.func(args)
 

@@ -41,3 +41,9 @@
         name: docker
         state: started
         enabled: true
+
+    # NOTE: chutes-cvm is NOT installed here. The guest build (chutes-miner-vm.yml)
+    # self-installs it from its own checkout (`pip install -e {{ repo_root }}/src/chutes-cvm`)
+    # so the build always runs the code under test — installing here from /opt/sek8s could
+    # be a different checkout. build-setup only ensures the prereq (python3-venv, via
+    # host_prerequisites); the build owns the install.

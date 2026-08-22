@@ -13,7 +13,7 @@
       || git remote set-url origin {{ sek8s_repo_url }}
     git config core.sparseCheckout true
     mkdir -p .git/info
-    printf 'host-tools/\nfirmware/\n' > .git/info/sparse-checkout
+    printf 'host-tools/\nfirmware/\nsrc/chutes-cvm/\n' > .git/info/sparse-checkout
     git fetch --depth 1 origin {{ sek8s_repo_branch | default('main') }}
     git checkout {{ sek8s_repo_branch | default('main') }} 2>/dev/null \
       || git checkout -b {{ sek8s_repo_branch | default('main') }} FETCH_HEAD
@@ -22,12 +22,13 @@
     executable: /bin/bash
     creates: "{{ sek8s_remote_host_tools }}"
 
-- name: Ensure sparse-checkout includes host-tools and firmware
+- name: Ensure sparse-checkout includes host-tools, firmware, and the chutes-cvm package
   ansible.builtin.copy:
     dest: "{{ sek8s_remote_root }}/.git/info/sparse-checkout"
     content: |
       host-tools/
       firmware/
+      src/chutes-cvm/
     mode: "0644"
 
 - name: Fetch latest host-tools
@@ -41,3 +42,23 @@
     chdir: "{{ sek8s_remote_root }}"
   register: git_reset
   changed_when: git_reset.rc == 0
+
+# chutes-cvm is a real package now: install it (editable, into a venv) so the
+# `chutes-cvm` console script is on PATH for every later role/playbook — with its
+# declared deps (pyyaml/jsonschema/substrate-interface) available, which a bare
+# `python3 -m` would not have. Runs here (before tdx_bootstrap) so `chutes-cvm
+# setup-host` works, and self-ensures venv/pip so it holds even when host_tools
+# runs before host_prerequisites (launch/upgrade playbooks).
+- name: Ensure Python venv/pip are present for the chutes-cvm install
+  ansible.builtin.apt:
+    name:
+      - python3-venv
+      - python3-pip
+    state: present
+    update_cache: false
+
+- name: Install the chutes-cvm CLI (editable venv + PATH shim)
+  ansible.builtin.command:
+    cmd: "{{ sek8s_remote_host_tools }}/scripts/provision/setup-chutes-cvm.sh"
+  register: _chutes_cvm_install
+  changed_when: "'Installed chutes-cvm' in _chutes_cvm_install.stdout"

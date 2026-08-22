@@ -23,7 +23,7 @@ pccs_ssl_dir: /opt/intel/sgx-dcap-pccs/ssl_key
 chutes_validator_api: "https://api.chutes.ai"
 
 # The base image is a published image SET (qcow2 + direct-boot .vmlinuz/.initrd/.cmdline
-# + manifest.json), verified as a coherent unit via chutes.guest.image_set. R2 serves the
+# + manifest.json), verified as a coherent unit via chutes_cvm.guest.image_set. R2 serves the
 # set under the canonical variant name; the local set lives in a per-variant directory.
 upgrade_r2_base_url: "https://vm.chutes.ai"
 upgrade_image_variant: tdx-guest

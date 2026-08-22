@@ -1,11 +1,11 @@
-"""Tests for the standalone host-readiness verify entrypoint (chutes.guest.verify)."""
+"""Tests for the standalone host-readiness verify entrypoint (chutes_cvm.guest.verify)."""
 
 from unittest.mock import patch
 
-from chutes.guest import verify
-from chutes.guest.gpu import known_topologies as known
-from chutes.guest.gpu.profiles import GPU_PROFILES
-from chutes.guest.gpu.topology import (
+from chutes_cvm.guest import verify
+from chutes_cvm.guest.gpu import known_topologies as known
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
+from chutes_cvm.guest.gpu.topology import (
     CpuTopology,
     FlatTopology,
     NumaTopology,
@@ -34,18 +34,18 @@ def _patch_verify(profile, fingerprint, qemu="10.2.1", qemu_raises=False):
 
     stack = ExitStack()
     qemu_gate = stack.enter_context(
-        patch("chutes.guest.verify.verify_host_qemu_supported")
+        patch("chutes_cvm.guest.verify.verify_host_qemu_supported")
     )
     if qemu_raises:
         qemu_gate.side_effect = ValueError("qemu 10.1.0 != expected 10.2.1")
     stack.enter_context(
         patch(
-            "chutes.guest.verify.detect_profile",
+            "chutes_cvm.guest.verify.detect_profile",
             return_value=(profile, fingerprint),
         )
     )
     stack.enter_context(
-        patch("chutes.guest.verify.detect_qemu_version", return_value=qemu)
+        patch("chutes_cvm.guest.verify.detect_qemu_version", return_value=qemu)
     )
     return stack
 
@@ -64,7 +64,7 @@ def test_verify_blocked_when_topology_uncharacterized():
     stack = _patch_verify(GPU_PROFILES["H200"], _H200_AR6_FP)
     with stack:
         with patch(
-            "chutes.guest.verify.detect_profile",
+            "chutes_cvm.guest.verify.detect_profile",
             side_effect=ValueError("Host fingerprint ... is not baselined"),
         ):
             assert verify.verify_host() == verify.BLOCKED

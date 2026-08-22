@@ -1,7 +1,7 @@
 """build_qemu_command(spec) must equal driving the low-level builders directly."""
 
-from chutes.guest.command import DeviceSpec, MachineSpec, build_qemu_command
-from chutes.guest.qemu import NumaPciTopologyState, PciTopologyState, build_base_cmd
+from chutes_cvm.guest.command import DeviceSpec, MachineSpec, build_qemu_command
+from chutes_cvm.guest.qemu import NumaPciTopologyState, PciTopologyState, build_base_cmd
 
 _FW = "OVMF.inteltdx.fd"
 _SMP = "124,sockets=2,cores=62,threads=1"

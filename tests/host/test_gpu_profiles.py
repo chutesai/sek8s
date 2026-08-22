@@ -7,14 +7,14 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
-from chutes.guest.gpu import known_topologies as known
-from chutes.guest.gpu.profiles import (
+from chutes_cvm.guest.gpu import known_topologies as known
+from chutes_cvm.guest.gpu.profiles import (
     GPU_PROFILES,
     HOST_RESERVED_CPUS,
     GpuProfile,
     resolve_profile,
 )
-from chutes.guest.gpu.topology import (
+from chutes_cvm.guest.gpu.topology import (
     CpuTopology,
     FlatTopology,
     NumaTopology,
@@ -375,7 +375,7 @@ def test_resolve_profile_rejects_all_default():
 
 
 def test_match_gpu_model_resolves_by_device_id():
-    from chutes.guest.detection import _match_gpu_model
+    from chutes_cvm.guest.detection import _match_gpu_model
 
     b200 = "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)"
     b300 = "0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"
@@ -384,7 +384,7 @@ def test_match_gpu_model_resolves_by_device_id():
 
 
 def test_match_gpu_model_returns_none_for_unknown_device():
-    from chutes.guest.detection import _match_gpu_model
+    from chutes_cvm.guest.detection import _match_gpu_model
 
     line = "0000:0d:00.0 3D controller [0302]: NVIDIA [Unknown] [10de:ffff] (rev a1)"
     assert _match_gpu_model(line) is None
@@ -396,32 +396,32 @@ def test_match_gpu_model_returns_none_for_unknown_device():
 
 
 def test_detect_qemu_version_parses_upstream_version():
-    from chutes.guest import detection
+    from chutes_cvm.guest import detection
 
     fake = type(
         "R",
         (),
         {"stdout": "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)\n"},
     )()
-    with patch("chutes.guest.detection.subprocess.run", return_value=fake):
+    with patch("chutes_cvm.guest.detection.subprocess.run", return_value=fake):
         assert detection.detect_qemu_version() == "10.2.1"
 
 
 def test_verify_host_qemu_supported_passes_when_qemu_matches_os():
-    from chutes.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_supported
+    from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_supported
 
     os_ver, qemu_ver = next(iter(SUPPORTED_QEMU_BY_OS.items()))
-    with patch("chutes.guest.detection.detect_os_version", return_value=os_ver):
-        with patch("chutes.guest.detection.detect_qemu_version", return_value=qemu_ver):
+    with patch("chutes_cvm.guest.detection.detect_os_version", return_value=os_ver):
+        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value=qemu_ver):
             verify_host_qemu_supported()  # must not raise
 
 
 def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
-    from chutes.guest.detection import verify_host_qemu_supported
+    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
     # 26.04 ships 10.2.1; a host on 26.04 running 10.1.0 must be flagged.
-    with patch("chutes.guest.detection.detect_os_version", return_value="26.04"):
-        with patch("chutes.guest.detection.detect_qemu_version", return_value="10.1.0"):
+    with patch("chutes_cvm.guest.detection.detect_os_version", return_value="26.04"):
+        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value="10.1.0"):
             with pytest.raises(
                 ValueError, match=r"ships \(and we baseline\) QEMU 10\.2\.1"
             ):
@@ -429,10 +429,10 @@ def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
 
 
 def test_verify_host_qemu_supported_raises_on_unsupported_os():
-    from chutes.guest.detection import verify_host_qemu_supported
+    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
-    with patch("chutes.guest.detection.detect_os_version", return_value="24.04"):
-        with patch("chutes.guest.detection.detect_qemu_version", return_value="8.2.2"):
+    with patch("chutes_cvm.guest.detection.detect_os_version", return_value="24.04"):
+        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value="8.2.2"):
             with pytest.raises(
                 ValueError, match=r"OS release '24.04' is not supported"
             ):
@@ -440,9 +440,9 @@ def test_verify_host_qemu_supported_raises_on_unsupported_os():
 
 
 def test_verify_host_qemu_supported_raises_when_qemu_undetectable():
-    from chutes.guest.detection import verify_host_qemu_supported
+    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
-    with patch("chutes.guest.detection.detect_qemu_version", return_value=None):
+    with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value=None):
         with pytest.raises(
             ValueError, match="Could not determine the host QEMU version"
         ):
@@ -478,37 +478,37 @@ def _patch_detection(
     stack = ExitStack()
     stack.enter_context(
         patch(
-            "chutes.guest.detection.host_topology_fingerprint",
+            "chutes_cvm.guest.detection.host_topology_fingerprint",
             return_value=fingerprint,
         )
     )
     stack.enter_context(
-        patch("chutes.guest.detection._lspci_lines", return_value=lspci_lines or [])
+        patch("chutes_cvm.guest.detection._lspci_lines", return_value=lspci_lines or [])
     )
     stack.enter_context(
-        patch("chutes.guest.detection.detect_numa_node_count", return_value=numa_count)
+        patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=numa_count)
     )
     stack.enter_context(
         patch(
-            "chutes.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []
+            "chutes_cvm.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []
         )
     )
     stack.enter_context(
         patch(
-            "chutes.guest.detection.detect_infiniband_pfs",
+            "chutes_cvm.guest.detection.detect_infiniband_pfs",
             return_value=ib_pf_bdfs or [],
         )
     )
     stack.enter_context(
-        patch("chutes.guest.detection.detect_cx7_bridge_pfs", return_value=[])
+        patch("chutes_cvm.guest.detection.detect_cx7_bridge_pfs", return_value=[])
     )
     bdfs = gpu_bdfs if gpu_bdfs is not None else ["0000:0d:00.0"]
-    stack.enter_context(patch("chutes.guest.detection.get_gpu_bdfs", return_value=bdfs))
+    stack.enter_context(patch("chutes_cvm.guest.detection.get_gpu_bdfs", return_value=bdfs))
     return stack
 
 
 def test_detect_profile_returns_correct_profile():
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     with _patch_detection(lspci_lines=_make_lspci_b200()):
         profile, fingerprint = detect_profile()
@@ -529,7 +529,7 @@ def test_detect_profile_returns_correct_profile():
 def test_detect_profile_accepts_baselined_rtx_topologies(numa_count, fingerprint):
     """Both RTX Pro 6000 host shapes (2-node NUMA and 4-node flat) are baselined
     and must pass the launch-time topology hard-match."""
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     rtx_lines = [
         f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA "
@@ -549,7 +549,7 @@ def test_detect_profile_accepts_baselined_rtx_topologies(numa_count, fingerprint
 
 
 def test_detect_profile_raises_when_nvswitches_expected_but_missing():
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     h200_lines = [
         f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA [H200] [10de:2335] (rev a1)"
@@ -566,7 +566,7 @@ def test_detect_profile_raises_when_nvswitches_expected_but_missing():
 
 
 def test_detect_profile_raises_when_no_gpus():
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     with _patch_detection(gpu_bdfs=[]):
         with pytest.raises(ValueError, match="No GPU devices detected"):
@@ -582,17 +582,17 @@ def test_detect_profile_raises_when_no_gpus():
 def _patch_host_shape(*, cpus, sockets, mem_gb, vendor, proc_id):
     """Pin the four host-shape detectors host_topology_fingerprint reads so the
     resulting fingerprint's shape is deterministic."""
-    with patch("chutes.guest.detection.detect_host_cpus", return_value=cpus), patch(
-        "chutes.guest.detection.detect_host_sockets", return_value=sockets
-    ), patch("chutes.guest.detection.detect_host_mem_gb", return_value=mem_gb), patch(
-        "chutes.guest.detection.detect_host_cpu_identity",
+    with patch("chutes_cvm.guest.detection.detect_host_cpus", return_value=cpus), patch(
+        "chutes_cvm.guest.detection.detect_host_sockets", return_value=sockets
+    ), patch("chutes_cvm.guest.detection.detect_host_mem_gb", return_value=mem_gb), patch(
+        "chutes_cvm.guest.detection.detect_host_cpu_identity",
         return_value=(vendor, proc_id),
     ):
         yield
 
 
 def test_topology_fingerprint_numa_path_includes_device_layout():
-    from chutes.guest.detection import host_topology_fingerprint
+    from chutes_cvm.guest.detection import host_topology_fingerprint
 
     profile = GPU_PROFILES["H200"]  # enable_numa_topology = True; guest_mem = 141*8
     with _patch_host_shape(
@@ -602,9 +602,9 @@ def test_topology_fingerprint_numa_path_includes_device_layout():
         vendor="GenuineIntel",
         proc_id="f2060c00fffba91f",
     ):
-        with patch("chutes.guest.detection.detect_numa_node_count", return_value=2):
+        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
             with patch(
-                "chutes.guest.detection._device_numa_layout",
+                "chutes_cvm.guest.detection._device_numa_layout",
                 side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ()],
             ):
                 fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
@@ -612,7 +612,7 @@ def test_topology_fingerprint_numa_path_includes_device_layout():
 
 
 def test_topology_fingerprint_flat_when_not_two_numa_nodes():
-    from chutes.guest.detection import host_topology_fingerprint
+    from chutes_cvm.guest.detection import host_topology_fingerprint
 
     profile = GPU_PROFILES["H200"]
     with _patch_host_shape(
@@ -622,7 +622,7 @@ def test_topology_fingerprint_flat_when_not_two_numa_nodes():
         vendor="GenuineIntel",
         proc_id="f2060c00fffba91f",
     ):
-        with patch("chutes.guest.detection.detect_numa_node_count", return_value=4):
+        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=4):
             fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
     assert fp == TopologyFingerprint(
         CpuTopology(**_H200_SHAPE), 1128, FlatTopology(gpu_count=8, nvswitch_count=4)
@@ -631,7 +631,7 @@ def test_topology_fingerprint_flat_when_not_two_numa_nodes():
 
 def test_topology_fingerprint_flat_when_profile_disables_numa():
     # B300 never uses guest NUMA topology -> flat regardless of host node count.
-    from chutes.guest.detection import host_topology_fingerprint
+    from chutes_cvm.guest.detection import host_topology_fingerprint
 
     profile = GPU_PROFILES["B300"]  # guest_mem = 288*8 = 2304
     with _patch_host_shape(
@@ -641,7 +641,7 @@ def test_topology_fingerprint_flat_when_profile_disables_numa():
         vendor="GenuineIntel",
         proc_id=None,
     ):
-        with patch("chutes.guest.detection.detect_numa_node_count", return_value=2):
+        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
             fp = host_topology_fingerprint(profile, ["g"] * 8, [], [])
     assert fp == TopologyFingerprint(
         CpuTopology(**_B300_SHAPE), 2304, FlatTopology(gpu_count=8)
@@ -652,7 +652,7 @@ def test_topology_fingerprint_includes_ib_layout_on_numa_path():
     # Two B200 hosts with the same GPU/NVSwitch layout but different IB->NUMA
     # wiring must produce different fingerprints (IB VFs are passed through and
     # attach to PXB bridges by NUMA, so they move RTMR0).
-    from chutes.guest.detection import host_topology_fingerprint
+    from chutes_cvm.guest.detection import host_topology_fingerprint
 
     profile = GPU_PROFILES["B200"]  # vcpus = 192-16 = 176; guest_mem = 1944 @ 2008G
     gpus = ["g"] * 8
@@ -664,9 +664,9 @@ def test_topology_fingerprint_includes_ib_layout_on_numa_path():
         vendor="GenuineIntel",
         proc_id=None,
     ):
-        with patch("chutes.guest.detection.detect_numa_node_count", return_value=2):
+        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
             with patch(
-                "chutes.guest.detection._device_numa_layout",
+                "chutes_cvm.guest.detection._device_numa_layout",
                 side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (), (0, 0, 1, 1)],
             ):
                 fp = host_topology_fingerprint(profile, gpus, [], ib)
@@ -679,7 +679,7 @@ def test_topology_fingerprint_includes_ib_layout_on_numa_path():
 
 def test_topology_fingerprint_ib_count_on_flat_path():
     # On the flat path only device counts matter; IB count is the ib_count field.
-    from chutes.guest.detection import host_topology_fingerprint
+    from chutes_cvm.guest.detection import host_topology_fingerprint
 
     profile = GPU_PROFILES["B200"]
     with _patch_host_shape(
@@ -689,7 +689,7 @@ def test_topology_fingerprint_ib_count_on_flat_path():
         vendor="GenuineIntel",
         proc_id=None,
     ):
-        with patch("chutes.guest.detection.detect_numa_node_count", return_value=6):
+        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=6):
             fp = host_topology_fingerprint(profile, ["g"] * 8, [], ["i"] * 4)
     assert fp == TopologyFingerprint(
         CpuTopology(**_B200_XEON_SHAPE), 1944, FlatTopology(gpu_count=8, ib_count=4)
@@ -697,7 +697,7 @@ def test_topology_fingerprint_ib_count_on_flat_path():
 
 
 def test_detect_profile_raises_on_unbaselined_topology():
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     with _patch_detection(
         lspci_lines=_make_lspci_b200(),
@@ -715,7 +715,7 @@ def test_detect_profile_raises_on_unbaselined_topology():
 def test_detect_profile_skips_topology_check_for_unbaselined_profile():
     # B300 has an empty baselined_topologies set -> the topology hard-match is
     # not enforced, so an arbitrary fingerprint must not refuse the launch.
-    from chutes.guest.detection import detect_profile
+    from chutes_cvm.guest.detection import detect_profile
 
     b300_lines = [
         "0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"

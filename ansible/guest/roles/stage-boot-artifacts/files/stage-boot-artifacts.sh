@@ -7,7 +7,7 @@
 # R2 alongside the qcow2, so every fleet host boots byte-identical kernel/initrd.
 # Both consumers read these same files:
 #   - compute-rtmr1-2.sh pins RTMR1/2 from them at build time
-#   - the launcher (chutes.guest.direct_boot) boots them
+#   - the launcher (chutes_cvm.guest.direct_boot) boots them
 # so the pinned measurements match the running VM by construction.
 #
 # The cmdline is the image's GRUB default entry minus the BOOT_IMAGE= prefix (what
