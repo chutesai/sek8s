@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 import time
 import urllib.error
@@ -196,8 +195,3 @@ def run_preflight(
 def status_exit_code(status: "str | None") -> int:
     """READY(0) for accepted; WARNING(2) for pending/unknown/other."""
     return _STATUS_EXIT.get(status or "", 2)
-
-
-def default_config_path(scripts_dir: str) -> str:
-    """The launch config the host uses (host-tools/scripts/config.yaml), or the env override."""
-    return os.environ.get("CHUTES_CVM_CONFIG") or str(Path(scripts_dir) / "config.yaml")

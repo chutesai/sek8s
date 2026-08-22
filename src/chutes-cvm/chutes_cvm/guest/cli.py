@@ -1,33 +1,27 @@
 """chutes-cvm — CLI for confidential-VM host operations.
 
-Invoked as ``chutes-cvm <command>`` via the shim installed by
-``host-tools/provision/setup-chutes-cvm.sh`` (which runs ``python3 -m chutes_cvm.guest.cli``),
-or directly as ``python3 -m chutes_cvm.guest.cli <command>``.
+Invoked as ``chutes-cvm <command>`` via the ``chutes-cvm`` console script (installed by
+``host-tools/scripts/provision/setup-chutes-cvm.sh``), or directly as
+``python3 -m chutes_cvm.guest.cli <command>``.
 
 Stdlib-only dispatcher. Subcommands import their implementation lazily, so a command
 that needs extra dependencies never burdens one that doesn't (``verify-host`` is pure
-stdlib). New commands (launch, create-config, discover-profile, …) slot in via
-``build_parser`` as the CLI grows to subsume the host-tools bash scripts.
+stdlib). Commands that delegate to a bundled shell entrypoint (``up``, ``discover-profile``,
+``reset-gpus``) shell out to ``chutes_cvm/scripts/`` via ``_run_script``; the rest dispatch
+to a Python ``main`` in this package.
 """
 
 import argparse
 import os
 import subprocess
 import sys
-from pathlib import Path
 
-# host-tools/scripts/ — the dir holding the shell entrypoints the CLI delegates to
-# (cli.py lives at .../scripts/chutes/guest/cli.py). Kept as the front door while the
-# implementations stay in their current form; individual commands get ported to modules
-# over time without changing their CLI interface.
-# Transitional: two commands still delegate to bash under the repo's host-tools/scripts
-# (discover-profile.sh, devices/reset-gpus.sh). Resolve them relative to the repo root when
-# running from a source checkout; override with CHUTES_CVM_SCRIPTS_DIR when the package is
-# pip-installed and host-tools isn't on disk. TODO: port these to Python and drop _run_script.
-_SCRIPTS_DIR = Path(
-    os.environ.get("CHUTES_CVM_SCRIPTS_DIR")
-    or (Path(__file__).resolve().parents[4] / "host-tools" / "scripts")
-)
+from chutes_cvm.paths import SCRIPTS_DIR as _SCRIPTS_DIR
+from chutes_cvm.paths import default_config_path
+
+# _SCRIPTS_DIR is the package's bundled shell scripts (chutes_cvm/scripts/): the VM-launch
+# orchestrator (quick-launch → `up`), volumes/, network/, discover-profile, reset-gpus.
+# _run_script execs one of them; they travel with the package, so no host-tools on disk.
 
 # verify_host's exit codes → (banner label, ANSI attributes). Kept here so the CLI owns
 # presentation while chutes_cvm.guest.verify stays a plain int-returning gate.
@@ -38,13 +32,16 @@ _VERIFY_STATUS = {
 }
 
 
-def _run_script(name: str, argv: "list[str]") -> int:
-    """Exec a host-tools/scripts/<name> shell entrypoint, forwarding argv."""
+def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
+    """Exec a bundled chutes_cvm/scripts/<name> shell entrypoint, forwarding argv.
+
+    ``cwd`` sets the working directory — the orchestrator (quick-launch.sh) needs it set to
+    the scripts dir so its sibling ``./volumes/`` / ``./network/`` calls resolve."""
     script = _SCRIPTS_DIR / name
     if not script.exists():
         print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
         return 1
-    return subprocess.call(["bash", str(script), *argv])
+    return subprocess.call(["bash", str(script), *argv], cwd=cwd)
 
 
 def _color(text: str, attrs: str) -> str:
@@ -117,12 +114,11 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
         DEFAULT_API_BASE,
         FAIL_CLOSED,
         PreflightError,
-        default_config_path,
         run_preflight,
         status_exit_code,
     )
 
-    config = args.config or default_config_path(str(_SCRIPTS_DIR))
+    config = args.config or default_config_path()
     api = args.api or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
         resp = run_preflight(
@@ -140,6 +136,44 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
     print(_color(f"[{status}] {resp.get('detail', '')}", attrs))
     print(f"  fingerprint: {resp.get('fingerprint', '?')}")
     return status_exit_code(status)
+
+
+def _cmd_download(args: argparse.Namespace) -> int:
+    """Download + manifest-verify a base image set (production, or debug with --debug)."""
+    base = "tdx-guest-debug" if args.debug else "tdx-guest"
+    return _run_script("download-image-set.sh", [base])
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Write a starter config.yaml (from the bundled template) into the current directory."""
+    import shutil
+
+    template = _SCRIPTS_DIR / "config" / "config.tmpl.yaml"
+    dest = "config.yaml"
+    if os.path.exists(dest) and not args.force:
+        print(
+            f"chutes-cvm: {dest} already exists — pass --force to overwrite.",
+            file=sys.stderr,
+        )
+        return 1
+    shutil.copyfile(template, dest)
+    print(f"Created {dest} (from {template.name}). Edit it, then `chutes-cvm launch`.")
+    return 0
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    """Stop the running TDX VM only — leaves the bridge and volumes in place."""
+    from chutes_cvm.guest.__main__ import stop_existing_vm
+
+    stop_existing_vm()
+    return 0
+
+
+def _cmd_down(args: argparse.Namespace) -> int:
+    """Full teardown: stop the VM and tear down its bridge + benchmark-netlog service."""
+    config = args.config or default_config_path()
+    forward = [config] if os.path.exists(config) else []
+    return _run_script("teardown.sh", forward, cwd=str(_SCRIPTS_DIR))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -204,13 +238,62 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "launch",
         add_help=False,
-        help="Launch the TDX guest VM (args forwarded; `chutes-cvm launch --help`).",
+        help="Launch a VM end-to-end from config.yaml — volumes, network, then boot "
+        "(args forwarded; `chutes-cvm launch --help`).",
     )
+    # launch-vm is the low-level QEMU primitive: only the orchestrator (launch) and advanced
+    # tooling (prime-vm) call it directly, so it is intentionally NOT registered as a visible
+    # subcommand. main() still dispatches it via _PASSTHROUGH; `chutes-cvm launch-vm --help`
+    # shows the primitive's own argparse.
     sub.add_parser(
         "setup-host",
         add_help=False,
         help="Set up this TDX host (args forwarded; `chutes-cvm setup-host --help`).",
     )
+
+    download = sub.add_parser(
+        "download",
+        help="Download + verify a base image set into /var/lib/chutes/base-images/ (first-run step).",
+        description=(
+            "Fetch a published base image set (qcow2 + direct-boot artifacts + manifest) and "
+            "verify every byte against the manifest. Run this once before the first launch."
+        ),
+    )
+    download.add_argument(
+        "--debug",
+        action="store_true",
+        help="Download the debug image set (SSH, no encryption) instead of production.",
+    )
+    download.set_defaults(func=_cmd_download)
+
+    init = sub.add_parser(
+        "init",
+        help="Write a starter config.yaml into the current directory (edit it, then launch).",
+    )
+    init.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing config.yaml.",
+    )
+    init.set_defaults(func=_cmd_init)
+
+    stop = sub.add_parser(
+        "stop",
+        help="Stop the running TDX VM only (leaves the bridge and volumes in place).",
+    )
+    stop.set_defaults(func=_cmd_stop)
+
+    down = sub.add_parser(
+        "down",
+        help="Full teardown: stop the VM and tear down its bridge + benchmark-netlog service.",
+    )
+    down.add_argument(
+        "--config",
+        metavar="PATH",
+        help="config.yaml whose network values drive bridge cleanup "
+        "(default: host-tools/scripts/config.yaml).",
+    )
+    down.set_defaults(func=_cmd_down)
 
     tune = sub.add_parser(
         "tune-host",
@@ -279,9 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
-# before argparse because REMAINDER mishandles leading options (e.g. `launch --image`,
-# `setup-host --help`). Each underlying main owns its own --help.
-_PASSTHROUGH = ("launch", "setup-host", "image-set", "config")
+# before argparse because REMAINDER mishandles leading options (e.g. `launch-vm --image`,
+# `setup-host --help`). Each underlying main owns its own --help. `launch-vm` is the hidden
+# QEMU primitive (no visible subparser); `launch` is the end-to-end orchestrator.
+_PASSTHROUGH = ("launch", "launch-vm", "setup-host", "image-set", "config")
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -289,6 +373,11 @@ def main(argv: "list[str] | None" = None) -> int:
     if raw and raw[0] in _PASSTHROUGH:
         forward = raw[1:]
         if raw[0] == "launch":
+            # The end-to-end orchestrator is a bundled shell script; run it from the
+            # scripts dir so its ./volumes/ and ./network/ sibling calls resolve. Its final
+            # step is `chutes-cvm launch-vm` (the primitive below).
+            return _run_script("quick-launch.sh", forward, cwd=str(_SCRIPTS_DIR))
+        if raw[0] == "launch-vm":
             from chutes_cvm.guest.__main__ import main as _launch_main
 
             return _launch_main(forward)

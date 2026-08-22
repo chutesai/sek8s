@@ -7,13 +7,13 @@
 
 ## Context
 
-- **Packages affected**: `host-tools/scripts/chutes/host/`, `host-tools/scripts/chutes/guest/`
+- **Packages affected**: `src/chutes-cvm/chutes_cvm/host/`, `src/chutes-cvm/chutes_cvm/guest/`
 - **Key files**:
-  - `host-tools/scripts/chutes/host/setup.py` — host setup orchestration
-  - `host-tools/scripts/chutes/host/support_matrix.py` — validated topologies
-  - `host-tools/scripts/chutes/guest/gpu/profiles.py` — B200 GPU profile
-  - `host-tools/scripts/chutes/guest/detection.py` — PCI device detection
-  - `host-tools/scripts/chutes/guest/passthrough.py` — passthrough orchestration
+  - `src/chutes-cvm/chutes_cvm/host/setup.py` — host setup orchestration
+  - `src/chutes-cvm/chutes_cvm/host/support_matrix.py` — validated topologies
+  - `src/chutes-cvm/chutes_cvm/guest/gpu/profiles.py` — B200 GPU profile
+  - `src/chutes-cvm/chutes_cvm/guest/detection.py` — PCI device detection
+  - `src/chutes-cvm/chutes_cvm/guest/passthrough.py` — passthrough orchestration
 - **Dependencies**: `nvidia-fabricmanager`, `nvlsm`, `libibumad3`, `infiniband-diags` from CUDA apt repo
 
 ---
@@ -59,11 +59,11 @@ Success =
 
 ## Output Format
 
-1. `host-tools/scripts/chutes/host/setup.py` — `_detect_b200_gpus()`, `_setup_host_fabric_manager()`, Step 5c in `setup_host()`
-2. `host-tools/scripts/chutes/guest/detection.py` — `detect_cx7_bridge_pfs()`, updated `detect_infiniband_pfs(exclude_bdfs)`
-3. `host-tools/scripts/chutes/guest/passthrough.py` — CX7 bridge exclusion in `setup_passthrough()`
-4. `host-tools/scripts/chutes/guest/gpu/profiles.py` — corrected `B200Profile` values
-5. `host-tools/scripts/chutes/host/support_matrix.py` — `("25.10", "B200", 8)` added
+1. `src/chutes-cvm/chutes_cvm/host/setup.py` — `_detect_b200_gpus()`, `_setup_host_fabric_manager()`, Step 5c in `setup_host()`
+2. `src/chutes-cvm/chutes_cvm/guest/detection.py` — `detect_cx7_bridge_pfs()`, updated `detect_infiniband_pfs(exclude_bdfs)`
+3. `src/chutes-cvm/chutes_cvm/guest/passthrough.py` — CX7 bridge exclusion in `setup_passthrough()`
+4. `src/chutes-cvm/chutes_cvm/guest/gpu/profiles.py` — corrected `B200Profile` values
+5. `src/chutes-cvm/chutes_cvm/host/support_matrix.py` — `("25.10", "B200", 8)` added
 
 ---
 

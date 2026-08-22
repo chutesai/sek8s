@@ -1,5 +1,5 @@
 ---
-# Render config, start the VM via quick-launch.sh, and wait for node-health.
+# Render config, start the VM via `chutes-cvm launch`, and wait for node-health.
 # Used by upgrade-guest.yml and upgrade-host.yml after the guest has been shut down.
 #
 # Expects (from caller scope or vars):
@@ -7,7 +7,6 @@
 #   chutes_hotkey_path            — controller path to Bittensor hotkey JSON
 #   chutes_miner_api              — miner API URL
 #   chutes_config_remote_path     — path to config.yaml on the remote host
-#   sek8s_remote_host_tools       — path to host-tools checkout on the remote host
 #   upgrade_health_poll_seconds   — seconds to poll node-health before giving up
 
 - name: Render config.yaml on host before launch
@@ -16,11 +15,11 @@
 
 # ── Image-set pre-flight ─────────────────────────────────────────────────────
 # Launch is decoupled from download: the image set must already be staged (by
-# upgrade-guest.yml, or `quick-launch --download`). We do NOT auto-download here — a
+# upgrade-guest.yml, or `chutes-cvm download`). We do NOT auto-download here — a
 # missing set is an explicit failure with a remediation hint, not a silent fetch.
 # When present, verify it is coherent against its manifest (chutes_cvm.guest.image_set
 # resolve — presence/size, cheap, the bytes were fully hashed when staged) so a stale or
-# out-of-sync set fails here with a clear message rather than cryptically inside quick-launch.
+# out-of-sync set fails here with a clear message rather than cryptically inside chutes-cvm launch.
 
 - name: Check the base image set exists
   ansible.builtin.stat:
@@ -33,7 +32,7 @@
     msg: >-
       Base image set not found at {{ upgrade_default_base_image }}. Launch does not
       auto-download — stage it first with `upgrade-guest.yml` or
-      `./quick-launch.sh --download` (populates the set + manifest), then relaunch.
+      `chutes-cvm download` (populates the set + manifest), then relaunch.
   when: not (_base_img_stat.stat.exists and _base_img_stat.stat.isdir)
 
 - name: Verify the base image set against its manifest
@@ -73,11 +72,11 @@
 
 - name: Launch VM (reboot and retry once if the launch wedges the PCI subsystem)
   block:
-    - name: Launch VM via quick-launch.sh
+    - name: Launch VM via chutes-cvm launch
       ansible.builtin.command:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
         argv:
-          - ./quick-launch.sh
+          - chutes-cvm
+          - launch
           - "{{ chutes_config_remote_path }}"
       register: _qlaunch
       changed_when: true
@@ -105,7 +104,7 @@
     - name: Fail when the launch error is not a recoverable PCI wedge
       ansible.builtin.fail:
         msg: >-
-          quick-launch.sh failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
+          chutes-cvm launch failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
           other than a PCI wedge — not retrying. stderr={{ _qlaunch.stderr | default('') }}
       when: not (_launch_pci_wedged | bool)
 
@@ -116,9 +115,9 @@
 
     - name: Retry VM launch after reboot
       ansible.builtin.command:
-        chdir: "{{ sek8s_remote_host_tools }}/scripts"
         argv:
-          - ./quick-launch.sh
+          - chutes-cvm
+          - launch
           - "{{ chutes_config_remote_path }}"
       register: _qlaunch_retry
       changed_when: true
@@ -127,7 +126,7 @@
     - name: Fail if launch still fails after reboot
       ansible.builtin.fail:
         msg: >-
-          quick-launch.sh still failing after a reboot to clear the PCI wedge
+          chutes-cvm launch still failing after a reboot to clear the PCI wedge
           (rc={{ _qlaunch_retry.rc }}). stderr={{ _qlaunch_retry.stderr | default('') }}
       when: _qlaunch_retry.rc != 0
 

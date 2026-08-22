@@ -1,7 +1,8 @@
 # Measurement data (baselines + generated outputs)
 
-Per-version measurement artifacts, kept separate from the tooling in
-`guest-tools/measurement/`. One subdir per guest image version:
+Per-version measurement artifacts, kept separate from the tooling (on-host capture
+in `guest-tools/measurement/`; offline replay/generation in `chutes_cvm.measurement`).
+One subdir per guest image version:
 
 - `<version>/` — captured baseline (CCEL + fw_cfg ACPI/SMBIOS preimages,
   `baseline.json`) produced by the `capture-ccel` role (the final

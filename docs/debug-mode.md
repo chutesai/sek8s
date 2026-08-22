@@ -130,13 +130,13 @@ fi
 
 ```bash
 cd host-tools/scripts
-./quick-launch.sh --download-debug
+chutes-cvm download --debug
 ```
 
 This downloads the debug image set (qcow2 + boot artifacts + `manifest.json`) into
 `/var/lib/chutes/base-images/tdx-guest-debug/` and verifies it against the manifest.
 
-### Launch with quick-launch.sh
+### Launch with chutes-cvm
 
 Use the debug example config as a starting point:
 
@@ -144,7 +144,7 @@ Use the debug example config as a starting point:
 cd host-tools/scripts
 cp config/config.debug.example.yaml config.yaml
 # Edit config.yaml with your credentials and network settings
-./quick-launch.sh config.yaml --foreground
+chutes-cvm launch config.yaml --foreground
 ```
 
 The debug config sets `vm.base_image` to the debug image path and uses smaller volume sizes. See [`config/config.debug.example.yaml`](../host-tools/scripts/config/config.debug.example.yaml) for the full template.

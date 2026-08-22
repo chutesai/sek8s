@@ -24,8 +24,8 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 
 - **Never install a new dependency** without discussion first
 - **Never modify database schemas** without showing the migration plan (sek8s has no DB; this applies if one is added)
-- **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`), `src/sek8s-common/` (`sek8s_common`), and `src/attestation-proxy/` (`attestation_proxy`); tests under `tests/`
-- **Shell scripts** in `host-tools/scripts/` and `guest-tools/`
+- **Python services**: Poetry packages under `src/sek8s/` (import name `sek8s`), `src/sek8s-common/` (`sek8s_common`), `src/attestation-proxy/` (`attestation_proxy`), and `src/chutes-cvm/` (`chutes_cvm`, the host CLI/toolkit); tests under `tests/`
+- **Shell scripts** in `host-tools/scripts/`, `guest-tools/`, and the bundled `src/chutes-cvm/chutes_cvm/scripts/`
 - **Ansible roles** in `ansible/guest/roles/`
 - **OPA policies** in `ansible/guest/roles/admission-controller/files/policies/`
 - **Environment variables** go in config files (pydantic-settings, Ansible vars) — never hardcoded
@@ -61,7 +61,8 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 | **src/sek8s-common/sek8s_common/** | Shared config, server, auth, and constants for all sek8s packages |
 | **src/attestation-proxy/attestation_proxy/** | Dual-port attestation proxy (separate lean Docker image) |
 | **nvevidence/** | NVIDIA attestation SDK wrapper (separate Poetry package) |
-| **host-tools/** | Host setup (`chutes_cvm.host`), GPU binding/VM launch (`chutes_cvm.guest`), networking, orchestration (`quick-launch.sh`) |
+| **src/chutes-cvm/chutes_cvm/** | The `chutes-cvm` CLI + toolkit (import `chutes_cvm`): host setup (`host/`), GPU binding & VM launch (`guest/`), offline measurement generation (`measurement/`), and the bundled orchestration/volume/network shell scripts (`scripts/`, incl. `quick-launch.sh`). Console script `chutes-cvm`. |
+| **host-tools/** | Host provisioning + dev/manual tooling: `setup-chutes-cvm.sh` (installs the CLI), the GPU-tools wheel (`scripts/gpu-tools/`), and config examples. VM-management scripts (`quick-launch.sh`, volumes/, network/, …) now live in the `chutes-cvm` package. |
 | **guest-tools/** | TDX VM image builder, boot measurement extraction |
 | **ansible/guest/** | Ansible roles for guest image build (k3s, GPU drivers, attestation services, LUKS) |
 | **ansible/host/** | Operational Ansible (setup / launch / upgrade) for bare-metal TDX hosts over SSH |

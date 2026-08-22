@@ -184,7 +184,7 @@ all:
 
 The inventory hostname (`my-tee-host` above) is used as both `chutes-miner --name` and `vm.hostname` in `config.yaml`. These must match the TEE server name registered in chutes-miner — do not use an SSH alias as the inventory key.
 
-The generated `config.yaml` matches the shape of [`config.tmpl.yaml`](../../host-tools/scripts/config/config.tmpl.yaml).
+The generated `config.yaml` matches the shape of [`config.tmpl.yaml`](../../src/chutes-cvm/chutes_cvm/scripts/config/config.tmpl.yaml).
 
 ---
 
@@ -232,6 +232,6 @@ upgrade-host.yml                   upgrade-guest.yml
      "26.04": "26.10"   # new
    ```
 2. Optionally add `roles/os_upgrade/tasks/pre_2604.yml` with any migration tasks to run before `do-release-upgrade` on that version (e.g. removing stale repos). Omit the file if no pre-upgrade work is needed.
-3. Add a host profile in `host-tools/scripts/chutes/host/profiles.py` for the new target version so `chutes-cvm setup-host` (called automatically by the hop) can configure it correctly.
+3. Add a host profile in `src/chutes-cvm/chutes_cvm/host/profiles.py` for the new target version so `chutes-cvm setup-host` (called automatically by the hop) can configure it correctly.
 
 See [docs/specs/ansible-playbooks.md](../../docs/specs/ansible-playbooks.md) for the full contract.

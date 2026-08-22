@@ -66,13 +66,13 @@ Clear `benchmark_build` and `benchmark_ssh_keys` before any subsequent non-TEE b
 
 ## Launching the VM
 
-Use `quick-launch.sh` with the `--benchmark` flag:
+Use `chutes-cvm launch` with the `--benchmark` flag:
 
 ```bash
 cd host-tools/scripts
 cp config/config.benchmark.example.yaml config.yaml
 # Edit config.yaml — at minimum set network.public_interface and network.vm_ip
-./quick-launch.sh config.yaml --benchmark
+chutes-cvm launch --benchmark config.yaml
 ```
 
 The `--benchmark` flag:
@@ -207,7 +207,7 @@ luks-setup open /dev/vdb /data
 
 ## Host-side network logging
 
-When launched with `--benchmark`, `quick-launch.sh` installs and starts the
+When launched with `--benchmark`, `chutes-cvm launch` installs and starts the
 `benchmark-netlog` systemd service on the host. It uses `conntrack` to stream all
 connection events for the VM's bridge subnet, writing them to daily log files:
 

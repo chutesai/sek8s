@@ -1,6 +1,6 @@
 # Benchmark TEE VM Configuration
 # Partner SSH access only — no miner credentials, no cache/config volume.
-# Pass --benchmark to quick-launch.sh when using this config.
+# Pass --benchmark to `chutes-cvm launch` when using this config.
 
 vm:
   hostname: chutes-benchmark-0

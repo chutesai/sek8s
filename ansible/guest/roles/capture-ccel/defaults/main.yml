@@ -42,6 +42,6 @@ measurement_bridge_name: br0
 # that is already up, and never collides with the server's own subnets.
 measurement_pick_network_script: "{{ repo_root }}/ansible/host/roles/chutes_vm_config/files/pick_guest_network.py"
 
-# The capture VM never joins a cluster; dummy creds keep quick-launch happy.
+# The capture VM never joins a cluster; dummy creds keep `chutes-cvm launch` happy.
 measurement_miner_ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 measurement_miner_seed: "0000000000000000000000000000000000000000000000000000000000000000"

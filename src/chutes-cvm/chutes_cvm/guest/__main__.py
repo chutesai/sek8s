@@ -1,6 +1,8 @@
-"""CLI entry point for TDX VM launch.
+"""CLI entry point for the low-level TDX VM launch primitive.
 
-Invoked via: chutes-cvm launch [args]
+Invoked via: chutes-cvm launch-vm [args] — the raw QEMU boot with GPU-passthrough sizing.
+The end-to-end orchestrator (`chutes-cvm launch`) calls this as its final step; advanced
+tooling (prime-vm) calls it directly. Miners use `chutes-cvm launch`, not this.
 """
 
 import argparse
@@ -35,6 +37,7 @@ from chutes_cvm.guest.qemu import (
     safe_vm_mem_gb,
     use_numa_topology,
 )
+from chutes_cvm.paths import firmware_dir
 
 PIDFILE = "/tmp/tdx-td-pid.pid"
 LOGFILE = "/tmp/tdx-guest-td.log"
@@ -49,10 +52,7 @@ _DEFAULT_FIRMWARE = "OVMF.inteltdx.fd"
 
 
 def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
-    scripts_dir = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    return os.path.join(scripts_dir, "../../firmware", filename)
+    return str(firmware_dir() / filename)
 
 
 def print_vm_status(ssh_port: int, show_ssh: bool = False):
@@ -237,7 +237,8 @@ def launch_vm(args) -> int:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="chutes-cvm launch", description="Launch a TDX VM with GPU passthrough"
+        prog="chutes-cvm launch-vm",
+        description="Launch a TDX VM with GPU passthrough (primitive)",
     )
 
     parser.add_argument("--image", type=str, help="Path to VM image")

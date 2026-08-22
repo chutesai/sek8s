@@ -14,11 +14,7 @@ import shlex
 import sys
 
 import yaml
-
-
-def _scripts_dir() -> str:
-    """Return the host-tools/scripts/ directory (parent of the chutes_cvm.guest package)."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from chutes_cvm.paths import SCRIPTS_DIR
 
 
 def validate_config(config, schema_path):
@@ -86,7 +82,7 @@ def main(argv=None):
     schema_name = (
         "config-schema.benchmark.json" if benchmark_mode else "config-schema.json"
     )
-    schema_path = os.path.join(_scripts_dir(), "config", schema_name)
+    schema_path = os.path.join(str(SCRIPTS_DIR), "config", schema_name)
 
     if not validate_config(config, schema_path):
         print(

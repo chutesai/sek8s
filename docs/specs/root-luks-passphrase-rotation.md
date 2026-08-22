@@ -15,7 +15,7 @@ The root volume is LUKS-encrypted at image build time with a shared passphrase. 
 This feature solves both problems: drop the overlay so the per-VM image is the only copy of the LUKS header, and add a LUKS2 token as a "first boot" marker so the API knows which passphrase to return.
 
 - **Packages affected**: `ansible/guest/roles/luks`, `host-tools/scripts`
-- **Key files**: `host-tools/scripts/prepare-vm-image.sh`, `host-tools/scripts/quick-launch.sh`, `ansible/guest/roles/luks/tasks/luks_encrypt.yml`, `ansible/guest/roles/luks/files/initramfs/fetch_key_and_unlock`, `ansible/guest/roles/luks/files/initramfs/fetch_key`
+- **Key files**: `host-tools/scripts/prepare-vm-image.sh`, `src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh`, `ansible/guest/roles/luks/tasks/luks_encrypt.yml`, `ansible/guest/roles/luks/files/initramfs/fetch_key_and_unlock`, `ansible/guest/roles/luks/files/initramfs/fetch_key`
 - **Dependencies**: Chutes API changes (separate repo -- see API prompt at end of this spec)
 
 ---

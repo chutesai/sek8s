@@ -15,10 +15,10 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
 
 - **Packages affected**: `host-tools/scripts`, `ansible/guest/roles/config`, `ansible/guest/roles/common`, `ansible/guest/roles/admission-controller`, `ansible/guest/roles/system-manager`, `sek8s/cosign`
 - **Key files**:
-  - `host-tools/scripts/config/config.tmpl.yaml` — user-facing config template
+  - `src/chutes-cvm/chutes_cvm/scripts/config/config.tmpl.yaml` — user-facing config template
   - `host-tools/scripts/config/config-schema.json` — JSON Schema for config validation
-  - `host-tools/scripts/chutes/guest/config.py` — YAML parser, emits shell vars
-  - `host-tools/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
+  - `src/chutes-cvm/chutes_cvm/guest/config.py` — YAML parser, emits shell vars
+  - `src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
   - `host-tools/scripts/volumes/create-config.sh` — creates and populates config volume
   - `ansible/guest/roles/config/files/process-config.py` — guest-side config validator and applier (already uses PyYAML)
   - `ansible/guest/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s); Ansible content preserved at runtime
@@ -127,7 +127,7 @@ Success = A miner who provides Docker Hub credentials has both containerd (k3s) 
    - Add optional `docker_hub` section (document PAT link in comments/help).
 2. **Modified: `host-tools/scripts/config/config-schema.json`**
    - Add `docker_hub` to schema properties (not in `required`).
-3. **Modified: `host-tools/scripts/chutes/guest/config.py`**
+3. **Modified: `src/chutes-cvm/chutes_cvm/guest/config.py`**
    - Parse `docker_hub.username` and `docker_hub.token` from config.
    - Emit `DOCKER_HUB_USERNAME` and `DOCKER_HUB_TOKEN` shell vars via `shlex.quote` (defense in depth for host scripts).
 4. **Modified: `host-tools/scripts/quick-launch.sh`**

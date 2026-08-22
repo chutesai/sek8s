@@ -46,7 +46,7 @@ The `config.yaml` defines your deployment: VM identity, miner credentials, netwo
 ## Key Documentation
 
 - `**[host-tools/README.md](host-tools/README.md)`** — Setting up the TDX host and launching VMs
-- `**[docs/specs/tdx-measurement-verification.md](docs/specs/tdx-measurement-verification.md)**` — How the guest image's TDX measurements are structured, reproduced, and independently verified (tooling in `guest-tools/measurement/`)
+- `**[docs/specs/tdx-measurement-verification.md](docs/specs/tdx-measurement-verification.md)**` — How the guest image's TDX measurements are structured, reproduced, and independently verified (on-host capture in `guest-tools/measurement/`; offline replay/generation in `chutes_cvm.measurement`)
 - `**[docs/end-to-end-miner.md](docs/end-to-end-miner.md)**` — Complete integration workflow with chutes-miner
 - `**[docs/system-status.md](docs/system-status.md)**` — System status API for monitoring service health and GPU telemetry
 

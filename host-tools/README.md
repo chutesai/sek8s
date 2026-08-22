@@ -61,7 +61,7 @@ A reboot is triggered automatically if a new kernel was installed.
 ansible-playbook -i ~/chutes/my-inventory.yml playbooks/launch.yml
 ```
 
-This renders `config.yaml` on the host, downloads the base image if missing, verifies its checksum, and launches the VM via `quick-launch.sh`.
+This renders `config.yaml` on the host, downloads the base image if missing, verifies its checksum, and launches the VM via `chutes-cvm launch`.
 
 ### Subsequent updates
 
@@ -125,7 +125,7 @@ systemctl restart pccs
 
 ```bash
 cd host-tools/scripts
-./quick-launch.sh --download
+chutes-cvm download
 ```
 
 Images are saved to `/var/lib/chutes/base-images/`.
@@ -133,7 +133,7 @@ Images are saved to `/var/lib/chutes/base-images/`.
 ### Step 4: Create configuration file
 
 ```bash
-./quick-launch.sh --template
+chutes-cvm init
 # Edit config.yaml with your settings
 ```
 
@@ -147,10 +147,10 @@ See [`scripts/config/CONFIG-GUIDE.md`](scripts/config/CONFIG-GUIDE.md) for the f
 ### Step 5: Launch the VM
 
 ```bash
-./quick-launch.sh config.yaml
+chutes-cvm launch config.yaml
 ```
 
-The script validates TDX, prepares volumes, configures networking, binds GPUs to `vfio-pci`, and starts the VM.
+The launcher validates TDX, prepares volumes, configures networking, binds GPUs to `vfio-pci`, and starts the VM.
 
 ---
 
@@ -165,7 +165,7 @@ cat /tmp/qemu.log
 
 ### Stop and clean up
 ```bash
-./quick-launch.sh --clean
+chutes-cvm down
 ```
 Removes the VM process, bridge, TAP interfaces, and NAT rules. Volume files are preserved.
 
@@ -198,7 +198,7 @@ Caused by non-interactive install skipping the `npm install` post-install step.
 
 **GPU stuck or unhealthy**
 
-If `quick-launch` or `chutes-cvm reset-gpus` hangs, check for wedged PCI tasks:
+If `chutes-cvm launch` or `chutes-cvm reset-gpus` hangs, check for wedged PCI tasks:
 ```bash
 ps aux | awk '$8 ~ /D/ && /nvidia-gpu-tools|vfio-pci\/unbind/'
 ```
@@ -234,12 +234,16 @@ sudo sysctl net.ipv4.ip_forward       # should be 1
 |------|-------------|
 | `/var/lib/chutes/base-images/tdx-guest/` | Base VM image set (qcow2 + boot artifacts + manifest.json) |
 | `/var/lib/chutes/vm-images/tdx-<hostname>-<sha>.qcow2` | Per-VM image copy |
-| `host-tools/scripts/cache-<hostname>.raw` | HF/model cache volume (XFS) |
-| `host-tools/scripts/storage-<hostname>.raw` | k3s/containerd/kubelet volume |
-| `host-tools/scripts/config-<hostname>.qcow2` | Credentials config volume |
+| `<volumes.cache.path>` (e.g. `/data/prod/cache.raw`) | HF/model cache volume (XFS) |
+| `<volumes.storage.path>` (e.g. `/data/prod/storage.raw`) | k3s/containerd/kubelet volume |
+| `<volumes.config.path>` (e.g. `/data/prod/config.qcow2`) | Credentials config volume |
 | `/tmp/tdx-guest-td.log` | VM serial console log |
 | `/tmp/qemu.log` | QEMU debug log |
 | `/tmp/tdx-td-pid.pid` | VM process PID |
+
+Set absolute `volumes.*.path` values in `config.yaml` (the Ansible-rendered config does).
+An empty `path:` auto-generates `cache-<hostname>.raw` etc. **relative to the launch working
+directory**, so prefer absolute paths for anything long-lived.
 
 ---
 

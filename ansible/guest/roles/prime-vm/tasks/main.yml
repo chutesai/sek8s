@@ -19,10 +19,6 @@
 # ensure GRUB selects kernel entry 0 deterministically, complementing the
 # EFI variable priming done here.
 
-- name: Set host tools scripts path
-  ansible.builtin.set_fact:
-    host_tools_scripts: "{{ repo_root }}/host-tools/scripts"
-
 - name: Check no TDX VM is running
   ansible.builtin.shell: |
     if [ -f /tmp/tdx-td-pid.pid ]; then
@@ -44,8 +40,7 @@
 
     - name: Stop any existing TDX VM
       ansible.builtin.command:
-        cmd: chutes-cvm launch --clean
-        chdir: "{{ host_tools_scripts }}"
+        cmd: chutes-cvm stop
       changed_when: false
       failed_when: false
 
@@ -59,25 +54,27 @@
         state: absent
 
     - name: Launch VM for prime (user-mode networking, no volumes)
-      ansible.builtin.shell: |
-        cd {{ host_tools_scripts }}
-        chutes-cvm launch \
-          --image {{ final_img_path }} \
-          --network-type user
-      args:
-        executable: /bin/bash
+      # The bare-boot primitive: no volumes/bridge/GPU passthrough, just boot the image.
+      ansible.builtin.command:
+        argv:
+          - chutes-cvm
+          - launch-vm
+          - --image
+          - "{{ final_img_path }}"
+          - --network-type
+          - user
       register: launch_result
 
     - name: Mark that we launched a VM
       ansible.builtin.set_fact:
         prime_launched: true
 
-    - name: Debug chutes-cvm launch output
+    - name: Debug chutes-cvm launch-vm output
       ansible.builtin.debug:
         msg:
-          - "chutes-cvm launch exit code: {{ launch_result.rc }}"
-          - "chutes-cvm launch stdout: {{ launch_result.stdout | default('') | trim }}"
-          - "chutes-cvm launch stderr: {{ launch_result.stderr | default('') | trim }}"
+          - "chutes-cvm launch-vm exit code: {{ launch_result.rc }}"
+          - "chutes-cvm launch-vm stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "chutes-cvm launch-vm stderr: {{ launch_result.stderr | default('') | trim }}"
 
     - name: Wait for kernel boot signal in console log
       ansible.builtin.shell: |
@@ -136,9 +133,9 @@
     - name: Prime failed — debug output
       ansible.builtin.debug:
         msg:
-          - "chutes-cvm launch exit code: {{ launch_result.rc | default('N/A') }}"
-          - "chutes-cvm launch stdout: {{ launch_result.stdout | default('') | trim }}"
-          - "chutes-cvm launch stderr: {{ launch_result.stderr | default('') | trim }}"
+          - "chutes-cvm launch-vm exit code: {{ launch_result.rc | default('N/A') }}"
+          - "chutes-cvm launch-vm stdout: {{ launch_result.stdout | default('') | trim }}"
+          - "chutes-cvm launch-vm stderr: {{ launch_result.stderr | default('') | trim }}"
       when: launch_result is defined
 
     - name: Dump QEMU log on failure
@@ -161,14 +158,13 @@
     - name: Fail with verbose message for investigation
       ansible.builtin.fail:
         msg: |
-          Prime VM failed. Check chutes-cvm launch output and /tmp/tdx-guest-td.log above.
+          Prime VM failed. Check chutes-cvm launch-vm output and /tmp/tdx-guest-td.log above.
           Re-run with --tags prime-vm after resolving the root cause.
 
   always:
     - name: Ensure VM is stopped after prime
       ansible.builtin.command:
-        cmd: chutes-cvm launch --clean
-        chdir: "{{ host_tools_scripts }}"
+        cmd: chutes-cvm stop
       changed_when: false
       failed_when: false
       when: prime_launched | default(false) | bool

@@ -36,9 +36,9 @@ connection-level metadata records for NDA compliance (no TLS payloads).
   - `ansible/guest/roles/cleanup/tasks/main.yml` — build cleanup
   - `ansible/guest/roles/attestation-service/tasks/install-tdx-quote-generator.yml` — TDX quote tools
   - `ansible/guest/roles/sek8s/tasks/install-nvevidence-cli.yml` — GPU evidence CLI
-  - `host-tools/scripts/quick-launch.sh` — VM launch orchestrator
+  - `src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh` — VM launch orchestrator
   - `host-tools/scripts/network/setup-bridge.sh` — bridge + NAT + DNAT
-  - `host-tools/scripts/chutes/guest/qemu.py` — QEMU volume attachment
+  - `src/chutes-cvm/chutes_cvm/guest/qemu.py` — QEMU volume attachment
 - **Dependencies**: `nv-attestation-sdk` (already in `nvevidence/`), `libtdx-attest` (already in attestation-service role), `conntrack` (already in common role system packages), `trustauthority-cli` (Intel SGX/TDX repo)
 
 ---

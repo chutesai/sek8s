@@ -91,7 +91,7 @@ Host tools automatically configure iptables rules for k3s API (port 6443) and No
 
 ### Configuration Volumes
 
-Production VMs require three attached volumes (created by `quick-launch.sh`):
+Production VMs require three attached volumes (created by `chutes-cvm launch`):
 
 #### Config Volume (`tdx-config`)
 - **Created by**: `host-tools/scripts/volumes/create-config.sh`
@@ -168,11 +168,11 @@ See role-specific defaults for component configuration.
 
 This Ansible playbook builds the VM image only. The following are handled by host-tools:
 
-- ❌ TDX-enabled host system setup → See `host-tools/scripts/chutes/host/`
+- ❌ TDX-enabled host system setup → See `src/chutes-cvm/chutes_cvm/host/`
 - ❌ GPU passthrough configuration → Handled automatically by `chutes-cvm launch`
 - ❌ Network infrastructure → See `host-tools/scripts/network/setup-bridge.sh`
 - ❌ Config/cache/storage volume creation → See `host-tools/scripts/volumes/create-*.sh`
-- ❌ VM launch and orchestration → See `host-tools/scripts/quick-launch.sh`
+- ❌ VM launch and orchestration → Handled by `chutes-cvm launch`
 - ✅ Guest OS and k3s installation
 - ✅ GPU drivers and attestation services
 - ✅ Security hardening and admission control

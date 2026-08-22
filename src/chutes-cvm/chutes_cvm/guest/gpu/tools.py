@@ -8,12 +8,7 @@ import os
 import subprocess
 import sys
 
-
-def _scripts_dir() -> str:
-    """Return the host-tools/scripts/ directory (parent of the chutes_cvm.guest package)."""
-    return os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    )
+from chutes_cvm.paths import gpu_tools_dir
 
 
 def _cli_healthy() -> bool:
@@ -98,7 +93,7 @@ def ensure_gpu_tools_available() -> str:
             "and install the GPU admin tools."
         )
 
-    bundled_tools_dir = os.path.join(_scripts_dir(), "gpu-tools")
+    bundled_tools_dir = str(gpu_tools_dir())
     if not os.path.exists(bundled_tools_dir):
         raise FileNotFoundError(
             f"GPU tools directory not found: {bundled_tools_dir}. "

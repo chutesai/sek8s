@@ -35,7 +35,6 @@
 
 - name: Set derived capture facts
   ansible.builtin.set_fact:
-    _host_tools_scripts: "{{ repo_root }}/host-tools/scripts"
     _baseline_dir: "{{ measurement_output_dir }}/{{ vm_version }}"
 
 # ── Resolve the VM/bridge network ─────────────────────────────────────────────
@@ -193,7 +192,6 @@
 
 - name: Generate the working set's manifest (coherence contract the launcher verifies)
   ansible.builtin.command:
-    chdir: "{{ _host_tools_scripts }}"
     argv:
       - chutes-cvm
       - image-set
@@ -218,9 +216,9 @@
     - name: Launch the dumper VM from the working image set (TDX, profile-sized)
       # No --no-gpus: GPU passthrough sizes the guest like production (see header).
       ansible.builtin.command:
-        chdir: "{{ _host_tools_scripts }}"
         argv:
-          - ./quick-launch.sh
+          - chutes-cvm
+          - launch
           - --hostname
           - "{{ measurement_hostname }}"
           - --base-image
@@ -307,8 +305,7 @@
     # It usually powered itself off already; this is belt-and-suspenders.
     - name: Stop the capture VM (leave the shared bridge in place)
       ansible.builtin.command:
-        chdir: "{{ _host_tools_scripts }}"
-        argv: [chutes-cvm, launch, --clean]
+        argv: [chutes-cvm, stop]
       changed_when: true
       failed_when: false
 

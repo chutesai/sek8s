@@ -16,7 +16,7 @@ pip3 install pyyaml jsonschema
 
 ```bash
 # Start from template
-cp config/config.tmpl.yaml config.yaml
+chutes-cvm init
 
 # Or use examples
 cp config/config.prod.example.yaml config.yaml    # For production
@@ -35,7 +35,7 @@ Edit `config.yaml` with your settings. The schema will validate:
 ### 4. Launch VM
 
 ```bash
-./quick-launch.sh config.yaml
+chutes-cvm launch config.yaml
 ```
 
 ## Schema Validation
@@ -69,30 +69,30 @@ Values are resolved in this order (highest to lowest):
 
 1. **CLI arguments** (`--hostname`, `--base-image`, `--vm-image-dir`, `--docker-hub-username` / `--docker-hub-token` when **both** are set, etc.)
 2. **YAML config file** (your config.yaml)
-3. **Hard-coded defaults** (in quick-launch.sh)
+3. **Hard-coded defaults** (in `chutes-cvm launch`)
 
 For Docker Hub: if you pass **both** `--docker-hub-username` and `--docker-hub-token`, they override the optional `docker_hub` block in YAML. Otherwise `docker_hub.username` / `docker_hub.token` from YAML are used when present.
 
 Example:
 ```bash
 # Base image precedence:
-./quick-launch.sh config.yaml --base-image /path/to/custom-image-set/
+chutes-cvm launch config.yaml --base-image /path/to/custom-image-set/
 # Uses: /path/to/custom-image-set/ (CLI wins)
 
-./quick-launch.sh config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest/"
+chutes-cvm launch config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest/"
 # Uses: value from YAML (image-set directory)
 
-./quick-launch.sh config.yaml  # config.yaml has vm.base_image: ""
+chutes-cvm launch config.yaml  # config.yaml has vm.base_image: ""
 # Uses: default /var/lib/chutes/base-images/tdx-guest/
 ```
 
 `base_image` points at a **published image-set directory** — the qcow2 plus its direct-boot
 artifacts (`.vmlinuz`/`.initrd`/`.cmdline`) and a `manifest.json` that ties them together —
-populated by `quick-launch --download`. There is one image format: the set. The launcher
+populated by `chutes-cvm download`. There is one image format: the set. The launcher
 verifies the set against the manifest (so a stale/mismatched artifact fails loudly, not as
 an opaque boot error) and reads the qcow2's sha256 from the manifest instead of re-hashing
 it each launch. Launch does not auto-download: a missing set fails with a clear message,
-and you stage it explicitly with `--download` (or, in a build, via ansible). Custom or
+and you stage it explicitly with `chutes-cvm download` (or, in a build, via ansible). Custom or
 benchmark images must likewise be assembled into a set (`chutes_cvm.guest.image_set manifest`).
 
 ## Docker Hub (optional)
@@ -107,7 +107,7 @@ docker_hub:
 
 - Schema: both `username` and `token` are required when `docker_hub` is present (`maxLength` 64 / 128).
 - The host writes `docker-hub-username` and `docker-hub-token` onto the config volume (cleartext); treat the volume like other secrets.
-- `quick-launch.sh` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
+- `chutes-cvm launch` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
 - See `config.tmpl.yaml`, `config.prod.example.yaml`, and `config.debug.example.yaml` for commented examples.
 
 ## Production vs Debug Configs
@@ -171,8 +171,8 @@ Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest/`
 ### Via CLI Override
 
 ```bash
-./quick-launch.sh config.yaml --base-image /path/to/image-set-dir/
-./quick-launch.sh config.yaml --vm-image-dir /custom/vm-images/
+chutes-cvm launch config.yaml --base-image /path/to/image-set-dir/
+chutes-cvm launch config.yaml --vm-image-dir /custom/vm-images/
 ```
 
 ## Volume Auto-Generation

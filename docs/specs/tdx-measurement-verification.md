@@ -76,27 +76,31 @@ value can be recomputed and checked against what a genuine TDX quote reports —
 requiring trust only in the hardware quote, not in chutes.
 
 Inside a guest, the firmware records every measurement extension in the CC event
-log (`/sys/firmware/acpi/tables/data/CCEL`). The `guest-tools/measurement/`
-tooling parses that log and replays the SHA-384 chains to reproduce each
-register, then compares them to published reference values (no signed quote
-required for the replay itself). Anyone can build the image (see `ansible/guest`),
+log (`/sys/firmware/acpi/tables/data/CCEL`). The measurement tooling parses that
+log and replays the SHA-384 chains to reproduce each register, then compares them
+to published reference values (no signed quote required for the replay itself). Anyone can build the image (see `ansible/guest`),
 run it, and confirm the reproduced registers match the published values and are a
 faithful function of the documented inputs.
 
 ## Tooling
 
-`guest-tools/measurement/`:
+On-host capture (`guest-tools/measurement/`):
 
 - **`capture-measurement-artifacts.sh`** — capture a guest's CC event log and the
   platform tables it measures (the inputs for offline reproduction). Requires TDX
   hardware, since the CCEL only exists there.
 - **`extract-measurements.sh`** — report a running guest's live measurements from a
   fresh quote (MRTD + RTMR0-3); verification, not reproduction.
+
+Offline replay/generation — the `chutes_cvm.measurement` package
+(`src/chutes-cvm/chutes_cvm/measurement/`):
+
 - **`ccel_replay.py`** — parse the event log, replay the RTMR chains, and verify
   them against known-good values (`--expect`) or compare two captures (`diff`).
+- **`generate_measurements.py`** — offline per-topology RTMR0 generation.
 - **`utils/`** — diagnostics (per-table ACPI byte-diff; event-log preimage
   matcher).
 
 The measurement package reuses the same VM launch definitions as the host
-launcher (`host-tools/scripts/chutes/guest`), so reproduced measurements track
+launcher (`src/chutes-cvm/chutes_cvm/guest`), so reproduced measurements track
 the real launch by construction.

@@ -3,7 +3,7 @@
 
 vm:
   hostname: chutes-miner-debug-0
-  base_image: "/var/lib/chutes/base-images/tdx-guest-debug/"  # Debug image-set dir (no encryption, SSH enabled); populated by `quick-launch --download-debug`
+  base_image: "/var/lib/chutes/base-images/tdx-guest-debug/"  # Debug image-set dir (no encryption, SSH enabled); populated by `chutes-cvm download --debug`
   vm_image_directory: ""  # Empty = /var/lib/chutes/vm-images/
   
 miner:

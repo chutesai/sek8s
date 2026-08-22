@@ -26,49 +26,10 @@ run_create_config() {
     ./volumes/create-config.sh "$vol_path"
 }
 
-# Download a full image set (1.4.0+) into its own per-variant directory: the qcow2, the
-# direct-boot kernel/initrd/cmdline OVMF boots directly, and the manifest that ties them
-# together. The set lives in one directory so the launcher resolves the qcow2 + sidecars
-# next to each other, and `image_set resolve --full` verifies every downloaded byte
-# against the manifest (the R2-published integrity source).
-#   $1 = image basename (tdx-guest | tdx-guest-debug)
-download_image_set() {
-  local base="$1" ext
-  local dir="/var/lib/chutes/base-images/${base}"
-  sudo mkdir -p "$dir"
-
-  # Download into a fixed per-variant directory (overwrites in place — keep an old build
-  # by moving its directory aside before re-downloading). Manifest last so a partial
-  # download never leaves a manifest advertising bytes that aren't there yet.
-  echo "Downloading ${base}.qcow2..."
-  aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "${base}.qcow2" \
-    "https://vm.chutes.ai/${base}.qcow2" || { echo "Download failed for ${base}.qcow2"; exit 1; }
-  for ext in vmlinuz initrd cmdline; do
-    echo "Downloading ${base}.${ext} (direct-boot artifact)..."
-    aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "${base}.${ext}" \
-      "https://vm.chutes.ai/${base}.${ext}" || {
-      echo "Download failed for ${base}.${ext}. It must be published alongside the qcow2 (1.4.0+)."
-      exit 1
-    }
-  done
-  echo "Downloading manifest.json (coherence contract)..."
-  aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$dir" -o "manifest.json" \
-    "https://vm.chutes.ai/${base}.manifest.json" || {
-    echo "Download failed for ${base}.manifest.json. It must be published alongside the qcow2 (1.4.0+)."
-    exit 1
-  }
-
-  echo "Verifying the downloaded image set against its manifest..."
-  chutes-cvm image-set resolve --full "$dir" >/dev/null || {
-    echo "ERROR: downloaded image set failed manifest verification (see above)."
-    exit 1
-  }
-  echo "✓ Image set downloaded and verified: $dir"
-  echo "  Point base_image at this directory (or leave it empty to use the default)."
-}
-
 # Integrity is carried entirely by the per-image-set manifest.json (verified at download
 # and launch by chutes_cvm.guest.image_set) — there is no pinned base-image hash to maintain.
+# Image-set download lives in `chutes-cvm download`; config scaffolding in `chutes-cvm init`;
+# teardown in `chutes-cvm down`/`stop`. This orchestrator only brings a VM up.
 
 # --------------------------------------------------------------------
 # Hard-coded defaults (lowest precedence)
@@ -125,12 +86,10 @@ CLI_SSH_PORT=""
 CLI_NETWORK_TYPE=""
 CLI_EPHEMERAL=""
 CLI_BENCHMARK=""
-CLI_DOWNLOAD=""
 CLI_DOCKER_HUB_USERNAME=""
 CLI_DOCKER_HUB_TOKEN=""
 CLI_OPERATOR_SIGNING_KEY=""
 CLI_FORCE=""
-CLI_CLEAN=""
 
 # --------------------------------------------------------------------
 # Duplicate-instance guard (chutes-td QEMU must not stack without --force)
@@ -194,44 +153,20 @@ while [[ $# -gt 0 ]]; do
     --docker-hub-token) CLI_DOCKER_HUB_TOKEN="$2"; shift 2 ;;
     --operator-signing-key) CLI_OPERATOR_SIGNING_KEY="$2"; shift 2 ;;
     --force) CLI_FORCE="true"; shift ;;
-    --clean) CLI_CLEAN="true"; shift ;;
-    --download)
-      echo "=== Downloading VM Image Set (production) ==="
-      if ! command -v aria2c >/dev/null 2>&1; then
-        echo "Error: aria2c not found. Install with: sudo apt install aria2"
-        exit 1
-      fi
-      download_image_set tdx-guest
-      exit 0
-      ;;
-
-    --download-debug)
-      echo "=== Downloading VM Image Set (debug) ==="
-      if ! command -v aria2c >/dev/null 2>&1; then
-        echo "Error: aria2c not found. Install with: sudo apt install aria2"
-        exit 1
-      fi
-      download_image_set tdx-guest-debug
-      exit 0
-      ;;
-
-
-    --template)
-      cp config/config.tmpl.yaml config.yaml
-      echo "Created config.yaml"
-      exit 0
-      ;;
-
     --help)
       cat << EOF
-Usage: $0 [config.yaml] [options]
+Usage: chutes-cvm launch [config.yaml] [options]
 
-TEE VM orchestration with YAML configuration support.
+End-to-end TEE VM orchestration: verify host, prepare volumes and network, then boot.
+Related commands (formerly flags of this script):
+  chutes-cvm init            Scaffold a starter config.yaml
+  chutes-cvm download        Download + verify a base image set (add --debug for the debug set)
+  chutes-cvm down            Stop the VM and tear down its bridge/netlog
+  chutes-cvm stop            Stop only the VM (leave the bridge up)
 
 Config File:
   config.yaml               Use YAML configuration file
   --config FILE             Specify config file explicitly
-  --template                Create template config file from template
 
 Command Line Options (CLI overrides YAML when provided):
   --hostname NAME           VM hostname (required if not in YAML)
@@ -276,31 +211,26 @@ Benchmark Mode:
                             auto-installs and starts benchmark-netlog service)
 
 Management:
-  --clean                   Clean up VM, bridge, and benchmark-netlog service (if running)
-  --download                Download VM base image (production) to /var/lib/chutes/base-images/
-  --download-debug          Download VM debug image to /var/lib/chutes/base-images/
   --force                   Allow launch even if a chutes-td QEMU instance appears running (unsafe)
 
 Examples:
-  # Create template config
-  $0 --template
-
-  # Use config file
-  $0 config.yaml
+  # First run: scaffold config, download an image set, then launch
+  chutes-cvm init
+  chutes-cvm download                       # add --debug for the debug image set
+  chutes-cvm launch config.yaml
 
   # Use config with overrides
-  $0 config.yaml --foreground --skip-bind
-
-  # Download VM base image (before first run)
-  $0 --download
-  $0 --download-debug        # Debug image (SSH, no encryption)
+  chutes-cvm launch config.yaml --foreground --skip-bind
 
   # Benchmark launch (image is built on-server via Ansible, not downloaded)
-  $0 --benchmark config.benchmark.yaml
+  chutes-cvm launch --benchmark config.benchmark.yaml
 
   # Command line only
-  $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
-  $0 config.yaml --vm-image-dir /custom/vm-images/
+  chutes-cvm launch --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'
+  chutes-cvm launch config.yaml --vm-image-dir /custom/vm-images/
+
+  # Tear down afterward
+  chutes-cvm down
 EOF
       exit 0
       ;;
@@ -323,15 +253,8 @@ if [[ -n "$CONFIG_FILE" ]]; then
     exit 1
   fi
 
-  if ! python3 -c "import yaml" 2>/dev/null; then
-    echo "Error: PyYAML not found. Install with: pip3 install pyyaml"
-    exit 1
-  fi
-
-  if [[ ! -d "./chutes" ]]; then
-    echo "Error: chutes package not found in current directory"
-    exit 1
-  fi
+  # Config parsing/validation is done by the `chutes-cvm config` console script (its
+  # pyyaml/jsonschema deps ship with the package), so no local package check is needed here.
 
   # Pre-scan for --benchmark so the correct schema is used during validation.
   # CLI_BENCHMARK is not yet applied to BENCHMARK at this point in the script,
@@ -420,40 +343,6 @@ if [[ -z "$PUBLIC_IFACE" ]] || ! ip link show "$PUBLIC_IFACE" >/dev/null 2>&1; t
   PUBLIC_IFACE="$DETECTED_IFACE"
 fi
 
-# --------------------------------------------------------------------
-# Deferred --clean: runs after config + CLI overrides so bridge cleanup
-# uses the correct PUBLIC_IFACE, BRIDGE_IP, and VM_IP from config.yaml.
-# --------------------------------------------------------------------
-if [[ "$CLI_CLEAN" == "true" ]]; then
-  echo "=== Cleaning Up TEE VM Environment ==="
-  echo "Stopping Chutes VM (if running)..."
-  chutes-cvm launch --clean 2>/dev/null || true
-
-  echo "Waiting for VM processes to exit..."
-  for i in {1..15}; do
-    if ! pgrep -f 'qemu-system|qemu-kvm|chutes-cvm' >/dev/null 2>&1; then
-      echo "No VM processes found. Proceeding with bridge cleanup."
-      break
-    fi
-    echo "VM processes still running; waiting... ($i/15)"
-    sleep 1
-  done
-
-  ./network/setup-bridge.sh --clean \
-    --bridge-ip "$BRIDGE_IP" \
-    --vm-ip "${VM_IP}/24" \
-    --public-iface "$PUBLIC_IFACE" 2>/dev/null || true
-
-
-  if systemctl is-active --quiet benchmark-netlog 2>/dev/null; then
-    echo "Stopping benchmark network logging service..."
-    sudo systemctl stop benchmark-netlog
-    echo "✓ benchmark-netlog stopped"
-  fi
-
-  exit 0
-fi
-
 # Benchmark mode: set defaults before the general defaults below. The benchmark image is
 # a published image set (directory) like every other image — assemble one with
 # `chutes_cvm.guest.image_set manifest` if you're pointing at a loose qcow2.
@@ -465,8 +354,8 @@ if [[ "$BENCHMARK" == "true" ]]; then
 fi
 
 # Default base image: the published image-set directory (qcow2 + boot artifacts +
-# manifest) that `--download` populates. There is one image format — the set directory;
-# a missing set fails cleanly here rather than being auto-downloaded at launch.
+# manifest) that `chutes-cvm download` populates. There is one image format — the set
+# directory; a missing set fails cleanly here rather than being auto-downloaded at launch.
 [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest"
 if [[ "$EPHEMERAL" == "true" ]]; then
   VM_IMAGE_DIR="/tmp/chutes-vm-images"
@@ -500,10 +389,10 @@ else
     [[ -z "$MINER_SEED" ]] && echo "  - miner.seed (miner.seed or --miner-seed)"
     echo ""
     echo "Provide via config file or command line, for example:"
-    echo "  $0 --template        # create config.yaml template"
-    echo "  $0 config.yaml       # and edit it"
+    echo "  chutes-cvm init          # create config.yaml template"
+    echo "  chutes-cvm launch config.yaml   # and edit it first"
     echo "or"
-    echo "  $0 --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'"
+    echo "  chutes-cvm launch --hostname miner --miner-ss58 'ss58' --miner-seed 'seed'"
     exit 1
   fi
 fi
@@ -539,7 +428,7 @@ echo ""
 if [[ "$CLI_FORCE" != "true" ]]; then
   if _live_chutes_td_qemu_running; then
     echo "Error: TDX VM (QEMU, $_PROCESS_NAME_CHUTES_TD) is already running."
-    echo "Stop it first: ./quick-launch.sh --clean"
+    echo "Stop it first: chutes-cvm down"
     echo "Or pass --force only if you intend to override this check (not recommended)."
     exit 1
   fi
@@ -609,7 +498,7 @@ echo "✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)"
 echo "✓ Host configuration verified"
 echo ""
 
-# Device binding to vfio-pci is handled inside chutes-cvm launch (chutes_cvm.guest.passthrough)
+# Device binding to vfio-pci is handled inside chutes-cvm launch-vm (chutes_cvm.guest.passthrough)
 echo ""
 
 
@@ -756,7 +645,7 @@ if [[ "$BENCHMARK" == "true" && "$NETWORK_TYPE" == "tap" ]]; then
 
   for src in "$NETLOG_SCRIPT_SRC" "$NETLOG_SERVICE_SRC" "$NETLOG_LOGRORATE_SRC"; do
     if [[ ! -f "$src" ]]; then
-      echo "✗ Error: $src not found. Run from the host-tools/scripts/ directory."
+      echo "✗ Error: $src not found next to quick-launch.sh in the chutes-cvm scripts directory."
       exit 1
     fi
   done
@@ -794,7 +683,7 @@ LAUNCH_ARGS=(
 )
 # GPU passthrough is on by default; --no-gpus omits it (e.g. the measurement capture VM,
 # which must boot without the physical GPUs/NVSwitches — their fabric never trains in a
-# capture VM and stalls the boot before multi-user/sshd). chutes-cvm launch then uses its GPU-less
+# capture VM and stalls the boot before multi-user/sshd). chutes-cvm launch-vm then uses its GPU-less
 # defaults (DEFAULT_MEM, single socket, no vfio devices).
 [[ "$PASS_GPUS" == "true" ]] && LAUNCH_ARGS+=(--pass-gpus)
 
@@ -815,10 +704,10 @@ else
 fi
 [[ "$FOREGROUND" == "true" ]] && LAUNCH_ARGS+=(--foreground)
 
-# Call Python runner
-if ! chutes-cvm launch "${LAUNCH_ARGS[@]}"; then
+# Call the low-level launch primitive (chutes-cvm launch-vm).
+if ! chutes-cvm launch-vm "${LAUNCH_ARGS[@]}"; then
   echo ""
-  echo "Error: VM launch failed (chutes-cvm launch exited non-zero). See output above and /tmp/tdx-guest-td.log if daemonized."
+  echo "Error: VM launch failed (chutes-cvm launch-vm exited non-zero). See output above and /tmp/tdx-guest-td.log if daemonized."
   exit 1
 fi
 

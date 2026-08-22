@@ -22,7 +22,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 
 - Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies) and `chutes-cvm setup-host --topology-matrix`.
 - Intel PCCS access + API key (for PCK cert registration)
-- The VM image downloaded via `./quick-launch.sh --download` (requires `aria2`)
+- The VM image downloaded via `chutes-cvm download` (requires `aria2`)
 - Miner credentials: SS58 address and secret seed without `0x`
 - Control node provisioned with the [chutes-miner](https://github.com/chutesai/chutes-miner) Ansible roles
 - `chutes-miner-cli` installed on that control node to manage miner inventory
@@ -45,9 +45,9 @@ Keep this in mind when planning disaster recovery: you need access to the attest
 ## 🗺️ Workflow Overview
 
 1. **Prepare the host** – enable TDX in firmware + kernel, install PCCS. *(host-tools README)*
-2. **Fetch the guest image** – run `./quick-launch.sh --download` from `host-tools/scripts/`.
+2. **Fetch the guest image** – run `chutes-cvm download` from `host-tools/scripts/`.
 3. **Create configuration** – generate `config.yaml` with credentials, network, and volume settings.
-4. **Launch the VM** – run `./quick-launch.sh config.yaml` to create volumes, verify the base image, configure GPUs, build the network bridge, and start QEMU.
+4. **Launch the VM** – run `chutes-cvm launch config.yaml` to create volumes, verify the base image, configure GPUs, build the network bridge, and start QEMU.
 5. **Tie into the miner control plane** – from your control node, add the new TEE VM to your miner inventory with `chutes-miner-cli`.
 6. **Operate & monitor** – follow the log, upgrade paths, and troubleshooting tips listed below.
 
@@ -75,8 +75,8 @@ From `host-tools/scripts/`, use the built-in download command:
 
 ```bash
 cd host-tools/scripts
-./quick-launch.sh --download          # production image
-./quick-launch.sh --download-debug    # debug image (SSH enabled, no encryption)
+chutes-cvm download          # production image
+chutes-cvm download --debug  # debug image (SSH enabled, no encryption)
 ```
 
 Images are saved to `/var/lib/chutes/base-images/`. To use a custom image, set `vm.base_image` in your `config.yaml` or pass `--base-image /path/to/image.qcow2` at launch.
@@ -89,7 +89,7 @@ Generate a template config and customize it with your network + credentials:
 
 ```bash
 cd host-tools/scripts
-./quick-launch.sh --template
+chutes-cvm init
 nano config.yaml
 ```
 
@@ -121,7 +121,7 @@ volumes:
     size: "500G"
 ```
 
-Behind the scenes `quick-launch.sh` calls `create-config.sh`, which writes hostname, credentials, network config, and optional Docker Hub auth into a qcow2 volume mounted at `/var/config` inside the VM. First-boot scripts pick those up and create the `chutes/miner-credentials` Kubernetes secret automatically.
+Behind the scenes `chutes-cvm launch` calls `create-config.sh`, which writes hostname, credentials, network config, and optional Docker Hub auth into a qcow2 volume mounted at `/var/config` inside the VM. First-boot scripts pick those up and create the `chutes/miner-credentials` Kubernetes secret automatically.
 
 Memory, vCPU count, and PCI sizing are fixed inside `chutes-cvm launch` to preserve RTMR determinism and are not configurable. See [`host-tools/scripts/config/CONFIG-GUIDE.md`](../host-tools/scripts/config/CONFIG-GUIDE.md) for the full schema reference.
 
@@ -132,7 +132,7 @@ Memory, vCPU count, and PCI sizing are fixed inside `chutes-cvm launch` to prese
 From `host-tools/scripts` run:
 
 ```bash
-./quick-launch.sh config.yaml
+chutes-cvm launch config.yaml
 ```
 
 What this does:
@@ -204,10 +204,10 @@ You can still use `kubectl` from your workstation to spot-check pods, but day-to
 
 ## 7. Operate, Monitor, Recycle
 
-- **Lifecycle** – Stop everything with `./quick-launch.sh --clean` (tears down bridge and stops VM). Relaunch with the same config when ready. GPUs are reconfigured and rebound automatically on next launch.
+- **Lifecycle** – Stop everything with `chutes-cvm down` (tears down bridge and stops VM). Relaunch with the same config when ready. GPUs are reconfigured and rebound automatically on next launch.
 - **Logs** – Host-side QEMU output lives in `/tmp/tdx-guest-td.log`; Kubernetes events stay inside the guest (`kubectl get events -n chutes`).
 - **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (auto-installed by `chutes-cvm launch`).
-- **Upgrades** – Download the new image with `./quick-launch.sh --download`, then rerun `./quick-launch.sh config.yaml`. The overlay is recreated when the base image SHA256 changes.
+- **Upgrades** – Download the new image with `chutes-cvm download`, then rerun `chutes-cvm launch config.yaml`. The overlay is recreated when the base image SHA256 changes.
 - **Restart workloads** – The miner kubeconfig has get/list/watch/patch on all deployments and daemonsets in all namespaces (ClusterRole `miner-rollout-restart`). Outside the chutes namespace, the admission controller OPA policy allows only patches to `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]` (rollout restart). Example: `kubectl rollout restart daemonset/attestation-proxy -n attestation-system`.
 - **Security** – Protect the config volume—it holds the plain-text miner seed and Docker Hub token. Rotate credentials by editing `config.yaml` and relaunching (the config volume is refreshed each launch).
 

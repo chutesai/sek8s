@@ -18,7 +18,7 @@ Primary references:
 
 **Packages affected**: No external Ansible collections required; all modules are `ansible.builtin`. Playbooks under **`ansible/host/`** are **not** part of the guest image release line; only **`ansible/guest/*`** (and other VM-domain paths) bump [`ansible/guest/VERSION`](../../ansible/guest/VERSION) per [docs/versioning.md](../versioning.md).
 
-**Key files**: `ansible/host/playbooks/{setup,launch,shutdown,upgrade}.yml`, `ansible/host/inventory/`, `ansible/host/group_vars/`, `ansible/host/roles/` (including **`chutes_vm_config`**, **`chutes_tee_vm`** for live-QEMU pre-check and shared shutdown tasks); [`host-tools/scripts/quick-launch.sh`](../../host-tools/scripts/quick-launch.sh) (includes duplicate-QEMU guard and `--force`); [`host-tools/scripts/devices/reset-gpus.sh`](../../host-tools/scripts/devices/reset-gpus.sh).
+**Key files**: `ansible/host/playbooks/{setup,launch,shutdown,upgrade}.yml`, `ansible/host/inventory/`, `ansible/host/group_vars/`, `ansible/host/roles/` (including **`chutes_vm_config`**, **`chutes_tee_vm`** for live-QEMU pre-check and shared shutdown tasks); [`src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh`](../../src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh) (includes duplicate-QEMU guard and `--force`); [`host-tools/scripts/devices/reset-gpus.sh`](../../host-tools/scripts/devices/reset-gpus.sh).
 
 **Dependencies**
 

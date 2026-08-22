@@ -5,6 +5,10 @@ description = "CLI and toolkit for operating Chutes confidential GPU VMs (host i
 authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"
 packages = [{include = "chutes_cvm"}]
+# Bundled shell entrypoints + config schemas + vfio rules that travel with the package
+# (resolved via chutes_cvm.paths.SCRIPTS_DIR). The editable dev/host install reads them
+# in-place; this makes them ship in the built wheel/sdist for the PyPI install path too.
+include = [{ path = "chutes_cvm/scripts/**/*", format = ["sdist", "wheel"] }]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.15"

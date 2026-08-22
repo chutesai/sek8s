@@ -15,26 +15,14 @@ Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU, or preflight couldn't ru
 import argparse
 import os
 import sys
-from pathlib import Path
 
 from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_supported
-from chutes_cvm.guest.preflight import (
-    DEFAULT_API_BASE,
-    PreflightError,
-    default_config_path,
-    run_preflight,
-)
+from chutes_cvm.guest.preflight import DEFAULT_API_BASE, PreflightError, run_preflight
+from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
 READY = 0
 BLOCKED = 1
 WARNING = 2
-
-
-def _resolve_scripts_dir() -> str:
-    """host-tools/scripts (for discover-profile.sh + config.yaml). Mirrors cli._SCRIPTS_DIR."""
-    return os.environ.get("CHUTES_CVM_SCRIPTS_DIR") or str(
-        Path(__file__).resolve().parents[4] / "host-tools" / "scripts"
-    )
 
 
 def verify_host(
@@ -44,7 +32,7 @@ def verify_host(
     api_base: "str | None" = None,
 ) -> int:
     """Run the launch gates without launching; return one of READY/BLOCKED/WARNING."""
-    scripts_dir = scripts_dir or _resolve_scripts_dir()
+    scripts_dir = scripts_dir or str(SCRIPTS_DIR)
 
     # Gate A: which QEMU's measurement matters?
     if target_os is None:
@@ -74,7 +62,7 @@ def verify_host(
     # Gate B: does the control plane have a published measurement for this host class?
     # A dry-run preflight — capture metadata, sign, ask — without submitting (this is a
     # check, not a request to baseline). The API owns the fingerprint and the verdict.
-    config = config_path or default_config_path(scripts_dir)
+    config = config_path or default_config_path()
     api = api_base or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
         resp = run_preflight(
