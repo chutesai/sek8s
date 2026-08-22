@@ -60,7 +60,12 @@ def _cmd_verify_host(args: argparse.Namespace) -> int:
     from chutes_cvm.guest.verify import verify_host
 
     print(_color("── chutes-cvm: host verification ──", "1;36"))
-    rc = verify_host(target_os=args.target_os)
+    rc = verify_host(
+        target_os=args.target_os,
+        scripts_dir=str(_SCRIPTS_DIR),
+        config_path=args.config,
+        api_base=args.api,
+    )
     label, attrs = _VERIFY_STATUS.get(rc, (f"EXIT {rc}", "1"))
     print(_color(f"\nResult: {label}", attrs))
     return rc
@@ -106,6 +111,37 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     return 0 if pci_operations_wedged() else 1
 
 
+def _cmd_preflight(args: argparse.Namespace) -> int:
+    """Ask the control plane whether this host class can launch (submits it if unknown)."""
+    from chutes_cvm.guest.preflight import (
+        DEFAULT_API_BASE,
+        FAIL_CLOSED,
+        PreflightError,
+        default_config_path,
+        run_preflight,
+        status_exit_code,
+    )
+
+    config = args.config or default_config_path(str(_SCRIPTS_DIR))
+    api = args.api or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
+    try:
+        resp = run_preflight(
+            config_path=config,
+            scripts_dir=str(_SCRIPTS_DIR),
+            api_base=api,
+            dry_run=args.dry_run,
+        )
+    except PreflightError as exc:
+        print(_color(f"PREFLIGHT FAILED (refusing to launch): {exc}", "1;31"))
+        return FAIL_CLOSED
+
+    status = resp.get("status")
+    attrs = {"accepted": "1;32", "pending": "1;33"}.get(status, "1;33")
+    print(_color(f"[{status}] {resp.get('detail', '')}", attrs))
+    print(f"  fingerprint: {resp.get('fingerprint', '?')}")
+    return status_exit_code(status)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chutes-cvm",
@@ -126,6 +162,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--target-os",
         metavar="VERSION",
         help="Verify against a target OS release's QEMU (pre-upgrade check), e.g. 26.04.",
+    )
+    verify.add_argument(
+        "--config",
+        metavar="PATH",
+        help="Launch config.yaml with the miner hotkey (default: host-tools/scripts/config.yaml).",
+    )
+    verify.add_argument(
+        "--api",
+        metavar="URL",
+        help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
     )
     verify.set_defaults(func=_cmd_verify_host)
 
@@ -189,6 +235,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit 0 if host PCI passthrough is wedged and needs a reset before launch, else 1.",
     )
     vfio.set_defaults(func=_cmd_vfio_wedged)
+
+    pre = sub.add_parser(
+        "preflight",
+        help="Ask Chutes whether this host class can launch (submits it if unknown).",
+        description=(
+            "Capture this host's platform metadata, sign it with the miner hotkey, and POST it "
+            "to the control plane, which returns a status: accepted (can launch), pending "
+            "(submitted, awaiting measurements), or unknown (dry-run only). "
+            "Exit 0 accepted / 1 error (fail-closed) / 2 not-yet."
+        ),
+    )
+    pre.add_argument(
+        "--config",
+        metavar="PATH",
+        help="Launch config.yaml with the miner hotkey (default: host-tools/scripts/config.yaml).",
+    )
+    pre.add_argument(
+        "--api",
+        metavar="URL",
+        help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
+    )
+    pre.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report status without submitting the profile when unknown.",
+    )
+    pre.set_defaults(func=_cmd_preflight)
 
     # Pass-through modules with their own argparse (see _PASSTHROUGH / main).
     sub.add_parser(

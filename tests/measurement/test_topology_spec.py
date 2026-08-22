@@ -18,7 +18,10 @@ from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from chutes_cvm.guest.passthrough import _build_pci_topology
 from chutes_cvm.guest.qemu import build_base_cmd, use_numa_topology
-from chutes_cvm.measurement.topology_spec import build_topology_spec, cpu_args_for_qemu_version
+from chutes_cvm.measurement.topology_spec import (
+    build_topology_spec,
+    cpu_args_for_qemu_version,
+)
 
 _FW = "OVMF.inteltdx.fd"
 

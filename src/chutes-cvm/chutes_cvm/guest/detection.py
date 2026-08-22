@@ -518,11 +518,11 @@ def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
     """Probe host hardware and resolve the (profile, live fingerprint) pair.
 
     Resolves the GPU-model profile from the PCI device ID, then builds this host's
-    full RTMR0 fingerprint (device layout + vcpus/sockets/mem + CPU identity). If the
-    profile declares baselined fingerprints, the live one must be exactly among them
-    (a placeholder with cpu_processor_id=None never matches, so a profile pending its
-    capture is refused). Raises ValueError on any mismatch. The returned fingerprint is
-    the source of the launch -smp / -m.
+    full RTMR0 fingerprint (device layout + vcpus/sockets/mem + CPU identity). Raises
+    ValueError only when the hardware can't be resolved (no GPU, required NVSwitches
+    missing). Acceptance — whether this fingerprint has a published measurement — is the
+    control plane's call (chutes-cvm preflight / verify-host), not a local gate. The
+    returned fingerprint drives the launch -smp / -m.
     """
     gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
     if not gpu_bdfs:
@@ -553,18 +553,8 @@ def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
 
     fingerprint = host_topology_fingerprint(profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs)
 
-    # Topology hard-match: the live fingerprint must be one we've baselined for this
-    # profile (it drives the guest ACPI and thus RTMR0). Empty set = not enforced
-    # (uncharacterized profile — launches on the live-detected shape, ungated). A
-    # baselined placeholder (cpu_processor_id=None) can't match a live host, so a
-    # profile pending its capture is refused here until discover-profile.sh fills it in.
-    baselined = profile.baselined_topologies
-    if baselined and fingerprint not in baselined:
-        known = ", ".join(sorted(b.variant_label for b in baselined))
-        raise ValueError(
-            f"Host fingerprint '{fingerprint.variant_label}' is not baselined for profile "
-            f"'{profile.name}'. Known: {known}. This host would attest with an unbaselined "
-            f"RTMR0 and be rejected. Run discover-profile.sh and send the output to baseline it."
-        )
-
+    # No local topology gate: whether this host class can launch is the control plane's
+    # call (``chutes-cvm preflight`` / ``verify-host`` ask the API, which owns the fingerprint
+    # and the published measurements). detect_profile just resolves the GPU-model profile and
+    # the live fingerprint, which still drive the launch ``-smp`` / ``-m``.
     return profile, fingerprint

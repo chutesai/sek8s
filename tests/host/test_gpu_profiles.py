@@ -408,11 +408,16 @@ def test_detect_qemu_version_parses_upstream_version():
 
 
 def test_verify_host_qemu_supported_passes_when_qemu_matches_os():
-    from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_supported
+    from chutes_cvm.guest.detection import (
+        SUPPORTED_QEMU_BY_OS,
+        verify_host_qemu_supported,
+    )
 
     os_ver, qemu_ver = next(iter(SUPPORTED_QEMU_BY_OS.items()))
     with patch("chutes_cvm.guest.detection.detect_os_version", return_value=os_ver):
-        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value=qemu_ver):
+        with patch(
+            "chutes_cvm.guest.detection.detect_qemu_version", return_value=qemu_ver
+        ):
             verify_host_qemu_supported()  # must not raise
 
 
@@ -421,7 +426,9 @@ def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
 
     # 26.04 ships 10.2.1; a host on 26.04 running 10.1.0 must be flagged.
     with patch("chutes_cvm.guest.detection.detect_os_version", return_value="26.04"):
-        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value="10.1.0"):
+        with patch(
+            "chutes_cvm.guest.detection.detect_qemu_version", return_value="10.1.0"
+        ):
             with pytest.raises(
                 ValueError, match=r"ships \(and we baseline\) QEMU 10\.2\.1"
             ):
@@ -432,7 +439,9 @@ def test_verify_host_qemu_supported_raises_on_unsupported_os():
     from chutes_cvm.guest.detection import verify_host_qemu_supported
 
     with patch("chutes_cvm.guest.detection.detect_os_version", return_value="24.04"):
-        with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value="8.2.2"):
+        with patch(
+            "chutes_cvm.guest.detection.detect_qemu_version", return_value="8.2.2"
+        ):
             with pytest.raises(
                 ValueError, match=r"OS release '24.04' is not supported"
             ):
@@ -486,11 +495,14 @@ def _patch_detection(
         patch("chutes_cvm.guest.detection._lspci_lines", return_value=lspci_lines or [])
     )
     stack.enter_context(
-        patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=numa_count)
+        patch(
+            "chutes_cvm.guest.detection.detect_numa_node_count", return_value=numa_count
+        )
     )
     stack.enter_context(
         patch(
-            "chutes_cvm.guest.detection.detect_nvswitches", return_value=nvswitch_bdfs or []
+            "chutes_cvm.guest.detection.detect_nvswitches",
+            return_value=nvswitch_bdfs or [],
         )
     )
     stack.enter_context(
@@ -503,7 +515,9 @@ def _patch_detection(
         patch("chutes_cvm.guest.detection.detect_cx7_bridge_pfs", return_value=[])
     )
     bdfs = gpu_bdfs if gpu_bdfs is not None else ["0000:0d:00.0"]
-    stack.enter_context(patch("chutes_cvm.guest.detection.get_gpu_bdfs", return_value=bdfs))
+    stack.enter_context(
+        patch("chutes_cvm.guest.detection.get_gpu_bdfs", return_value=bdfs)
+    )
     return stack
 
 
@@ -584,7 +598,9 @@ def _patch_host_shape(*, cpus, sockets, mem_gb, vendor, proc_id):
     resulting fingerprint's shape is deterministic."""
     with patch("chutes_cvm.guest.detection.detect_host_cpus", return_value=cpus), patch(
         "chutes_cvm.guest.detection.detect_host_sockets", return_value=sockets
-    ), patch("chutes_cvm.guest.detection.detect_host_mem_gb", return_value=mem_gb), patch(
+    ), patch(
+        "chutes_cvm.guest.detection.detect_host_mem_gb", return_value=mem_gb
+    ), patch(
         "chutes_cvm.guest.detection.detect_host_cpu_identity",
         return_value=(vendor, proc_id),
     ):
@@ -696,20 +712,21 @@ def test_topology_fingerprint_ib_count_on_flat_path():
     )
 
 
-def test_detect_profile_raises_on_unbaselined_topology():
+def test_detect_profile_has_no_local_topology_gate():
+    # Acceptance moved to the control plane (chutes-cvm preflight / verify-host): detect_profile
+    # returns the (profile, fingerprint) even for a topology not in any in-repo set — it never
+    # gates locally now. The fingerprint still drives the launch -smp / -m.
     from chutes_cvm.guest.detection import detect_profile
 
-    with _patch_detection(
-        lspci_lines=_make_lspci_b200(),
-        # not in B200 baseline (GPU->NUMA layout differs from the 4+4 split)
-        fingerprint=TopologyFingerprint(
-            CpuTopology(**_B200_XEON_SHAPE),
-            1944,
-            NumaTopology(gpu_nodes=(0, 1, 0, 1, 0, 1, 0, 1)),
-        ),
-    ):
-        with pytest.raises(ValueError, match="not baselined for profile 'B200'"):
-            detect_profile()
+    fp = TopologyFingerprint(
+        CpuTopology(**_B200_XEON_SHAPE),
+        1944,
+        NumaTopology(gpu_nodes=(0, 1, 0, 1, 0, 1, 0, 1)),
+    )
+    with _patch_detection(lspci_lines=_make_lspci_b200(), fingerprint=fp):
+        profile, fingerprint = detect_profile()
+        assert profile.name == "B200"
+        assert fingerprint == fp
 
 
 def test_detect_profile_skips_topology_check_for_unbaselined_profile():

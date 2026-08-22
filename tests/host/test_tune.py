@@ -124,7 +124,9 @@ def test_apply_second_call_preserves_original_snapshot(tmp_path):
         patch("chutes_cvm.host.tune.RESTORE_SCRIPT", str(restore_path)),
         patch("chutes_cvm.host.tune.glob.glob", side_effect=_glob_side_effect),
         # sysfs now reads "performance" (already tuned)
-        patch("chutes_cvm.host.tune._read", side_effect=_read_side_effect("performance")),
+        patch(
+            "chutes_cvm.host.tune._read", side_effect=_read_side_effect("performance")
+        ),
         patch("chutes_cvm.host.tune._write_root", write_root),
     ):
         tune.apply_tuning()
