@@ -29,6 +29,10 @@ venv:
 list-packages: ##@development Show packages under src/
 	@echo $(PACKAGES)
 
+.PHONY: bundle-gpu-tools
+bundle-gpu-tools: ##@development Rebuild the vendored nvidia-gpu-tools wheel into the chutes-cvm package (maintainer; needs git + network)
+	src/chutes-cvm/tools/gpu-tools/bundle-tools.sh
+
 .PHONY: build
 build: ##@development Build the docker images
 build: args ?= --network=host --build-arg BUILDKIT_INLINE_CACHE=1

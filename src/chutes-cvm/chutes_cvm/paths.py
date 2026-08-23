@@ -1,13 +1,13 @@
-"""Where chutes-cvm finds its bundled scripts and its external runtime data.
+"""Where chutes-cvm finds its bundled data and the one external artifact it needs.
 
-Two kinds of thing:
-
-* **Bundled** (small, ship with the package): the VM-management shell scripts, the
-  config JSON schema, and the vfio udev rules under ``chutes_cvm/scripts/``. Resolved
-  package-relative, so they travel with a ``pip install`` — no checkout needed.
-* **External** (large, not bundled): the guest firmware (OVMF) and the gpu-tools wheel.
-  These live in the checkout; resolved checkout-relative for an editable install, with
-  an env override for a non-editable / PyPI install.
+* **Bundled** (ship with the package under ``chutes_cvm/scripts/``): the VM-management
+  shell scripts, the config JSON schema + template, the vfio udev rules, and the
+  nvidia-gpu-tools wheel. Resolved package-relative, so they travel with a ``pip install``
+  — no checkout needed.
+* **External**: the guest firmware (OVMF). It is a large, MRTD-measured, image-bound
+  artifact, so it is NOT shipped in this (host-side) package. Resolved from an env override,
+  else the checkout copy as a fast-path (see ``firmware_dir``). Nothing in the package
+  imports from the repo, and only ``firmware_dir`` consults the checkout layout at all.
 """
 
 import os
@@ -15,30 +15,31 @@ from pathlib import Path
 
 # chutes_cvm/ — bundled data lives under here.
 PACKAGE_DIR = Path(__file__).resolve().parent
-# VM-management shell scripts + config schema + udev rules, shipped with the package.
+# VM-management shell scripts + config schema/template + udev rules + gpu-tools wheel.
 SCRIPTS_DIR = PACKAGE_DIR / "scripts"
 
-# The checkout root, for editable installs (chutes_cvm -> chutes-cvm -> src -> repo).
+# The checkout root — consulted ONLY by firmware_dir() as a checkout fast-path (the firmware
+# is image-bound and not shipped in this package). Nothing else here uses it.
 _REPO_ROOT = PACKAGE_DIR.parents[2]
 
 
 def firmware_dir() -> Path:
-    """The guest firmware (OVMF) directory. Env override for non-editable installs."""
+    """The guest firmware (OVMF) directory.
+
+    ``CHUTES_CVM_FIRMWARE_DIR`` wins; otherwise the checkout copy (``<repo>/firmware``) as a
+    fast-path for a repo-present (editable) install. The firmware is MRTD-measured and not
+    bundled in this host-side package; a standalone (non-editable) install copies it out of the
+    checkout and sets the env in the shim, so no repo or R2 is needed at runtime."""
     return Path(os.environ.get("CHUTES_CVM_FIRMWARE_DIR") or (_REPO_ROOT / "firmware"))
 
 
 def gpu_tools_dir() -> Path:
-    """The bundled nvidia-gpu-tools wheel directory (stays in host-tools; dev/build owns it)."""
-    return Path(
-        os.environ.get("CHUTES_CVM_GPU_TOOLS_DIR")
-        or (_REPO_ROOT / "host-tools" / "scripts" / "gpu-tools")
-    )
+    """The bundled nvidia-gpu-tools wheel directory (ships with the package)."""
+    return SCRIPTS_DIR / "gpu-tools"
 
 
 def default_config_path() -> str:
-    """The miner's launch config.yaml. Operator data (not bundled): the deployed location
-    under the checkout's host-tools/scripts/, or the CHUTES_CVM_CONFIG override. Callers
-    (ansible, quick-launch) usually pass an explicit path instead."""
-    return os.environ.get("CHUTES_CVM_CONFIG") or str(
-        _REPO_ROOT / "host-tools" / "scripts" / "config.yaml"
-    )
+    """The launch config.yaml when a caller passes none. ``CHUTES_CVM_CONFIG`` override, else
+    ``./config.yaml`` in the current directory — where ``chutes-cvm init`` writes it. Ansible
+    and quick-launch pass an explicit path instead of relying on this."""
+    return os.environ.get("CHUTES_CVM_CONFIG") or "config.yaml"

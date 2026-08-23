@@ -6,4 +6,4 @@
   (plus `discover-profile`). Logic still lives in the `chutes_cvm.guest` / `chutes_cvm.host`
   modules; the CLI is a thin front door. `discover-profile.sh` is deliberately kept as a
   standalone script (bundled with the package). Callers invoke the `chutes-cvm` console script
-  installed by `setup-chutes-cvm.sh`, rather than the removed `host-tools/bin/` symlinks.
+  installed by the package's `install.sh`, rather than the removed `host-tools/bin/` symlinks.

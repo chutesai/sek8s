@@ -1,8 +1,8 @@
 """chutes-cvm — CLI for confidential-VM host operations.
 
-Invoked as ``chutes-cvm <command>`` via the ``chutes-cvm`` console script (installed by
-``host-tools/scripts/provision/setup-chutes-cvm.sh``), or directly as
-``python3 -m chutes_cvm.guest.cli <command>``.
+Invoked as ``chutes-cvm <command>`` via the ``chutes-cvm`` console script (installed by the
+package's ``src/chutes-cvm/install.sh``), or directly as ``python3 -m chutes_cvm.guest.cli
+<command>``.
 
 Stdlib-only dispatcher. Subcommands import their implementation lazily, so a command
 that needs extra dependencies never burdens one that doesn't (``verify-host`` is pure
@@ -200,7 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "--config",
         metavar="PATH",
-        help="Launch config.yaml with the miner hotkey (default: host-tools/scripts/config.yaml).",
+        help="Launch config.yaml with the miner hotkey (default: ./config.yaml; env CHUTES_CVM_CONFIG).",
     )
     verify.add_argument(
         "--api",
@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         metavar="PATH",
         help="config.yaml whose network values drive bridge cleanup "
-        "(default: host-tools/scripts/config.yaml).",
+        "(default: ./config.yaml).",
     )
     down.set_defaults(func=_cmd_down)
 
@@ -332,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument(
         "--config",
         metavar="PATH",
-        help="Launch config.yaml with the miner hotkey (default: host-tools/scripts/config.yaml).",
+        help="Launch config.yaml with the miner hotkey (default: ./config.yaml; env CHUTES_CVM_CONFIG).",
     )
     pre.add_argument(
         "--api",
@@ -357,6 +357,12 @@ def build_parser() -> argparse.ArgumentParser:
         add_help=False,
         help="Render/validate a config.yaml to KEY=value env (args forwarded).",
     )
+    sub.add_parser(
+        "generate-measurements",
+        add_help=False,
+        help="Offline TDX measurement generation — generate / list / selftest "
+        "(build-host tool; args forwarded, `chutes-cvm generate-measurements --help`).",
+    )
 
     return parser
 
@@ -365,7 +371,14 @@ def build_parser() -> argparse.ArgumentParser:
 # before argparse because REMAINDER mishandles leading options (e.g. `launch-vm --image`,
 # `setup-host --help`). Each underlying main owns its own --help. `launch-vm` is the hidden
 # QEMU primitive (no visible subparser); `launch` is the end-to-end orchestrator.
-_PASSTHROUGH = ("launch", "launch-vm", "setup-host", "image-set", "config")
+_PASSTHROUGH = (
+    "launch",
+    "launch-vm",
+    "setup-host",
+    "image-set",
+    "config",
+    "generate-measurements",
+)
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -389,6 +402,12 @@ def main(argv: "list[str] | None" = None) -> int:
             from chutes_cvm.guest.image_set import main as _image_set_main
 
             return _image_set_main(forward)
+        if raw[0] == "generate-measurements":
+            from chutes_cvm.measurement.generate_measurements import (
+                main as _genmeas_main,
+            )
+
+            return _genmeas_main(forward)
         from chutes_cvm.guest.config import main as _config_main
 
         return _config_main(forward)

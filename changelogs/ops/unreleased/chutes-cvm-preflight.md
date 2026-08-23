@@ -21,10 +21,10 @@
 - **VM-management scripts now ship inside the `chutes-cvm` package.** `quick-launch.sh`,
   `prepare-vm-image.sh`, `discover-profile.sh`, and the `volumes/`, `network/`, `devices/`, and
   `config/` (schemas) helpers moved from `host-tools/scripts/` into `chutes_cvm/scripts/`, resolve
-  package-relative, and are bundled in the wheel. `host-tools/scripts/` now holds only provisioning,
-  the GPU-tools wheel, and config examples. Ansible host launch/upgrade and the capture-ccel
-  measurement role invoke `chutes-cvm launch` instead of `./quick-launch.sh`; `setup-chutes-cvm.sh`
-  no longer exports `CHUTES_CVM_SCRIPTS_DIR`.
+  package-relative, and are bundled in the wheel. `host-tools/scripts/` now holds only config
+  examples. Ansible host launch/upgrade and the capture-ccel measurement role invoke
+  `chutes-cvm launch` instead of `./quick-launch.sh`; the install no longer needs a
+  `CHUTES_CVM_SCRIPTS_DIR` env (the scripts are package-relative).
 - **`quick-launch.sh` shrank to pure orchestration.** Its `--download` / `--download-debug` /
   `--template` / `--clean` early-exit modes moved out to the `download` / `init` / `down` commands
   above, and its final step now calls `chutes-cvm launch-vm`. The `config.tmpl.yaml` template moved

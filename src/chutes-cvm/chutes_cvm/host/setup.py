@@ -601,7 +601,6 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     6. Configure QGS for vsock (port 4050)
     7. Configure QCNL to accept local PCCS self-signed cert
     8. Add user to kvm group
-    9. Install dependencies (CLI symlinks + nvidia-gpu-tools)
 
     When noninteractive=True (e.g. called by Ansible via --noninteractive),
     DEBIAN_FRONTEND=noninteractive is set so apt never blocks on prompts.
@@ -701,46 +700,9 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     print("\nStep 8: Configuring kvm group...")
     _add_user_to_kvm()
 
-    # 9. Host dependencies (repo CLIs + nvidia-gpu-tools)
-    print("\nStep 9: Installing dependencies...")
-    install_dependencies()
-
     print(f"\n{'=' * 60}")
     print("  TDX host setup complete. Reboot to load the new kernel.")
     print(f"{'=' * 60}\n")
-
-
-def _install_chutes_cvm() -> None:
-    """Install the chutes-cvm CLI (venv + PATH shim) via the provision script — the
-    single PATH entrypoint for host operations (replaces the old bin/ symlinks)."""
-    scripts_dir = os.path.dirname(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    setup_script = os.path.join(scripts_dir, "provision", "setup-chutes-cvm.sh")
-    if not os.path.isfile(setup_script):
-        print(f"  Warning: {setup_script} not found, skipping chutes-cvm install")
-        return
-    print("  Installing chutes-cvm CLI...")
-    subprocess.run(["bash", setup_script], check=True)
-
-
-def install_dependencies() -> None:
-    """Install the chutes-cvm CLI and ensure nvidia-gpu-tools is available.
-
-    When the GPU CLI is missing, installs from the bundled wheel (venv under gpu-tools/).
-    Must run as root.
-    """
-    if os.geteuid() != 0:
-        print("Error: install_dependencies must run as root (sudo).", file=sys.stderr)
-        sys.exit(1)
-
-    print("\n=== Install dependencies ===\n")
-    _install_chutes_cvm()
-    print("\nEnsuring nvidia-gpu-tools (bundled wheel if missing)...")
-    from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
-
-    ensure_gpu_tools_available()
-    print("\nDone.\n")
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -764,11 +726,6 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Print lab-validated Ubuntu × GPU × count combinations and exit",
     )
     parser.add_argument(
-        "--install-tools-only",
-        action="store_true",
-        help="Install host dependencies (chutes-cvm CLI + nvidia-gpu-tools); then exit",
-    )
-    parser.add_argument(
         "--noninteractive",
         action="store_true",
         help=(
@@ -781,10 +738,6 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if args.topology_matrix:
         print(format_topology_matrix())
-        return 0
-
-    if args.install_tools_only:
-        install_dependencies()
         return 0
 
     try:

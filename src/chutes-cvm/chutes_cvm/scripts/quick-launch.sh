@@ -4,9 +4,9 @@
 
 set -e
 
-# chutes-cvm is installed as a console script by host setup (setup-chutes-cvm.sh:
-# editable venv + /usr/local/bin/chutes-cvm). The image-set / config / launch calls
-# below use it directly, so its deps (pyyaml/jsonschema) are always available.
+# chutes-cvm is installed as a console script by the package's install.sh (venv +
+# /usr/local/bin/chutes-cvm shim). The image-set / config / launch calls below use it
+# directly, so its deps (pyyaml/jsonschema) are always available.
 
 run_create_config() {
   local vol_path="$1"

@@ -61,7 +61,7 @@ Success = TDX VM launches with RTX Pro 6000 GPU(s) passed through in CC mode, wi
 - BAR size (`bar_size_mb`) is **131072 MB (128 GiB)**, validated on Server Edition hardware: `lspci -vvv -d 10de:` reports **Physical Resizable BAR / BAR 2: current size: 128GB** on each GPU. (Optional cross-check: `nvidia-smi -q -d BAR1` in a VM with driver.)
 - Do not modify passthrough orchestration (`passthrough.py`, `detection.py`, `vfio.py`) -- all behavior must be driven by the profile.
 - Single guest image for all GPU topologies -- no topology-specific Ansible changes.
-- `nvidia-gpu-tools` bundled wheel must support Blackwell GB202. If not, re-bundle from latest `gpu-admin-tools` main via `host-tools/scripts/gpu-tools/bundle-tools.sh`.
+- `nvidia-gpu-tools` bundled wheel must support Blackwell GB202. If not, re-bundle from latest `gpu-admin-tools` main via `make bundle-gpu-tools` (`src/chutes-cvm/tools/gpu-tools/bundle-tools.sh`).
 
 ---
 

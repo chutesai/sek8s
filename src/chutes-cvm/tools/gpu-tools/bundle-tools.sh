@@ -1,11 +1,22 @@
 #!/bin/bash
-# Bundle GPU admin tools from NVIDIA gpu-admin-tools repository
-# This script clones the repo, creates a wheel package, and installs it locally
+# Bundle GPU admin tools from NVIDIA gpu-admin-tools repository.
+#
+# Maintainer-only build recipe (run via `make bundle-gpu-tools`). NVIDIA's gpu-admin-tools
+# ships as a loose script repo with NO packaging, so this clones it, injects entry_point.py +
+# pyproject.toml (next to this script) to give it a `nvidia-gpu-tools` console-script, builds a
+# wheel, and drops the wheel into the chutes-cvm package (the only artifact that ships). This
+# recipe lives under src/chutes-cvm/tools/ — in the package project but OUTSIDE the importable
+# chutes_cvm/, so it is never shipped in the wheel.
 
 set -e
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
+# Build INPUTS (entry_point.py, pyproject.toml) live next to this script.
 TARGET_DIR="${SCRIPT_DIR}"
+# Build OUTPUT: the wheel is committed inside the chutes-cvm package (bundled + resolved by
+# chutes_cvm.paths.gpu_tools_dir). chutes_cvm/ is a sibling of tools/ under src/chutes-cvm/.
+# Override WHEEL_OUT_DIR to place it elsewhere.
+WHEEL_OUT_DIR="${WHEEL_OUT_DIR:-${SCRIPT_DIR%/tools/gpu-tools}/chutes_cvm/scripts/gpu-tools}"
 GPU_ADMIN_TOOLS_URL="https://github.com/NVIDIA/gpu-admin-tools.git"
 GPU_ADMIN_TOOLS_TAG="${GPU_ADMIN_TOOLS_TAG:-v2026.06.05}"
 BUILD_DIR="${TARGET_DIR}/.build"
@@ -69,18 +80,19 @@ else
     WHEEL_FILE=$(find dist -name "*.whl" 2>/dev/null | head -1)
 fi
     
-# Find the built wheel and move it to target directory
+# Find the built wheel and move it into the chutes-cvm package (the shipped artifact).
 if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
     WHEEL_NAME=$(basename "${WHEEL_FILE}")
+    mkdir -p "${WHEEL_OUT_DIR}"
     # Remove any existing wheel files
-    rm -f "${TARGET_DIR}"/*.whl
-    mv "${WHEEL_FILE}" "${TARGET_DIR}/${WHEEL_NAME}"
+    rm -f "${WHEEL_OUT_DIR}"/*.whl
+    mv "${WHEEL_FILE}" "${WHEEL_OUT_DIR}/${WHEEL_NAME}"
     echo ""
     echo "✓ Successfully built wheel package"
-    echo "  Location: ${TARGET_DIR}/${WHEEL_NAME}"
+    echo "  Location: ${WHEEL_OUT_DIR}/${WHEEL_NAME}"
     echo ""
     echo "The wheel file is ready to be committed to the repository."
-    echo "The chutes-cvm launch command will automatically install it if nvidia-gpu-tools is not in PATH."
+    echo "chutes-cvm installs it (into a venv on PATH) when nvidia-gpu-tools is not present."
 else
     echo "Error: Could not find built wheel file"
     exit 1
@@ -95,6 +107,6 @@ rm -rf "${TARGET_DIR}"/build "${TARGET_DIR}"/dist "${TARGET_DIR}"/*.egg-info
 
 echo ""
 echo "✓ GPU admin tools bundled successfully"
-echo "  Wheel file: ${TARGET_DIR}/${WHEEL_NAME}"
+echo "  Wheel file: ${WHEEL_OUT_DIR}/${WHEEL_NAME}"
 echo ""
 echo "Only the wheel file should be committed to the repository."

@@ -1,10 +1,14 @@
-"""Tests for the self-healing helpers in the GPU admin tools installer."""
+"""Tests for the nvidia-gpu-tools availability check.
+
+nvidia-gpu-tools is installed at CLI-setup time (install.sh installs the bundled wheel into the
+chutes-cvm venv and symlinks it). This module only verifies it is present and runs.
+"""
 
 import subprocess
-import sys
 from unittest.mock import MagicMock, patch
 
-from chutes_cvm.guest.gpu.tools import _cli_healthy, _venv_matches_system_python
+import pytest
+from chutes_cvm.guest.gpu.tools import _cli_healthy, ensure_gpu_tools_available
 
 
 def _completed(returncode):
@@ -49,30 +53,17 @@ def test_cli_healthy_false_on_probe_timeout(mock_run):
 
 
 # ---------------------------------------------------------------------------
-# _venv_matches_system_python
+# ensure_gpu_tools_available — health check only (no lazy install)
 # ---------------------------------------------------------------------------
 
 
-def test_venv_matches_false_when_cfg_missing(tmp_path):
-    assert _venv_matches_system_python(str(tmp_path)) is False
+@patch("chutes_cvm.guest.gpu.tools._cli_healthy", return_value=True)
+def test_ensure_returns_command_when_healthy(_healthy):
+    assert ensure_gpu_tools_available() == "nvidia-gpu-tools"
 
 
-def test_venv_matches_true_for_current_python(tmp_path):
-    ver = f"{sys.version_info.major}.{sys.version_info.minor}.0"
-    (tmp_path / "pyvenv.cfg").write_text(
-        f"home = /usr/bin\ninclude-system-site-packages = false\nversion = {ver}\n"
-    )
-    assert _venv_matches_system_python(str(tmp_path)) is True
-
-
-def test_venv_matches_false_for_different_python(tmp_path):
-    # A version that cannot equal the running interpreter's X.Y (project is 3.12+).
-    (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\nversion = 2.7.18\n")
-    assert _venv_matches_system_python(str(tmp_path)) is False
-
-
-def test_venv_matches_ignores_version_prefix_collision(tmp_path):
-    # "3.1" must not match a "3.1x" interpreter via a bare startswith.
-    major, minor = sys.version_info.major, sys.version_info.minor
-    (tmp_path / "pyvenv.cfg").write_text(f"version = {major}.{minor}9.0\n")
-    assert _venv_matches_system_python(str(tmp_path)) is False
+@patch("chutes_cvm.guest.gpu.tools._cli_healthy", return_value=False)
+def test_ensure_raises_when_missing(_healthy):
+    # Missing = the CLI setup did not install it; it must not try to install on the fly.
+    with pytest.raises(RuntimeError, match="not available on PATH"):
+        ensure_gpu_tools_available()

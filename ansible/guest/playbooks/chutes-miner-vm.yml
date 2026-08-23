@@ -35,7 +35,7 @@
     # is then on PATH for every later play.
     - name: Install the chutes-cvm CLI from this checkout
       ansible.builtin.command:
-        cmd: "{{ repo_root }}/host-tools/scripts/provision/setup-chutes-cvm.sh"
+        cmd: "{{ repo_root }}/src/chutes-cvm/install.sh"
       register: _cvm_install
       changed_when: "'Installed chutes-cvm' in _cvm_install.stdout"
 

@@ -41,9 +41,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-_HERE = Path(__file__).resolve().parent
-
-from chutes_cvm.measurement import ccel_replay as cc  # noqa: E402
+from chutes_cvm.measurement import ccel_replay as cc
+from chutes_cvm.paths import firmware_dir
 
 # The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
 # not by fixed position: the boot method sets how many CONSTANT events surround them
@@ -423,14 +422,18 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        prog="chutes-cvm generate-measurements",
+        description=__doc__.splitlines()[0],
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     st = sub.add_parser("selftest", help="validate splice/replay against a fixture")
     st.add_argument(
         "--fixture",
-        default=str(_HERE.parent.parent / "local" / "acpi_real"),
-        help="capture dir with data/CCEL + fw_cfg ACPI blobs",
+        required=True,
+        help="dev cross-check fixture: a capture dir with data/CCEL + the fw_cfg ACPI blobs "
+        "(table_loader.bin / rsdp.bin / acpi_tables.bin)",
     )
     st.add_argument("--expect", default="5FC09D10", help="expected RTMR0 hex prefix")
     st.set_defaults(func=_cmd_selftest)
@@ -477,9 +480,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     gen.add_argument(
         "--bios-dir",
-        default=str(_HERE.parent.parent / "firmware"),
+        default=str(firmware_dir()),
         help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
-        "opens the metadata's 'bios' path, so it must resolve absolutely",
+        "opens the metadata's 'bios' path, so it must resolve absolutely "
+        "(default: chutes-cvm firmware dir; env CHUTES_CVM_FIRMWARE_DIR)",
     )
     gen.set_defaults(func=_cmd_generate)
 

@@ -4,7 +4,8 @@
 # Peer of compute-rtmr1-2 (RTMR1/2) and compute-rtmr3 (RTMR3). For every supported
 # topology of every profile it runs the tdx-measure fork, which self-generates the
 # COMPLETE 15-event RTMR0 (firmware + QEMU-generated ACPI + fw_cfg + SMBIOS) — no captured
-# baseline CCEL, no splice. See guest-tools/measurement/generate_measurements.py.
+# baseline CCEL, no splice. Invoked via `chutes-cvm generate-measurements generate`
+# (chutes_cvm.measurement.generate_measurements).
 #
 # Fully OFFLINE — the fork + Docker (with buildx; it uses `docker build --progress
 # plain`) on ANY x86-64 Linux (no TDX, no GPUs). Determinism across generating hosts
@@ -16,8 +17,8 @@
 - name: Generate per-topology RTMR0 (self-contained — no baseline CCEL)
   ansible.builtin.command:
     argv:
-      - python3
-      - "{{ repo_root }}/guest-tools/measurement/generate_measurements.py"
+      - chutes-cvm
+      - generate-measurements
       - generate
       - --version
       - "{{ vm_version }}"

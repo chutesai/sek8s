@@ -32,6 +32,7 @@ def test_visible_command_surface():
         "down",
         "preflight",
         "verify-host",
+        "generate-measurements",
     ):
         assert expected in cmds
     # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
@@ -53,6 +54,14 @@ def test_launch_vm_dispatches_to_primitive():
     with patch("chutes_cvm.guest.__main__.main", return_value=7) as prim:
         assert cli.main(["launch-vm", "--image", "x.qcow2"]) == 7
     assert prim.call_args.args[0] == ["--image", "x.qcow2"]
+
+
+def test_generate_measurements_dispatches_to_engine():
+    with patch(
+        "chutes_cvm.measurement.generate_measurements.main", return_value=0
+    ) as gen:
+        assert cli.main(["generate-measurements", "list", "--qemu", "10.2.1"]) == 0
+    assert gen.call_args.args[0] == ["list", "--qemu", "10.2.1"]
 
 
 def test_stop_calls_stop_existing_vm():

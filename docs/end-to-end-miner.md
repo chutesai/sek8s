@@ -206,7 +206,7 @@ You can still use `kubectl` from your workstation to spot-check pods, but day-to
 
 - **Lifecycle** – Stop everything with `chutes-cvm down` (tears down bridge and stops VM). Relaunch with the same config when ready. GPUs are reconfigured and rebound automatically on next launch.
 - **Logs** – Host-side QEMU output lives in `/tmp/tdx-guest-td.log`; Kubernetes events stay inside the guest (`kubectl get events -n chutes`).
-- **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (auto-installed by `chutes-cvm launch`).
+- **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (installed with the chutes-cvm CLI by `install.sh`).
 - **Upgrades** – Download the new image with `chutes-cvm download`, then rerun `chutes-cvm launch config.yaml`. The overlay is recreated when the base image SHA256 changes.
 - **Restart workloads** – The miner kubeconfig has get/list/watch/patch on all deployments and daemonsets in all namespaces (ClusterRole `miner-rollout-restart`). Outside the chutes namespace, the admission controller OPA policy allows only patches to `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]` (rollout restart). Example: `kubectl rollout restart daemonset/attestation-proxy -n attestation-system`.
 - **Security** – Protect the config volume—it holds the plain-text miner seed and Docker Hub token. Rotate credentials by editing `config.yaml` and relaunching (the config volume is refreshed each launch).
