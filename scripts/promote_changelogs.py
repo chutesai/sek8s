@@ -32,6 +32,7 @@ VERSION_CHANGELOG_MAP: dict[str, str] = {
     "ansible/guest/VERSION": "changelogs/vm",
     "src/sek8s/VERSION": "changelogs/sek8s",
     "src/attestation-proxy/VERSION": "changelogs/attestation-proxy",
+    "src/chutes-cvm/VERSION": "changelogs/chutes-cvm",
     "changelogs/ops/VERSION": "changelogs/ops",
 }
 
@@ -43,6 +44,7 @@ PATH_CHANGELOG_MAP: list[tuple[str, str]] = [
     ("src/sek8s/", "changelogs/sek8s"),
     ("src/sek8s-common/", "changelogs/sek8s"),
     ("src/attestation-proxy/", "changelogs/attestation-proxy"),
+    ("src/chutes-cvm/", "changelogs/chutes-cvm"),
     ("ansible/guest/", "changelogs/vm"),
     ("nvevidence/", "changelogs/vm"),
     # Ops changelog — versioned via changelogs/ops/VERSION (CalVer YYYY.MM.PATCH).
