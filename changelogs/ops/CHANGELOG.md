@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.4] - 2026-08-20
+## [2026.07.4] - 2026-08-22
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -48,6 +48,13 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   pointing at this checkout. A miner can run it directly (no Ansible required), and Ansible
   host-setup can invoke the same script — one source of truth for CLI setup. Paths are
   overridable via `CHUTES_CVM_VENV` / `CHUTES_CVM_BIN`.
+- **`chutes-cvm discover-profile`.** New CLI command that captures this host's GPU/CPU/NUMA
+  profile (delegating to `discover-profile.sh` for now), so `chutes-cvm` is the front door
+  for both host inspection commands (`verify-host`, `discover-profile`). `--json-only` /
+  `--no-json` forward to the underlying script.
+- **`chutes-cvm image-set` / `chutes-cvm config` / `chutes-cvm vfio-wedged`** — the
+  image-set manifest tool, the config renderer, and the PCI-passthrough-wedged check are
+  now first-class subcommands, so every caller routes through the one console script.
 
 ### Changed
 - Pin host kernel to `linux-image-6.17.0-35-generic` in both Ubuntu 25.10 and
@@ -99,6 +106,28 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   existing hosts can advance. 25.10 is now an upgrade waypoint only — from 25.04
   always run with `-e target_version=26.04`, since a run whose final hop is 25.10 is
   refused by the `verify-host` pre-flight (no baselined QEMU for that release).
+- **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
+  scripts `run-td`, `verify-host`, `setup-tdx-host`, `tune-host.sh`, `restore-host.sh` and the
+  `host-tools/bin/chutes-*` PATH delegators are removed; their operations are now `chutes-cvm`
+  subcommands: `launch`, `verify-host`, `setup-host`, `tune-host`, `restore-host`, `reset-gpus`
+  (plus `discover-profile`). Logic still lives in the `chutes.guest` / `chutes.host` modules;
+  the CLI is a thin front door. `discover-profile.sh` is deliberately kept as a standalone
+  script. Ansible invokes the bootstrap-free `python3 -m chutes.guest.cli <cmd>` form (no venv
+  needed); host setup installs the `chutes-cvm` shim via `setup-chutes-cvm.sh` instead of
+  symlinking `bin/`.
+- **`chutes-cvm` is now a real Python package under `src/chutes-cvm/`** (import
+  `chutes_cvm`, published to PyPI), instead of a loose module tree on `PYTHONPATH` at
+  `host-tools/scripts/chutes/`. The rename from `chutes` to `chutes_cvm` avoids colliding
+  with the Chutes platform SDK once installed. The offline measurement engine
+  (`guest-tools/measurement/*.py`) moved into `chutes_cvm.measurement`, dropping its
+  `sys.path` shims.
+- **Host provisioning installs the package** — `host_tools` now runs `setup-chutes-cvm.sh`,
+  which `pip install -e`'s the package into a venv and puts the `chutes-cvm` console script on
+  PATH (with its deps: pyyaml/jsonschema/substrate-interface). Host ansible + `quick-launch.sh`
+  call `chutes-cvm <command>` instead of `python3 -m chutes.guest.*`, so dependency-bearing
+  commands (`config`, and the upcoming `preflight`) run with their deps available. The sparse
+  checkout now includes `src/chutes-cvm/`. Guest image build keeps `PYTHONPATH` (stdlib commands
+  only). Set `CHUTES_CVM_PYPI=1` to install from PyPI instead of the checkout.
 
 ### Fixed
 - 25.10 → 26.04 host upgrade no longer stalls on `sgx-dcap-pccs`. Intel's
