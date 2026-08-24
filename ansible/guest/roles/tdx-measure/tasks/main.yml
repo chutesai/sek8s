@@ -1,7 +1,7 @@
 ---
 # tdx-measure — Provision the virtee/tdx-measure fork binary on the build host.
 #
-# compute-rtmr0/rtmr1-2 need the fork's CLI. This role clones the fork and always
+# `chutes-cvm measurements generate` (RTMR0/1/2) needs the fork's CLI. This role clones it and always
 # fast-forwards it to `tdx_measure_ref` from origin — so a build host never silently
 # rebuilds a stale binary when the pinned branch moves — then builds it with cargo and
 # sets the `tdx_measure_bin` fact. Runs in user space (invoke with become: false): rust

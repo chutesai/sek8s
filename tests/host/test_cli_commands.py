@@ -1,4 +1,4 @@
-"""Tests for the chutes-cvm CLI dispatcher (chutes_cvm.guest.cli).
+"""Tests for the chutes-cvm CLI dispatcher (chutes_cvm.cli).
 
 Covers the command surface after the up->launch rename and the decomposition of
 quick-launch's early-exit modes into first-class commands (download / init / stop / down).
@@ -8,7 +8,7 @@ The low-level QEMU primitive is the hidden `launch-vm`; the orchestrator is `lau
 import os
 from unittest.mock import patch
 
-from chutes_cvm.guest import cli
+from chutes_cvm import cli
 
 
 def _visible_commands():
@@ -32,7 +32,7 @@ def test_visible_command_surface():
         "down",
         "preflight",
         "verify-host",
-        "generate-measurements",
+        "measurements",
     ):
         assert expected in cmds
     # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
@@ -41,7 +41,7 @@ def test_visible_command_surface():
 
 
 def test_launch_dispatches_to_orchestrator_script():
-    with patch("chutes_cvm.guest.cli._run_script", return_value=0) as run:
+    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
         assert cli.main(["launch", "config.yaml", "--foreground"]) == 0
     name, argv = run.call_args.args[0], run.call_args.args[1]
     assert name == "quick-launch.sh"
@@ -56,11 +56,11 @@ def test_launch_vm_dispatches_to_primitive():
     assert prim.call_args.args[0] == ["--image", "x.qcow2"]
 
 
-def test_generate_measurements_dispatches_to_engine():
+def test_measurements_dispatches_to_engine():
     with patch(
         "chutes_cvm.measurement.generate_measurements.main", return_value=0
     ) as gen:
-        assert cli.main(["generate-measurements", "list", "--qemu", "10.2.1"]) == 0
+        assert cli.main(["measurements", "list", "--qemu", "10.2.1"]) == 0
     assert gen.call_args.args[0] == ["list", "--qemu", "10.2.1"]
 
 
@@ -71,7 +71,7 @@ def test_stop_calls_stop_existing_vm():
 
 
 def test_down_dispatches_to_teardown_script():
-    with patch("chutes_cvm.guest.cli._run_script", return_value=0) as run:
+    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
         assert cli.main(["down", "--config", "/nope/config.yaml"]) == 0
     # Non-existent config is not forwarded (teardown falls back to defaults).
     assert run.call_args.args[0] == "teardown.sh"
@@ -80,13 +80,13 @@ def test_down_dispatches_to_teardown_script():
 
 
 def test_download_selects_production_by_default():
-    with patch("chutes_cvm.guest.cli._run_script", return_value=0) as run:
+    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
         assert cli.main(["download"]) == 0
     assert run.call_args.args == ("download-image-set.sh", ["tdx-guest"])
 
 
 def test_download_debug_flag_selects_debug_set():
-    with patch("chutes_cvm.guest.cli._run_script", return_value=0) as run:
+    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
         assert cli.main(["download", "--debug"]) == 0
     assert run.call_args.args == ("download-image-set.sh", ["tdx-guest-debug"])
 

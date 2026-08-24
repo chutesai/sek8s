@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -282,19 +283,18 @@ def _cmd_selftest(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _cmd_generate(args: argparse.Namespace) -> int:
-    """Generate per-topology RTMR0. --profile <name> does one profile; empty --profile
-    does ALL. For each baselined topology, run tdx-measure to get its #0/#11-13
-    (rtmr0_log), splice into the baseline CCEL (keeping its #14/#2-4/constants) and
-    replay → RTMR0.
+def _rtmr0_block(args: argparse.Namespace) -> dict:
+    """Generate the version-level RTMR0 block: {version, mrtd, hardware[], pending_profiles?}.
 
-    The fork recomputes the per-topology events (#0 TD-HOB, #11-13 ACPI); the baseline
-    supplies the constants and #14 (SMBIOS). #14's only host-varying input (the type-1/2/3
-    identity) is pinned this release, so ONE CCEL — captured on any host, TDX or not —
-    generates every profile offline; there is no per-class baseline requirement. The
-    generated rtmr0 is validated against a live quote. Writes the profiles to --output.
+    --profile <name> does one profile; empty does ALL. For each baselined topology, the fork
+    self-generates the COMPLETE RTMR0 (all 15 events, no CCEL) — the measurement -cpu
+    reconstructs the profile's production CPU vendor + SMBIOS Type-4 Processor ID, so any host
+    reproduces the production RTMR0. A profile that can't be generated offline yet (e.g. no
+    passthrough["gpu"] modeled) is listed PENDING, not fatal.
 
-    Needs the fork + Docker (offline, any x86-64 Linux — no TDX/GPU)."""
+    Raises ValueError on a hard error (unknown profile, duplicate hardware names, or MRTD
+    divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
+    """
     from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
     from chutes_cvm.measurement.platform_tables import MeasurementMetadata
     from chutes_cvm.measurement.topology_spec import (
@@ -303,10 +303,6 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     )
 
     def fork_rtmr0(profile, fp):
-        """Run the fork to self-generate this topology's COMPLETE RTMR0 — all 15
-        events, no CCEL, no splice. The measurement -cpu reconstructs the profile's
-        production CPU vendor and the SMBIOS Type-4 Processor ID is patched in, so any
-        host reproduces the production RTMR0. Returns (rtmr0, mrtd)."""
         spec = build_topology_spec(
             profile,
             fp,
@@ -332,13 +328,10 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     for name in names:
         profile = GPU_PROFILES.get(name)
         if profile is None:
-            print(f"unknown profile: {name}", file=sys.stderr)
-            return 1
+            raise ValueError(f"unknown profile: {name}")
         fps = sorted(profile.baselined_measurements.get(args.qemu, set()), key=str)
         if not fps:
             continue  # nothing baselined for this QEMU version
-        # A profile that can't be generated offline yet (e.g. no passthrough["gpu"]
-        # modeled) must not take down the whole publish — mark it PENDING and continue.
         try:
             for fp in fps:
                 rtmr0, mrtd = fork_rtmr0(profile, fp)
@@ -359,10 +352,7 @@ def _cmd_generate(args: argparse.Namespace) -> int:
                         "gpu_count": gpu_count,
                     }
                 )
-                print(
-                    f"    {hw_name}  rtmr0={rtmr0[:16]}…",
-                    file=sys.stderr,
-                )
+                print(f"    {hw_name}  rtmr0={rtmr0[:16]}…", file=sys.stderr)
         except Exception as exc:
             pending.append(name)
             print(
@@ -378,17 +368,11 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         counts[e["name"]] = counts.get(e["name"], 0) + 1
     dupes = sorted(n for n, c in counts.items() if c > 1)
     if dupes:
-        print(f"ERROR: duplicate hardware names: {dupes}", file=sys.stderr)
-        return 1
+        raise ValueError(f"duplicate hardware names: {dupes}")
     # MRTD is version-level (same OVMF/TDVF across every topology of a build).
     if len(mrtds) > 1:
-        print(
-            f"ERROR: MRTD differs across topologies: {sorted(mrtds)}", file=sys.stderr
-        )
-        return 1
+        raise ValueError(f"MRTD differs across topologies: {sorted(mrtds)}")
 
-    # Aggregate-ready block: version-level mrtd + a flat hardware list. rtmr1/rtmr2/
-    # runtime_rtmr3 are pinned by the sibling roles and joined by aggregate-measurements.
     block: dict = {
         "version": args.version,
         "mrtd": next(iter(mrtds), ""),
@@ -396,22 +380,162 @@ def _cmd_generate(args: argparse.Namespace) -> int:
     }
     if pending:
         block["pending_profiles"] = sorted(set(pending))
+    return block
 
-    payload = json.dumps(block, indent=2) + "\n"
-    if args.output == "-":
+
+def _write_output(payload: str, output: str) -> None:
+    """Write ``payload`` to ``output`` — ``-`` = stdout; otherwise mkdir -p the parent, write
+    the file, and note it on stderr. Shared by the register-generating subcommands."""
+    if output == "-":
         sys.stdout.write(payload)
-    else:
-        out = Path(args.output)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(payload)
-        print(f"wrote {out}", file=sys.stderr)
+        return
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(payload)
+    print(f"wrote {out}", file=sys.stderr)
+
+
+def _generate_rtmr0(args: argparse.Namespace) -> int:
+    """`generate --register rtmr0`: compute just the RTMR0 block (version-level mrtd + per-topology
+    hardware list) and write it as JSON to --output. A standalone/debug partial — a full `generate`
+    computes RTMR0 inline (via _compute_measurements), so this is no longer an input to it.
+    """
+    try:
+        block = _rtmr0_block(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    _write_output(json.dumps(block, indent=2) + "\n", args.output)
+    pending = block.get("pending_profiles")
+    n = len(block["hardware"])
     print(
-        f"{len(hardware)} hardware entr{'y' if len(hardware) == 1 else 'ies'} generated"
-        f"{f', pending: {block['pending_profiles']}' if pending else ''}",
+        f"{n} hardware entr{'y' if n == 1 else 'ies'} generated"
+        f"{f', pending: {pending}' if pending else ''}",
         file=sys.stderr,
     )
     # Fail only when a specific profile was requested but couldn't be generated.
-    return 2 if (args.profile and not hardware) else 0
+    return 2 if (args.profile and not block["hardware"]) else 0
+
+
+def _compute_measurements(args: argparse.Namespace) -> dict:
+    """Compute EVERY register for a version and return the assembled teeMeasurements entry.
+
+    POST-LUKS, from the finalized image: version-level mrtd + per-topology rtmr0 (the fork),
+    rtmr1/rtmr2 (the image's staged direct-boot artifacts), and rtmr3 (mounting the root —
+    unlocking it with the LUKS_PASSPHRASE env var when the image is already encrypted). Pure
+    data assembly — no file output; raises ValueError (topology/aggregation) or MeasurementError
+    (rtmr1/2/3) on failure. Replaces the old compute-rtmr0/1-2/rtmr3 + aggregate roles.
+    """
+    from chutes_cvm.measurement.runtime_rtmr import compute_rtmr1_2, compute_rtmr3
+
+    block = _rtmr0_block(args)
+    rtmr1, rtmr2 = compute_rtmr1_2(args.image, tdx_measure_bin=args.tdx_measure_bin)
+    rtmr3, _ = compute_rtmr3(
+        args.image, luks_passphrase=os.environ.get("LUKS_PASSPHRASE")
+    )
+    print(
+        f"    RTMR1={rtmr1[:16]}…  RTMR2={rtmr2[:16]}…  RTMR3={rtmr3[:16]}…",
+        file=sys.stderr,
+    )
+    pending = block.get("pending_profiles")
+    if pending:
+        print(f"    pending profiles: {pending}", file=sys.stderr)
+
+    # Insertion order (version → mrtd → rtmr1/2 → runtime_rtmr3 → hardware) matches the
+    # chutes-ops values.yaml teeMeasurements layout this merges into; sort_keys=False keeps it.
+    return {
+        "version": args.version,
+        "mrtd": block["mrtd"],
+        "rtmr1": rtmr1,
+        "rtmr2": rtmr2,
+        "runtime_rtmr3": rtmr3,
+        "hardware": block["hardware"],
+    }
+
+
+def _generate_full(args: argparse.Namespace) -> int:
+    """A full `generate` (no --register): compute every register (via _compute_measurements) and
+    write the version's single measurements.yaml to --output. compute → serialize → write.
+    """
+    import yaml
+    from chutes_cvm.measurement.runtime_rtmr import MeasurementError
+
+    try:
+        entry = _compute_measurements(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except MeasurementError as exc:
+        print(f"ERROR (rtmr1/2/3): {exc}", file=sys.stderr)
+        return 1
+
+    payload = yaml.safe_dump(
+        {"measurements": [entry]}, sort_keys=False, indent=2, default_flow_style=False
+    )
+    _write_output(payload, args.output)
+    n = len(entry["hardware"])
+    print(
+        f"measurements.yaml: {n} hardware entr{'y' if n == 1 else 'ies'}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _generate_rtmr3(args: argparse.Namespace) -> int:
+    """`generate --register rtmr3`: compute the version-level RTMR3 fresh from the image. Prints
+    the bare hex to stdout (per-file hashes to stderr) for a caller to capture as a fact.
+
+    Mounts the root read-only. If it is already LUKS-encrypted, set the LUKS_PASSPHRASE env var
+    (the passphrase the image was encrypted with) to unlock it and recompute — always a fresh
+    value, never a cached one.
+    """
+    from chutes_cvm.measurement.runtime_rtmr import MeasurementError, compute_rtmr3
+
+    try:
+        rtmr3, per_file = compute_rtmr3(
+            args.image,
+            root_part=args.root_part,
+            luks_passphrase=os.environ.get("LUKS_PASSPHRASE"),
+        )
+    except MeasurementError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"  Measuring {len(per_file)} files:", file=sys.stderr)
+    for file_hash, rel in per_file:
+        print(f"  {file_hash}  {rel}", file=sys.stderr)
+    print(f"RTMR3: {rtmr3}", file=sys.stderr)
+    print(rtmr3)  # bare hex to stdout
+    return 0
+
+
+def _usage_error(msg: str) -> int:
+    """Print an argparse-style usage error to stderr and return exit code 2."""
+    print(f"chutes-cvm measurements generate: {msg}", file=sys.stderr)
+    return 2
+
+
+def _cmd_generate(args: argparse.Namespace) -> int:
+    """Route `measurements generate` by --register: none = the full measurements.yaml (every
+    register); rtmr0 = just the RTMR0 JSON block; rtmr3 = just the bare RTMR3 hex. Each mode
+    needs different inputs, validated here (argparse can't require them conditionally).
+    """
+    if args.register == "rtmr0":
+        if not args.version:
+            return _usage_error("--register rtmr0 requires --version")
+        return _generate_rtmr0(args)
+    if args.register == "rtmr3":
+        if not args.image:
+            return _usage_error("--register rtmr3 requires --image")
+        return _generate_rtmr3(args)
+    missing = [
+        flag
+        for flag, val in (("--version", args.version), ("--image", args.image))
+        if not val
+    ]
+    if missing:
+        return _usage_error(f"a full generate requires {' and '.join(missing)}")
+    return _generate_full(args)
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -423,7 +547,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="chutes-cvm generate-measurements",
+        prog="chutes-cvm measurements",
         description=__doc__.splitlines()[0],
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -442,48 +566,81 @@ def main(argv: list[str] | None = None) -> int:
     ls.add_argument("--qemu", default="10.2.1", help="QEMU version filter")
     ls.set_defaults(func=_cmd_list)
 
+    def _add_fork_args(p: argparse.ArgumentParser) -> None:
+        """Shared RTMR0-generation options (the tdx-measure fork inputs)."""
+        p.add_argument(
+            "--profile",
+            default="",
+            help="GPU profile (e.g. RTX_PRO_6000) — empty = ALL profiles (each generated "
+            "only if its class matches a baseline)",
+        )
+        p.add_argument(
+            "--qemu",
+            default="10.2.1",
+            help="QEMU version key in baselined_measurements",
+        )
+        p.add_argument(
+            "--tdx-measure-bin",
+            default="tdx-measure",
+            help="path to the tdx-measure fork binary",
+        )
+        p.add_argument(
+            "--dist", default="ubuntu:26.04", help="ACPI-dump container base image"
+        )
+        p.add_argument(
+            "--bios-dir",
+            default=str(firmware_dir()),
+            help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
+            "opens the metadata's 'bios' path, so it must resolve absolutely "
+            "(default: chutes-cvm firmware dir; env CHUTES_CVM_FIRMWARE_DIR)",
+        )
+
     gen = sub.add_parser(
         "generate",
-        help="generate per-topology RTMR0 for a profile (build host: needs the tdx-measure fork + Docker/KVM)",
+        help="generate the version's measurements — by default EVERY register into "
+        "measurements.yaml; --register narrows it to one (build host: fork + Docker/KVM; "
+        "LUKS_PASSPHRASE unlocks an encrypted root for RTMR3)",
+        description="Generate TDX measurements for an image version. With no --register this "
+        "computes the complete set — mrtd + rtmr0 (all topologies) + rtmr1/rtmr2 + rtmr3 — from "
+        "the finalized (post-LUKS) image and writes measurements.yaml. --register restricts it to "
+        "a single register (a standalone partial): rtmr0 emits the mrtd+rtmr0 JSON block; rtmr3 "
+        "emits the bare RTMR3 hex to stdout.",
+    )
+    _add_fork_args(gen)
+    gen.add_argument(
+        "--register",
+        choices=("rtmr0", "rtmr3"),
+        default=None,
+        help="generate only this register instead of the full set (rtmr0 = mrtd+rtmr0 JSON; "
+        "rtmr3 = bare hex). Omit for the complete measurements.yaml.",
     )
     gen.add_argument(
-        "--profile",
-        default="",
-        help="GPU profile (e.g. RTX_PRO_6000) — must match the baseline's class; "
-        "empty = ALL profiles (each generated only if its class matches a baseline)",
+        "--version",
+        default=None,
+        help="image version (required for the full set and --register rtmr0)",
+    )
+    gen.add_argument(
+        "--image",
+        default=None,
+        help="finalized (post-luks) qcow2 (required for the full set and --register rtmr3): its "
+        "staged .vmlinuz/.initrd/.cmdline pin RTMR1/RTMR2; its root (unlocked via LUKS_PASSPHRASE "
+        "if encrypted) yields RTMR3",
+    )
+    gen.add_argument(
+        "--output",
+        default="-",
+        help="output path (measurements.yaml for the full set, JSON for --register rtmr0); "
+        "'-' = stdout (default). --register rtmr3 always prints its hex to stdout.",
+    )
+    gen.add_argument(
+        "--root-part",
+        default=None,
+        help="ext4 root partition device for --register rtmr3 (default: auto-detect via guestfish)",
     )
     gen.add_argument(
         "--baseline",
         default="",
-        help="DEPRECATED (no longer used): the fork now self-generates the complete "
-        "RTMR0, so no baseline CCEL is required. Retained as an accepted-but-ignored "
-        "flag for callers mid-migration.",
-    )
-    gen.add_argument(
-        "--version", required=True, help="image version (recorded in the output)"
-    )
-    gen.add_argument(
-        "--output",
-        required=True,
-        help="output JSON, e.g. measurements/<ver>/rtmr0-<profile>.json",
-    )
-    gen.add_argument(
-        "--qemu", default="10.2.1", help="QEMU version key in baselined_measurements"
-    )
-    gen.add_argument(
-        "--tdx-measure-bin",
-        default="tdx-measure",
-        help="path to the tdx-measure fork binary",
-    )
-    gen.add_argument(
-        "--dist", default="ubuntu:26.04", help="ACPI-dump container base image"
-    )
-    gen.add_argument(
-        "--bios-dir",
-        default=str(firmware_dir()),
-        help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
-        "opens the metadata's 'bios' path, so it must resolve absolutely "
-        "(default: chutes-cvm firmware dir; env CHUTES_CVM_FIRMWARE_DIR)",
+        help="DEPRECATED (accepted-but-ignored): the fork self-generates the complete RTMR0.",
     )
     gen.set_defaults(func=_cmd_generate)
 

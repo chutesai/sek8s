@@ -13,6 +13,6 @@ Committed reference data — small firmware/ACPI/SMBIOS preimages only. The
 captured baseline holds only the **RTMR0** inputs (the debug CCEL splice + the
 per-topology ACPI/SMBIOS preimages), which are identical across debug and prod.
 **RTMR1/2/3** are not captured here; they are computed statically from each image at
-build time (`compute-rtmr3` pre-luks; `compute-rtmr1-2` + `compute-rtmr0` post-luks) for **both**
-prod and debug builds — the debug image is attested too under the RC gate (its
-distinct measurement is registered `rc:true`).
+build time — one post-luks `chutes-cvm measurements generate` (RTMR3 mounts the root,
+unlocked via LUKS_PASSPHRASE) — for **both** prod and debug builds; the debug image is
+attested too under the RC gate (its distinct measurement is registered `rc:true`).

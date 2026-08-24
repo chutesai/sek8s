@@ -40,7 +40,7 @@ Diagnostics / one-off helpers live in **`utils/`**:
 
 Planned (per the spec's generator design): `arg_synth.py` (synthesize a
 topology's QEMU args from a `discover-profile` JSON), `acpi_source.py`
-(pluggable generated-vs-captured ACPI/SMBIOS source), `generate-measurements`
+(pluggable generated-vs-captured ACPI/SMBIOS source), `measurements generate`
 (splice + replay → full `teeMeasurements` block). Captured baselines and
 generated outputs live in the top-level `measurements/<version>/` (data, kept
 separate from this tooling dir).

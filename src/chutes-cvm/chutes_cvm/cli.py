@@ -1,12 +1,16 @@
 """chutes-cvm — CLI for confidential-VM host operations.
 
 Invoked as ``chutes-cvm <command>`` via the ``chutes-cvm`` console script (installed by the
-package's ``src/chutes-cvm/install.sh``), or directly as ``python3 -m chutes_cvm.guest.cli
+package's ``src/chutes-cvm/install.sh``), or directly as ``python3 -m chutes_cvm.cli
 <command>``.
+
+This is the package-level dispatcher: it routes to host (``setup-host``, ``tune-host``),
+guest (``launch``, ``reset-gpus``, ``preflight``), and measurement (``measurements``)
+subpackages, so it lives at the package root rather than under any one of them.
 
 Stdlib-only dispatcher. Subcommands import their implementation lazily, so a command
 that needs extra dependencies never burdens one that doesn't (``verify-host`` is pure
-stdlib). Commands that delegate to a bundled shell entrypoint (``up``, ``discover-profile``,
+stdlib). Commands that delegate to a bundled shell entrypoint (``launch``, ``discover-profile``,
 ``reset-gpus``) shell out to ``chutes_cvm/scripts/`` via ``_run_script``; the rest dispatch
 to a Python ``main`` in this package.
 """
@@ -358,10 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render/validate a config.yaml to KEY=value env (args forwarded).",
     )
     sub.add_parser(
-        "generate-measurements",
+        "measurements",
         add_help=False,
         help="Offline TDX measurement generation — generate / list / selftest "
-        "(build-host tool; args forwarded, `chutes-cvm generate-measurements --help`).",
+        "(build-host tool; args forwarded, `chutes-cvm measurements --help`).",
     )
 
     return parser
@@ -377,7 +381,7 @@ _PASSTHROUGH = (
     "setup-host",
     "image-set",
     "config",
-    "generate-measurements",
+    "measurements",
 )
 
 
@@ -402,12 +406,12 @@ def main(argv: "list[str] | None" = None) -> int:
             from chutes_cvm.guest.image_set import main as _image_set_main
 
             return _image_set_main(forward)
-        if raw[0] == "generate-measurements":
+        if raw[0] == "measurements":
             from chutes_cvm.measurement.generate_measurements import (
-                main as _genmeas_main,
+                main as _measurements_main,
             )
 
-            return _genmeas_main(forward)
+            return _measurements_main(forward)
         from chutes_cvm.guest.config import main as _config_main
 
         return _config_main(forward)

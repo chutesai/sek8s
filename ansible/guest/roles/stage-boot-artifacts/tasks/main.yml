@@ -2,7 +2,7 @@
 # stage-boot-artifacts — Extract the direct-boot kernel/initrd/cmdline from the
 # finalized image and persist them next to it as publishable artifacts
 # (<image>.vmlinuz/.initrd/.cmdline). Published to R2 with the qcow2; read by both
-# compute-rtmr1-2 (RTMR1/2) and the launcher (deploy). See
+# `chutes-cvm measurements generate` (RTMR1/2) and the launcher (deploy). See
 # files/stage-boot-artifacts.sh.
 #
 # Part of the measurement GATHER phase (runs POST-luks, so the staged initrd is the

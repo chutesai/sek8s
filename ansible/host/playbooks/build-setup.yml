@@ -10,7 +10,9 @@
 #   - Installs host script dependencies (git, aria2, python3-yaml, python3-venv)
 #   - Installs Ansible for running the guest image build locally
 #   - Installs Docker (offline RTMR0 generation runs the tdx-measure fork's
-#     patched QEMU in a container; see roles/compute-rtmr0)
+#     patched QEMU in a container; see `chutes-cvm measurements generate`)
+#   - Installs libguestfs-tools (RTMR3 mounts the image root read-only;
+#     see `chutes-cvm measurements generate` / the standalone `rtmr3`)
 
 - name: Build host setup
   hosts: td_hosts
@@ -27,7 +29,7 @@
         update_cache: true
 
     - name: Install Docker (with buildx)
-      # compute-rtmr0's offline ACPI gen runs the tdx-measure fork's `docker build
+      # measurements generate's offline ACPI gen runs the tdx-measure fork's `docker build
       # --progress plain`, which needs BuildKit (the buildx plugin), not docker.io's legacy builder.
       ansible.builtin.apt:
         name:
@@ -41,6 +43,14 @@
         name: docker
         state: started
         enabled: true
+
+    - name: Install libguestfs-tools (guestmount / virt-filesystems for RTMR3)
+      # RTMR3 (folded into `measurements generate`) mounts the image root read-only to replay
+      # the file chain; virt-filesystems detects an encrypted root, unlocked via LUKS_PASSPHRASE.
+      ansible.builtin.apt:
+        name: libguestfs-tools
+        state: present
+        update_cache: true
 
     # NOTE: chutes-cvm is NOT installed here. The guest build (chutes-miner-vm.yml)
     # self-installs it from its own checkout (`pip install -e {{ repo_root }}/src/chutes-cvm`)

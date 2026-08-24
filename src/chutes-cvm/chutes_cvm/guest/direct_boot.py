@@ -4,8 +4,8 @@
 GRUB, dropping GRUB/shim from the measured boot chain. OVMF needs the kernel and
 initrd as host files.
 
-These are produced **once at build time** (the same bytes ``compute-rtmr1-2``
-measures) and published to R2 alongside the qcow2, so every fleet host downloads
+These are produced **once at build time** (the same bytes
+``measurements generate`` measures) and published to R2 alongside the qcow2, so every fleet host downloads
 byte-identical boot artifacts — RTMR1/2 match by construction, not by re-running
 an extraction on each host at each launch. The launcher just resolves the files
 staged next to the image:

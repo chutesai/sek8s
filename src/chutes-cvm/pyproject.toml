@@ -18,7 +18,7 @@ jsonschema = "^4.23.0"
 substrate-interface = "^1.7.11"
 
 [tool.poetry.scripts]
-chutes-cvm = "chutes_cvm.guest.cli:main"
+chutes-cvm = "chutes_cvm.cli:main"
 
 [build-system]
 requires = ["poetry-core"]

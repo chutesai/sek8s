@@ -147,7 +147,7 @@ def launch_vm(args) -> int:
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
     # GRUB/shim from the measured chain. These are published with the image (built
     # once, downloaded from R2) and staged next to it — the same bytes
-    # compute-rtmr1-2 measures, so the boot matches the pinned RTMR1/2.
+    # `measurements generate` measures, so the boot matches the pinned RTMR1/2.
     kernel_path, initrd_path, cmdline = direct_boot_artifacts(args.image)
     print(f"Direct boot: kernel={kernel_path} cmdline={cmdline!r}")
 

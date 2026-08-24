@@ -27,7 +27,7 @@
 #
 # The CCEL is identical across debug and prod for a given topology, and is topology-
 # independent for the constant events, so capture once per image version. RTMR1/2/3 are
-# computed separately, statically (compute-rtmr1-2 / compute-rtmr3 / compute-rtmr0).
+# computed separately, statically (`chutes-cvm measurements generate`).
 #
 # Runs as a gather step (post-luks), gated by measurements=full (the only TDX-hardware
 # step). To (re)capture against an already-built image without a full rebuild:
