@@ -66,6 +66,7 @@ def _cmd_verify_host(args: argparse.Namespace) -> int:
         scripts_dir=str(_SCRIPTS_DIR),
         config_path=args.config,
         api_base=args.api,
+        submit=args.submit,
     )
     label, attrs = _VERIFY_STATUS.get(rc, (f"EXIT {rc}", "1"))
     print(_color(f"\nResult: {label}", attrs))
@@ -110,36 +111,6 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     from chutes_cvm.guest.vfio import pci_operations_wedged
 
     return 0 if pci_operations_wedged() else 1
-
-
-def _cmd_preflight(args: argparse.Namespace) -> int:
-    """Ask the control plane whether this host class can launch (submits it if unknown)."""
-    from chutes_cvm.guest.preflight import (
-        DEFAULT_API_BASE,
-        FAIL_CLOSED,
-        PreflightError,
-        run_preflight,
-        status_exit_code,
-    )
-
-    config = args.config or default_config_path()
-    api = args.api or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
-    try:
-        resp = run_preflight(
-            config_path=config,
-            scripts_dir=str(_SCRIPTS_DIR),
-            api_base=api,
-            dry_run=args.dry_run,
-        )
-    except PreflightError as exc:
-        print(_color(f"PREFLIGHT FAILED (refusing to launch): {exc}", "1;31"))
-        return FAIL_CLOSED
-
-    status = resp.get("status")
-    attrs = {"accepted": "1;32", "pending": "1;33"}.get(status, "1;33")
-    print(_color(f"[{status}] {resp.get('detail', '')}", attrs))
-    print(f"  fingerprint: {resp.get('fingerprint', '?')}")
-    return status_exit_code(status)
 
 
 def _cmd_download(args: argparse.Namespace) -> int:
@@ -192,7 +163,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check this host will relaunch and re-attest (optionally after an OS upgrade).",
         description=(
             "Run the launch gates without launching a VM: host QEMU is the one its OS "
-            "release baselines, and the host topology resolves to a baselined fingerprint. "
+            "release baselines, and the control plane has a published measurement for this "
+            "host class. --submit registers an unbaselined host class (so Chutes can generate "
+            "its measurements) instead of the default dry-run check. "
             "Exit 0 READY / 1 BLOCKED / 2 WARNING."
         ),
     )
@@ -210,6 +183,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--api",
         metavar="URL",
         help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
+    )
+    verify.add_argument(
+        "--submit",
+        action="store_true",
+        help="Register this host class with Chutes if it is not yet baselined, so Chutes can "
+        "generate its measurements (default: a non-storing dry-run check).",
     )
     verify.set_defaults(func=_cmd_verify_host)
 
@@ -323,33 +302,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vfio.set_defaults(func=_cmd_vfio_wedged)
 
-    pre = sub.add_parser(
-        "preflight",
-        help="Ask Chutes whether this host class can launch (submits it if unknown).",
-        description=(
-            "Capture this host's platform metadata, sign it with the miner hotkey, and POST it "
-            "to the control plane, which returns a status: accepted (can launch), pending "
-            "(submitted, awaiting measurements), or unknown (dry-run only). "
-            "Exit 0 accepted / 1 error (fail-closed) / 2 not-yet."
-        ),
-    )
-    pre.add_argument(
-        "--config",
-        metavar="PATH",
-        help="Launch config.yaml with the miner hotkey (default: ./config.yaml; env CHUTES_CVM_CONFIG).",
-    )
-    pre.add_argument(
-        "--api",
-        metavar="URL",
-        help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
-    )
-    pre.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Report status without submitting the profile when unknown.",
-    )
-    pre.set_defaults(func=_cmd_preflight)
-
     # Pass-through modules with their own argparse (see _PASSTHROUGH / main).
     sub.add_parser(
         "image-set",
@@ -364,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "measurements",
         add_help=False,
-        help="Offline TDX measurement generation — generate / list / selftest "
+        help="Offline TDX measurement generation — generate / list "
         "(build-host tool; args forwarded, `chutes-cvm measurements --help`).",
     )
 

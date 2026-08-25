@@ -1,6 +1,6 @@
 ### Added
 - **`chutes-cvm measurements`** — offline TDX measurement generation is now a first-class command
-  group (`generate` / `list` / `selftest`), forwarding to `chutes_cvm.measurement`. The guest build
+  group (`generate` / `list`), forwarding to `chutes_cvm.measurement`. The guest build
   calls the CLI instead of per-register shell scripts + ansible roles:
   - **`generate`** — with no `--register`, computes EVERY register in one POST-LUKS call — mrtd +
     RTMR0 (all topologies) + RTMR1/RTMR2 (the image's staged direct-boot artifacts) + RTMR3
@@ -22,7 +22,7 @@
   RTMR3's userspace files (always fresh — no cached-value reuse), so there is no longer a separate
   pre-LUKS RTMR3 stage. `libguestfs-tools` (guestmount) is now a build-host prereq
   (`build-setup.yml`); `tee-gpu-vm.yml` calls `measurements generate --register rtmr3` inline. The
-  generator's firmware / selftest-fixture paths resolve via `chutes_cvm.paths`.
+  generator's firmware paths resolve via `chutes_cvm.paths`.
 - **The package-level CLI dispatcher moved to the package root** — `chutes_cvm/guest/cli.py` →
   `chutes_cvm/cli.py` (console script `chutes-cvm` → `chutes_cvm.cli:main`), since it routes to the
   host, guest, and measurement subpackages rather than belonging to `guest/`.

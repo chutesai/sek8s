@@ -23,8 +23,6 @@ release, so #14 does not vary by host or topology — one CCEL, captured anywher
 every profile. (Recomputing #14 offline from the SMBIOS blob, to drop the CCEL entirely, is
 future work — see utils/smbios_match.py.)
 
-Verified end-to-end against local/acpi_real (box-028, RTX_PRO_6000) — see `selftest`.
-
 Requires host-tools/scripts on sys.path (for chutes_cvm.guest / GPU_PROFILES) and, for
 actual per-topology ACPI generation, the chutesai/tdx-measure fork + Docker on any
 x86-64 Linux (NO TDX, NO GPUs — that's the point of offline measurement). The
@@ -230,57 +228,6 @@ def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
-
-
-def _cmd_selftest(args: argparse.Namespace) -> int:
-    """Prove the splice+recompute+replay path against the committed RTX fixture:
-    recompute #11-13 from local/acpi_real's own ACPI blobs, splice them into that
-    same baseline CCEL, and confirm the replay reproduces box-028's known RTMR0."""
-    fixture = Path(args.fixture)
-    ccel = fixture / "data" / "CCEL"
-    if not ccel.exists():
-        ccel = fixture / "CCEL"
-    events = cc.parse_event_log(ccel.read_bytes())
-
-    expected = cc.replay(events, 1).hex().upper()
-    tdhob_idx, acpi_idx = locate_rtmr0_events(events)
-    overrides = acpi_digests(fixture, acpi_idx)
-    spliced = replay_with_overrides(events, overrides).hex().upper()
-
-    # Cross-check: the recomputed ACPI digests must equal the captured event digests.
-    captured = mr1_events(events)
-    ok_acpi = all(overrides[i] == captured[i].digest() for i in acpi_idx)
-
-    print(f"baseline replay   : {expected[:16]}…")
-    print(f"spliced replay    : {spliced[:16]}…")
-    print(f"#11-13 recompute  : {'MATCH captured' if ok_acpi else 'MISMATCH'}")
-
-    # Also validate the fork-log → override path (what `generate` uses) without
-    # needing tdx-measure: synthesize a fork rtmr0_log whose [0,8,9,10] entries are
-    # the baseline's own TD-HOB/ACPI digests, run it through overrides_from_fork_log +
-    # replay, and confirm it reproduces the baseline. Proves the index map + splice.
-    synth = ["00" * 48] * (max((FORK_TDHOB_IDX, *FORK_ACPI_IDX)) + 1)
-    synth[FORK_TDHOB_IDX] = captured[tdhob_idx].digest().hex()
-    for baseline_i, fork_i in zip(acpi_idx, FORK_ACPI_IDX):
-        synth[fork_i] = captured[baseline_i].digest().hex()
-    forkpath = (
-        replay_with_overrides(
-            events, overrides_from_fork_log(synth, tdhob_idx, acpi_idx)
-        )
-        .hex()
-        .upper()
-    )
-    ok_forklog = forkpath == expected
-    print(f"fork-log override : {'MATCH baseline' if ok_forklog else 'MISMATCH'}")
-
-    ok = spliced == expected and ok_acpi and ok_forklog
-    if args.expect:
-        ok = ok and spliced.startswith(args.expect.upper())
-        print(
-            f"expect {args.expect}: {'MATCH' if spliced.startswith(args.expect.upper()) else 'NO MATCH'}"
-        )
-    print("SELFTEST:", "PASS" if ok else "FAIL")
-    return 0 if ok else 1
 
 
 def _rtmr0_block(args: argparse.Namespace) -> dict:
@@ -551,16 +498,6 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__.splitlines()[0],
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
-
-    st = sub.add_parser("selftest", help="validate splice/replay against a fixture")
-    st.add_argument(
-        "--fixture",
-        required=True,
-        help="dev cross-check fixture: a capture dir with data/CCEL + the fw_cfg ACPI blobs "
-        "(table_loader.bin / rsdp.bin / acpi_tables.bin)",
-    )
-    st.add_argument("--expect", default="5FC09D10", help="expected RTMR0 hex prefix")
-    st.set_defaults(func=_cmd_selftest)
 
     ls = sub.add_parser("list", help="list supported topologies")
     ls.add_argument("--qemu", default="10.2.1", help="QEMU version filter")

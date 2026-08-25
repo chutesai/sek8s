@@ -3,12 +3,15 @@ a node will relaunch and re-attest rather than going offline.
 
     python3 -m chutes_cvm.guest.verify              # relaunch as-is?
     python3 -m chutes_cvm.guest.verify --target-os 26.04   # ... after an OS upgrade?
+    python3 -m chutes_cvm.guest.verify --submit     # ... and register an unbaselined host
 
 Two gates: (A) the host runs the QEMU its OS release baselines (local), and (B) the
-control plane has a published measurement for this host class (the API preflight — the
-same submit endpoint the miner uses, run as a non-storing dry-run check).
+control plane has a published measurement for this host class (the API check — captures
+the host's signed platform metadata and asks the API, which owns the fingerprint and
+verdict). By default Gate B is a non-storing dry-run; `--submit` registers the host class
+so Chutes can generate its measurements (the miner's baselining path — no separate verb).
 
-Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU, or preflight couldn't run) ·
+Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU, or the check couldn't run) ·
 2 WARNING (gates run, but no published measurement for this topology x QEMU yet).
 """
 
@@ -30,8 +33,13 @@ def verify_host(
     scripts_dir: "str | None" = None,
     config_path: "str | None" = None,
     api_base: "str | None" = None,
+    submit: bool = False,
 ) -> int:
-    """Run the launch gates without launching; return one of READY/BLOCKED/WARNING."""
+    """Run the launch gates without launching; return one of READY/BLOCKED/WARNING.
+
+    ``submit`` turns Gate B from a dry-run check into a real registration: an unbaselined
+    host class is submitted so Chutes can generate its measurements (was `chutes-cvm preflight`).
+    """
     scripts_dir = scripts_dir or str(SCRIPTS_DIR)
 
     # Gate A: which QEMU's measurement matters?
@@ -60,8 +68,8 @@ def verify_host(
         )
 
     # Gate B: does the control plane have a published measurement for this host class?
-    # A dry-run preflight — capture metadata, sign, ask — without submitting (this is a
-    # check, not a request to baseline). The API owns the fingerprint and the verdict.
+    # Capture metadata, sign, ask — the API owns the fingerprint and the verdict. Default is a
+    # non-storing dry-run (a check); --submit registers an unbaselined host class instead.
     config = config_path or default_config_path()
     api = api_base or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
@@ -69,12 +77,12 @@ def verify_host(
             config_path=config,
             scripts_dir=scripts_dir,
             api_base=api,
-            dry_run=True,
+            dry_run=not submit,
             target_qemu=target_qemu,
         )
     except PreflightError as exc:
         # Fail closed: if we cannot get a verdict, the host would attest into the unknown.
-        print(f"BLOCKED (preflight): {exc}")
+        print(f"BLOCKED (API check): {exc}")
         return BLOCKED
 
     status = resp.get("status")
@@ -85,10 +93,16 @@ def verify_host(
         return READY
 
     print(f"WARNING [{status}]: {detail} (fingerprint {fingerprint})")
-    print(
-        "  Run `chutes-cvm preflight` to submit this host class so Chutes can generate its "
-        "measurements before you launch/upgrade."
-    )
+    if submit:
+        print(
+            "  Submitted this host class for baselining — Chutes will generate its "
+            "measurements; re-check readiness later."
+        )
+    else:
+        print(
+            "  Re-run with --submit to register this host class so Chutes can generate its "
+            "measurements before you launch/upgrade."
+        )
     return WARNING
 
 
@@ -114,9 +128,18 @@ def main() -> int:
         help="Validator base URL.",
         default="https://api.chutes.ai",
     )
+    parser.add_argument(
+        "--submit",
+        action="store_true",
+        help="Register this host class with Chutes if it is not yet baselined "
+        "(instead of the default non-storing dry-run check).",
+    )
     args = parser.parse_args()
     return verify_host(
-        target_os=args.target_os, config_path=args.config, api_base=args.api
+        target_os=args.target_os,
+        config_path=args.config,
+        api_base=args.api,
+        submit=args.submit,
     )
 
 

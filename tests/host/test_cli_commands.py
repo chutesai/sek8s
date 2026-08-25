@@ -30,11 +30,12 @@ def test_visible_command_surface():
         "init",
         "stop",
         "down",
-        "preflight",
         "verify-host",
         "measurements",
     ):
         assert expected in cmds
+    # preflight was folded into `verify-host --submit`; it is no longer its own command.
+    assert "preflight" not in cmds
     # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
     assert "launch-vm" not in cmds
     assert "up" not in cmds

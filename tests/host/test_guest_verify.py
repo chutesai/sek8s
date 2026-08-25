@@ -80,3 +80,12 @@ def test_target_os_skips_live_qemu_gate_and_passes_target_qemu():
             == verify.SUPPORTED_QEMU_BY_OS["26.04"]
         )
         assert pf.call_args.kwargs.get("dry_run") is True
+
+
+def test_submit_flips_preflight_out_of_dry_run():
+    # `verify-host --submit` (was `preflight`) registers an unbaselined host class: Gate B
+    # runs the real (non-dry-run) submission, and a pending status is still WARNING.
+    stack, _, pf = _patch(status="pending")
+    with stack:
+        assert verify.verify_host(scripts_dir="/x", submit=True) == verify.WARNING
+        assert pf.call_args.kwargs.get("dry_run") is False
