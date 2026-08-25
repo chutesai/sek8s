@@ -1,10 +1,10 @@
 #!/bin/bash
 # download-image-set.sh — fetch a published base image set and verify it against its manifest.
 #
-# Invoked by `chutes-cvm download [--debug]` (cli.py _cmd_download). Downloads a full
+# Invoked by `chutes-cvm image download [--debug]` (image_set.py _cmd_download). Downloads a full
 # image set (1.4.0+) into its own per-variant directory under /var/lib/chutes/base-images/:
 # the qcow2, the direct-boot kernel/initrd/cmdline OVMF boots directly, and the manifest
-# that ties them together. `image-set resolve --full` then verifies every downloaded byte
+# that ties them together. `image verify --full` then verifies every downloaded byte
 # against the manifest (the R2-published integrity source).
 #
 #   download-image-set.sh <base>      # base = tdx-guest | tdx-guest-debug
@@ -42,7 +42,7 @@ aria2c -x 16 -s 16 -k 1M --allow-overwrite=true -d "$DIR" -o "manifest.json" \
 }
 
 echo "Verifying the downloaded image set against its manifest..."
-chutes-cvm image-set resolve --full "$DIR" >/dev/null || {
+chutes-cvm image verify --full "$DIR" >/dev/null || {
   echo "ERROR: downloaded image set failed manifest verification (see above)." >&2
   exit 1
 }

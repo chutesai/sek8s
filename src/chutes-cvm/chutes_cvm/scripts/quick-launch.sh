@@ -28,7 +28,7 @@ run_create_config() {
 
 # Integrity is carried entirely by the per-image-set manifest.json (verified at download
 # and launch by chutes_cvm.guest.image_set) — there is no pinned base-image hash to maintain.
-# Image-set download lives in `chutes-cvm download`; config scaffolding in `chutes-cvm init`;
+# Image-set download lives in `chutes-cvm image download`; config scaffolding in `chutes-cvm init`;
 # teardown in `chutes-cvm down`/`stop`. This orchestrator only brings a VM up.
 
 # --------------------------------------------------------------------
@@ -160,7 +160,7 @@ Usage: chutes-cvm launch [config.yaml] [options]
 End-to-end TEE VM orchestration: verify host, prepare volumes and network, then boot.
 Related commands (formerly flags of this script):
   chutes-cvm init            Scaffold a starter config.yaml
-  chutes-cvm download        Download + verify a base image set (add --debug for the debug set)
+  chutes-cvm image download        Download + verify a base image set (add --debug for the debug set)
   chutes-cvm down            Stop the VM and tear down its bridge/netlog
   chutes-cvm stop            Stop only the VM (leave the bridge up)
 
@@ -216,7 +216,7 @@ Management:
 Examples:
   # First run: scaffold config, download an image set, then launch
   chutes-cvm init
-  chutes-cvm download                       # add --debug for the debug image set
+  chutes-cvm image download                       # add --debug for the debug image set
   chutes-cvm launch config.yaml
 
   # Use config with overrides
@@ -354,7 +354,7 @@ if [[ "$BENCHMARK" == "true" ]]; then
 fi
 
 # Default base image: the published image-set directory (qcow2 + boot artifacts +
-# manifest) that `chutes-cvm download` populates. There is one image format — the set
+# manifest) that `chutes-cvm image download` populates. There is one image format — the set
 # directory; a missing set fails cleanly here rather than being auto-downloaded at launch.
 [[ -z "$BASE_IMAGE" ]] && BASE_IMAGE="/var/lib/chutes/base-images/tdx-guest"
 if [[ "$EPHEMERAL" == "true" ]]; then

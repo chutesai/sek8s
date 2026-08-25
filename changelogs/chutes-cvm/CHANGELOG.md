@@ -35,16 +35,17 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   the `install_dependencies` step are removed.
 - **`make bundle-gpu-tools`** — discoverable maintainer target that rebuilds the vendored
   nvidia-gpu-tools wheel into the package (recipe at `src/chutes-cvm/tools/gpu-tools/`).
-- **`chutes-cvm image-set` / `chutes-cvm config` / `chutes-cvm vfio-wedged`** — the
-  image-set manifest tool, the config renderer, and the PCI-passthrough-wedged check are
-  now first-class subcommands, so every caller routes through the one console script.
+- **`chutes-cvm image` / `chutes-cvm config` / `chutes-cvm vfio-wedged`** — the base-image
+  tool (`image download` / `image verify` / `image manifest`), the config renderer, and the
+  PCI-passthrough-wedged check are subcommands, so every caller routes through the one console
+  script.
 - **`chutes-cvm launch`** — end-to-end VM launch orchestrator (verify host → volumes → network →
   boot) from `config.yaml`. This is the one command a miner uses to bring a VM up. It calls the
   low-level QEMU primitive, now the hidden `chutes-cvm launch-vm`.
-- **`chutes-cvm download` / `init` / `stop` / `down`** — the quick-launch modes that used to be
-  flags are now first-class commands: `download [--debug]` fetches + verifies a base image set,
-  `init` scaffolds a `config.yaml`, `stop` stops only the VM (leaving the bridge up), and `down`
-  tears the whole environment down (VM + bridge + benchmark-netlog).
+- **`chutes-cvm image download` / `init` / `stop` / `down`** — the quick-launch modes that used to
+  be flags are now first-class commands: `image download [--debug]` fetches + verifies a base image
+  set, `init` scaffolds a `config.yaml`, `stop` stops only the VM (leaving the bridge up), and
+  `down` tears the whole environment down (VM + bridge + benchmark-netlog).
 
 ### Changed
 - **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
@@ -114,8 +115,8 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   `chutes-cvm launch` instead of `./quick-launch.sh`; the install no longer needs a
   `CHUTES_CVM_SCRIPTS_DIR` env (the scripts are package-relative).
 - **`quick-launch.sh` shrank to pure orchestration.** Its `--download` / `--download-debug` /
-  `--template` / `--clean` early-exit modes moved out to the `download` / `init` / `down` commands
-  above, and its final step now calls `chutes-cvm launch-vm`. The `config.tmpl.yaml` template moved
+  `--template` / `--clean` early-exit modes moved out to the `image download` / `init` / `down`
+  commands above, and its final step now calls `chutes-cvm launch-vm`. The `config.tmpl.yaml` template moved
   into the package (so `chutes-cvm init` can emit it); the config `.example.yaml` files stay in
   `host-tools/scripts/config/`. Guest roles that drove the primitive directly (prime-vm) now call
   `chutes-cvm launch-vm` / `chutes-cvm stop`.

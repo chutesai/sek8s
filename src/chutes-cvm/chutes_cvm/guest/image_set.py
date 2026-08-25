@@ -27,22 +27,25 @@ constant, and it is the first thing that ties the boot artifacts to their qcow2
 (previously the artifacts had no checksum at all, so a stale/mismatched set only surfaced
 as an opaque boot or attestation failure). It is generated once over the finished
 artifacts (``manifest``), published to R2 alongside the qcow2, and verified on the way in
-(``resolve``).
+(``verify``).
 
-``quick-launch --download`` fetches the manifest and runs ``resolve --full`` to verify
-every downloaded byte once. The launcher runs ``resolve`` (size-only, cheap) to confirm
+``chutes-cvm image download`` fetches the set + manifest and runs ``verify --full`` to check
+every downloaded byte once. The launcher runs ``verify`` (size-only, cheap) to confirm
 the on-disk set still matches — without re-hashing a multi-GB qcow2 on every boot.
 
-Usage::
+Usage (``chutes-cvm image <verb>``; also ``python3 -m chutes_cvm.guest.image_set <verb>``)::
+
+    # Fetch + verify a published base image set (production, or --debug).
+    chutes-cvm image download [--debug]
 
     # Generate the manifest for a finished image (build / publish / capture staging).
     # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars.
-    python3 -m chutes_cvm.guest.image_set manifest <qcow2> [-o OUT] [--version V] [--debug]
+    chutes-cvm image manifest <qcow2> [-o OUT] [--version V] [--debug]
 
     # Verify an image-set directory and print QCOW2=/SHA256= for the caller to eval.
-    python3 -m chutes_cvm.guest.image_set resolve [--full] <image-set-dir>
+    chutes-cvm image verify [--full] <image-set-dir>
 
-``resolve`` prints shell assignments for the caller to ``eval``::
+``verify`` prints shell assignments for the caller to ``eval``::
 
     QCOW2=<path-to-qcow2>
     SHA256=<qcow2 sha256 from the manifest>
@@ -57,6 +60,7 @@ import hashlib
 import json
 import os
 import shlex
+import subprocess
 import sys
 
 # Roles in the manifest. The on-disk filename for each is the qcow2 basename with the
@@ -129,7 +133,7 @@ def _load_manifest(image_dir: str) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(
             f"manifest.json missing in {image_dir} — the image set is incomplete; "
-            "re-run `quick-launch --download`"
+            "re-run `chutes-cvm image download`"
         )
     with open(path) as f:
         manifest = json.load(f)
@@ -183,7 +187,25 @@ def resolve(image_dir: str, full: bool) -> tuple[str, str]:
     return qcow2, artifacts["qcow2"]["sha256"]
 
 
-def _cmd_resolve(args: argparse.Namespace) -> int:
+def _cmd_download(args: argparse.Namespace) -> int:
+    """Fetch + manifest-verify a published base image set (production, or debug with --debug).
+
+    Delegates to the bundled download-image-set.sh, which downloads the full set into
+    /var/lib/chutes/base-images/<variant>/ and runs `image verify --full` over it.
+    """
+    from chutes_cvm.paths import SCRIPTS_DIR
+
+    base = "tdx-guest-debug" if args.debug else "tdx-guest"
+    script = SCRIPTS_DIR / "download-image-set.sh"
+    if not script.exists():
+        print(
+            f"chutes-cvm: download-image-set.sh not found at {script}", file=sys.stderr
+        )
+        return 1
+    return subprocess.call(["bash", str(script), base])
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
     try:
         qcow2, sha256 = resolve(args.image_dir, args.full)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
@@ -209,19 +231,30 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="chutes_cvm.guest.image_set")
+    parser = argparse.ArgumentParser(prog="chutes-cvm image")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_resolve = sub.add_parser(
-        "resolve", help="verify an image-set directory and print QCOW2=/SHA256="
+    p_download = sub.add_parser(
+        "download",
+        help="download + verify a published base image set (production; --debug for the debug set)",
     )
-    p_resolve.add_argument("image_dir", help="path to the image-set directory")
-    p_resolve.add_argument(
+    p_download.add_argument(
+        "--debug",
+        action="store_true",
+        help="fetch the debug set (SSH enabled, no encryption) instead of production",
+    )
+    p_download.set_defaults(func=_cmd_download)
+
+    p_verify = sub.add_parser(
+        "verify", help="verify an image-set directory and print QCOW2=/SHA256="
+    )
+    p_verify.add_argument("image_dir", help="path to the image-set directory")
+    p_verify.add_argument(
         "--full",
         action="store_true",
         help="re-hash every file (download-time); default checks presence and size only",
     )
-    p_resolve.set_defaults(func=_cmd_resolve)
+    p_verify.set_defaults(func=_cmd_verify)
 
     p_manifest = sub.add_parser(
         "manifest", help="generate manifest.json for a finished image + its sidecars"

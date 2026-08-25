@@ -545,7 +545,7 @@
       ansible.builtin.command:
         chdir: "{{ repo_root }}/host-tools/scripts"
         argv: >-
-          {{ ['chutes-cvm', 'image-set', 'manifest', final_img_path,
+          {{ ['chutes-cvm', 'image', 'manifest', final_img_path,
               '--version', vm_version]
              + (['--debug'] if (debug_build | default(false)) else []) }}
       changed_when: true

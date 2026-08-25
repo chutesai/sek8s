@@ -62,7 +62,7 @@ Primary references:
 6. **Launch vs upgrade (image-set coherence)**  
    - The base image is a published **image set** — a per-variant directory holding the qcow2, its direct-boot `.vmlinuz`/`.initrd`/`.cmdline`, and a `manifest.json` (sha256 + size per artifact). Coherence is verified against the manifest by `chutes_cvm.guest.image_set` (full hash at download, presence/size at launch); there is no hand-maintained `EXPECTED_BASE_SHA256`.  
    - **Launch:** `quick-launch.sh --download` **only** when the default base-image **directory** is **missing**. If it **exists** and manifest verification fails → **fail** and direct to **`upgrade-guest.yml`** (no auto-download overwrite).  
-   - **Upgrade:** Stage the full set with **`aria2c`** into **`tdx-guest.staged/`** and verify it with **`image_set resolve --full`**; then after shutdown **rename** current `tdx-guest/` → `tdx-guest-<YYYY-MM-DD>/`, **rename** staged → `tdx-guest/`, **relaunch** with the default directory (no `--base-image` override).
+   - **Upgrade:** Stage the full set with **`aria2c`** into **`tdx-guest.staged/`** and verify it with **`image_set verify --full`**; then after shutdown **rename** current `tdx-guest/` → `tdx-guest-<YYYY-MM-DD>/`, **rename** staged → `tdx-guest/`, **relaunch** with the default directory (no `--base-image` override).
 
 7. **Host content on metal**  
    - **rsync** `host-tools/` from the controller checkout to **`sek8s_remote_host_tools`** (default `/opt/sek8s/host-tools`), not full-repo clone.
@@ -149,7 +149,7 @@ or fix/remove the qcow2 manually.
 ### Upgrade — ordered phases (implemented)
 
 1. Rsync **host-tools** (syncs the launcher + `chutes_cvm.guest.image_set` verifier).  
-2. **Stage** the image set with **`aria2c`** into **`/var/lib/chutes/base-images/tdx-guest.staged/`**; verify with **`image_set resolve --full`** against the manifest.  
+2. **Stage** the image set with **`aria2c`** into **`/var/lib/chutes/base-images/tdx-guest.staged/`**; verify with **`image_set verify --full`** against the manifest.  
 3. **`chutes-miner tee start-maintenance`**.  
 4. **`chutes-miner sync-kubeconfig`**.  
 5. **`kubectl delete pods -n chutes -l chutes/chute=true --wait=true`** (optional force path).  

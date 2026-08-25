@@ -113,12 +113,6 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     return 0 if pci_operations_wedged() else 1
 
 
-def _cmd_download(args: argparse.Namespace) -> int:
-    """Download + manifest-verify a base image set (production, or debug with --debug)."""
-    base = "tdx-guest-debug" if args.debug else "tdx-guest"
-    return _run_script("download-image-set.sh", [base])
-
-
 def _cmd_init(args: argparse.Namespace) -> int:
     """Write a starter config.yaml (from the bundled template) into the current directory."""
     import shutil
@@ -234,21 +228,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set up this TDX host (args forwarded; `chutes-cvm setup-host --help`).",
     )
 
-    download = sub.add_parser(
-        "download",
-        help="Download + verify a base image set into /var/lib/chutes/base-images/ (first-run step).",
-        description=(
-            "Fetch a published base image set (qcow2 + direct-boot artifacts + manifest) and "
-            "verify every byte against the manifest. Run this once before the first launch."
-        ),
-    )
-    download.add_argument(
-        "--debug",
-        action="store_true",
-        help="Download the debug image set (SSH, no encryption) instead of production.",
-    )
-    download.set_defaults(func=_cmd_download)
-
     init = sub.add_parser(
         "init",
         help="Write a starter config.yaml into the current directory (edit it, then launch).",
@@ -304,9 +283,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Pass-through modules with their own argparse (see _PASSTHROUGH / main).
     sub.add_parser(
-        "image-set",
+        "image",
         add_help=False,
-        help="Build/verify a base image-set manifest (args forwarded; `chutes-cvm image-set --help`).",
+        help="Base image sets — download / verify / manifest (args forwarded; "
+        "`chutes-cvm image --help`).",
     )
     sub.add_parser(
         "config",
@@ -331,7 +311,7 @@ _PASSTHROUGH = (
     "launch",
     "launch-vm",
     "setup-host",
-    "image-set",
+    "image",
     "config",
     "measurements",
 )
@@ -354,10 +334,10 @@ def main(argv: "list[str] | None" = None) -> int:
             from chutes_cvm.host.setup import main as _setup_main
 
             return _setup_main(forward)
-        if raw[0] == "image-set":
-            from chutes_cvm.guest.image_set import main as _image_set_main
+        if raw[0] == "image":
+            from chutes_cvm.guest.image_set import main as _image_main
 
-            return _image_set_main(forward)
+            return _image_main(forward)
         if raw[0] == "measurements":
             from chutes_cvm.measurement.generate_measurements import (
                 main as _measurements_main,

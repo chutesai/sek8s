@@ -88,11 +88,11 @@ chutes-cvm launch config.yaml  # config.yaml has vm.base_image: ""
 
 `base_image` points at a **published image-set directory** — the qcow2 plus its direct-boot
 artifacts (`.vmlinuz`/`.initrd`/`.cmdline`) and a `manifest.json` that ties them together —
-populated by `chutes-cvm download`. There is one image format: the set. The launcher
+populated by `chutes-cvm image download`. There is one image format: the set. The launcher
 verifies the set against the manifest (so a stale/mismatched artifact fails loudly, not as
 an opaque boot error) and reads the qcow2's sha256 from the manifest instead of re-hashing
 it each launch. Launch does not auto-download: a missing set fails with a clear message,
-and you stage it explicitly with `chutes-cvm download` (or, in a build, via ansible). Custom or
+and you stage it explicitly with `chutes-cvm image download` (or, in a build, via ansible). Custom or
 benchmark images must likewise be assembled into a set (`chutes_cvm.guest.image_set manifest`).
 
 ## Docker Hub (optional)

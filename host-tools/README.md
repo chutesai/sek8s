@@ -125,7 +125,7 @@ systemctl restart pccs
 
 ```bash
 cd host-tools/scripts
-chutes-cvm download
+chutes-cvm image download
 ```
 
 Images are saved to `/var/lib/chutes/base-images/`.

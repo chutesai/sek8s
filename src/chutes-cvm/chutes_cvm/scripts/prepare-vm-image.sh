@@ -24,12 +24,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 [[ -z "$VM_IMAGE_DIR" ]] && { echo "ERROR: VM image directory not provided" >&2; exit 1; }
 [[ -d "$BASE_IMAGE" ]] || {
   echo "ERROR: base image must be a published image-set directory (got: $BASE_IMAGE)." >&2
-  echo "  Stage it with 'quick-launch.sh --download' or via ansible before launching." >&2
+  echo "  Stage it with 'chutes-cvm image download' or via ansible before launching." >&2
   exit 1
 }
 
 # Verify the set against its manifest; get back the qcow2 path + its manifest sha256.
-RESOLVE_OUT=$(PYTHONPATH="$SCRIPT_DIR/../../src/chutes-cvm" python3 -m chutes_cvm.guest.image_set resolve "$BASE_IMAGE") || exit 1
+RESOLVE_OUT=$(PYTHONPATH="$SCRIPT_DIR/../../src/chutes-cvm" python3 -m chutes_cvm.guest.image_set verify "$BASE_IMAGE") || exit 1
 eval "$RESOLVE_OUT"   # sets QCOW2 and SHA256
 BASE_IMAGE="$QCOW2"
 SHA_FOR_IMAGE="$SHA256"

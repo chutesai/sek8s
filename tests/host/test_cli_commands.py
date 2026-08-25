@@ -1,7 +1,7 @@
 """Tests for the chutes-cvm CLI dispatcher (chutes_cvm.cli).
 
 Covers the command surface after the up->launch rename and the decomposition of
-quick-launch's early-exit modes into first-class commands (download / init / stop / down).
+quick-launch's early-exit modes into first-class commands (image download / init / stop / down).
 The low-level QEMU primitive is the hidden `launch-vm`; the orchestrator is `launch`.
 """
 
@@ -26,7 +26,7 @@ def test_visible_command_surface():
     cmds = _visible_commands()
     for expected in (
         "launch",
-        "download",
+        "image",
         "init",
         "stop",
         "down",
@@ -80,16 +80,28 @@ def test_down_dispatches_to_teardown_script():
     assert run.call_args.kwargs["cwd"] == str(cli._SCRIPTS_DIR)
 
 
-def test_download_selects_production_by_default():
-    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["download"]) == 0
-    assert run.call_args.args == ("download-image-set.sh", ["tdx-guest"])
+def test_image_dispatches_to_engine():
+    # `chutes-cvm image <verb>` forwards verbatim to the image_set module's main.
+    with patch("chutes_cvm.guest.image_set.main", return_value=0) as img:
+        assert cli.main(["image", "verify", "/some/dir"]) == 0
+    assert img.call_args.args[0] == ["verify", "/some/dir"]
 
 
-def test_download_debug_flag_selects_debug_set():
-    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["download", "--debug"]) == 0
-    assert run.call_args.args == ("download-image-set.sh", ["tdx-guest-debug"])
+def test_image_download_selects_production_by_default():
+    from chutes_cvm.guest import image_set
+
+    with patch("chutes_cvm.guest.image_set.subprocess.call", return_value=0) as call:
+        assert image_set.main(["download"]) == 0
+    # download-image-set.sh is invoked with the production variant.
+    assert call.call_args.args[0][-1] == "tdx-guest"
+
+
+def test_image_download_debug_flag_selects_debug_set():
+    from chutes_cvm.guest import image_set
+
+    with patch("chutes_cvm.guest.image_set.subprocess.call", return_value=0) as call:
+        assert image_set.main(["download", "--debug"]) == 0
+    assert call.call_args.args[0][-1] == "tdx-guest-debug"
 
 
 def test_init_writes_config_and_guards_overwrite(tmp_path, monkeypatch):

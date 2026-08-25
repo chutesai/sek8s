@@ -15,7 +15,7 @@
 
 # ── Image-set pre-flight ─────────────────────────────────────────────────────
 # Launch is decoupled from download: the image set must already be staged (by
-# upgrade-guest.yml, or `chutes-cvm download`). We do NOT auto-download here — a
+# upgrade-guest.yml, or `chutes-cvm image download`). We do NOT auto-download here — a
 # missing set is an explicit failure with a remediation hint, not a silent fetch.
 # When present, verify it is coherent against its manifest (chutes_cvm.guest.image_set
 # resolve — presence/size, cheap, the bytes were fully hashed when staged) so a stale or
@@ -32,15 +32,15 @@
     msg: >-
       Base image set not found at {{ upgrade_default_base_image }}. Launch does not
       auto-download — stage it first with `upgrade-guest.yml` or
-      `chutes-cvm download` (populates the set + manifest), then relaunch.
+      `chutes-cvm image download` (populates the set + manifest), then relaunch.
   when: not (_base_img_stat.stat.exists and _base_img_stat.stat.isdir)
 
 - name: Verify the base image set against its manifest
   ansible.builtin.command:
     argv:
       - chutes-cvm
-      - image-set
-      - resolve
+      - image
+      - verify
       - "{{ upgrade_default_base_image }}"
   register: _image_set_resolve
   changed_when: false

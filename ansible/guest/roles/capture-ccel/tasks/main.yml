@@ -194,7 +194,7 @@
   ansible.builtin.command:
     argv:
       - chutes-cvm
-      - image-set
+      - image
       - manifest
       - "{{ measurement_work_image }}"
       - -o

@@ -130,7 +130,7 @@ fi
 
 ```bash
 cd host-tools/scripts
-chutes-cvm download --debug
+chutes-cvm image download --debug
 ```
 
 This downloads the debug image set (qcow2 + boot artifacts + `manifest.json`) into
