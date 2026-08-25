@@ -50,6 +50,30 @@ Do not introduce alternate frameworks (e.g., Prisma, NextAuth, Firebase). Stay w
 - **One concern per module** — keep files focused; split when they grow large
 - **Follow existing naming** — check neighboring files and packages for conventions
 
+### chutes-cvm: bash vs Python
+
+**Python owns decisions and data; bash owns privileged, linear sequences of external-tool calls.**
+The language boundary must fall at a **data handoff**: Python resolves the values, then hands them
+to a bash step that performs the root-level system mutation. Never split a decision from its
+execution across the boundary (bash deciding *and* executing while Python builds args downstream is
+the anti-pattern).
+
+- **Put it in Python** when it makes decisions (precedence, validation, branching on parsed data),
+  models/validates structured data (config schema, manifest, GPU/topology profiles, measurements),
+  constructs commands from data (e.g. `guest/qemu.py` building the QEMU cmdline), is measurement- or
+  security-critical (must be unit-tested), or is the dispatch/UX surface (argparse, help, exit codes).
+- **Put it in bash** (bundled under `chutes_cvm/scripts/`) when it is a thin, mostly-linear sequence
+  of privileged system mutations via external tools (cryptsetup/qemu-nbd/mkfs/losetup, ip/iptables,
+  aria2c, lspci/nvidia-smi) where the logic *is* the tool invocations, branching is shallow, there is
+  no structured data to model, and a reviewer benefits from reading the literal root commands. These
+  need root + real devices, so they are untestable in unit tests regardless — porting them to Python
+  buys indirection, not testability.
+- **Smell tests**: a bash script carrying real precedence/parsing/validation logic → that logic
+  belongs in Python (the script shrinks to its system-mutation steps). A Python module that is only
+  `subprocess.run([...])` calls with no data modeling → fine to keep, but don't Pythonize a
+  cryptsetup sequence for purity. Standalone operator/diagnostic tools meant to be read and run
+  directly (e.g. `discover-profile.sh`) legitimately stay bash.
+
 ## Architecture Overview
 
 | Component | Purpose |

@@ -4,7 +4,7 @@ Tests focus on behavioral contracts, registry integrity, and setup
 orchestration logic (mocking all subprocess/OS calls).
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.host.profiles import (
@@ -14,7 +14,12 @@ from chutes_cvm.host.profiles import (
     Ubuntu2604Profile,
     resolve_profile,
 )
-from chutes_cvm.host.setup import _get_kernel_version, setup_host
+from chutes_cvm.host.setup import (
+    _ensure_chutes_dirs,
+    _get_kernel_version,
+    _setup_ntp,
+    setup_host,
+)
 
 # ---------------------------------------------------------------------------
 # PPA dataclass
@@ -233,6 +238,8 @@ def test_get_kernel_version_rejects_metapackage():
 # ---------------------------------------------------------------------------
 
 
+@patch("chutes_cvm.host.setup._ensure_chutes_dirs")
+@patch("chutes_cvm.host.setup._setup_ntp")
 @patch("chutes_cvm.host.setup._add_user_to_kvm")
 @patch("chutes_cvm.host.setup._grub_update_cmdline")
 @patch("chutes_cvm.host.setup._grub_set_kernel")
@@ -246,6 +253,8 @@ def test_setup_host_calls_all_steps(
     mock_grub_kernel,
     mock_grub_cmdline,
     mock_kvm,
+    mock_ntp,
+    mock_dirs,
 ):
     profile = Ubuntu2604Profile()
     setup_host(profile)
@@ -254,11 +263,17 @@ def test_setup_host_calls_all_steps(
     mock_grub_kernel.assert_called_once_with("6.17.0-15-generic")
     mock_grub_cmdline.assert_called_once_with(profile.grub_cmdline_additions)
     mock_kvm.assert_called_once()
+    # The folded-in per-host config steps run as part of setup-host.
+    mock_ntp.assert_called_once()
+    mock_dirs.assert_called_once()
 
     install_calls = [
         c for c in mock_run.call_args_list if len(c[0]) > 0 and "install" in c[0][0]
     ]
     assert len(install_calls) > 0, "apt install should have been called"
+    # base_packages (chrony/aria2/xfsprogs) are installed alongside the kernel + TDX stack.
+    installed = [pkg for c in install_calls for pkg in c[0][0]]
+    assert "chrony" in installed and "aria2" in installed and "xfsprogs" in installed
 
 
 @patch("os.geteuid", return_value=1000)
@@ -266,3 +281,55 @@ def test_setup_host_exits_if_not_root(mock_euid):
     profile = Ubuntu2604Profile()
     with pytest.raises(SystemExit):
         setup_host(profile)
+
+
+# ---------------------------------------------------------------------------
+# base_packages + folded-in host config (ntp / chutes_dirs)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+def test_every_profile_base_packages_include_host_deps(version):
+    """The folded-in host operational deps must be present so setup-host fully provisions."""
+    profile = HOST_PROFILES[version]
+    assert {"chrony", "aria2", "xfsprogs"}.issubset(set(profile.base_packages))
+
+
+@patch("chutes_cvm.host.setup._run")
+@patch("chutes_cvm.host.setup._write_system_file")
+@patch("chutes_cvm.host.setup.subprocess.run", return_value=MagicMock(returncode=0))
+def test_setup_ntp_masks_timesyncd_writes_conf_and_enables_chrony(
+    mock_sub, mock_write, mock_run
+):
+    _setup_ntp()
+    # systemd-timesyncd is masked (chrony owns the clock).
+    assert any(
+        "systemd-timesyncd" in c.args[0] and "mask" in c.args[0]
+        for c in mock_sub.call_args_list
+    )
+    # chrony.conf is written with makestep (immediate step, not slew).
+    assert mock_write.call_args.args[0] == "/etc/chrony/chrony.conf"
+    assert "makestep" in mock_write.call_args.args[1]
+    # chrony is enabled + started.
+    assert any(
+        "chrony" in c.args[0] and "enable" in c.args[0] for c in mock_run.call_args_list
+    )
+
+
+@patch("chutes_cvm.host.setup.subprocess.run", return_value=MagicMock(returncode=1))
+@patch("chutes_cvm.host.setup._write_system_file")
+@patch("chutes_cvm.host.setup._run")
+def test_setup_ntp_tolerates_waitsync_failure(mock_run, mock_write, mock_sub):
+    # A non-zero waitsync (clock not yet synced) must not raise — setup continues.
+    _setup_ntp()  # returncode=1 on the tolerant subprocess calls; no exception
+
+
+@patch("chutes_cvm.host.setup.os.chmod")
+@patch("chutes_cvm.host.setup.os.makedirs")
+def test_ensure_chutes_dirs_creates_expected(mock_makedirs, mock_chmod):
+    _ensure_chutes_dirs()
+    made = [c.args[0] for c in mock_makedirs.call_args_list]
+    assert "/var/lib/chutes/base-images" in made
+    assert "/var/lib/chutes/vm-overlays" in made
+    # created idempotently
+    assert all(c.kwargs.get("exist_ok") for c in mock_makedirs.call_args_list)

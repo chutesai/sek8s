@@ -94,6 +94,16 @@ class HostProfile(ABC):
         ...
 
     @property
+    def base_packages(self) -> list[str]:
+        """Version-independent host operational deps, folded in from the ansible ntp /
+        host_prerequisites roles so `setup-host` fully provisions a host: chrony (NTP —
+        see _setup_ntp) plus the tools chutes-cvm operations shell out to (aria2 for image
+        download, xfsprogs for volume mkfs). Install-time bootstrap deps (git, python3-venv/
+        pip) are the installer's job (install.sh / the host_tools role), not setup-host's.
+        """
+        return ["chrony", "aria2", "python3-yaml", "xfsprogs"]
+
+    @property
     def grub_cmdline_additions(self) -> list[str]:
         """Extra kernel parameters for GRUB_CMDLINE_LINUX_DEFAULT."""
         return ["nohibernate"]

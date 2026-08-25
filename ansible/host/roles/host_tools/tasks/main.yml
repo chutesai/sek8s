@@ -4,14 +4,16 @@
 # host-tools/ + firmware/ + src/chutes-cvm/ into {{ sek8s_remote_root }} and editable-installs the
 # CLI (+ the bundled nvidia-gpu-tools) into a venv on PATH — so a later `git pull` updates the code
 # with no reinstall, and every later role/playbook has `chutes-cvm` (with its deps) available.
-# Runs before tdx_bootstrap so `chutes-cvm setup-host` works, and self-ensures venv/pip so it holds
-# even when host_tools runs before host_prerequisites (launch/upgrade playbooks).
+# Runs before tdx_bootstrap so `chutes-cvm setup-host` works, and self-ensures its own install
+# prerequisites (venv/pip + git for the fetch) so it holds without a separate host_prerequisites
+# step — setup.yml no longer runs one (setup-host installs the host operational deps itself).
 
-- name: Ensure Python venv/pip are present for the chutes-cvm install
+- name: Ensure the chutes-cvm install prerequisites are present (venv/pip + git for the fetch)
   ansible.builtin.apt:
     name:
       - python3-venv
       - python3-pip
+      - git
     state: present
     update_cache: false
 

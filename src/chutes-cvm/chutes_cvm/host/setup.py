@@ -589,18 +589,76 @@ def _ensure_pccs_node_modules(pccs_dir: str = "/opt/intel/sgx-dcap-pccs"):
     print("  ✓ PCCS node_modules installed")
 
 
+_CHRONY_CONF = """\
+# NTP sources
+pool ntp.ubuntu.com iburst
+pool 0.ubuntu.pool.ntp.org iburst
+pool 1.ubuntu.pool.ntp.org iburst
+
+keyfile /etc/chrony/chrony.keys
+driftfile /var/lib/chrony/chrony.drift
+logdir /var/log/chrony
+
+# Step the clock (rather than slew) if the offset exceeds 1 second during any clock
+# update, so a BMC RTC set minutes ahead is corrected immediately on first boot.
+makestep 1 -1
+
+# Keep the hardware clock in sync with the system clock.
+rtcsync
+"""
+
+
+def _setup_ntp():
+    """Configure chrony to STEP the clock immediately, replacing systemd-timesyncd.
+
+    timesyncd only slews small offsets; a BMC RTC set minutes ahead would take a long time to
+    correct, and a VM inherits the host clock at launch (QEMU RTC) — a skewed clock yields
+    boot-time mTLS certs with a wrong notBefore. chrony's ``makestep`` steps immediately so the
+    host clock is right before any launch. chrony itself installs via ``profile.base_packages``.
+    (Folded in from the ansible ``ntp`` role.)
+    """
+    print("\nStep: Configuring chrony (NTP, immediate clock step)...")
+    # timesyncd only slews; mask it so chrony owns the clock. Tolerant — it may be absent/masked.
+    for action in ("stop", "disable", "mask"):
+        subprocess.run(["systemctl", action, "systemd-timesyncd"], check=False)
+    _write_system_file("/etc/chrony/chrony.conf", _CHRONY_CONF)
+    _run(["systemctl", "enable", "--now", "chrony"])
+    # Force an immediate step, then best-effort wait for the first sync (never fatal).
+    subprocess.run(["chronyc", "makestep"], check=False)
+    waited = subprocess.run(["chronyc", "waitsync", "60", "1", "0", "1"], check=False)
+    if waited.returncode != 0:
+        print(
+            "  ⚠ chrony did not confirm sync within 60s — continuing "
+            "(verify later with `chronyc tracking`)."
+        )
+
+
+def _ensure_chutes_dirs():
+    """Create the /var/lib/chutes directories chutes-cvm operations expect (base image sets and
+    per-VM overlays). Folded in from the ansible ``chutes_dirs`` role."""
+    print("\nStep: Ensuring /var/lib/chutes directories...")
+    for d in ("/var/lib/chutes/base-images", "/var/lib/chutes/vm-overlays"):
+        os.makedirs(d, exist_ok=True)
+        os.chmod(d, 0o755)
+        print(f"  {d}")
+
+
 def setup_host(profile: HostProfile, noninteractive: bool = False):
     """Execute TDX host setup using the given profile.
 
-    Must be run as root (or via sudo). Steps:
+    Must be run as root (or via sudo). This is the complete per-host configuration — a host is
+    launch-ready after it (modulo the CLI install itself, PCCS secrets, and a reboot, which the
+    ansible layer owns). Steps:
     1. Add PPAs with apt pinning
     2. apt update
-    3. Install kernel + packages
+    3. Install kernel + base_packages (chrony/aria2/xfsprogs) + packages
+    3b. Configure chrony (NTP, immediate clock step)
     4. Set kernel as default boot target
     5. Update GRUB cmdline
     6. Configure QGS for vsock (port 4050)
     7. Configure QCNL to accept local PCCS self-signed cert
     8. Add user to kvm group
+    9. Ensure /var/lib/chutes directories
 
     When noninteractive=True (e.g. called by Ansible via --noninteractive),
     DEBIAN_FRONTEND=noninteractive is set so apt never blocks on prompts.
@@ -649,9 +707,9 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     print("\nStep 2: Updating package index...")
     _run(["apt", "update"])
 
-    # 3. Install kernel + packages
+    # 3. Install kernel + packages (base_packages = the folded-in host deps: chrony/aria2/xfsprogs)
     print(f"\nStep 3: Installing kernel ({profile.kernel_package}) and packages...")
-    all_packages = [profile.kernel_package] + profile.packages
+    all_packages = [profile.kernel_package] + profile.base_packages + profile.packages
     _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
 
     kernel_version = _get_kernel_version(profile.kernel_package)
@@ -671,6 +729,9 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
         # sgx-dcap-pccs post-install only runs npm install during interactive
         # debconf prompts; in non-interactive mode we must do it ourselves.
         _ensure_pccs_node_modules()
+
+    # 3b. NTP: chrony (installed above) steps the clock immediately so no VM inherits a skew.
+    _setup_ntp()
 
     # 4. Set kernel as default boot
     print(f"\nStep 4: Setting kernel {kernel_version} as default boot target...")
@@ -699,6 +760,9 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     # 8. kvm group
     print("\nStep 8: Configuring kvm group...")
     _add_user_to_kvm()
+
+    # 9. Host directories chutes-cvm operations expect (base image sets / per-VM overlays).
+    _ensure_chutes_dirs()
 
     print(f"\n{'=' * 60}")
     print("  TDX host setup complete. Reboot to load the new kernel.")
