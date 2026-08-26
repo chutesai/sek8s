@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.4] - 2026-08-22
+## [2026.07.4] - 2026-08-26
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -55,6 +55,12 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - **`chutes-cvm image-set` / `chutes-cvm config` / `chutes-cvm vfio-wedged`** — the
   image-set manifest tool, the config renderer, and the PCI-passthrough-wedged check are
   now first-class subcommands, so every caller routes through the one console script.
+- **`host-tools/scripts/generate-operator-signing-key.sh`** — standalone helper to mint an
+  RC-gate operator RSA key pair for testing. Writes the PRIVATE key (referenced from
+  `config.yaml` as `rc.operator_signing_key`) and the matching PUBLIC key (to register with the
+  Chutes API's accepted RC measurement). Thin `openssl` wrapper (`genpkey` + `pkey -pubout`) whose
+  keys are compatible with the initramfs `rc-sign` signer and the API verifier
+  (`openssl dgst -sha256 -sign`/`-verify`); it writes no config and registers nothing.
 
 ### Changed
 - Pin host kernel to `linux-image-6.17.0-35-generic` in both Ubuntu 25.10 and
