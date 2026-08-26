@@ -36,7 +36,7 @@ Options:
 
 Writes:
   <OUT_DIR>/<PREFIX>.pem       operator PRIVATE key (mode 0600)  → config rc.operator_signing_key
-  <OUT_DIR>/<PREFIX>.pub.pem   operator PUBLIC key  (mode 0644)  → register with the Chutes API
+  <OUT_DIR>/<PREFIX>.pub       operator PUBLIC key  (PEM; mode 0644)  → register with the Chutes API
 
 Example:
   $(basename "$0") -o ~/rc-keys
@@ -70,7 +70,7 @@ esac
 
 mkdir -p "$OUT_DIR"
 PRIV="$OUT_DIR/$PREFIX.pem"
-PUB="$OUT_DIR/$PREFIX.pub.pem"
+PUB="$OUT_DIR/$PREFIX.pub"
 
 if [[ "$FORCE" -ne 1 ]]; then
     for f in "$PRIV" "$PUB"; do
