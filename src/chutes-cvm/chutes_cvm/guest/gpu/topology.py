@@ -14,10 +14,10 @@ fact that moves RTMR0, as the three orthogonal host axes that produce it:
 This split is what lets ONE ``GpuProfile`` (GPU-model policy only) cover several host
 configurations: a B200 on a 192-CPU/2 TB Xeon and on a 288-CPU/3 TB Xeon 6 are two
 fingerprints (different cpu + mem_gb, same gpu) of one profile, not two profiles.
-Profiles declare their known fingerprints in ``baselined_measurements`` (see
-``known_topologies``); detection builds a live one (``host_topology_fingerprint``) and
-matches by exact set membership. A fingerprint with ``cpu_processor_id=None`` is a
-placeholder (exact CPU model not captured) and so never matches a live host — the
+Detection builds a live fingerprint (``host_topology_fingerprint``) that drives the launch
+``-smp``/``-m``; the API owns the set of known classes and their acceptance (the measurement
+generator derives the same fingerprint from each published host-profile document). A fingerprint
+with ``cpu_processor_id=None`` is a placeholder (exact CPU model not captured) — the
 profile is refused at launch until discover-profile.sh fills it in.
 
 All of these are value types (frozen dataclasses): hashable and compared by value, so
@@ -44,8 +44,8 @@ class CpuTopology:
     ``vcpus`` + ``sockets`` become ``-smp``; ``cpu_vendor`` fixes the SRAT memory-hole
     (#13) and ``cpu_processor_id`` (CPUID leaf-1, 8-byte hex) becomes the SMBIOS Type-4
     Processor ID (#14). Guest RAM is a separate host axis — ``TopologyFingerprint.mem_gb``
-    — not carried here. Detection fills these from the live host; ``known_topologies``
-    declares the known values.
+    — not carried here. Detection fills these from the live host; the measurement generator
+    derives the same values from each API host-profile document.
     """
 
     vcpus: int
@@ -130,7 +130,7 @@ class TopologyFingerprint:
     Three orthogonal host axes that each move RTMR0: ``cpu`` (CpuTopology), ``mem_gb``
     (guest RAM — a scalar, but a distinct host feature from the CPU and GPUs), and
     ``gpu`` (GpuTopology device layout). Value type (frozen): two fingerprints are equal
-    iff all three match, so a profile's ``baselined_measurements`` is a set of these.
+    iff all three match.
     """
 
     cpu: CpuTopology

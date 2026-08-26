@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
-from chutes_cvm.guest.gpu import known_topologies as known
+import topology_fixtures as known
 from chutes_cvm.guest.gpu.profiles import (
     GPU_PROFILES,
     HOST_RESERVED_CPUS,
@@ -22,9 +22,9 @@ from chutes_cvm.guest.gpu.topology import (
 )
 
 # ---------------------------------------------------------------------------
-# Host-shape fixtures: the RTMR0-determining host facts now carried on the
-# topology fingerprint (vcpus/sockets/mem_gb + CPU identity), mirroring each
-# profile's baselined_measurements so the detect/fingerprint tests reproduce a
+# Host-shape fixtures: the RTMR0-determining host facts carried on the topology
+# fingerprint (vcpus/sockets/mem_gb + CPU identity), mirroring real host classes
+# (see tests/topology_fixtures.py) so the detect/fingerprint tests reproduce a
 # real host's shape deterministically.
 # ---------------------------------------------------------------------------
 _B200_XEON_SHAPE = dict(
@@ -45,8 +45,8 @@ _B300_SHAPE = dict(
     cpu_vendor="GenuineIntel",
     cpu_processor_id=None,
 )
-# A fingerprint equal to one in B200Profile.baselined_measurements, used as the
-# stand-in "live" fingerprint so detect_profile's exact-membership match accepts it.
+# A realistic B200 (Xeon) fingerprint (tests/topology_fixtures.py), used as the
+# stand-in "live" fingerprint detect_profile should return for a B200 host.
 _B200_LIVE_FP = known.B200_XEON_FP
 
 
@@ -251,19 +251,23 @@ def test_h200_uses_cc_mode_below_8_gpus():
 
 
 # ---------------------------------------------------------------------------
-# vCPU / SMP shape now lives on the baselined fingerprints, not the profile.
-# These assert the -smp-determining fields of every registered fingerprint
-# (B300 has none baselined yet, so it is skipped naturally).
+# vCPU / SMP shape lives on the TopologyFingerprint. These assert the
+# -smp-determining fields of the sample topologies (tests/topology_fixtures.py).
 # ---------------------------------------------------------------------------
+
+_SAMPLE_FINGERPRINTS = (
+    "H200_KR6288",
+    "H200_XE9680",
+    "B200_XEON_FP",
+    "B200_XEON6_FP",
+    "RTX_NUMA",
+    "RTX_FLAT",
+)
 
 
 def _all_baselined_fingerprints():
-    """(profile_key, fingerprint) for every baselined topology across profiles."""
-    return [
-        (key, fp)
-        for key, profile in GPU_PROFILES.items()
-        for fp in profile.baselined_topologies
-    ]
+    """(name, fingerprint) for the sample topologies — exercises each one's -smp shape."""
+    return [(name, getattr(known, name)) for name in _SAMPLE_FINGERPRINTS]
 
 
 def test_some_profiles_are_baselined():
@@ -478,9 +482,8 @@ def _patch_detection(
     """Return a context manager stack that patches all detection side effects.
 
     ``fingerprint`` is what host_topology_fingerprint() returns; the default is a
-    full-shape B200 (Xeon) fingerprint that matches B200Profile.baselined_measurements
-    so B200 resolution tests pass the topology hard-match. Pass a non-baselined value
-    to exercise the refusal path.
+    full-shape B200 (Xeon) fingerprint (tests/topology_fixtures.py) so B200 resolution
+    tests get a realistic live shape. detect_profile no longer gates on any local set.
     """
     from contextlib import ExitStack
 
@@ -730,8 +733,8 @@ def test_detect_profile_has_no_local_topology_gate():
 
 
 def test_detect_profile_skips_topology_check_for_unbaselined_profile():
-    # B300 has an empty baselined_topologies set -> the topology hard-match is
-    # not enforced, so an arbitrary fingerprint must not refuse the launch.
+    # No profile gates on a local topology set anymore (acceptance is the control plane's),
+    # so an arbitrary B300 fingerprint must resolve the profile, not refuse the launch.
     from chutes_cvm.guest.detection import detect_profile
 
     b300_lines = [

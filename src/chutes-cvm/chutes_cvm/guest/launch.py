@@ -94,6 +94,60 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
+def _measurement_published(config_path: str, force: bool) -> bool:
+    """Return True if launch may proceed: the control plane has a published measurement for this
+    host class (so the VM will attest). Mirrors `chutes-cvm host verify`'s API check — capture the
+    host profile, sign it, ask the API. Without an accepted verdict the VM would boot and then fail
+    attestation, so refuse early (return False) unless ``force`` overrides with a warning.
+    """
+    # Deferred: preflight pulls substrateinterface (signing) — only needed for an actual launch,
+    # not `guest launch --help` or the early config path.
+    from chutes_cvm.guest.preflight import (
+        DEFAULT_API_BASE,
+        PreflightError,
+        run_preflight,
+    )
+
+    api_base = os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
+    try:
+        resp = run_preflight(
+            config_path=config_path,
+            scripts_dir=str(SCRIPTS_DIR),
+            api_base=api_base,
+            dry_run=True,
+        )
+        status = resp.get("status")
+        fingerprint = resp.get("fingerprint", "?")
+        detail = resp.get("detail", "")
+    except PreflightError as exc:
+        status, fingerprint, detail = None, "?", str(exc)
+
+    if status == "accepted":
+        print(f"✓ Published measurement covers this host (fingerprint {fingerprint})")
+        return True
+
+    problem = (
+        f"no published measurement for this host class yet "
+        f"(status: {status or 'unreachable'}; fingerprint {fingerprint})."
+        + (f" {detail}" if detail else "")
+    )
+    if force:
+        print(
+            f"⚠ {problem}\n  Proceeding anyway (--force) — the VM will fail attestation if this "
+            "host class is truly unpublished.",
+            file=sys.stderr,
+        )
+        return True
+    print(
+        f"✗ {problem}\n"
+        "  Refusing to launch: the VM would boot but fail attestation. Register this host class\n"
+        "  with `chutes-cvm host submit-profile`, then retry once Chutes publishes its\n"
+        "  measurements (`chutes-cvm host verify` shows readiness). Pass --force to launch anyway.",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _resolve_public_iface(configured: str) -> str:
     """Return the public interface: the configured one if it exists, else the default-route dev.
 
@@ -542,6 +596,15 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     print(f"✓ TDX active (via {source})")
     _ensure_numa_zone_reclaim()
+
+    # Benchmark VMs use dummy creds and are not registered/attested against a published
+    # measurement, so the gate only applies to a standard launch.
+    if not benchmark:
+        print("\nStep 1: Confirming a published measurement for this host class...")
+        if not _measurement_published(
+            args.config_file or default_config_path(), args.force
+        ):
+            return 1
 
     orig_cwd = os.getcwd()
     os.chdir(

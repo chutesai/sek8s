@@ -292,3 +292,119 @@ def test_generate_full_without_image_is_usage_error(capsys):
     rc = gm._cmd_generate(_gen_args(image=None))
     assert rc == 2
     assert "--image" in capsys.readouterr().err
+
+
+# ── API-driven generation: host-profile document → topology, fetch, fingerprint ──
+
+import topology_fixtures as tf  # noqa: E402  (tests/ is on sys.path)
+
+# Minimal discover-profile documents (API `profile` wire shape) for two known classes.
+_H200_DOC = {
+    "gpu": {
+        "pci_device_ids": ["2335"],
+        "count": 8,
+        "numa_nodes": [0, 0, 0, 0, 1, 1, 1, 1],
+    },
+    "cpu": {
+        "total": 128,
+        "sockets": 2,
+        "cpu_vendor": "GenuineIntel",
+        "cpu_processor_id": "f2060c00fffba91f",
+    },
+    "memory": {"total_gb": 2048},
+    "numa": {"node_count": 2},
+    "nvswitch": {"count": 4, "numa_nodes": [0, 0, 0, 0]},
+    "launch_determinism": {"qemu_version": "10.2.1"},
+}
+_RTX_FLAT_DOC = {
+    "gpu": {"pci_device_ids": ["2bb5"], "count": 8},
+    "cpu": {
+        "total": 128,
+        "sockets": 2,
+        "cpu_vendor": "GenuineIntel",
+        "cpu_processor_id": "f3060a00fffba91f",
+    },
+    "memory": {"total_gb": 2048},
+    "numa": {"node_count": 4},  # not 2 → flat fallback
+    "launch_determinism": {"qemu_version": "10.2.1"},
+}
+
+
+def test_topology_from_profile_reproduces_numa_fingerprint():
+    """The document deriver must reproduce the exact fingerprint the host would launch with —
+    here byte-identical to the former hardcoded H200 NVSwitch-node-0 registry entry."""
+    profile, fp, qemu = gm.topology_from_profile(_H200_DOC)
+    assert profile.display_name == "8xh200"
+    assert qemu == "10.2.1"
+    assert fp == tf.H200_KR6288  # vcpus 124, mem 1128, NUMA gpu 4+4, nvsw node 0
+
+
+def test_topology_from_profile_flat_fallback():
+    profile, fp, qemu = gm.topology_from_profile(_RTX_FLAT_DOC)
+    assert profile.display_name == "8xpro_6000"
+    assert fp == tf.RTX_FLAT  # >2 NUMA nodes → FlatTopology(gpu_count=8), mem 768
+
+
+def test_topology_from_profile_rejects_unknown_device():
+    with pytest.raises(ValueError, match="no GPU profile matches"):
+        gm.topology_from_profile({"gpu": {"pci_device_ids": ["dead"], "count": 8}})
+
+
+def test_fetch_host_profiles_parses_list(monkeypatch):
+    payload = [{"fingerprint": "a" * 64, "profile": _H200_DOC}]
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(payload).encode()
+
+    with patch(
+        "chutes_cvm.measurement.generate_measurements.urllib.request.urlopen",
+        return_value=_Resp(),
+    ):
+        out = gm.fetch_host_profiles("https://api.example")
+    assert out == payload
+
+
+def _rtmr0_args(**over):
+    d = dict(
+        api_base="https://api.example",
+        bios_dir="/fw",
+        tdx_measure_bin="tdx-measure",
+        dist="ubuntu:26.04",
+        version="1.4.0",
+    )
+    d.update(over)
+    return argparse.Namespace(**d)
+
+
+def test_rtmr0_block_carries_api_fingerprint_onto_each_entry():
+    """The API's fingerprint is stamped onto the generated entry (never recomputed), so the
+    reconciler can join the published measurement to the submitted host profile."""
+    fp_hex = "b" * 64
+    records = [{"fingerprint": fp_hex, "profile": _H200_DOC}]
+    with patch.object(gm, "fetch_host_profiles", return_value=records), patch.object(
+        gm, "generate_acpi_blobs", return_value={"rtmr0": "R0HEX", "mrtd": "MRTDHEX"}
+    ):
+        block = gm._rtmr0_block(_rtmr0_args())
+    assert len(block["hardware"]) == 1
+    entry = block["hardware"][0]
+    assert entry["fingerprint"] == fp_hex
+    assert entry["rtmr0"] == "R0HEX"
+    assert block["mrtd"] == "MRTDHEX"
+    assert "8xh200" in entry["name"]
+
+
+def test_rtmr0_block_marks_unfingerprinted_record_pending():
+    records = [{"fingerprint": "", "profile": _H200_DOC}]
+    with patch.object(gm, "fetch_host_profiles", return_value=records), patch.object(
+        gm, "generate_acpi_blobs", return_value={"rtmr0": "R0", "mrtd": "M"}
+    ):
+        block = gm._rtmr0_block(_rtmr0_args())
+    assert block["hardware"] == []
+    assert block.get("pending_profiles")

@@ -171,6 +171,7 @@ def _happy(**over):
         "_resolve_public_iface": "eth0",
         "_chutes_td_running": False,
         "_tdx_active": (True, "sysfs"),
+        "_measurement_published": True,
         "_prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
     defaults.update(over)
@@ -204,6 +205,57 @@ def test_main_force_overrides_duplicate_guard():
         rc = launch.main(_STD_ARGV + ["--force"])
     assert rc == 0
     boot.assert_called_once()
+
+
+def test_main_refuses_when_measurement_unpublished():
+    # No published measurement for this host class → stop before any GPU/volume work.
+    with _happy(_measurement_published=False), patch(f"{P}._boot") as boot:
+        rc = launch.main(_STD_ARGV)
+    assert rc == 1
+    boot.assert_not_called()
+
+
+def test_main_benchmark_skips_measurement_gate():
+    # Benchmark VMs use dummy creds and aren't attested, so a failing gate must not block them.
+    argv = ["--hostname", "h", "--benchmark", "--network-type", "user", "--no-gpus"]
+    with _happy(_measurement_published=False), patch(
+        f"{P}._boot", return_value=0
+    ) as boot:
+        rc = launch.main(argv)
+    assert rc == 0
+    boot.assert_called_once()
+
+
+# ── the measurement gate itself (mirrors host verify's API check) ────────────────
+
+
+def test_measurement_published_true_when_accepted(capsys):
+    with patch(
+        "chutes_cvm.guest.preflight.run_preflight",
+        return_value={"status": "accepted", "fingerprint": "abc"},
+    ):
+        assert launch._measurement_published("/cfg.yaml", force=False) is True
+    assert "Published measurement" in capsys.readouterr().out
+
+
+def test_measurement_published_false_when_pending_force_overrides(capsys):
+    resp = {"status": "pending", "fingerprint": "abc", "detail": "awaiting generation"}
+    with patch("chutes_cvm.guest.preflight.run_preflight", return_value=resp):
+        assert launch._measurement_published("/cfg.yaml", force=False) is False
+        assert launch._measurement_published("/cfg.yaml", force=True) is True
+    err = capsys.readouterr().err
+    assert "Refusing to launch" in err and "submit-profile" in err
+
+
+def test_measurement_published_fails_closed_on_api_error():
+    from chutes_cvm.guest.preflight import PreflightError
+
+    with patch(
+        "chutes_cvm.guest.preflight.run_preflight",
+        side_effect=PreflightError("API unreachable"),
+    ):
+        assert launch._measurement_published("/cfg.yaml", force=False) is False
+        assert launch._measurement_published("/cfg.yaml", force=True) is True
 
 
 def test_main_blocks_when_tdx_inactive(capsys):

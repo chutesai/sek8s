@@ -6,21 +6,31 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
 ## [0.1.0] - 2026-08-25
 
 ### Added
-- **`chutes-cvm measurements`** — offline TDX measurement generation is now a first-class command
+- **`chutes-cvm measurements`** — TDX measurement generation is now a first-class command
   group (`generate` / `list`), forwarding to `chutes_cvm.measurement`. The guest build
   calls the CLI instead of per-register shell scripts + ansible roles:
+  - **The API is the source of truth for known host classes.** `generate` reads the published host
+    profiles (`GET /servers/tdx/host_profiles` — public, unauthenticated; `--api-base`, default
+    `https://api.chutes.ai`) and produces ONE entry per class: it derives the topology from each
+    stored discover-profile document (mirroring the live `host_topology_fingerprint`), runs the fork
+    offline, and **carries the API's 64-hex `fingerprint` through onto the entry** (never recomputed).
+    The reconciler joins published measurements to submitted host profiles on that fingerprint, so it
+    is required — an entry without one is unmatchable ("pending" forever even though it launches). The
+    in-repo baseline registry (`known_topologies`, `GpuProfile.baselined_measurements`) is removed:
+    adding hardware is `chutes-cvm host submit-profile`, not a code change here.
   - **`generate`** — with no `--register`, computes EVERY register in one POST-LUKS call — mrtd +
-    RTMR0 (all topologies) + RTMR1/RTMR2 (the image's staged direct-boot artifacts) + RTMR3
+    RTMR0 (all API host classes) + RTMR1/RTMR2 (the image's staged direct-boot artifacts) + RTMR3
     (mounting the root, unlocking it with `LUKS_PASSPHRASE`) — and writes the version's single
     `measurements.yaml`. This is what the miner-VM build runs; there is no separate pre-LUKS RTMR3
     step.
   - **`generate --register rtmr0`** — just the version-level MRTD + per-topology RTMR0 via the
-    tdx-measure fork (offline, any x86-64 Linux — no TDX/GPU) as a JSON block; `--profile` does one,
-    empty does all. A standalone partial (a full `generate` computes RTMR0 inline).
+    tdx-measure fork (offline, any x86-64 Linux — no TDX/GPU) as a JSON block. A standalone partial
+    (a full `generate` computes RTMR0 inline).
   - **`generate --register rtmr3`** — just the version-level RTMR3 (SHA-384 chain over the image's
     `/etc/tdx-measure.conf` files), mounting the root read-only. `LUKS_PASSPHRASE` unlocks an
     encrypted root; always recomputes **fresh** (the real value, no cached/reused fallback). Used by
     the partner GPU-VM build (`tee-gpu-vm.yml`), which has no aggregation.
+  - **`list`** — prints the API's known host classes (fingerprint + GPU summary).
 - **`src/chutes-cvm/install.sh` — the single source of truth for install** (replaces
   `host-tools/scripts/provision/setup-chutes-cvm.sh`). One script owns both fetch and install, and
   picks its mode: run from a checkout (ansible / build / dev) → editable install from that checkout
@@ -51,6 +61,12 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   primitive. This is the one command a miner uses to bring a VM up. Per the AGENT.md bash-vs-Python
   rule, Python owns the decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd,
   ip/iptables).
+- **Launch gates on a published measurement.** Before any GPU/volume/boot work, `guest launch`
+  runs the same control-plane check as `host verify` (capture host profile → sign → ask the API):
+  if this host class has no published measurement (`status != accepted`), it refuses early with the
+  fix (`host submit-profile`) instead of booting a VM that would only fail attestation. Fails closed
+  if the API is unreachable; `--force` overrides (with a warning); benchmark launches (dummy creds,
+  not attested) skip the gate.
 - **`chutes-cvm image download` / `config init` / `guest stop` / `guest down`** — the launch
   orchestrator's modes that used to be flags are now first-class commands: `image download [--debug]`
   fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` stops

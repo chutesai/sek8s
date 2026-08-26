@@ -10,9 +10,11 @@ A GpuProfile holds only GPU-MODEL policy that is identical on every host the GPU
 ships on. The host-instance facts that feed RTMR0 — the guest -smp (vcpus +
 sockets), guest RAM, and CPU identity (vendor + SMBIOS Type-4 Processor ID) — are
 NOT profile constants: they live on the topology fingerprint (gpu/topology.py),
-detected from the live host and declared in ``baselined_measurements``. So "same
-GPU, different CPU/RAM host" is two fingerprints of one profile, not two profiles
-(e.g. B200 on a 192-CPU Xeon vs a 288-CPU Xeon 6).
+detected from the live host. So "same GPU, different CPU/RAM host" is two
+fingerprints of one profile, not two profiles (e.g. B200 on a 192-CPU Xeon vs a
+288-CPU Xeon 6). The set of known host classes and their acceptance is owned by the
+API, not this repo — ``chutes-cvm measurements generate`` derives each class's
+fingerprint from the host profiles the API publishes.
 
 To add a profile:
   1. Encode GPU-model policy on the subclass: pci_device_ids, BAR/VRAM, CC/PPCIe
@@ -21,12 +23,11 @@ To add a profile:
      override ``guest_mem_gb`` if guest RAM is derived from host RAM rather than
      pinned to aggregate VRAM (B200 does, most don't). Keep host_reserved_cpus EVEN
      so vcpus divides across sockets.
-  2. Run ``discover-profile.sh`` on each host CLASS the GPU ships on to capture its
-     shape (cpu_vendor, cpu_processor_id, plus the CPU/RAM the fingerprint's
-     vcpus/mem derive from), and declare one fingerprint per class in
-     ``baselined_measurements`` (see H200Profile). A fingerprint with
-     cpu_processor_id=None is launch-gated but not yet generatable — fill it in from
-     discover-profile before generating that class's measurement.
+  2. Submit each host CLASS the GPU ships on via ``chutes-cvm host submit-profile``
+     (``discover-profile.sh`` captures cpu_vendor/cpu_processor_id + the CPU/RAM the
+     fingerprint's vcpus/mem derive from). The API records it and returns the
+     fingerprint the measurement generator then builds against — no per-class data
+     is hardcoded here.
 
 Changing host_reserved_cpus / guest_mem_gb moves the fingerprint's vcpus/mem →
 RTMR0, so it requires re-baselining that profile's attestation policy.
@@ -34,9 +35,6 @@ RTMR0, so it requires re-baselining that profile's attestation policy.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-
-from chutes_cvm.guest.gpu import known_topologies as known
-from chutes_cvm.guest.gpu.topology import TopologyFingerprint
 
 HOST_RESERVED_CPUS = 4
 
@@ -144,7 +142,7 @@ class GpuProfile(ABC):
     # profile constants: they vary host to host and live on the topology fingerprint
     # (gpu/topology.py). Detection derives them from the LIVE host (vcpus =
     # host_cpus − host_reserved_cpus; sockets; mem via guest_mem_gb; CPU via
-    # /proc/cpuinfo) and matches the result against baselined_measurements. The
+    # /proc/cpuinfo); acceptance of the resulting fingerprint is the API's call. The
     # profile supplies only host_reserved_cpus (workload policy) and guest_mem_gb.
 
     @abstractmethod
@@ -189,26 +187,6 @@ class GpuProfile(ABC):
         return False
 
     @property
-    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        """QEMU version -> known topology fingerprints (RTMR0 = f(topology, QEMU)).
-
-        Fingerprints are NumaTopology / FlatTopology value types (see
-        gpu/topology.py). chutes-cvm host verify uses the per-QEMU keys to flag a topology
-        with no measurement at a given QEMU. Empty dict = profile not
-        characterized yet.
-        """
-        return {}
-
-    @property
-    def baselined_topologies(self) -> set[TopologyFingerprint]:
-        """Union of known fingerprints across QEMU versions, for the launch-time
-        hard-match (QEMU-agnostic). Empty union skips the check."""
-        out: set[TopologyFingerprint] = set()
-        for topos in self.baselined_measurements.values():
-            out |= topos
-        return out
-
-    @property
     def enable_post_launch_tuning(self) -> bool:
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
         return False
@@ -242,9 +220,8 @@ class GpuProfile(ABC):
 class B200Profile(GpuProfile):
     """B200 (GPU-model policy). Covers both Intel host classes it ships on — a
     192-CPU/~2 TB Xeon and a 288-CPU/~3 TB Xeon 6 — as two fingerprints of this one
-    profile (see baselined_measurements), not two classes. 2 NUMA nodes with GPUs
-    split 4+4 across sockets. Confirmed from discover-profile.sh on am-b200-57
-    (Xeon) and chutes-miner-gpu-0 (Xeon 6).
+    profile, not two profiles. 2 NUMA nodes with GPUs split 4+4 across sockets.
+    Confirmed from discover-profile.sh on am-b200-57 (Xeon) and chutes-miner-gpu-0 (Xeon 6).
     """
 
     pci_device_ids = ["2901"]
@@ -309,13 +286,6 @@ class B200Profile(GpuProfile):
     def requires_fabric_manager(self) -> bool:
         return True
 
-    @property
-    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # ONE profile, two host classes — same 4+4 GPU layout, different CPU/RAM (the
-        # B200-vs-Xeon6 collapse: two fingerprints, not two classes). Both Intel; each
-        # cpu_processor_id PENDING a discover-profile.sh capture. QEMU 10.2.1 (26.04).
-        return {"10.2.1": {known.B200_XEON_FP, known.B200_XEON6_FP}}
-
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200)"
 
@@ -339,8 +309,8 @@ class B300Profile(GpuProfile):
         return 288  # B300 HBM3e (SXM6 AC)
 
     # Host: 2 sockets x 48 cores x 2 threads = 192 (Intel, from lscpu on am-b300-61)
-    # → 188 vcpus. No baselined_measurements yet (uncharacterized): run
-    # discover-profile.sh on a B300 host and declare its fingerprint (see H200Profile).
+    # → 188 vcpus. Not yet submitted to the API (uncharacterized): run
+    # `chutes-cvm host submit-profile` on a B300 host so its class gets a fingerprint.
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
         return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
@@ -428,17 +398,6 @@ class H200Profile(GpuProfile):
         # before changing this value.
         return total_gpus == 8
 
-    @property
-    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # Mirrors chutes-ops teeMeasurements. The two fingerprints differ only in which
-        # host NUMA node the four NVSwitches attach to (chassis-dependent); GPUs always
-        # 4+4. No flat entry: no flat-path H200 is baselined at 10.2.1 (the only
-        # supported QEMU), so a >2-NUMA-node H200 host is refused at launch. NOTE: a
-        # 192-CPU H200 host now derives 188 vcpus (its own fingerprint) instead of being
-        # pinned to 124; capture its CPU with discover-profile.sh and register that
-        # RTMR0 before running one.
-        return {"10.2.1": {known.H200_KR6288, known.H200_XE9680}}
-
     def describe_mode(self, total_gpus: int) -> str:
         if total_gpus == 8:
             return "PPCIe mode (8 GPUs, H200)"
@@ -492,13 +451,6 @@ class RTXPro6000Profile(GpuProfile):
 
     def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
         return False
-
-    @property
-    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
-        # Two host shapes distinguished purely by NUMA node count: 2 nodes → guest-NUMA
-        # path (GPUs 4+4); >2 nodes → flat fallback (only GPU count matters). Intel Xeon
-        # host, CPU captured (see known.RTX_XEON). QEMU 10.2.1 = Ubuntu 26.04.
-        return {"10.2.1": {known.RTX_NUMA, known.RTX_FLAT}}
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (RTX Pro 6000)"

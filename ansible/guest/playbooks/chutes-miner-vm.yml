@@ -513,6 +513,9 @@
           - "{{ repo_root }}/measurements/{{ vm_version }}/measurements.yaml"
           - --tdx-measure-bin
           - "{{ tdx_measure_bin | default('tdx-measure') }}"
+          # Source of the known host classes + their fingerprints (the build host must reach it).
+          - --api-base
+          - "{{ measurements_api_base | default('https://api.chutes.ai') }}"
       environment:
         # RTMR3 mounts the root; LUKS_PASSPHRASE unlocks it when the image is encrypted (prod).
         LUKS_PASSPHRASE: "{{ luks_passphrase | default('') }}"

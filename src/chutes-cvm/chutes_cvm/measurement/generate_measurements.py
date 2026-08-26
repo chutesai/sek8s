@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Offline TDX measurements generator → the version's teeMeasurements block.
+"""TDX measurements generator → the version's teeMeasurements block.
+
+The known host classes come from the API (the source of truth): `generate` reads the published
+host profiles (`GET /servers/tdx/host_profiles`) and produces one entry per class, carrying the
+API's fingerprint through onto it so the reconciler can join the published measurement to the
+submitted host profile. RTMR generation itself is offline (fork + Docker; no TDX/GPU).
 
 `generate` (no --register) computes the whole block for an image version — MRTD +
 per-topology RTMR0 + RTMR1/RTMR2 (from the staged direct-boot artifacts) + RTMR3
 (over the encrypted root's /etc/tdx-measure.conf files) — and writes measurements.yaml.
 `--register {rtmr0,rtmr3}` narrows it to one register (standalone partials for the
-GPU-VM build, which has no aggregation). `list` enumerates supported topologies.
+GPU-VM build, which has no aggregation). `list` prints the API's known host classes.
 
 The bulk of this module is the novel part — offline per-topology RTMR0 generation (no
 guest boot), from local/offline-rtmr0-findings.md §7:
@@ -30,10 +35,10 @@ release, so #14 does not vary by host or topology — one CCEL, captured anywher
 every profile. (Recomputing #14 offline from the SMBIOS blob, to drop the CCEL entirely, is
 future work — see utils/smbios_match.py.)
 
-Requires host-tools/scripts on sys.path (for chutes_cvm.guest / GPU_PROFILES) and, for
-actual per-topology ACPI generation, the chutesai/tdx-measure fork + Docker on any
-x86-64 Linux (NO TDX, NO GPUs — that's the point of offline measurement). The
-splice/replay/recompute/assembly path is pure stdlib and runs anywhere.
+Needs network access to the API for the host-profile list, and — for actual per-topology ACPI
+generation — the chutesai/tdx-measure fork + Docker on any x86-64 Linux (NO TDX, NO GPUs —
+that's the point of offline measurement). The splice/replay/recompute/assembly path is pure
+stdlib.
 """
 from __future__ import annotations
 
@@ -43,12 +48,19 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import yaml
 from chutes_cvm import proc
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
+from chutes_cvm.guest.gpu.topology import (
+    CpuTopology,
+    FlatTopology,
+    NumaTopology,
+    TopologyFingerprint,
+)
 from chutes_cvm.measurement import ccel_replay as cc
 from chutes_cvm.measurement.platform_tables import MeasurementMetadata
 from chutes_cvm.measurement.runtime_rtmr import (
@@ -61,6 +73,14 @@ from chutes_cvm.measurement.topology_spec import (
     measurement_cpu_args,
 )
 from chutes_cvm.paths import firmware_dir
+
+# The API is the source of truth for known host classes and their fingerprints. `generate`
+# reads the published host profiles (the platform inputs each measurement is built from) from
+# this public, unauthenticated endpoint and generates one measurement per profile, carrying the
+# API's fingerprint straight through — the reconciler joins published measurements to submitted
+# host profiles on it, so an entry without a fingerprint is unmatchable.
+DEFAULT_API_BASE = "https://api.chutes.ai"
+_HOST_PROFILES_PATH = "/servers/tdx/host_profiles"
 
 # The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
 # not by fixed position: the boot method sets how many CONSTANT events surround them
@@ -181,9 +201,9 @@ def generate_acpi_blobs(
 
     Only the distribution is passed to --create-acpi-tables: the fork pins the exact
     QEMU source-package version *and* container image digest per dist (qemu_pkg_for),
-    which is what makes the dump reproducible. Our internal baselined_measurements key
-    (e.g. "10.2.1") is a release label, NOT a Debian package version — forwarding it as
-    the fork's version override lands an unresolvable `pull-lp-source qemu 10.2.1`.
+    which is what makes the dump reproducible. The QEMU version label (e.g. "10.2.1", from the
+    host profile) is a release label, NOT a Debian package version — forwarding it as the fork's
+    version override lands an unresolvable `pull-lp-source qemu 10.2.1`.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     meta_path = out_dir / "metadata.json"
@@ -217,32 +237,87 @@ def generate_acpi_blobs(
     return json.loads(result_path.read_text())
 
 
-# ── Topology enumeration (offline, from the profile registry) ─────────────────
+# ── Host profiles (from the API) → per-topology generation inputs ──────────────
 
 
-@dataclass(frozen=True)
-class Topology:
-    profile_name: str
-    qemu_version: str
-    fingerprint: object  # NumaTopology | FlatTopology
+def fetch_host_profiles(api_base: str) -> list[dict]:
+    """GET the published host profiles: ``[{"fingerprint", "profile"}, ...]``.
 
-    def key(self) -> str:
-        return f"{self.profile_name}[{self.qemu_version}]:{self.fingerprint}"
+    The API owns the fingerprint and is the source of truth for known host classes. This public,
+    unauthenticated endpoint returns each stored discover-profile document plus its 64-hex
+    fingerprint; the generator builds one measurement per profile and carries the fingerprint
+    through verbatim (never recomputed)."""
+    url = f"{api_base.rstrip('/')}{_HOST_PROFILES_PATH}"
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "chutes-cvm-measurements/1.0"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"API returned HTTP {exc.code} for {url}") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError(f"API unreachable at {url}: {exc.reason}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"API returned unparseable host profiles: {exc}") from exc
+    if not isinstance(data, list):
+        raise ValueError(
+            f"expected a list of host profiles from {url}, got {type(data).__name__}"
+        )
+    return data
 
 
-def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
-    """Every registered (profile, qemu_version, fingerprint) from the profiles'
-    `baselined_measurements` — the hand-curated offline registry (no live host).
-    `qemu_filter` (e.g. "10.2.1") restricts to this release's supported QEMU."""
+def _resolve_profile_for_devices(device_ids: list[str]) -> GpuProfile:
+    """The GpuProfile whose ``pci_device_ids`` cover these GPUs — the measurement policy
+    (firmware, CC/PPCIe mode, BAR/VRAM, reserved CPUs, guest-RAM rule) for the class."""
+    for profile in GPU_PROFILES.values():
+        if any(profile.matches_device_id(d) for d in device_ids):
+            return profile
+    raise ValueError(f"no GPU profile matches device ids {device_ids}")
 
-    out: list[Topology] = []
-    for name, profile in GPU_PROFILES.items():
-        for qemu_version, fingerprints in profile.baselined_measurements.items():
-            if qemu_filter and qemu_version != qemu_filter:
-                continue
-            for fp in fingerprints:
-                out.append(Topology(name, qemu_version, fp))
-    return out
+
+def topology_from_profile(doc: dict) -> "tuple[GpuProfile, TopologyFingerprint, str]":
+    """Derive ``(GpuProfile, TopologyFingerprint, qemu_version)`` from an API host-profile document.
+
+    ``doc`` is discover-profile.sh's output as stored by the API. This mirrors the live
+    ``host_topology_fingerprint`` but reads the document instead of sysfs, so the generator
+    reproduces the exact RTMR0 inputs the host launches with. The fingerprint that identifies the
+    class is the API's (carried separately) — it is never recomputed here.
+    """
+    gpu = doc.get("gpu") or {}
+    cpu = doc.get("cpu") or {}
+    memory = doc.get("memory") or {}
+    numa = doc.get("numa") or {}
+    nvswitch = doc.get("nvswitch") or {}
+    nic = doc.get("nic") or {}
+    qemu = (doc.get("launch_determinism") or {}).get("qemu_version") or ""
+
+    device_ids = [str(d).lower() for d in (gpu.get("pci_device_ids") or [])]
+    profile = _resolve_profile_for_devices(device_ids)
+    gpu_count = int(gpu.get("count") or 0)
+
+    cpu_topo = CpuTopology(
+        vcpus=int(cpu.get("total") or 0) - profile.host_reserved_cpus,
+        sockets=int(cpu.get("sockets") or 0),
+        cpu_vendor=cpu.get("cpu_vendor") or "",
+        cpu_processor_id=cpu.get("cpu_processor_id"),
+    )
+    mem_gb = profile.guest_mem_gb(int(memory.get("total_gb") or 0), gpu_count)
+
+    gpu_topo: "NumaTopology | FlatTopology"
+    if profile.enable_numa_topology and int(numa.get("node_count") or 0) == 2:
+        gpu_topo = NumaTopology(
+            gpu_nodes=tuple(gpu.get("numa_nodes") or ()),
+            nvswitch_nodes=tuple(nvswitch.get("numa_nodes") or ()),
+            ib_nodes=tuple(nic.get("passthrough_numa_nodes") or ()),
+        )
+    else:
+        gpu_topo = FlatTopology(
+            gpu_count=gpu_count,
+            nvswitch_count=int(nvswitch.get("count") or 0),
+            ib_count=int(nic.get("ib_class_count") or 0),
+        )
+    return profile, TopologyFingerprint(cpu_topo, mem_gb, gpu_topo), qemu
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -251,21 +326,22 @@ def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
 def _rtmr0_block(args: argparse.Namespace) -> dict:
     """Generate the version-level RTMR0 block: {version, mrtd, hardware[], pending_profiles?}.
 
-    --profile <name> does one profile; empty does ALL. For each baselined topology, the fork
-    self-generates the COMPLETE RTMR0 (all 15 events, no CCEL) — the measurement -cpu
-    reconstructs the profile's production CPU vendor + SMBIOS Type-4 Processor ID, so any host
-    reproduces the production RTMR0. A profile that can't be generated offline yet (e.g. no
-    passthrough["gpu"] modeled) is listed PENDING, not fatal.
+    Reads the published host profiles from the API (the source of truth for known host classes)
+    and generates ONE hardware entry per profile. For each, the fork self-generates the COMPLETE
+    RTMR0 (all 15 events, no CCEL) from the topology derived off the profile document, and the
+    API's fingerprint is carried through onto the entry (never recomputed) so the reconciler can
+    join it to the submitted host profile. A profile that can't be generated offline yet (e.g. an
+    uncaptured CPU model — cpu_processor_id null) is listed PENDING by fingerprint, not fatal.
 
-    Raises ValueError on a hard error (unknown profile, duplicate hardware names, or MRTD
+    Raises ValueError on a hard error (API unreachable, duplicate hardware names, or MRTD
     divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
     """
 
-    def fork_rtmr0(profile, fp):
+    def fork_rtmr0(profile, fp, qemu):
         spec = build_topology_spec(
             profile,
             fp,
-            cpu_args=measurement_cpu_args(fp, args.qemu),
+            cpu_args=measurement_cpu_args(fp, qemu),
             firmware=str(Path(args.bios_dir) / profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
@@ -280,42 +356,41 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             )
         return (out.get("rtmr0") or "").upper(), out.get("mrtd", "")
 
-    names = [args.profile] if args.profile else list(GPU_PROFILES)
+    records = fetch_host_profiles(args.api_base)
     hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
     mrtds: set[str] = set()
     pending: list[str] = []
-    for name in names:
-        profile = GPU_PROFILES.get(name)
-        if profile is None:
-            raise ValueError(f"unknown profile: {name}")
-        fps = sorted(profile.baselined_measurements.get(args.qemu, set()), key=str)
-        if not fps:
-            continue  # nothing baselined for this QEMU version
+    for record in records:
+        fingerprint = record.get("fingerprint") or ""
+        label = fingerprint[:12] or "<no-fingerprint>"
         try:
-            for fp in fps:
-                rtmr0, mrtd = fork_rtmr0(profile, fp)
-                mrtds.add(mrtd.upper())
-                gpu_count = getattr(fp.gpu, "gpu_count", None) or len(
-                    getattr(fp.gpu, "gpu_nodes", ())
-                )
-                hw_name = f"{profile.display_name} [{args.qemu}, {fp.variant_label}]"
-                hardware.append(
-                    {
-                        "name": hw_name,
-                        "description": (
-                            f"{gpu_count}x {profile.expected_gpus[0].upper()} "
-                            "GPU configuration"
-                        ),
-                        "rtmr0": rtmr0,
-                        "expected_gpus": list(profile.expected_gpus),
-                        "gpu_count": gpu_count,
-                    }
-                )
-                print(f"    {hw_name}  rtmr0={rtmr0[:16]}…", file=sys.stderr)
+            if not fingerprint:
+                raise ValueError("host profile has no fingerprint")
+            profile, fp, qemu = topology_from_profile(record.get("profile") or {})
+            rtmr0, mrtd = fork_rtmr0(profile, fp, qemu)
+            mrtds.add(mrtd.upper())
+            gpu_count = getattr(fp.gpu, "gpu_count", None) or len(
+                getattr(fp.gpu, "gpu_nodes", ())
+            )
+            hw_name = f"{profile.display_name} [{qemu}, {fp.variant_label}]"
+            hardware.append(
+                {
+                    "name": hw_name,
+                    "description": (
+                        f"{gpu_count}x {profile.expected_gpus[0].upper()} "
+                        "GPU configuration"
+                    ),
+                    "fingerprint": fingerprint,
+                    "rtmr0": rtmr0,
+                    "expected_gpus": list(profile.expected_gpus),
+                    "gpu_count": gpu_count,
+                }
+            )
+            print(f"    {hw_name}  fp={label}…  rtmr0={rtmr0[:16]}…", file=sys.stderr)
         except Exception as exc:
-            pending.append(name)
+            pending.append(fingerprint or label)
             print(
-                f"  {name}: PENDING — cannot generate offline: {exc}", file=sys.stderr
+                f"  {label}: PENDING — cannot generate offline: {exc}", file=sys.stderr
             )
             continue
 
@@ -373,8 +448,8 @@ def _generate_rtmr0(args: argparse.Namespace) -> int:
         f"{f', pending: {pending}' if pending else ''}",
         file=sys.stderr,
     )
-    # Fail only when a specific profile was requested but couldn't be generated.
-    return 2 if (args.profile and not block["hardware"]) else 0
+    # Fail if the API returned host classes but none could be generated (all pending).
+    return 2 if (block.get("pending_profiles") and not block["hardware"]) else 0
 
 
 def _compute_measurements(args: argparse.Namespace) -> dict:
@@ -491,10 +566,24 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
-    """List the supported topologies the generator would produce RTMR0 for."""
-    for t in enumerate_topologies(args.qemu):
-        print(t.key())
+    """List the published host classes the API knows — the profiles `generate` builds
+    measurements for. Prints ``<fingerprint>  <count>x [<pci_device_ids>]`` per class.
+    """
+    for record in fetch_host_profiles(args.api_base):
+        fp = record.get("fingerprint") or "<no-fingerprint>"
+        gpu = (record.get("profile") or {}).get("gpu") or {}
+        ids = ",".join(gpu.get("pci_device_ids") or []) or "?"
+        print(f"{fp}  {gpu.get('count', '?')}x [{ids}]")
     return 0
+
+
+def _add_api_arg(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--api-base",
+        default=os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE,
+        help="control-plane base URL for the host-profile source "
+        f"(default: {DEFAULT_API_BASE}; env CHUTES_API_BASE)",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -504,23 +593,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    ls = sub.add_parser("list", help="list supported topologies")
-    ls.add_argument("--qemu", default="10.2.1", help="QEMU version filter")
+    ls = sub.add_parser(
+        "list", help="list the API's known host classes (fingerprint + GPUs)"
+    )
+    _add_api_arg(ls)
     ls.set_defaults(func=_cmd_list)
 
     def _add_fork_args(p: argparse.ArgumentParser) -> None:
-        """Shared RTMR0-generation options (the tdx-measure fork inputs)."""
-        p.add_argument(
-            "--profile",
-            default="",
-            help="GPU profile (e.g. RTX_PRO_6000) — empty = ALL profiles (each generated "
-            "only if its class matches a baseline)",
-        )
-        p.add_argument(
-            "--qemu",
-            default="10.2.1",
-            help="QEMU version key in baselined_measurements",
-        )
+        """Shared RTMR0-generation options (the tdx-measure fork inputs + host-profile source)."""
+        _add_api_arg(p)
         p.add_argument(
             "--tdx-measure-bin",
             default="tdx-measure",

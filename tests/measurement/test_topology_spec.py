@@ -12,8 +12,8 @@ the endpoint device type is settled here.
 
 from unittest.mock import patch
 
+import topology_fixtures as known
 from chutes_cvm.guest.command import build_qemu_command
-from chutes_cvm.guest.gpu import known_topologies as known
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from chutes_cvm.guest.passthrough import _build_pci_topology
