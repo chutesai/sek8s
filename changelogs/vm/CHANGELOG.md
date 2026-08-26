@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-08-22
+## [1.4.0] - 2026-08-26
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -271,6 +271,12 @@ Version source of truth: `ansible/guest/VERSION`
   body can't mangle the console — so a miner sees the actual cause. The 401/403 case on the
   attestation POST is relabeled `Attestation rejected` (it is a measurement verdict, not an
   auth failure). Falls back to the prior generic string when the body carries no message.
+- **The guest-image build's measurement step now sources known host classes from the API.**
+  `chutes-cvm measurements generate` reads the published host profiles (and their fingerprints)
+  from the control plane instead of an in-repo baseline registry, so the build host must reach the
+  API. The `chutes-miner-vm` build passes `--api-base` (var `measurements_api_base`, default
+  `https://api.chutes.ai`); override it for an isolated build environment. The GPU-VM build's
+  `measurements generate --register rtmr3` step is unaffected (RTMR3 is image-only, no API call).
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
