@@ -1,8 +1,9 @@
-"""Tests for the chutes-cvm CLI dispatcher (chutes_cvm.cli).
+"""Tests for the top-level chutes-cvm CLI dispatcher (chutes_cvm.cli).
 
-Covers the command surface after the up->launch rename and the decomposition of
-the launch orchestrator's early-exit modes into first-class commands (image download / init / stop / down).
-The low-level QEMU primitive is the hidden `launch-vm`; the orchestrator is `launch`.
+Covers the noun-group command surface: every operator command is a noun (guest / host /
+image / config / measurements) whose args are forwarded verbatim to that subpackage's main.
+The low-level QEMU boot primitive (chutes_cvm.guest.__main__) is not a CLI command — the
+operator VM lifecycle lives under the `guest` noun (see test_guest_cli.py for its verbs).
 """
 
 from unittest.mock import patch
@@ -16,39 +17,38 @@ def _visible_commands():
     subactions = [
         a
         for a in parser._actions
-        if getattr(a, "choices", None) and "launch" in a.choices
+        if getattr(a, "choices", None) and "guest" in a.choices
     ]
     return set(subactions[0].choices)
 
 
 def test_visible_command_surface():
     cmds = _visible_commands()
-    for expected in (
-        "launch",
-        "image",
-        "config",
-        "host",
-        "stop",
-        "down",
-        "measurements",
-    ):
+    # The top level is all nouns.
+    for expected in ("guest", "host", "image", "config", "measurements"):
         assert expected in cmds
-    # preflight was folded into `host submit-profile`; it is no longer its own command.
-    assert "preflight" not in cmds
-    # init is now `config init`, not a top-level command.
-    assert "init" not in cmds
-    # host lifecycle commands are now `host <verb>`, not top-level.
+    # The VM lifecycle verbs live under `guest`; the hardware ops under `host`. None are top-level.
+    for gone in ("launch", "stop", "down", "reset-gpus", "vfio-wedged", "up"):
+        assert gone not in cmds
+    # host lifecycle commands are `host <verb>`, not top-level.
     for gone in (
         "verify-host",
         "setup-host",
         "tune-host",
         "restore-host",
         "discover-profile",
+        "preflight",
+        "init",
     ):
         assert gone not in cmds
-    # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
+    # The boot primitive is not a CLI command at all (no `launch-vm` verb).
     assert "launch-vm" not in cmds
-    assert "up" not in cmds
+
+
+def test_guest_dispatches_to_guest_cli():
+    with patch("chutes_cvm.guest.cli.main", return_value=0) as g:
+        assert cli.main(["guest", "down", "--force"]) == 0
+    assert g.call_args.args[0] == ["down", "--force"]
 
 
 def test_host_dispatches_to_host_cli():
@@ -57,17 +57,9 @@ def test_host_dispatches_to_host_cli():
     assert h.call_args.args[0] == ["verify", "--target-os", "26.04"]
 
 
-def test_launch_dispatches_to_python_orchestrator():
-    # launch is now the Python orchestrator (chutes_cvm.guest.launch), not a bash passthrough.
-    with patch("chutes_cvm.guest.launch.main", return_value=0) as orch:
-        assert cli.main(["launch", "config.yaml", "--foreground"]) == 0
-    assert orch.call_args.args[0] == ["config.yaml", "--foreground"]
-
-
-def test_launch_vm_dispatches_to_primitive():
-    with patch("chutes_cvm.guest.__main__.main", return_value=7) as prim:
-        assert cli.main(["launch-vm", "--image", "x.qcow2"]) == 7
-    assert prim.call_args.args[0] == ["--image", "x.qcow2"]
+def test_no_launch_vm_command():
+    # `launch-vm` was removed with prime-vm; it is not a passthrough and not dispatched.
+    assert "launch-vm" not in cli._PASSTHROUGH
 
 
 def test_measurements_dispatches_to_engine():
@@ -76,43 +68,6 @@ def test_measurements_dispatches_to_engine():
     ) as gen:
         assert cli.main(["measurements", "list", "--qemu", "10.2.1"]) == 0
     assert gen.call_args.args[0] == ["list", "--qemu", "10.2.1"]
-
-
-def test_stop_calls_stop_existing_vm():
-    with patch("chutes_cvm.guest.__main__.stop_existing_vm") as stop:
-        assert cli.main(["stop"]) == 0
-    stop.assert_called_once_with()
-
-
-def test_down_force_kills_and_tears_down():
-    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["down", "--force", "--config", "/nope/config.yaml"]) == 0
-    # --force goes straight to teardown (force-kill), no --no-stop.
-    assert run.call_args.args[0] == "teardown.sh"
-    assert "--no-stop" not in run.call_args.args[1]
-    assert run.call_args.kwargs["cwd"] == str(cli._SCRIPTS_DIR)
-
-
-def test_down_graceful_then_teardown_no_stop():
-    with patch(
-        "chutes_cvm.guest.shutdown.graceful_shutdown", return_value="192.168.100.2"
-    ), patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["down", "--config", "/nope/config.yaml"]) == 0
-    # Graceful path tells teardown NOT to force-kill (the guest is powering off itself).
-    assert run.call_args.args[0] == "teardown.sh"
-    assert "--no-stop" in run.call_args.args[1]
-
-
-def test_down_graceful_failure_suggests_force(capsys):
-    from chutes_cvm.guest.shutdown import ShutdownError
-
-    with patch(
-        "chutes_cvm.guest.shutdown.graceful_shutdown",
-        side_effect=ShutdownError("unreachable"),
-    ), patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["down", "--config", "/nope/config.yaml"]) == 1
-    run.assert_not_called()  # no teardown when graceful fails
-    assert "--force" in capsys.readouterr().err
 
 
 def test_image_dispatches_to_engine():

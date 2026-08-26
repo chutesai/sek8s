@@ -35,23 +35,27 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   the `install_dependencies` step are removed.
 - **`make bundle-gpu-tools`** — discoverable maintainer target that rebuilds the vendored
   nvidia-gpu-tools wheel into the package (recipe at `src/chutes-cvm/tools/gpu-tools/`).
-- **`chutes-cvm image` / `chutes-cvm config` / `chutes-cvm vfio-wedged`** — the base-image
-  tool (`image download` / `image verify` / `image manifest`), the config validator, and the
-  PCI-passthrough-wedged check are subcommands, so every caller routes through the one console
-  script.
-- **`chutes-cvm launch`** — end-to-end VM launch orchestrator (`chutes_cvm.guest.launch`): a Python
-  decision layer that resolves config with precedence (CLI > YAML > defaults), validates, runs the
-  host gates (TDX active, NUMA, duplicate-VM guard), then invokes the bundled bash helpers for the
-  privileged steps (volumes, config volume, per-VM image, bridge) and boots via the hidden
-  `chutes-cvm launch-vm` primitive. This is the one command a miner uses to bring a VM up. Per the
-  AGENT.md bash-vs-Python rule, Python owns the decisions and bash still owns the root system
-  mutations (cryptsetup/mkfs/nbd, ip/iptables).
-- **`chutes-cvm image download` / `config init` / `stop` / `down`** — the launch orchestrator's
-  modes that used to be flags are now first-class commands: `image download [--debug]` fetches +
-  verifies a base image set, `config init` scaffolds a `config.yaml`, `stop` stops only the VM
-  (leaving the bridge up), and `down` tears the whole environment down (VM + bridge +
-  benchmark-netlog).
-- **`chutes-cvm down` shuts the guest down gracefully by default.** It POSTs a hotkey-signed
+- **`chutes-cvm image` / `chutes-cvm config`** — the base-image tool (`image download` /
+  `image verify` / `image manifest`) and the config validator (`config init` / `config verify`) are
+  noun groups, so every caller routes through the one console script.
+- **`chutes-cvm guest` — the TDX VM runtime lifecycle, grouped under one noun** (mirroring `host`):
+  `guest launch` / `stop` / `down`. The operator surface is all nouns; the low-level QEMU boot
+  primitive (`chutes_cvm.guest.__main__`) is not a CLI command — `guest launch` reaches it via a
+  Python import. GPU/PCI hardware ops (`reset-gpus`, `vfio-wedged`) live under `host`, since they act
+  on host hardware with or without a running guest.
+- **`chutes-cvm guest launch`** — end-to-end VM launch orchestrator (`chutes_cvm.guest.launch`): a
+  Python decision layer that resolves config with precedence (CLI > YAML > defaults), validates, runs
+  the host gates (TDX active, NUMA, duplicate-VM guard), then invokes the bundled bash helpers for
+  the privileged steps (volumes, config volume, per-VM image, bridge) and boots via the QEMU boot
+  primitive. This is the one command a miner uses to bring a VM up. Per the AGENT.md bash-vs-Python
+  rule, Python owns the decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd,
+  ip/iptables).
+- **`chutes-cvm image download` / `config init` / `guest stop` / `guest down`** — the launch
+  orchestrator's modes that used to be flags are now first-class commands: `image download [--debug]`
+  fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` stops
+  only the VM (leaving the bridge up), and `guest down` tears the whole environment down (VM + bridge
+  + benchmark-netlog).
+- **`chutes-cvm guest down` shuts the guest down gracefully by default.** It POSTs a hotkey-signed
   request to the guest system-manager API (`http://<vm_ip>:8080/status/system/shutdown`, the same
   endpoint the chutes-miner control plane uses) so the VM powers off cleanly — a miner can shut
   down gracefully with only their config.yaml, no chutes-miner CLI needed — then tears down the
@@ -62,7 +66,8 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
 - **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
   scripts `run-td`, `verify-host`, `setup-tdx-host`, `tune-host.sh`, `restore-host.sh` and the
   `host-tools/bin/chutes-*` PATH delegators are removed; their operations are now `chutes-cvm`
-  subcommands: `launch`, `host verify`, `host setup`, `host tune`, `host restore`, `reset-gpus`.
+  subcommands: `guest launch`, `host verify`, `host setup`, `host tune`, `host restore`,
+  `host reset-gpus`.
   Logic still lives in the `chutes_cvm.guest` / `chutes_cvm.host`
   modules; the CLI is a thin front door. `discover-profile.sh` is deliberately kept as a
   standalone script (bundled with the package). Callers invoke the `chutes-cvm` console script
@@ -123,19 +128,19 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   (`prepare-vm-image.sh`, `discover-profile.sh`, and the `volumes/`, `network/`, `devices/` scripts)
   plus the `config/` schemas moved from `host-tools/scripts/` into `chutes_cvm/scripts/`, resolve
   package-relative, and are bundled in the wheel. `host-tools/scripts/` now holds only config
-  examples and the deprecated `quick-launch.sh` compat shim. Ansible host launch/upgrade and the
-  capture-ccel measurement role invoke
-  `chutes-cvm launch` / `chutes-cvm launch-vm`; the install no longer needs a
+  examples and the deprecated `quick-launch.sh` compat shim. Ansible host launch/upgrade invokes
+  `chutes-cvm guest launch`; the install no longer needs a
   `CHUTES_CVM_SCRIPTS_DIR` env (the scripts are package-relative).
 - **The launch orchestrator is Python, not a bash script.** The former `quick-launch.sh` is ported
-  to `chutes_cvm.guest.launch` (`chutes-cvm launch`): Python owns arg/config precedence, validation,
-  the host gates and the duplicate-VM guard, and calls the bundled bash helpers for the privileged
-  volume/network steps then boots via `launch-vm`. Its old `--download` / `--template` / `--clean`
-  early-exit modes are the first-class `image download` / `config init` / `down` commands above. The
-  `config.tmpl.yaml` template moved into the package (so `chutes-cvm config init` can emit it); the config
-  `.example.yaml` files stay in `host-tools/scripts/config/`. Guest roles that drove the primitive
-  directly (prime-vm) call `chutes-cvm launch-vm` / `chutes-cvm stop`. A deprecated
-  `host-tools/scripts/quick-launch.sh` shim remains (forwards to `chutes-cvm launch`) so existing
+  to `chutes_cvm.guest.launch` (`chutes-cvm guest launch`): Python owns arg/config precedence,
+  validation, the host gates and the duplicate-VM guard, and calls the bundled bash helpers for the
+  privileged volume/network steps then boots via the QEMU boot primitive
+  (`chutes_cvm.guest.__main__`, reached by import — not a CLI command). Its old `--download` /
+  `--template` / `--clean` early-exit modes are the first-class `image download` / `config init` /
+  `guest down` commands above. The `config.tmpl.yaml` template moved into the package (so
+  `chutes-cvm config init` can emit it); the config `.example.yaml` files stay in
+  `host-tools/scripts/config/`. A deprecated `host-tools/scripts/quick-launch.sh` shim remains
+  (forwards to `chutes-cvm guest launch`) so existing
   miner automation that invokes the script by path keeps working across the upgrade; when run from
   a checkout without the CLI installed, it bootstraps it via the checkout's `install.sh` (editable)
   so `git pull` + the wrapper gets a host going with no separate install step.
@@ -147,7 +152,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   load natively with no migration**. The same model generates a starter file: `chutes-cvm config init`
   emits a schema-derived, commented config, and `chutes-cvm config verify <file>` validates against the
   model. This drops `jsonschema` and the `config-schema*.json` / `config.tmpl.yaml` files for
-  `pydantic-settings`; `chutes-cvm down` reads the network values in Python and passes them to
+  `pydantic-settings`; `chutes-cvm guest down` reads the network values in Python and passes them to
   `teardown.sh` (no more `chutes-cvm config` eval round-trip).
 - **`chutes-cvm host setup` is now the complete per-host configuration.** It folds in what were
   three ansible roles so that running the CLI fully provisions a host (launch-ready modulo the CLI

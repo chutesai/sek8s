@@ -6,7 +6,7 @@
 #
 # Usage:
 #   sudo ./devices/reset-gpus.sh
-#   chutes-cvm reset-gpus         # via PATH (after host setup)
+#   chutes-cvm host reset-gpus   # via PATH (after host setup)
 
 set -euo pipefail
 
@@ -76,7 +76,7 @@ fi
 CMD=$(which nvidia-gpu-tools 2>/dev/null || echo "")
 if [[ -z "$CMD" ]]; then
     echo "Error: nvidia-gpu-tools not found in PATH."
-    echo "It is installed automatically when chutes-cvm launch launches a VM,"
+    echo "It is installed automatically when chutes-cvm guest launch launches a VM,"
     echo "or install manually from the bundled wheel in chutes_cvm/scripts/gpu-tools/."
     exit 1
 fi

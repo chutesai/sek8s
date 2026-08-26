@@ -1,4 +1,5 @@
-"""Tests for chutes_cvm.guest.__main__ (chutes-cvm launch launcher)."""
+"""Tests for chutes_cvm.guest.__main__ (the low-level QEMU boot primitive driven by
+`chutes-cvm guest launch`; not a CLI command)."""
 
 from unittest.mock import MagicMock, patch
 

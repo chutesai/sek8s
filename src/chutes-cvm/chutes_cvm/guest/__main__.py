@@ -1,8 +1,9 @@
-"""CLI entry point for the low-level TDX VM launch primitive.
+"""The low-level TDX VM boot primitive — the raw QEMU boot with GPU-passthrough sizing.
 
-Invoked via: chutes-cvm launch-vm [args] — the raw QEMU boot with GPU-passthrough sizing.
-The end-to-end orchestrator (`chutes-cvm launch`) calls this as its final step; advanced
-tooling (prime-vm) calls it directly. Miners use `chutes-cvm launch`, not this.
+This is not a CLI command. The end-to-end orchestrator (`chutes-cvm guest launch`,
+`chutes_cvm.guest.launch`) calls ``main()`` here as its final step via a Python import,
+passing an assembled argv. It remains runnable as ``python -m chutes_cvm.guest`` for
+low-level debugging, but miners always use `chutes-cvm guest launch`.
 """
 
 import argparse
@@ -237,8 +238,8 @@ def launch_vm(args) -> int:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="chutes-cvm launch-vm",
-        description="Launch a TDX VM with GPU passthrough (primitive)",
+        prog="python -m chutes_cvm.guest",
+        description="Low-level TDX VM boot primitive (driven by `chutes-cvm guest launch`).",
     )
 
     parser.add_argument("--image", type=str, help="Path to VM image")

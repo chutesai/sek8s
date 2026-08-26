@@ -257,7 +257,7 @@ def render_config_template() -> str:
     sync with LaunchConfig. `chutes-cvm config init` writes this for a miner to edit."""
     header = (
         "# chutes-cvm launch configuration — generated from the schema.\n"
-        "# Edit values below, then: chutes-cvm launch config.yaml\n"
+        "# Edit values below, then: chutes-cvm guest launch config.yaml\n"
         "# CLI flags and CHUTES_CVM_* env vars override these at launch.\n"
     )
     # model_construct() gives an instance of pure schema defaults (no env/YAML), so the emitted
@@ -277,7 +277,7 @@ def _cmd_init(args) -> int:
     with open(args.output, "w") as f:
         f.write(render_config_template())
     print(
-        f"Created {args.output} (generated from the schema). Edit it, then `chutes-cvm launch`."
+        f"Created {args.output} (generated from the schema). Edit it, then `chutes-cvm guest launch`."
     )
     return 0
 

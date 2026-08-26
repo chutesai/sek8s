@@ -60,7 +60,7 @@ fi
 # Stage the direct-boot sidecars (1.4.0+) next to the per-VM image. The launcher resolves
 # <image-base>.{vmlinuz,initrd,cmdline} next to the *per-VM* copy it boots, so they must
 # travel with the copy — not just live next to the base image. Copy unconditionally so a
-# reused per-VM image also re-syncs. Missing base sidecars are fatal: without them chutes-cvm launch
+# reused per-VM image also re-syncs. Missing base sidecars are fatal: without them chutes-cvm guest launch
 # cannot direct-boot.
 BASE_BASE="${BASE_IMAGE%.qcow2}"
 VM_BASE="${VM_IMAGE%.qcow2}"

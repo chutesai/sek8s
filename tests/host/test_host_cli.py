@@ -1,7 +1,8 @@
 """Tests for the `chutes-cvm host <verb>` dispatcher (chutes_cvm.host.cli).
 
 verify / submit-profile route to the shared gate flow (chutes_cvm.guest.verify.verify_host,
-with submit False/True); tune / restore call the tuning helpers; setup forwards to host.setup.
+with submit False/True); tune / restore call the tuning helpers; setup forwards to host.setup;
+reset-gpus / vfio-wedged are host-hardware ops (GPUs, PCI subsystem).
 """
 
 from unittest.mock import patch
@@ -39,3 +40,16 @@ def test_setup_forwards_to_setup_main():
     with patch("chutes_cvm.host.setup.main", return_value=0) as sm:
         assert hostcli.main(["setup", "--noninteractive"]) == 0
     assert sm.call_args.args[0] == ["--noninteractive"]
+
+
+def test_reset_gpus_delegates_to_script():
+    with patch("chutes_cvm.host.cli._run_script", return_value=0) as run:
+        assert hostcli.main(["reset-gpus"]) == 0
+    assert run.call_args.args[0] == "devices/reset-gpus.sh"
+
+
+def test_vfio_wedged_maps_predicate_to_exit_code():
+    with patch("chutes_cvm.guest.vfio.pci_operations_wedged", return_value=True):
+        assert hostcli.main(["vfio-wedged"]) == 0
+    with patch("chutes_cvm.guest.vfio.pci_operations_wedged", return_value=False):
+        assert hostcli.main(["vfio-wedged"]) == 1

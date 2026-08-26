@@ -61,7 +61,7 @@ A reboot is triggered automatically if a new kernel was installed.
 ansible-playbook -i ~/chutes/my-inventory.yml playbooks/launch.yml
 ```
 
-This renders `config.yaml` on the host, downloads the base image if missing, verifies its checksum, and launches the VM via `chutes-cvm launch`.
+This renders `config.yaml` on the host, downloads the base image if missing, verifies its checksum, and launches the VM via `chutes-cvm guest launch`.
 
 ### Subsequent updates
 
@@ -147,7 +147,7 @@ See [`scripts/config/CONFIG-GUIDE.md`](scripts/config/CONFIG-GUIDE.md) for the f
 ### Step 5: Launch the VM
 
 ```bash
-chutes-cvm launch config.yaml
+chutes-cvm guest launch config.yaml
 ```
 
 The launcher validates TDX, prepares volumes, configures networking, binds GPUs to `vfio-pci`, and starts the VM.
@@ -165,7 +165,7 @@ cat /tmp/qemu.log
 
 ### Stop and clean up
 ```bash
-chutes-cvm down
+chutes-cvm guest down
 ```
 Removes the VM process, bridge, TAP interfaces, and NAT rules. Volume files are preserved.
 
@@ -175,7 +175,7 @@ Removes the VM process, bridge, TAP interfaces, and NAT rules. Volume files are 
 sudo nvidia-gpu-tools --query-cc-mode
 
 # Secondary Bus Reset (all GPUs — stop VM first)
-chutes-cvm reset-gpus
+chutes-cvm host reset-gpus
 
 # Recover a broken GPU
 sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>
@@ -198,7 +198,7 @@ Caused by non-interactive install skipping the `npm install` post-install step.
 
 **GPU stuck or unhealthy**
 
-If `chutes-cvm launch` or `chutes-cvm reset-gpus` hangs, check for wedged PCI tasks:
+If `chutes-cvm guest launch` or `chutes-cvm host reset-gpus` hangs, check for wedged PCI tasks:
 ```bash
 ps aux | awk '$8 ~ /D/ && /nvidia-gpu-tools|vfio-pci\/unbind/'
 ```
@@ -206,7 +206,7 @@ When that shows D-state processes, **reboot the host** before retrying — SBR c
 
 B200/B300 use CC mode (not PPCIe); use CC-mode SBR flags:
 ```bash
-chutes-cvm reset-gpus    # auto-selects flags from detected GPU type
+chutes-cvm host reset-gpus    # auto-selects flags from detected GPU type
 sudo nvidia-gpu-tools --reset-with-sbr --reset-after-cc-mode-switch --gpu-bdf=<bdf>
 ```
 H200 8-GPU PPCIe configs:

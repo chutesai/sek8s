@@ -1,5 +1,5 @@
 ---
-# Render config, start the VM via `chutes-cvm launch`, and wait for node-health.
+# Render config, start the VM via `chutes-cvm guest launch`, and wait for node-health.
 # Used by upgrade-guest.yml and upgrade-host.yml after the guest has been shut down.
 #
 # Expects (from caller scope or vars):
@@ -19,7 +19,7 @@
 # missing set is an explicit failure with a remediation hint, not a silent fetch.
 # When present, verify it is coherent against its manifest (chutes_cvm.guest.image_set
 # resolve — presence/size, cheap, the bytes were fully hashed when staged) so a stale or
-# out-of-sync set fails here with a clear message rather than cryptically inside chutes-cvm launch.
+# out-of-sync set fails here with a clear message rather than cryptically inside chutes-cvm guest launch.
 
 - name: Check the base image set exists
   ansible.builtin.stat:
@@ -53,12 +53,13 @@
 # host is rebooted". Only a reboot clears it. We detect this up front, and again
 # if the launch itself wedges the host, rebooting and waiting for SSH to return
 # before (re)trying the launch. chutes_cvm.guest.vfio.pci_operations_wedged() is the
-# same predicate chutes-cvm launch uses internally (scans ps for D-state vfio/gpu-tools).
+# same predicate chutes-cvm guest launch uses internally (scans ps for D-state vfio/gpu-tools).
 
 - name: Pre-flight — detect a wedged PCI subsystem
   ansible.builtin.command:
     argv:
       - chutes-cvm
+      - guest
       - vfio-wedged
   register: _pci_wedged
   failed_when: false
@@ -72,10 +73,11 @@
 
 - name: Launch VM (reboot and retry once if the launch wedges the PCI subsystem)
   block:
-    - name: Launch VM via chutes-cvm launch
+    - name: Launch VM via chutes-cvm guest launch
       ansible.builtin.command:
         argv:
           - chutes-cvm
+          - guest
           - launch
           - "{{ chutes_config_remote_path }}"
       register: _qlaunch
@@ -83,11 +85,12 @@
   rescue:
     # Authoritative signal: the D-state tasks that wedge the PCI subsystem persist
     # until reboot, so re-running the predicate after the failure tells us directly
-    # whether a reboot would help. Fall back to matching chutes-cvm launch's error text.
+    # whether a reboot would help. Fall back to matching chutes-cvm guest launch's error text.
     - name: Re-check PCI wedge state after launch failure
       ansible.builtin.command:
         argv:
           - chutes-cvm
+          - guest
           - vfio-wedged
       register: _post_wedge
       failed_when: false
@@ -104,7 +107,7 @@
     - name: Fail when the launch error is not a recoverable PCI wedge
       ansible.builtin.fail:
         msg: >-
-          chutes-cvm launch failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
+          chutes-cvm guest launch failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
           other than a PCI wedge — not retrying. stderr={{ _qlaunch.stderr | default('') }}
       when: not (_launch_pci_wedged | bool)
 
@@ -117,6 +120,7 @@
       ansible.builtin.command:
         argv:
           - chutes-cvm
+          - guest
           - launch
           - "{{ chutes_config_remote_path }}"
       register: _qlaunch_retry
@@ -126,7 +130,7 @@
     - name: Fail if launch still fails after reboot
       ansible.builtin.fail:
         msg: >-
-          chutes-cvm launch still failing after a reboot to clear the PCI wedge
+          chutes-cvm guest launch still failing after a reboot to clear the PCI wedge
           (rc={{ _qlaunch_retry.rc }}). stderr={{ _qlaunch_retry.stderr | default('') }}
       when: _qlaunch_retry.rc != 0
 

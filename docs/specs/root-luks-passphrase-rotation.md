@@ -90,7 +90,7 @@ Logic:
 - Rename `--overlay-dir` to `--vm-image-dir` (default: `/var/lib/chutes/vm-images/`)
 - Update Step 4b to call `prepare-vm-image.sh` with `$VM_IMAGE_DIR` instead of `$OVERLAY_DIR`
 - Update variable names: `OVERLAY_IMAGE` -> `VM_IMAGE`
-- Pass `VM_IMAGE` (not overlay) to `chutes-cvm launch`
+- Pass `VM_IMAGE` (not overlay) to `chutes-cvm guest launch`
 
 ### 3. `ansible/guest/roles/luks/tasks/luks_encrypt.yml`
 

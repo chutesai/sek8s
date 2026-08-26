@@ -1,4 +1,4 @@
-"""``chutes-cvm host <verb>`` — host lifecycle and attestation.
+"""``chutes-cvm host <verb>`` — host lifecycle, attestation, and GPU/PCI hardware.
 
 Groups the former setup-host / verify-host / tune-host / restore-host commands (and the new
 submit-profile) under one noun, matching the CLI's noun/verb pattern. Dispatched via the
@@ -8,15 +8,31 @@ top-level ``host`` passthrough in ``chutes_cvm.cli``.
   chutes-cvm host verify           # will this host relaunch + re-attest? (optionally --target-os)
   chutes-cvm host submit-profile   # register this host class with Chutes for baselining
   chutes-cvm host tune / restore   # NVIDIA host CPU tuning, and revert
+  chutes-cvm host reset-gpus       # reset all GPUs via nvidia-gpu-tools SBR
+  chutes-cvm host vfio-wedged      # exit 0 if host PCI passthrough is wedged and needs a reset
+
+reset-gpus / vfio-wedged act on host hardware (GPUs, the PCI subsystem) and are useful with or
+without a running guest, so they live under ``host``, not ``guest``.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 
 from chutes_cvm.paths import SCRIPTS_DIR
+
+
+def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
+    """Exec a bundled chutes_cvm/scripts/<name> shell entrypoint, forwarding argv."""
+    script = SCRIPTS_DIR / name
+    if not script.exists():
+        print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
+        return 1
+    return subprocess.call(["bash", str(script), *argv], cwd=cwd)
+
 
 # verify/submit exit codes → (banner label, ANSI attributes).
 _VERIFY_STATUS = {
@@ -76,6 +92,20 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reset_gpus(args: argparse.Namespace) -> int:
+    """Reset all host GPUs via nvidia-gpu-tools SBR (delegates to devices/reset-gpus.sh)."""
+    return _run_script("devices/reset-gpus.sh", [])
+
+
+def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
+    """Exit 0 if host PCI passthrough operations are wedged (a reset is needed before
+    launch), else 1. Lets orchestration gate a launch/reset on the machine-parseable code.
+    """
+    from chutes_cvm.guest.vfio import pci_operations_wedged
+
+    return 0 if pci_operations_wedged() else 1
+
+
 def _add_api_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--config",
@@ -100,7 +130,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return _setup_main(argv[1:])
 
     parser = argparse.ArgumentParser(
-        prog="chutes-cvm host", description="Host lifecycle and attestation."
+        prog="chutes-cvm host",
+        description="Host lifecycle, attestation, and GPU/PCI hardware.",
     )
     sub = parser.add_subparsers(dest="verb", required=True, metavar="<verb>")
 
@@ -152,6 +183,18 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Restore host CPU settings saved by `host tune` (no-op if never tuned).",
     )
     restore.set_defaults(func=_cmd_restore)
+
+    reset = sub.add_parser(
+        "reset-gpus",
+        help="Reset all host GPUs via nvidia-gpu-tools SBR (stop any VM first).",
+    )
+    reset.set_defaults(func=_cmd_reset_gpus)
+
+    vfio = sub.add_parser(
+        "vfio-wedged",
+        help="Exit 0 if host PCI passthrough is wedged and needs a reset before launch, else 1.",
+    )
+    vfio.set_defaults(func=_cmd_vfio_wedged)
 
     args = parser.parse_args(argv)
     return args.func(args)

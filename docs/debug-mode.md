@@ -144,7 +144,7 @@ Use the debug example config as a starting point:
 cd host-tools/scripts
 cp config/config.debug.example.yaml config.yaml
 # Edit config.yaml with your credentials and network settings
-chutes-cvm launch config.yaml --foreground
+chutes-cvm guest launch config.yaml --foreground
 ```
 
 The debug config sets `vm.base_image` to the debug image path and uses smaller volume sizes. See [`config/config.debug.example.yaml`](../host-tools/scripts/config/config.debug.example.yaml) for the full template.

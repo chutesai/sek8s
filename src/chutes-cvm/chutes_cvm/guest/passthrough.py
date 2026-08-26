@@ -189,7 +189,7 @@ def _prepare_devices(
         raise RuntimeError(
             "PCI operations are wedged (uninterruptible D-state tasks from a "
             "previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in "
-            "this state — reboot the host, then retry `chutes-cvm launch`."
+            "this state — reboot the host, then retry `chutes-cvm guest launch`."
         )
 
     _check_fabric_manager(profile)

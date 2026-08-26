@@ -1,9 +1,9 @@
-"""End-to-end TDX VM launch orchestrator — ``chutes-cvm launch``.
+"""End-to-end TDX VM launch orchestrator — ``chutes-cvm guest launch``.
 
 This is the decision layer (ported from the former quick-launch.sh): parse args + config with
 precedence (CLI > YAML > defaults), validate, run the host gates (TDX active, NUMA), refuse a
 duplicate chutes-td, then perform each privileged step by invoking the bundled bash helper that
-owns it (volumes, config volume, per-VM image, bridge), and finally boot via the launch-vm
+owns it (volumes, config volume, per-VM image, bridge), and finally boot via the QEMU boot
 primitive (``chutes_cvm.guest.__main__``). Per AGENT.md's bash-vs-Python rule, Python owns the
 decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd, ip/iptables).
 
@@ -334,12 +334,12 @@ _CLI_TO_VOLUME = {
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="chutes-cvm launch",
+        prog="chutes-cvm guest launch",
         description="End-to-end TEE VM launch: verify host, prepare volumes and network, boot.",
         epilog=(
             "Related commands (formerly flags of this orchestrator): `chutes-cvm config init` "
             "(scaffold config.yaml), `chutes-cvm image download` (fetch a base set), "
-            "`chutes-cvm down` / `stop` (tear down)."
+            "`chutes-cvm guest down` / `stop` (tear down)."
         ),
     )
     p.add_argument(
@@ -480,7 +480,7 @@ def main(argv: "list[str] | None" = None) -> int:
     if not args.force and _chutes_td_running():
         print(
             f"Error: a TDX VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
-            "  Stop it first: chutes-cvm down  (or pass --force to override — not recommended).",
+            "  Stop it first: chutes-cvm guest down  (or pass --force to override — not recommended).",
             file=sys.stderr,
         )
         return 1
@@ -539,7 +539,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if rc != 0:
         print(
-            "\nError: VM launch failed (launch-vm exited non-zero). See output above and "
+            "\nError: VM launch failed (the QEMU boot exited non-zero). See output above and "
             "/tmp/tdx-guest-td.log if daemonized.",
             file=sys.stderr,
         )
@@ -551,10 +551,10 @@ def main(argv: "list[str] | None" = None) -> int:
 def _boot(
     cfg: dict, vm_image: str, net_iface: str, benchmark: bool, pass_gpus: bool
 ) -> int:
-    """Assemble the launch-vm argument list and call the QEMU primitive in-process."""
-    # Deferred import: the launch-vm primitive pulls the heavy, host-specific chain
+    """Assemble the boot-primitive argument list and call the QEMU primitive in-process."""
+    # Deferred import: the boot primitive pulls the heavy, host-specific chain
     # (detection/gpu/qemu/passthrough) that only an actual boot needs — importing it here keeps
-    # `launch --help` and the early config/gate paths light.
+    # `guest launch --help` and the early config/gate paths light.
     from chutes_cvm.guest.__main__ import main as launch_vm_main
 
     launch_args = ["--image", vm_image, "--network-type", cfg["network_type"]]

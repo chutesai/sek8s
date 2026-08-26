@@ -34,7 +34,7 @@ Edit `config.yaml` with your settings. The schema will validate:
 ### 4. Launch VM
 
 ```bash
-chutes-cvm launch config.yaml
+chutes-cvm guest launch config.yaml
 ```
 
 ## Schema Validation
@@ -74,13 +74,13 @@ For Docker Hub: if you pass **both** `--docker-hub-username` and `--docker-hub-t
 Example:
 ```bash
 # Base image precedence:
-chutes-cvm launch config.yaml --base-image /path/to/custom-image-set/
+chutes-cvm guest launch config.yaml --base-image /path/to/custom-image-set/
 # Uses: /path/to/custom-image-set/ (CLI wins)
 
-chutes-cvm launch config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest/"
+chutes-cvm guest launch config.yaml  # config.yaml has vm.base_image: "/var/lib/chutes/base-images/tdx-guest/"
 # Uses: value from YAML (image-set directory)
 
-chutes-cvm launch config.yaml  # config.yaml has vm.base_image: ""
+chutes-cvm guest launch config.yaml  # config.yaml has vm.base_image: ""
 # Uses: default /var/lib/chutes/base-images/tdx-guest/
 ```
 
@@ -105,7 +105,7 @@ docker_hub:
 
 - Schema: both `username` and `token` are required when `docker_hub` is present (`maxLength` 64 / 128).
 - The host writes `docker-hub-username` and `docker-hub-token` onto the config volume (cleartext); treat the volume like other secrets.
-- `chutes-cvm launch` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
+- `chutes-cvm guest launch` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
 - Run `chutes-cvm config init` to generate a starter config from the schema; see `config.prod.example.yaml` and `config.debug.example.yaml` for commented examples.
 
 ## Production vs Debug Configs
@@ -169,8 +169,8 @@ Leave `base_image` empty to use default `/var/lib/chutes/base-images/tdx-guest/`
 ### Via CLI Override
 
 ```bash
-chutes-cvm launch config.yaml --base-image /path/to/image-set-dir/
-chutes-cvm launch config.yaml --vm-image-dir /custom/vm-images/
+chutes-cvm guest launch config.yaml --base-image /path/to/image-set-dir/
+chutes-cvm guest launch config.yaml --vm-image-dir /custom/vm-images/
 ```
 
 ## Volume Auto-Generation

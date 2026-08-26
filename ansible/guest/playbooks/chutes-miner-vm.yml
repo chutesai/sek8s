@@ -30,7 +30,7 @@
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
     # Install the chutes-cvm CLI from THIS checkout (editable venv + PATH shim) so the
-    # build's `chutes-cvm` calls (launch, image-set — here and in prime-vm/capture-ccel)
+    # build's `chutes-cvm` calls (measurements/image, here and in capture-ccel)
     # run the code being built and get the package's deps. Runs once; the console script
     # is then on PATH for every later play.
     - name: Install the chutes-cvm CLI from this checkout

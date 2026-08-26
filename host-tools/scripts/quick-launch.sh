@@ -1,5 +1,5 @@
 #!/bin/bash
-# DEPRECATED compatibility shim — quick-launch.sh is now `chutes-cvm launch`.
+# DEPRECATED compatibility shim — quick-launch.sh is now `chutes-cvm guest launch`.
 #
 # The launch orchestrator was ported from this script into Python
 # (chutes_cvm.guest.launch). This shim is kept only so existing miner automation that
@@ -10,12 +10,12 @@
 # bootstraps the CLI via the checkout's install.sh (editable) — so `git pull` + this
 # wrapper gets a host going without a separate manual install step.
 #
-# Please update your automation to call `chutes-cvm launch` directly; this shim may be
-# removed in a future release.
+# Please update your automation to call `chutes-cvm guest launch` directly; this shim may
+# be removed in a future release.
 set -euo pipefail
 
-echo "quick-launch.sh is deprecated — forwarding to 'chutes-cvm launch'. Update your" >&2
-echo "automation (e.g. systemd ExecStart) to call 'chutes-cvm launch' directly." >&2
+echo "quick-launch.sh is deprecated — forwarding to 'chutes-cvm guest launch'. Update your" >&2
+echo "automation (e.g. systemd ExecStart) to call 'chutes-cvm guest launch' directly." >&2
 
 # Bootstrap the CLI from the enclosing checkout if it isn't installed yet. install.sh is the
 # single source of truth for install; run from a checkout it does an editable install (no fetch),
@@ -39,4 +39,4 @@ if ! command -v chutes-cvm >/dev/null 2>&1; then
   exit 1
 fi
 
-exec chutes-cvm launch "$@"
+exec chutes-cvm guest launch "$@"

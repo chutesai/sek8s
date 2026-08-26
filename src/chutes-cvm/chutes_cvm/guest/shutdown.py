@@ -1,6 +1,6 @@
 """Graceful VM shutdown via the guest system-manager API.
 
-`chutes-cvm down` (without --force) asks the running guest to power itself off cleanly by POSTing a
+`chutes-cvm guest down` (without --force) asks the running guest to power itself off cleanly by POSTing a
 signed request to the system-manager status API on the VM — the same endpoint the chutes-miner
 control plane uses (``POST http://<vm_ip>:8080/status/system/shutdown``). This lets a miner shut a
 VM down gracefully with only the miner hotkey in their config.yaml, no chutes-miner CLI required.
