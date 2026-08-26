@@ -27,19 +27,34 @@ def test_visible_command_surface():
         "launch",
         "image",
         "config",
+        "host",
         "stop",
         "down",
-        "verify-host",
         "measurements",
     ):
         assert expected in cmds
-    # preflight was folded into `verify-host --submit`; it is no longer its own command.
+    # preflight was folded into `host submit-profile`; it is no longer its own command.
     assert "preflight" not in cmds
     # init is now `config init`, not a top-level command.
     assert "init" not in cmds
+    # host lifecycle commands are now `host <verb>`, not top-level.
+    for gone in (
+        "verify-host",
+        "setup-host",
+        "tune-host",
+        "restore-host",
+        "discover-profile",
+    ):
+        assert gone not in cmds
     # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
     assert "launch-vm" not in cmds
     assert "up" not in cmds
+
+
+def test_host_dispatches_to_host_cli():
+    with patch("chutes_cvm.host.cli.main", return_value=0) as h:
+        assert cli.main(["host", "verify", "--target-os", "26.04"]) == 0
+    assert h.call_args.args[0] == ["verify", "--target-os", "26.04"]
 
 
 def test_launch_dispatches_to_python_orchestrator():
@@ -69,13 +84,35 @@ def test_stop_calls_stop_existing_vm():
     stop.assert_called_once_with()
 
 
-def test_down_dispatches_to_teardown_script():
+def test_down_force_kills_and_tears_down():
     with patch("chutes_cvm.cli._run_script", return_value=0) as run:
-        assert cli.main(["down", "--config", "/nope/config.yaml"]) == 0
-    # Non-existent config is not forwarded (teardown falls back to defaults).
+        assert cli.main(["down", "--force", "--config", "/nope/config.yaml"]) == 0
+    # --force goes straight to teardown (force-kill), no --no-stop.
     assert run.call_args.args[0] == "teardown.sh"
-    assert run.call_args.args[1] == []
+    assert "--no-stop" not in run.call_args.args[1]
     assert run.call_args.kwargs["cwd"] == str(cli._SCRIPTS_DIR)
+
+
+def test_down_graceful_then_teardown_no_stop():
+    with patch(
+        "chutes_cvm.guest.shutdown.graceful_shutdown", return_value="192.168.100.2"
+    ), patch("chutes_cvm.cli._run_script", return_value=0) as run:
+        assert cli.main(["down", "--config", "/nope/config.yaml"]) == 0
+    # Graceful path tells teardown NOT to force-kill (the guest is powering off itself).
+    assert run.call_args.args[0] == "teardown.sh"
+    assert "--no-stop" in run.call_args.args[1]
+
+
+def test_down_graceful_failure_suggests_force(capsys):
+    from chutes_cvm.guest.shutdown import ShutdownError
+
+    with patch(
+        "chutes_cvm.guest.shutdown.graceful_shutdown",
+        side_effect=ShutdownError("unreachable"),
+    ), patch("chutes_cvm.cli._run_script", return_value=0) as run:
+        assert cli.main(["down", "--config", "/nope/config.yaml"]) == 1
+    run.assert_not_called()  # no teardown when graceful fails
+    assert "--force" in capsys.readouterr().err
 
 
 def test_image_dispatches_to_engine():

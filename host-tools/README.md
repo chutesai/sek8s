@@ -7,12 +7,12 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 ## Prerequisites
 
 - **Hardware**: Intel TDX-capable CPU and NVIDIA GPUs. See [Validated host topologies](#validated-host-topologies).
-- **OS**: Ubuntu **26.04** — the only supported host OS. `chutes-cvm setup-host` has no profile for 25.10 or 25.04, and no other release ships a baselined QEMU; advance an existing host with `upgrade-host.yml -e target_version=26.04` before setup.
+- **OS**: Ubuntu **26.04** — the only supported host OS. `chutes-cvm host setup` has no profile for 25.10 or 25.04, and no other release ships a baselined QEMU; advance an existing host with `upgrade-host.yml -e target_version=26.04` before setup.
 - **Access**: Root/sudo privileges on the host; SSH access from the Ansible control machine.
 
 ### Validated host topologies
 
-**Validated** means end-to-end tested (TDX host + VM + GPU passthrough). A profile existing in `chutes-cvm setup-host` does **not** imply validation.
+**Validated** means end-to-end tested (TDX host + VM + GPU passthrough). A profile existing in `chutes-cvm host setup` does **not** imply validation.
 
 | Ubuntu | GPU SKU      | GPU count | Status              | Notes |
 |--------|--------------|-----------|---------------------|-------|
@@ -23,14 +23,14 @@ This guide covers setting up a baremetal host to launch TDX-enabled VMs with GPU
 Print the canonical matrix from the repo:
 ```bash
 cd host-tools/scripts
-chutes-cvm setup-host --topology-matrix
+chutes-cvm host setup --topology-matrix
 ```
 
 #### Blackwell HGX notes
 
-B200 and B300 use a different NVSwitch architecture from H100/H200. `chutes-cvm setup-host` detects and configures both, but only **B200** is in the [validated topologies](#validated-host-topologies) above — B300 host setup works the same way but has not yet been validated end-to-end. Key differences that affect host setup:
+B200 and B300 use a different NVSwitch architecture from H100/H200. `chutes-cvm host setup` detects and configures both, but only **B200** is in the [validated topologies](#validated-host-topologies) above — B300 host setup works the same way but has not yet been validated end-to-end. Key differences that affect host setup:
 
-- **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `chutes-cvm setup-host` when B200 or B300 GPUs are detected. The guest's Fabric Manager is masked.
+- **Host-side Fabric Manager**: NVSwitches are not PCIe devices visible to the guest. `nvidia-fabricmanager` and `nvlsm` run on the *host* and are installed automatically by `chutes-cvm host setup` when B200 or B300 GPUs are detected. The guest's Fabric Manager is masked.
 - **CX7 NVSwitch bridge PFs stay on the host**: ConnectX-7 devices acting as the host interface to NVSwitches (identified by `SMDL=SW_MNG` in PCIe VPD) are excluded from VFIO passthrough. Regular CX7 NIC PFs are still passed through normally.
 - **Encrypted NVLink (MPT CC mode)**: NVLink traffic between GPUs and the host Fabric Manager is encrypted, so host-side FM does not compromise the zero-trust security model.
 - **`nvidia-open` driver**: Required on both host and guest for Blackwell (already the default in the guest image).
@@ -86,7 +86,7 @@ Use these steps if you are not using Ansible or are working directly on the host
 ```bash
 git clone https://github.com/chutesai/sek8s.git
 cd sek8s/host-tools/scripts
-sudo chutes-cvm setup-host
+sudo chutes-cvm host setup
 sudo reboot
 ```
 
@@ -115,7 +115,7 @@ sudo PCKIDRetrievalTool \
 
 Obtain your Intel API key from [api.portal.trustedservices.intel.com](https://api.portal.trustedservices.intel.com/).
 
-**Note:** If PCCS was installed non-interactively (e.g. via `chutes-cvm setup-host --noninteractive`) and the service fails with `Cannot find package 'config'`, run:
+**Note:** If PCCS was installed non-interactively (e.g. via `chutes-cvm host setup --noninteractive`) and the service fails with `Cannot find package 'config'`, run:
 ```bash
 cd /opt/intel/sgx-dcap-pccs && npm install
 systemctl restart pccs
@@ -183,7 +183,7 @@ sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>
 
 Refresh host dependencies on an existing machine (no full re-setup needed):
 ```bash
-sudo chutes-cvm setup-host --install-tools-only
+sudo chutes-cvm host setup
 ```
 
 ---
@@ -217,7 +217,7 @@ sudo nvidia-gpu-tools --reset-with-sbr --reset-after-ppcie-mode-switch --gpu-bdf
 **TDX not initialized after reboot**
 ```bash
 dmesg | grep -i tdx
-# If blank: verify GRUB entry via `grub-editenv list`; re-run chutes-cvm setup-host if needed
+# If blank: verify GRUB entry via `grub-editenv list`; re-run chutes-cvm host setup if needed
 ```
 
 **Network not accessible**

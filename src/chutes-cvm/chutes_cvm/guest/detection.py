@@ -521,7 +521,7 @@ def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
     full RTMR0 fingerprint (device layout + vcpus/sockets/mem + CPU identity). Raises
     ValueError only when the hardware can't be resolved (no GPU, required NVSwitches
     missing). Acceptance — whether this fingerprint has a published measurement — is the
-    control plane's call (chutes-cvm verify-host), not a local gate. The
+    control plane's call (chutes-cvm host verify), not a local gate. The
     returned fingerprint drives the launch -smp / -m.
     """
     gpu_bdfs = get_gpu_bdfs() or detect_nvidia_gpus()
@@ -554,7 +554,7 @@ def detect_profile() -> "tuple[GpuProfile, TopologyFingerprint]":
     fingerprint = host_topology_fingerprint(profile, gpu_bdfs, nvswitch_bdfs, ib_bdfs)
 
     # No local topology gate: whether this host class can launch is the control plane's
-    # call (``chutes-cvm verify-host`` asks the API, which owns the fingerprint and the
+    # call (``chutes-cvm host verify`` asks the API, which owns the fingerprint and the
     # published measurements). detect_profile just resolves the GPU-model profile and
     # the live fingerprint, which still drive the launch ``-smp`` / ``-m``.
     return profile, fingerprint

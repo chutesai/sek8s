@@ -26,7 +26,7 @@ class ConfigError(Exception):
     """A launch config could not be read/validated (message is user-facing)."""
 
 
-# YAML path the source reads, set by load_launch_config before construction. The CLI is
+# YAML path the source reads, set by LaunchConfig.from_file before construction. The CLI is
 # single-threaded, so a module global is sufficient (and avoids threading it through pydantic).
 _yaml_path: "str | None" = None
 
@@ -179,6 +179,31 @@ class LaunchConfig(BaseSettings):
             "operator_signing_key": self.rc.operator_signing_key,
         }
 
+    @classmethod
+    def from_file(cls, config_file: "str | None" = None, **overrides) -> "LaunchConfig":
+        """Build the resolved config. ``config_file`` is the YAML layer; ``overrides`` is the CLI
+        layer (a possibly-nested dict of only the values the user set). Precedence is
+        CLI > env > YAML > defaults. Raises ConfigError on read/validation failure."""
+        global _yaml_path
+        _yaml_path = os.path.abspath(config_file) if config_file else None
+        try:
+            if _yaml_path:
+                if not os.path.exists(_yaml_path):
+                    raise ConfigError(f"Config file not found: {_yaml_path}")
+                try:
+                    with open(_yaml_path) as f:
+                        data = yaml.safe_load(f) or {}
+                except yaml.YAMLError as e:
+                    raise ConfigError(f"Error parsing YAML: {e}") from e
+                if not isinstance(data, dict):
+                    raise ConfigError("config.yaml must be a mapping at the top level")
+                _check_removed_keys(data)
+            return cls(**overrides)
+        except ValidationError as e:
+            raise ConfigError(f"invalid configuration:\n{e}") from e
+        finally:
+            _yaml_path = None
+
 
 def _check_removed_keys(data: dict) -> None:
     """Reject config keys the current schema no longer supports, with a clear message."""
@@ -190,31 +215,6 @@ def _check_removed_keys(data: dict) -> None:
         raise ConfigError(
             "'volumes.cache.enabled' has been removed. Delete it from your config."
         )
-
-
-def load_launch_config(config_file: "str | None" = None, **overrides) -> LaunchConfig:
-    """Build the resolved LaunchConfig. ``config_file`` is the YAML layer; ``overrides`` is the
-    CLI layer, a (possibly nested) dict of only the values the user set. Raises ConfigError on
-    read/validation failure."""
-    global _yaml_path
-    _yaml_path = os.path.abspath(config_file) if config_file else None
-    try:
-        if _yaml_path:
-            if not os.path.exists(_yaml_path):
-                raise ConfigError(f"Config file not found: {_yaml_path}")
-            try:
-                with open(_yaml_path) as f:
-                    data = yaml.safe_load(f) or {}
-            except yaml.YAMLError as e:
-                raise ConfigError(f"Error parsing YAML: {e}") from e
-            if not isinstance(data, dict):
-                raise ConfigError("config.yaml must be a mapping at the top level")
-            _check_removed_keys(data)
-        return LaunchConfig(**overrides)
-    except ValidationError as e:
-        raise ConfigError(f"invalid configuration:\n{e}") from e
-    finally:
-        _yaml_path = None
 
 
 # ── Template generation (config.yaml from the schema) ────────────────────────────

@@ -217,7 +217,7 @@ def launch_vm(args) -> int:
         # vCPU thread pinning is gated on the profile enabling NUMA topology
         # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
         # CPU power tuning is separate and operator-driven; see
-        # `python -m chutes_cvm.host.tune` (chutes-cvm tune-host / restore-host).
+        # `python -m chutes_cvm.host.tune` (chutes-cvm host tune / restore-host).
         pin_threads = (
             numa_active and profile is not None and profile.enable_post_launch_tuning
         )

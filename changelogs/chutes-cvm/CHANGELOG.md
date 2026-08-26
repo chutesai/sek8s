@@ -30,7 +30,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   to it), then delete the temp checkout. The sparse path-list and the install steps live here
   exactly once; the `host_tools` ansible role and the guest build both invoke it. A standalone
   install is fully launch-capable — no manual `git clone`, no lingering source, no PyPI, no R2.
-  `chutes-cvm setup-host` no longer installs/verifies the CLI or gpu-tools (install.sh installs
+  `chutes-cvm host setup` no longer installs/verifies the CLI or gpu-tools (install.sh installs
   them; the launch path verifies gpu-tools where it matters); its `--install-tools-only` flag and
   the `install_dependencies` step are removed.
 - **`make bundle-gpu-tools`** — discoverable maintainer target that rebuilds the vendored
@@ -51,13 +51,19 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   verifies a base image set, `config init` scaffolds a `config.yaml`, `stop` stops only the VM
   (leaving the bridge up), and `down` tears the whole environment down (VM + bridge +
   benchmark-netlog).
+- **`chutes-cvm down` shuts the guest down gracefully by default.** It POSTs a hotkey-signed
+  request to the guest system-manager API (`http://<vm_ip>:8080/status/system/shutdown`, the same
+  endpoint the chutes-miner control plane uses) so the VM powers off cleanly — a miner can shut
+  down gracefully with only their config.yaml, no chutes-miner CLI needed — then tears down the
+  host-side bridge + netlog. `--force` skips the API and force-kills QEMU (the previous behavior);
+  a graceful attempt that can't reach the API stops and points the operator at `--force`.
 
 ### Changed
 - **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
   scripts `run-td`, `verify-host`, `setup-tdx-host`, `tune-host.sh`, `restore-host.sh` and the
   `host-tools/bin/chutes-*` PATH delegators are removed; their operations are now `chutes-cvm`
-  subcommands: `launch`, `verify-host`, `setup-host`, `tune-host`, `restore-host`, `reset-gpus`
-  (plus `discover-profile`). Logic still lives in the `chutes_cvm.guest` / `chutes_cvm.host`
+  subcommands: `launch`, `host verify`, `host setup`, `host tune`, `host restore`, `reset-gpus`.
+  Logic still lives in the `chutes_cvm.guest` / `chutes_cvm.host`
   modules; the CLI is a thin front door. `discover-profile.sh` is deliberately kept as a
   standalone script (bundled with the package). Callers invoke the `chutes-cvm` console script
   installed by the package's `install.sh`, rather than the removed `host-tools/bin/` symlinks.
@@ -82,7 +88,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   `install.sh`, which fetches + `pip install -e`'s the package into a venv and puts the
   `chutes-cvm` console script on PATH (with its deps: pyyaml/pydantic-settings/substrate-interface). Host
   ansible calls `chutes-cvm <command>` instead of `python3 -m chutes.guest.*`, so dependency-bearing
-  commands (`config`, and the API-backed `verify-host`) run with their deps available. The sparse
+  commands (`config`, and the API-backed `host verify`) run with their deps available. The sparse
   checkout now includes `src/chutes-cvm/`. Guest image build keeps `PYTHONPATH` (stdlib commands
   only). Set `CHUTES_CVM_PYPI=1` to install from PyPI instead of the checkout.
 - **The package is self-contained — no repo-layout assumptions.** The built nvidia-gpu-tools
@@ -100,15 +106,17 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   `pip install`s the bundled wheel into the chutes-cvm venv and symlinks `nvidia-gpu-tools` on
   PATH; the runtime lazy self-installing venv machinery is removed (`chutes_cvm.guest.gpu.tools`
   now only verifies the CLI is present and runs, raising a clear "re-run install.sh" error).
-- **`chutes-cvm verify-host` is now API-backed, and owns host-class registration.** Gate A (host
-  runs its OS release's QEMU) stays local; Gate B captures the host's platform metadata
-  (discover-profile), signs it with the miner hotkey (sr25519), and asks the control plane — which
-  owns the fingerprint and returns accepted / pending / unknown — instead of the in-repo
-  `known_topologies` set. By default Gate B is a non-storing dry-run; **`--submit`** registers an
-  unbaselined host class so Chutes can generate its measurements (this replaces a separate
-  `preflight` command — there is only `verify-host`). `--target-os` swaps in the target OS's QEMU
-  before the API fingerprints the profile. Fails closed (BLOCKED) when it can't get a verdict. Adds
-  `substrate-interface` to the chutes-cvm package for the signature.
+- **Host lifecycle + attestation live under one `chutes-cvm host` group.** `host setup` / `verify`
+  / `submit-profile` / `tune` / `restore` replace the former top-level `setup-host` / `verify-host`
+  / `tune-host` / `restore-host`; the standalone `discover-profile` command is dropped (its capture
+  is done inline by the verify/submit flow — `discover-profile.sh` stays as the bundled helper).
+  `host verify` is API-backed: Gate A (host runs its OS release's QEMU) stays local; Gate B captures
+  the host's platform metadata (discover-profile.sh), signs it with the miner hotkey (sr25519), and
+  asks the control plane — which owns the fingerprint and returns accepted / pending / unknown —
+  instead of the in-repo `known_topologies` set. `--target-os` checks against a target OS's QEMU
+  (pre-upgrade). `host submit-profile` is the non-dry-run path that registers an unbaselined host
+  class for baselining (this replaces the separate `preflight` command). Fails closed (BLOCKED)
+  when it can't get a verdict. Adds `substrate-interface` to the chutes-cvm package for the signature.
 - **`detect_profile` no longer gates on a local baselined set.** It resolves the GPU profile and the
   live fingerprint (which still drive the launch `-smp`/`-m`); acceptance is the control plane's call.
 - **VM-management scripts now ship inside the `chutes-cvm` package.** The privileged bash helpers
@@ -128,7 +136,9 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   `.example.yaml` files stay in `host-tools/scripts/config/`. Guest roles that drove the primitive
   directly (prime-vm) call `chutes-cvm launch-vm` / `chutes-cvm stop`. A deprecated
   `host-tools/scripts/quick-launch.sh` shim remains (forwards to `chutes-cvm launch`) so existing
-  miner automation that invokes the script by path keeps working across the upgrade.
+  miner automation that invokes the script by path keeps working across the upgrade; when run from
+  a checkout without the CLI installed, it bootstraps it via the checkout's `install.sh` (editable)
+  so `git pull` + the wrapper gets a host going with no separate install step.
 - **Launch config is one pydantic-settings model (`LaunchConfig`).** It is the single source of
   fields, defaults, validation, and precedence — **CLI > env (`CHUTES_CVM_*`, nested with `__`) >
   config.yaml > defaults** (nested sections deep-merge across sources) — replacing the hand-rolled
@@ -139,7 +149,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   model. This drops `jsonschema` and the `config-schema*.json` / `config.tmpl.yaml` files for
   `pydantic-settings`; `chutes-cvm down` reads the network values in Python and passes them to
   `teardown.sh` (no more `chutes-cvm config` eval round-trip).
-- **`chutes-cvm setup-host` is now the complete per-host configuration.** It folds in what were
+- **`chutes-cvm host setup` is now the complete per-host configuration.** It folds in what were
   three ansible roles so that running the CLI fully provisions a host (launch-ready modulo the CLI
   install itself, PCCS secrets, and a reboot): the `ntp` role becomes `_setup_ntp()` (chrony with
   `makestep` to step a skewed BMC RTC before any VM inherits the host clock), the `chutes_dirs` role
@@ -147,14 +157,14 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   operational deps from `host_prerequisites` (chrony, aria2, xfsprogs, python3-yaml) move into a new
   version-independent `HostProfile.base_packages` installed alongside the kernel + TDX stack.
 - **The `setup.yml` host-setup playbook is now thin orchestration.** It runs only `host_tools`
-  (bootstraps the CLI), `tdx_bootstrap` (`chutes-cvm setup-host` + reboot + TDX-init verify), and
+  (bootstraps the CLI), `tdx_bootstrap` (`chutes-cvm host setup` + reboot + TDX-init verify), and
   `pccs_configure` (vault-held PCCS secrets) — the boundary is: the CLI owns per-host config,
   ansible owns bootstrap, secrets, and fleet reboot/verify. The `host_tools` role now self-ensures
   its own install prerequisites (python3-venv/pip **+ git** for the sparse fetch), so no separate
   pre-CLI `host_prerequisites` step is needed in setup.
 
 ### Removed
-- **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm setup-host` (above). The
+- **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm host setup` (above). The
   `host_prerequisites` role stays (still used by the launch / remediate / build-setup playbooks) but
   is no longer part of `setup.yml`.
 

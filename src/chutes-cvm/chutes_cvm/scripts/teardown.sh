@@ -9,19 +9,24 @@
 # For a VM-only stop that LEAVES the shared bridge in place (e.g. the measurement capture
 # VM), use `chutes-cvm stop` directly instead of this.
 #
-#   teardown.sh [--bridge-ip IP/CIDR] [--vm-ip IP] [--public-iface IFACE]
+#   teardown.sh [--bridge-ip IP/CIDR] [--vm-ip IP] [--public-iface IFACE] [--no-stop]
+#
+# --no-stop: skip the force-kill (`chutes-cvm stop`) — the caller already asked the guest to power
+# off gracefully (chutes-cvm down); we still wait for it to exit, then clean the bridge/netlog.
 set -euo pipefail
 
 # Defaults mirror the launch orchestrator (chutes_cvm.guest.launch; used when a flag is omitted).
 VM_IP="192.168.100.2"
 BRIDGE_IP="192.168.100.1/24"
 PUBLIC_IFACE=""
+NO_STOP="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge-ip) BRIDGE_IP="$2"; shift 2 ;;
     --vm-ip) VM_IP="$2"; shift 2 ;;
     --public-iface) PUBLIC_IFACE="$2"; shift 2 ;;
+    --no-stop) NO_STOP="true"; shift ;;
     *) echo "teardown.sh: unknown argument '$1'" >&2; exit 1 ;;
   esac
 done
@@ -36,8 +41,12 @@ if [[ -z "$PUBLIC_IFACE" ]] || ! ip link show "$PUBLIC_IFACE" >/dev/null 2>&1; t
 fi
 
 echo "=== Cleaning Up TEE VM Environment ==="
-echo "Stopping Chutes VM (if running)..."
-chutes-cvm stop 2>/dev/null || true
+if [[ "$NO_STOP" == "true" ]]; then
+  echo "Graceful shutdown already requested; waiting for the guest to power off..."
+else
+  echo "Stopping Chutes VM (if running)..."
+  chutes-cvm stop 2>/dev/null || true
+fi
 
 echo "Waiting for VM processes to exit..."
 for i in {1..15}; do

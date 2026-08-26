@@ -4,15 +4,15 @@ Invoked as ``chutes-cvm <command>`` via the ``chutes-cvm`` console script (insta
 package's ``src/chutes-cvm/install.sh``), or directly as ``python3 -m chutes_cvm.cli
 <command>``.
 
-This is the package-level dispatcher: it routes to host (``setup-host``, ``tune-host``),
-guest (``launch``, ``reset-gpus``, ``preflight``), and measurement (``measurements``)
-subpackages, so it lives at the package root rather than under any one of them.
+This is the package-level dispatcher: it routes to the ``host`` group (setup / verify /
+submit-profile / tune / restore), guest (``launch``, ``reset-gpus``), measurement
+(``measurements``), and config (``config``) subpackages, so it lives at the package root
+rather than under any one of them.
 
 Stdlib-only dispatcher. Subcommands import their implementation lazily, so a command
-that needs extra dependencies never burdens one that doesn't (``verify-host`` is pure
-stdlib). Commands that delegate to a bundled shell entrypoint (``launch``, ``discover-profile``,
-``reset-gpus``) shell out to ``chutes_cvm/scripts/`` via ``_run_script``; the rest dispatch
-to a Python ``main`` in this package.
+that needs extra dependencies never burdens one that doesn't. Commands that delegate to a
+bundled shell entrypoint (``down``, ``reset-gpus``) shell out to ``chutes_cvm/scripts/`` via
+``_run_script``; the rest dispatch to a Python ``main`` in this package.
 """
 
 import argparse
@@ -24,16 +24,9 @@ from chutes_cvm.paths import SCRIPTS_DIR as _SCRIPTS_DIR
 from chutes_cvm.paths import default_config_path
 
 # _SCRIPTS_DIR is the package's bundled shell scripts (chutes_cvm/scripts/): the privileged
-# volume/network helpers the Python launch orchestrator calls, plus teardown, discover-profile,
-# reset-gpus. _run_script execs one of them; they travel with the package, so no host-tools on disk.
-
-# verify_host's exit codes → (banner label, ANSI attributes). Kept here so the CLI owns
-# presentation while chutes_cvm.guest.verify stays a plain int-returning gate.
-_VERIFY_STATUS = {
-    0: ("READY", "1;32"),  # bold green
-    1: ("BLOCKED", "1;31"),  # bold red
-    2: ("WARNING", "1;33"),  # bold yellow
-}
+# volume/network helpers the Python launch orchestrator calls, plus teardown, discover-profile
+# (used by the host verify/submit flow), reset-gpus. _run_script execs one; they travel with the
+# package, so no host-tools on disk.
 
 
 def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
@@ -46,57 +39,6 @@ def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
         print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
         return 1
     return subprocess.call(["bash", str(script), *argv], cwd=cwd)
-
-
-def _color(text: str, attrs: str) -> str:
-    """Wrap ``text`` in an ANSI attribute string, unless output isn't a TTY or NO_COLOR
-    is set (so piped/redirected output and dumb terminals stay clean)."""
-    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
-        return text
-    return f"\033[{attrs}m{text}\033[0m"
-
-
-def _cmd_verify_host(args: argparse.Namespace) -> int:
-    """Run the host-readiness gates and print a colored result banner."""
-    from chutes_cvm.guest.verify import verify_host
-
-    print(_color("── chutes-cvm: host verification ──", "1;36"))
-    rc = verify_host(
-        target_os=args.target_os,
-        scripts_dir=str(_SCRIPTS_DIR),
-        config_path=args.config,
-        api_base=args.api,
-        submit=args.submit,
-    )
-    label, attrs = _VERIFY_STATUS.get(rc, (f"EXIT {rc}", "1"))
-    print(_color(f"\nResult: {label}", attrs))
-    return rc
-
-
-def _cmd_discover_profile(args: argparse.Namespace) -> int:
-    """Capture this host's GPU/CPU/NUMA profile (delegates to discover-profile.sh)."""
-    forwarded = []
-    if args.json_only:
-        forwarded.append("--json-only")
-    if args.no_json:
-        forwarded.append("--no-json")
-    return _run_script("discover-profile.sh", forwarded)
-
-
-def _cmd_tune_host(args: argparse.Namespace) -> int:
-    """Apply NVIDIA-recommended host CPU tuning."""
-    from chutes_cvm.host.tune import apply_tuning
-
-    apply_tuning()
-    return 0
-
-
-def _cmd_restore_host(args: argparse.Namespace) -> int:
-    """Restore host CPU settings saved by tune-host."""
-    from chutes_cvm.host.tune import restore_tuning
-
-    restore_tuning()
-    return 0
 
 
 def _cmd_reset_gpus(args: argparse.Namespace) -> int:
@@ -122,33 +64,54 @@ def _cmd_stop(args: argparse.Namespace) -> int:
 
 
 def _cmd_down(args: argparse.Namespace) -> int:
-    """Full teardown: stop the VM and tear down its bridge + benchmark-netlog service.
+    """Bring the VM environment down. By default asks the guest to power off gracefully via the
+    system-manager API (miner hotkey from config); --force force-kills QEMU instead. Either way,
+    the host-side bridge + benchmark-netlog are then torn down.
 
-    Resolves the network values from config in Python and passes them to teardown.sh as flags
-    (no `chutes-cvm config` eval round-trip); teardown falls back to its own defaults when a
-    config is absent or unreadable.
+    Network values come from config (resolved in Python, passed to teardown.sh as flags — no
+    `chutes-cvm config` eval round-trip); teardown falls back to its own defaults if config is
+    absent/unreadable.
     """
     from chutes_cvm.guest.config import ConfigError, load_launch_config
 
-    forward: "list[str]" = []
     config = args.config or default_config_path()
-    if config and os.path.exists(config):
+    net_flags: "list[str]" = []
+    cfg_ok = bool(config and os.path.exists(config))
+    if cfg_ok:
         try:
-            cfg = load_launch_config(config).flat()
-            forward = [
+            flat = load_launch_config(config).flat()
+            net_flags = [
                 "--bridge-ip",
-                cfg["bridge_ip"],
+                flat["bridge_ip"],
                 "--vm-ip",
-                cfg["vm_ip"],
+                flat["vm_ip"],
                 "--public-iface",
-                cfg["public_iface"],
+                flat["public_iface"],
             ]
         except ConfigError as exc:
+            cfg_ok = False
             print(
-                f"chutes-cvm: could not read {config} ({exc}); tearing down with defaults.",
+                f"chutes-cvm: could not read {config} ({exc}); using defaults.",
                 file=sys.stderr,
             )
-    return _run_script("teardown.sh", forward, cwd=str(_SCRIPTS_DIR))
+
+    if not args.force:
+        from chutes_cvm.guest.shutdown import ShutdownError, graceful_shutdown
+
+        try:
+            graceful_shutdown(config if cfg_ok else None)
+        except ShutdownError as exc:
+            print(
+                f"chutes-cvm: graceful shutdown failed — {exc}\n"
+                "  Run `chutes-cvm down --force` to force-kill the VM instead.",
+                file=sys.stderr,
+            )
+            return 1
+        # Guest is powering off on its own; teardown waits for it (no force-kill), then cleans up.
+        return _run_script(
+            "teardown.sh", net_flags + ["--no-stop"], cwd=str(_SCRIPTS_DIR)
+        )
+    return _run_script("teardown.sh", net_flags, cwd=str(_SCRIPTS_DIR))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -157,62 +120,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Operate and inspect Chutes confidential GPU VMs on this host.",
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
-
-    verify = sub.add_parser(
-        "verify-host",
-        help="Check this host will relaunch and re-attest (optionally after an OS upgrade).",
-        description=(
-            "Run the launch gates without launching a VM: host QEMU is the one its OS "
-            "release baselines, and the control plane has a published measurement for this "
-            "host class. --submit registers an unbaselined host class (so Chutes can generate "
-            "its measurements) instead of the default dry-run check. "
-            "Exit 0 READY / 1 BLOCKED / 2 WARNING."
-        ),
-    )
-    verify.add_argument(
-        "--target-os",
-        metavar="VERSION",
-        help="Verify against a target OS release's QEMU (pre-upgrade check), e.g. 26.04.",
-    )
-    verify.add_argument(
-        "--config",
-        metavar="PATH",
-        help="Launch config.yaml with the miner hotkey (default: ./config.yaml; env CHUTES_CVM_CONFIG).",
-    )
-    verify.add_argument(
-        "--api",
-        metavar="URL",
-        help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
-    )
-    verify.add_argument(
-        "--submit",
-        action="store_true",
-        help="Register this host class with Chutes if it is not yet baselined, so Chutes can "
-        "generate its measurements (default: a non-storing dry-run check).",
-    )
-    verify.set_defaults(func=_cmd_verify_host)
-
-    discover = sub.add_parser(
-        "discover-profile",
-        help="Capture this host's GPU/CPU/NUMA profile as JSON (to baseline a new host class).",
-        description=(
-            "Probe the host's GPUs, CPU, NUMA and PCI topology and write a discover-profile "
-            "JSON (plus a terminal report). Send that JSON to Chutes to baseline a new host "
-            "class and generate its measurements."
-        ),
-    )
-    output = discover.add_mutually_exclusive_group()
-    output.add_argument(
-        "--json-only",
-        action="store_true",
-        help="Write only the JSON file (skip the terminal report).",
-    )
-    output.add_argument(
-        "--no-json",
-        action="store_true",
-        help="Print the terminal report only (skip the JSON file).",
-    )
-    discover.set_defaults(func=_cmd_discover_profile)
 
     # Pass-through commands (see _PASSTHROUGH / main): everything after the subcommand is
     # forwarded verbatim to the underlying launcher/setup, which own their own --help. These
@@ -229,9 +136,10 @@ def build_parser() -> argparse.ArgumentParser:
     # subcommand. main() still dispatches it via _PASSTHROUGH; `chutes-cvm launch-vm --help`
     # shows the primitive's own argparse.
     sub.add_parser(
-        "setup-host",
+        "host",
         add_help=False,
-        help="Set up this TDX host (args forwarded; `chutes-cvm setup-host --help`).",
+        help="Host lifecycle + attestation — setup / verify / submit-profile / tune / restore "
+        "(args forwarded; `chutes-cvm host --help`).",
     )
 
     stop = sub.add_parser(
@@ -242,27 +150,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     down = sub.add_parser(
         "down",
-        help="Full teardown: stop the VM and tear down its bridge + benchmark-netlog service.",
+        help="Gracefully shut down the VM (via the guest API) and tear down its bridge + "
+        "benchmark-netlog; --force force-kills QEMU instead.",
     )
     down.add_argument(
         "--config",
         metavar="PATH",
-        help="config.yaml whose network values drive bridge cleanup "
-        "(default: ./config.yaml).",
+        help="config.yaml providing the miner hotkey (to sign the shutdown) and network "
+        "values for bridge cleanup (default: ./config.yaml).",
+    )
+    down.add_argument(
+        "--force",
+        action="store_true",
+        help="Force-kill QEMU instead of asking the guest to power off gracefully.",
     )
     down.set_defaults(func=_cmd_down)
-
-    tune = sub.add_parser(
-        "tune-host",
-        help="Apply NVIDIA-recommended host CPU tuning (performance governor, no C1E/C6).",
-    )
-    tune.set_defaults(func=_cmd_tune_host)
-
-    restore = sub.add_parser(
-        "restore-host",
-        help="Restore host CPU settings saved by tune-host (no-op if never tuned).",
-    )
-    restore.set_defaults(func=_cmd_restore_host)
 
     reset = sub.add_parser(
         "reset-gpus",
@@ -301,13 +203,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 # Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
 # before argparse because REMAINDER mishandles leading options (e.g. `launch-vm --image`,
-# `setup-host --help`). Each underlying main owns its own --help. `launch-vm` is the hidden
+# `host --help`). Each underlying main owns its own --help. `launch-vm` is the hidden
 # QEMU primitive (no visible subparser); `launch` is the Python end-to-end orchestrator
 # (chutes_cvm.guest.launch) that drives the bash volume/network helpers then calls launch-vm.
 _PASSTHROUGH = (
     "launch",
     "launch-vm",
-    "setup-host",
+    "host",
     "image",
     "config",
     "measurements",
@@ -329,10 +231,10 @@ def main(argv: "list[str] | None" = None) -> int:
             from chutes_cvm.guest.__main__ import main as _launch_main
 
             return _launch_main(forward)
-        if raw[0] == "setup-host":
-            from chutes_cvm.host.setup import main as _setup_main
+        if raw[0] == "host":
+            from chutes_cvm.host.cli import main as _host_main
 
-            return _setup_main(forward)
+            return _host_main(forward)
         if raw[0] == "image":
             from chutes_cvm.guest.image_set import main as _image_main
 

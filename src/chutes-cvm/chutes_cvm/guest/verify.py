@@ -100,8 +100,8 @@ def verify_host(
         )
     else:
         print(
-            "  Re-run with --submit to register this host class so Chutes can generate its "
-            "measurements before you launch/upgrade."
+            "  Run `chutes-cvm host submit-profile` to register this host class so Chutes can "
+            "generate its measurements before you launch/upgrade."
         )
     return WARNING
 

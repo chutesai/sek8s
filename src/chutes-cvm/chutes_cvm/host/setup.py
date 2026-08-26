@@ -770,7 +770,7 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
 
 
 def main(argv: "list[str] | None" = None) -> int:
-    """CLI entry for host setup: `chutes-cvm setup-host` (or `python -m chutes_cvm.host.setup`).
+    """CLI entry for host setup: `chutes-cvm host setup` (or `python -m chutes_cvm.host.setup`).
 
     Detects the Ubuntu version, resolves the matching host profile, and executes the
     setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
@@ -781,7 +781,7 @@ def main(argv: "list[str] | None" = None) -> int:
     from chutes_cvm.host.support_matrix import format_topology_matrix
 
     parser = argparse.ArgumentParser(
-        prog="chutes-cvm setup-host",
+        prog="chutes-cvm host setup",
         description="Set up TDX host for confidential GPU computing",
     )
     parser.add_argument(
@@ -816,7 +816,7 @@ def main(argv: "list[str] | None" = None) -> int:
         "Validated hardware topologies are listed in the support matrix "
         "(not every OS profile × GPU SKU has been lab-tested):"
     )
-    print("  chutes-cvm setup-host --topology-matrix")
+    print("  chutes-cvm host setup --topology-matrix")
     return 0
 
 

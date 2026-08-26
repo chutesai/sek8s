@@ -193,7 +193,7 @@ class GpuProfile(ABC):
         """QEMU version -> known topology fingerprints (RTMR0 = f(topology, QEMU)).
 
         Fingerprints are NumaTopology / FlatTopology value types (see
-        gpu/topology.py). chutes-cvm verify-host uses the per-QEMU keys to flag a topology
+        gpu/topology.py). chutes-cvm host verify uses the per-QEMU keys to flag a topology
         with no measurement at a given QEMU. Empty dict = profile not
         characterized yet.
         """

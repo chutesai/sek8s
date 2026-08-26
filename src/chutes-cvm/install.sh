@@ -172,4 +172,4 @@ else
 fi
 
 echo "Installed chutes-cvm -> $SHIM"
-echo "Try: chutes-cvm verify-host"
+echo "Try: chutes-cvm host verify"

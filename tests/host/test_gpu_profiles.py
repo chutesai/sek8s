@@ -713,7 +713,7 @@ def test_topology_fingerprint_ib_count_on_flat_path():
 
 
 def test_detect_profile_has_no_local_topology_gate():
-    # Acceptance moved to the control plane (chutes-cvm verify-host): detect_profile
+    # Acceptance moved to the control plane (chutes-cvm host verify): detect_profile
     # returns the (profile, fingerprint) even for a topology not in any in-repo set — it never
     # gates locally now. The fingerprint still drives the launch -smp / -m.
     from chutes_cvm.guest.detection import detect_profile

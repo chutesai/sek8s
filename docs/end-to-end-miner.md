@@ -20,7 +20,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 
 ## ✅ Pre-flight Checklist
 
-- Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies) and `chutes-cvm setup-host --topology-matrix`.
+- Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies) and `chutes-cvm host setup --topology-matrix`.
 - Intel PCCS access + API key (for PCK cert registration)
 - The VM image downloaded via `chutes-cvm image download` (requires `aria2`)
 - Miner credentials: SS58 address and secret seed without `0x`
@@ -60,7 +60,7 @@ Each step is detailed in the following sections.
 Follow the dedicated [TDX VM Host Setup Guide](../host-tools/README.md). High-level tasks:
 
 1. Clone this repository.
-2. Run `cd host-tools/scripts && sudo chutes-cvm setup-host` (auto-detects Ubuntu version, installs kernel, QEMU, attestation services).
+2. Run `cd host-tools/scripts && sudo chutes-cvm host setup` (auto-detects Ubuntu version, installs kernel, QEMU, attestation services).
 3. Reboot into the TDX-enabled kernel and verify `dmesg | grep -i tdx`.
 4. Configure PCCS (`pccs-configure`, restart the service, run `PCKIDRetrievalTool`).
 5. Install Python + PyYAML (`pip3 install pyyaml`) and aria2 (`sudo apt install aria2`) for the orchestration scripts.

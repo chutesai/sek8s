@@ -3,7 +3,8 @@
   ansible.builtin.command:
     argv:
       - chutes-cvm
-      - setup-host
+      - host
+      - setup
       - "--noninteractive"
   register: setup_tdx
   changed_when: setup_tdx.rc == 0
