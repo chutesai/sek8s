@@ -40,6 +40,6 @@ def gpu_tools_dir() -> Path:
 
 def default_config_path() -> str:
     """The launch config.yaml when a caller passes none. ``CHUTES_CVM_CONFIG`` override, else
-    ``./config.yaml`` in the current directory — where ``chutes-cvm init`` writes it. Ansible
-    and quick-launch pass an explicit path instead of relying on this."""
+    ``./config.yaml`` in the current directory — where ``chutes-cvm config init`` writes it. Ansible
+    and the launch orchestrator pass an explicit path instead of relying on this."""
     return os.environ.get("CHUTES_CVM_CONFIG") or "config.yaml"

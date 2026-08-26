@@ -166,7 +166,7 @@ fi
 
 # Config values come from a positional arg OR the same-named environment variable —
 # the positional wins when given, else the env var, else the default. This lets a caller
-# (quick-launch.sh) set a handful of env vars and invoke with just the output path instead
+# (the launch orchestrator, chutes_cvm.guest.launch) set a handful of env vars and invoke with just the output path instead
 # of a long, order-fragile positional list, while direct/manual callers can still pass
 # everything positionally. See --help for the full name list.
 OUTPUT_PATH="${1:-${OUTPUT_PATH:-}}"
@@ -329,7 +329,7 @@ report_image_holders() {
     fi
     print_info ""
     print_info "If a qemu-system / qemu-kvm process is listed, the guest VM is still running."
-    print_info "Stop it first (./quick-launch.sh --clean). If it will not die (D-state),"
+    print_info "Stop it first (chutes-cvm down). If it will not die (D-state),"
     print_info "reboot the host before retrying."
 }
 

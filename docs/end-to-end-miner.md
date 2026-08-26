@@ -89,7 +89,7 @@ Generate a template config and customize it with your network + credentials:
 
 ```bash
 cd host-tools/scripts
-chutes-cvm init
+chutes-cvm config init
 nano config.yaml
 ```
 

@@ -1,11 +1,10 @@
 """Tests for the chutes-cvm CLI dispatcher (chutes_cvm.cli).
 
 Covers the command surface after the up->launch rename and the decomposition of
-quick-launch's early-exit modes into first-class commands (image download / init / stop / down).
+the launch orchestrator's early-exit modes into first-class commands (image download / init / stop / down).
 The low-level QEMU primitive is the hidden `launch-vm`; the orchestrator is `launch`.
 """
 
-import os
 from unittest.mock import patch
 
 from chutes_cvm import cli
@@ -27,7 +26,7 @@ def test_visible_command_surface():
     for expected in (
         "launch",
         "image",
-        "init",
+        "config",
         "stop",
         "down",
         "verify-host",
@@ -36,19 +35,18 @@ def test_visible_command_surface():
         assert expected in cmds
     # preflight was folded into `verify-host --submit`; it is no longer its own command.
     assert "preflight" not in cmds
+    # init is now `config init`, not a top-level command.
+    assert "init" not in cmds
     # launch-vm is the hidden primitive: dispatched via _PASSTHROUGH, never a visible subcommand.
     assert "launch-vm" not in cmds
     assert "up" not in cmds
 
 
-def test_launch_dispatches_to_orchestrator_script():
-    with patch("chutes_cvm.cli._run_script", return_value=0) as run:
+def test_launch_dispatches_to_python_orchestrator():
+    # launch is now the Python orchestrator (chutes_cvm.guest.launch), not a bash passthrough.
+    with patch("chutes_cvm.guest.launch.main", return_value=0) as orch:
         assert cli.main(["launch", "config.yaml", "--foreground"]) == 0
-    name, argv = run.call_args.args[0], run.call_args.args[1]
-    assert name == "quick-launch.sh"
-    assert argv == ["config.yaml", "--foreground"]
-    # Orchestrator must run from the bundled scripts dir so ./volumes and ./network resolve.
-    assert run.call_args.kwargs["cwd"] == str(cli._SCRIPTS_DIR)
+    assert orch.call_args.args[0] == ["config.yaml", "--foreground"]
 
 
 def test_launch_vm_dispatches_to_primitive():
@@ -104,22 +102,26 @@ def test_image_download_debug_flag_selects_debug_set():
     assert call.call_args.args[0][-1] == "tdx-guest-debug"
 
 
-def test_init_writes_config_and_guards_overwrite(tmp_path, monkeypatch):
+def test_config_init_writes_config_and_guards_overwrite(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    assert cli.main(["init"]) == 0
+    assert cli.main(["config", "init"]) == 0
     dest = tmp_path / "config.yaml"
     assert dest.exists() and dest.read_text().strip()
 
-    # A second init refuses (non-zero) rather than clobbering an edited config.
-    assert cli.main(["init"]) == 1
+    # A second `config init` refuses (non-zero) rather than clobbering an edited config.
+    assert cli.main(["config", "init"]) == 1
 
     # --force overwrites.
     dest.write_text("stale")
-    assert cli.main(["init", "--force"]) == 0
+    assert cli.main(["config", "init", "--force"]) == 0
     assert dest.read_text() != "stale"
 
 
-def test_init_template_source_is_bundled():
-    # The template `init` copies must ship inside the package (resolved package-relative).
-    template = cli._SCRIPTS_DIR / "config" / "config.tmpl.yaml"
-    assert os.path.exists(template)
+def test_config_init_generates_valid_config_from_schema(tmp_path, monkeypatch):
+    # `config init` generates the config from the LaunchConfig model; it must load back cleanly.
+    from chutes_cvm.guest.config import load_launch_config
+
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["config", "init"]) == 0
+    cfg = load_launch_config(str(tmp_path / "config.yaml"))
+    assert cfg.network.type == "tap"

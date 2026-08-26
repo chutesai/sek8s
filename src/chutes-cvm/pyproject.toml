@@ -13,7 +13,9 @@ include = [{ path = "chutes_cvm/scripts/**/*", format = ["sdist", "wheel"] }]
 [tool.poetry.dependencies]
 python = ">=3.12,<3.15"
 pyyaml = "^6.0.2"
-jsonschema = "^4.23.0"
+# Launch config is a pydantic-settings model (CLI > env > YAML > defaults); it also validates,
+# replacing the former hand-maintained JSON schema + jsonschema.
+pydantic-settings = "^2.10.0"
 # Attestation preflight signs the submission with the miner hotkey (sr25519).
 substrate-interface = "^1.7.11"
 

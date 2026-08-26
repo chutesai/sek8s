@@ -1,181 +1,335 @@
-"""YAML configuration parser for TEE VM launch.
+"""Launch configuration — a nested pydantic-settings model.
 
-Parses a YAML config file, validates it against the JSON schema, and outputs
-shell variable assignments to stdout for consumption by quick-launch.sh.
+`LaunchConfig` is the one source of truth for the VM launch config: per-area sections (vm,
+miner, network, volumes, devices, runtime, docker_hub, rc) that mirror the `config.yaml` miners
+edit — so the existing file loads natively, with no migration. Values resolve
+**CLI > env (`CHUTES_CVM_*`, nested with `__`) > config.yaml > defaults** (pydantic-settings
+source ordering; nested sections deep-merge across sources). The same model validates a config and
+generates a starter one:
 
-Can be invoked as:
-  python3 -m chutes_cvm.guest.config <config.yaml>
-  python3 -m chutes_cvm.guest.config --benchmark <config.yaml>
+  chutes-cvm config init            # write a starter config.yaml generated from this model
+  chutes-cvm config verify <file>   # validate a config.yaml against this model
 """
 
-import json
+from __future__ import annotations
+
 import os
-import shlex
-import sys
+from typing import Any, Literal
 
 import yaml
-from chutes_cvm.paths import SCRIPTS_DIR
+from pydantic import BaseModel, Field, ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources import YamlConfigSettingsSource
 
 
-def validate_config(config, schema_path):
-    """Validate config against JSON schema."""
+class ConfigError(Exception):
+    """A launch config could not be read/validated (message is user-facing)."""
+
+
+# YAML path the source reads, set by load_launch_config before construction. The CLI is
+# single-threaded, so a module global is sufficient (and avoids threading it through pydantic).
+_yaml_path: "str | None" = None
+
+
+class VmSection(BaseModel):
+    hostname: str = Field(
+        default="", description="VM hostname (must be unique per miner hotkey)"
+    )
+    base_image: str = Field(
+        default="",
+        description="Published image-set dir; empty = /var/lib/chutes/base-images/tdx-guest/",
+    )
+    vm_image_directory: str = Field(
+        default="", description="Per-VM image dir; empty = /var/lib/chutes/vm-images/"
+    )
+
+
+class MinerSection(BaseModel):
+    ss58: str = Field(
+        default="", description="Miner SS58 credential (required unless --benchmark)"
+    )
+    seed: str = Field(
+        default="", description="Miner seed credential (required unless --benchmark)"
+    )
+
+
+class NetworkSection(BaseModel):
+    vm_ip: str = Field(default="192.168.100.2", description="VM IP address")
+    bridge_ip: str = Field(
+        default="192.168.100.1/24", description="Bridge IP with CIDR"
+    )
+    dns: str = Field(default="8.8.8.8", description="VM DNS server")
+    public_interface: str = Field(
+        default="",
+        description="Public interface; empty = auto-detect from the default route",
+    )
+    type: Literal["tap", "user"] = Field(
+        default="tap",
+        description="Network type: tap (bridged) or user (SLIRP/port forwarding)",
+    )
+    ssh_port: int = Field(default=2222, description="SSH port for user-mode networking")
+
+
+class VolumeSpec(BaseModel):
+    size: str = Field(default="", description="Volume size (K/M/G/T)")
+    path: str = Field(
+        default="", description="Volume path; empty = auto-generate from hostname"
+    )
+
+
+class ConfigVolumeSpec(BaseModel):
+    path: str = Field(
+        default="", description="Config volume path; empty = config-<hostname>.qcow2"
+    )
+
+
+class VolumesSection(BaseModel):
+    cache: VolumeSpec = VolumeSpec(size="5000G")
+    storage: VolumeSpec = VolumeSpec(size="500G")
+    config: ConfigVolumeSpec = ConfigVolumeSpec()
+
+
+class DevicesSection(BaseModel):
+    bind_devices: bool = Field(
+        default=True,
+        description="Bind GPU/NVSwitch to vfio-pci (set false to skip binding)",
+    )
+
+
+class RuntimeSection(BaseModel):
+    foreground: bool = Field(
+        default=False, description="Run the VM in the foreground instead of daemonizing"
+    )
+
+
+class DockerHubSection(BaseModel):
+    username: str = Field(
+        default="", description="Docker Hub username (optional; use with token)"
+    )
+    token: str = Field(
+        default="", description="Docker Hub PAT/password (optional; use with username)"
+    )
+
+
+class RcSection(BaseModel):
+    operator_signing_key: str = Field(
+        default="",
+        description="RC-gate only: host path to the operator RSA private key",
+    )
+
+
+class LaunchConfig(BaseSettings):
+    """Resolved VM launch configuration (CLI > env > config.yaml > defaults)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CHUTES_CVM_",
+        env_nested_delimiter="__",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    vm: VmSection = VmSection()
+    miner: MinerSection = MinerSection()
+    network: NetworkSection = NetworkSection()
+    volumes: VolumesSection = VolumesSection()
+    devices: DevicesSection = DevicesSection()
+    runtime: RuntimeSection = RuntimeSection()
+    docker_hub: DockerHubSection = DockerHubSection()
+    rc: RcSection = RcSection()
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        # Precedence (first wins): CLI (init kwargs) > env (CHUTES_CVM_*) > config.yaml > defaults.
+        sources: list = [init_settings, env_settings]
+        if _yaml_path:
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=_yaml_path))
+        return tuple(sources)
+
+    def flat(self) -> dict:
+        """Flatten to the keys the launch orchestrator works with (one place; the model stays the
+        structured source of truth)."""
+        return {
+            "hostname": self.vm.hostname,
+            "base_image": self.vm.base_image,
+            "vm_image_dir": self.vm.vm_image_directory,
+            "miner_ss58": self.miner.ss58,
+            "miner_seed": self.miner.seed,
+            "vm_ip": self.network.vm_ip,
+            "bridge_ip": self.network.bridge_ip,
+            "vm_dns": self.network.dns,
+            "public_iface": self.network.public_interface,
+            "network_type": self.network.type,
+            "ssh_port": self.network.ssh_port,
+            "cache_size": self.volumes.cache.size,
+            "cache_volume": self.volumes.cache.path,
+            "storage_size": self.volumes.storage.size,
+            "storage_volume": self.volumes.storage.path,
+            "config_volume": self.volumes.config.path,
+            "bind_devices": self.devices.bind_devices,
+            "foreground": self.runtime.foreground,
+            "docker_hub_username": self.docker_hub.username,
+            "docker_hub_token": self.docker_hub.token,
+            "operator_signing_key": self.rc.operator_signing_key,
+        }
+
+
+def _check_removed_keys(data: dict) -> None:
+    """Reject config keys the current schema no longer supports, with a clear message."""
+    if "advanced" in data:
+        raise ConfigError(
+            "'advanced' section is no longer supported. Remove it to match the current schema."
+        )
+    if "enabled" in (data.get("volumes", {}) or {}).get("cache", {}):
+        raise ConfigError(
+            "'volumes.cache.enabled' has been removed. Delete it from your config."
+        )
+
+
+def load_launch_config(config_file: "str | None" = None, **overrides) -> LaunchConfig:
+    """Build the resolved LaunchConfig. ``config_file`` is the YAML layer; ``overrides`` is the
+    CLI layer, a (possibly nested) dict of only the values the user set. Raises ConfigError on
+    read/validation failure."""
+    global _yaml_path
+    _yaml_path = os.path.abspath(config_file) if config_file else None
     try:
-        import jsonschema
-    except ImportError:
+        if _yaml_path:
+            if not os.path.exists(_yaml_path):
+                raise ConfigError(f"Config file not found: {_yaml_path}")
+            try:
+                with open(_yaml_path) as f:
+                    data = yaml.safe_load(f) or {}
+            except yaml.YAMLError as e:
+                raise ConfigError(f"Error parsing YAML: {e}") from e
+            if not isinstance(data, dict):
+                raise ConfigError("config.yaml must be a mapping at the top level")
+            _check_removed_keys(data)
+        return LaunchConfig(**overrides)
+    except ValidationError as e:
+        raise ConfigError(f"invalid configuration:\n{e}") from e
+    finally:
+        _yaml_path = None
+
+
+# ── Template generation (config.yaml from the schema) ────────────────────────────
+
+
+def _yaml_scalar(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if value == "":
+        return '""'
+    return f'"{value}"'
+
+
+def _emit_section(
+    instance: Any, model_cls: "type[BaseModel]", indent: int
+) -> list[str]:
+    """Render a model's fields as commented YAML lines, reading effective values from a default
+    ``instance`` (so section-level defaults like cache size=5000G are reflected, not the leaf
+    class's own default)."""
+    lines: list[str] = []
+    pad = "  " * indent
+    for name, field in model_cls.model_fields.items():
+        ann: Any = field.annotation
+        value = getattr(instance, name)
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            lines.append(f"{pad}{name}:")
+            lines.extend(_emit_section(value, ann, indent + 1))
+        else:
+            suffix = f"  # {field.description}" if field.description else ""
+            lines.append(f"{pad}{name}: {_yaml_scalar(value)}{suffix}")
+    return lines
+
+
+def render_config_template() -> str:
+    """Render a starter config.yaml (nested, with per-field comments) from the model — always in
+    sync with LaunchConfig. `chutes-cvm config init` writes this for a miner to edit."""
+    header = (
+        "# chutes-cvm launch configuration — generated from the schema.\n"
+        "# Edit values below, then: chutes-cvm launch config.yaml\n"
+        "# CLI flags and CHUTES_CVM_* env vars override these at launch.\n"
+    )
+    # model_construct() gives an instance of pure schema defaults (no env/YAML), so the emitted
+    # values reflect the effective defaults (e.g. volumes.cache.size=5000G).
+    defaults = LaunchConfig.model_construct()
+    return header + "\n".join(_emit_section(defaults, LaunchConfig, 0)) + "\n"
+
+
+def _cmd_init(args) -> int:
+    """`chutes-cvm config init` — write a starter config.yaml (from the schema) to --output."""
+    import sys
+
+    if os.path.exists(args.output) and not args.force:
         print(
-            "Error: jsonschema not installed. Config validation is required.",
+            f"chutes-cvm: {args.output} already exists — pass --force to overwrite.",
             file=sys.stderr,
         )
-        print("Install with: pip3 install jsonschema", file=sys.stderr)
-        return False
+        return 1
+    with open(args.output, "w") as f:
+        f.write(render_config_template())
+    print(
+        f"Created {args.output} (generated from the schema). Edit it, then `chutes-cvm launch`."
+    )
+    return 0
+
+
+def _cmd_verify(args) -> int:
+    """`chutes-cvm config verify <file>` — validate a config.yaml against the schema."""
+    import sys
 
     try:
-        with open(schema_path, "r") as f:
-            schema = json.load(f)
-
-        jsonschema.validate(instance=config, schema=schema)
-        return True
-    except jsonschema.ValidationError as e:
-        print(f"Config validation error: {e.message}", file=sys.stderr)
-        print(f"Path: {' -> '.join(str(p) for p in e.path)}", file=sys.stderr)
-        return False
-    except FileNotFoundError:
-        print(f"Error: Schema file not found: {schema_path}", file=sys.stderr)
-        print("This is required for config validation.", file=sys.stderr)
-        return False
-    except Exception as e:
-        print(f"Error: Schema validation failed: {e}", file=sys.stderr)
-        return False
+        load_launch_config(args.config_file)
+    except ConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(f"OK: {args.config_file} is valid")
+    return 0
 
 
 def main(argv=None):
-    args = list(sys.argv[1:] if argv is None else argv)
-    benchmark_mode = False
+    """`chutes-cvm config <verb>` — manage the launch config.yaml (init / verify)."""
+    import argparse
 
-    if args and args[0] == "--benchmark":
-        benchmark_mode = True
-        args = args[1:]
-
-    if len(args) != 1:
-        print(
-            "Usage: python3 -m chutes_cvm.guest.config [--benchmark] <config.yaml>",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    config_file = args[0]
-
-    if not os.path.exists(config_file):
-        print(f"Error: Config file not found: {config_file}", file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        print(f"Error parsing YAML: {e}", file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error reading config file: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    schema_name = (
-        "config-schema.benchmark.json" if benchmark_mode else "config-schema.json"
+    parser = argparse.ArgumentParser(
+        prog="chutes-cvm config", description="Manage the launch config.yaml."
     )
-    schema_path = os.path.join(str(SCRIPTS_DIR), "config", schema_name)
+    sub = parser.add_subparsers(dest="cmd", required=True)
 
-    if not validate_config(config, schema_path):
-        print(
-            "\nConfig validation failed. Please fix the errors above.", file=sys.stderr
-        )
-        print(
-            "Validation is required to prevent launching VMs with invalid configuration.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    p_init = sub.add_parser(
+        "init",
+        help="generate a starter config.yaml from the schema (for a miner to edit)",
+    )
+    p_init.add_argument(
+        "-o",
+        "--output",
+        default="config.yaml",
+        help="output path (default: ./config.yaml)",
+    )
+    p_init.add_argument(
+        "--force", action="store_true", help="overwrite an existing file"
+    )
+    p_init.set_defaults(func=_cmd_init)
 
-    vm_config = config.get("vm", {})
-    hostname = vm_config.get("hostname", "")
-    base_image = vm_config.get("base_image", "")
-    vm_image_directory = vm_config.get("vm_image_directory", "")
+    p_verify = sub.add_parser(
+        "verify", help="validate a config.yaml against the schema"
+    )
+    p_verify.add_argument("config_file", help="path to the config.yaml to validate")
+    p_verify.set_defaults(func=_cmd_verify)
 
-    miner_ss58 = config.get("miner", {}).get("ss58", "")
-    miner_seed = config.get("miner", {}).get("seed", "")
-
-    network = config.get("network", {})
-    vm_ip = network.get("vm_ip", "192.168.100.2")
-    bridge_ip = network.get("bridge_ip", "192.168.100.1/24")
-    vm_dns = network.get("dns", "8.8.8.8")
-    public_iface = network.get("public_interface", "")
-    network_type = network.get("type", "tap")
-    ssh_port = network.get("ssh_port", 2222)
-
-    if "advanced" in config:
-        print(
-            "Error: 'advanced' section is no longer supported. Remove it to match the current schema.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    volumes = config.get("volumes", {})
-    cache_cfg = volumes.get("cache", {})
-    if "enabled" in cache_cfg:
-        print(
-            "Error: 'volumes.cache.enabled' has been removed. Delete it from your config.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    cache_size = cache_cfg.get("size", "5000G")
-    cache_volume = cache_cfg.get("path", "")
-
-    storage_cfg = volumes.get("storage", {})
-    storage_size = storage_cfg.get("size", "500G")
-    storage_volume = storage_cfg.get("path", "")
-
-    config_volume = volumes.get("config", {}).get("path", "")
-
-    devices = config.get("devices", {})
-    bind_devices = devices.get("bind_devices", True)
-
-    runtime = config.get("runtime", {})
-    foreground = runtime.get("foreground", False)
-
-    docker_hub = config.get("docker_hub") or {}
-    if not isinstance(docker_hub, dict):
-        docker_hub = {}
-    docker_hub_username = docker_hub.get("username", "") or ""
-    docker_hub_token = docker_hub.get("token", "") or ""
-
-    # RC-gate only: host path to the operator RSA private key. create-config.sh copies
-    # it onto the config volume as operator-signing-key.pem (the initramfs rc-sign
-    # signs the attestation nonce with it for rc=true measurements).
-    rc = config.get("rc") or {}
-    if not isinstance(rc, dict):
-        rc = {}
-    operator_signing_key = rc.get("operator_signing_key", "") or ""
-
-    print(f"HOSTNAME={shlex.quote(hostname)}")
-    print(f"BASE_IMAGE={shlex.quote(base_image)}")
-    print(f"VM_IMAGE_DIR={shlex.quote(vm_image_directory)}")
-    print(f"MINER_SS58={shlex.quote(miner_ss58)}")
-    print(f"MINER_SEED={shlex.quote(miner_seed)}")
-    print(f"VM_IP={shlex.quote(vm_ip)}")
-    print(f"BRIDGE_IP={shlex.quote(bridge_ip)}")
-    print(f"VM_DNS={shlex.quote(vm_dns)}")
-    print(f"PUBLIC_IFACE={shlex.quote(public_iface)}")
-    print(f"NETWORK_TYPE={shlex.quote(network_type)}")
-    print(f"SSH_PORT={shlex.quote(str(ssh_port))}")
-    print(f"CACHE_SIZE={shlex.quote(cache_size)}")
-    print(f"CACHE_VOLUME={shlex.quote(cache_volume)}")
-    print(f"STORAGE_SIZE={shlex.quote(storage_size)}")
-    print(f"STORAGE_VOLUME={shlex.quote(storage_volume)}")
-    print(f"CONFIG_VOLUME={shlex.quote(config_volume)}")
-    print(f"SKIP_BIND={'true' if not bind_devices else 'false'}")
-    print(f"FOREGROUND={'true' if foreground else 'false'}")
-    print(f"DOCKER_HUB_USERNAME={shlex.quote(docker_hub_username)}")
-    print(f"DOCKER_HUB_TOKEN={shlex.quote(docker_hub_token)}")
-    print(f"OPERATOR_SIGNING_KEY={shlex.quote(operator_signing_key)}")
+    args = parser.parse_args(argv)
+    return args.func(args)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    sys.exit(main())

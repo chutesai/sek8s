@@ -6,17 +6,16 @@ The TEE VM configuration system uses YAML files with JSON schema validation to e
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Install the CLI
 
-```bash
-pip3 install pyyaml jsonschema
-```
+The `chutes-cvm` CLI (with its config deps: pyyaml, pydantic-settings) is installed by
+`src/chutes-cvm/install.sh`. No separate config dependencies are needed.
 
 ### 2. Create Your Config
 
 ```bash
 # Start from template
-chutes-cvm init
+chutes-cvm config init
 
 # Or use examples
 cp config/config.prod.example.yaml config.yaml    # For production
@@ -40,7 +39,7 @@ chutes-cvm launch config.yaml
 
 ## Schema Validation
 
-The parser automatically validates your config against `config-schema.json`. If validation fails, you'll see clear error messages:
+The parser automatically validates your config against the `LaunchConfig` schema. If validation fails, you'll see clear error messages:
 
 ```
 Config validation error: 'containerd' is a required property
@@ -55,21 +54,20 @@ Path: volumes
 - **Pattern matching**: hostname must be valid DNS label
 - **Type checking**: booleans, integers, strings
 
-### Optional Validation
+### Validation is built in
 
-If `jsonschema` isn't installed, the parser will show a warning but continue. For production use, always install jsonschema:
-
-```bash
-pip3 install jsonschema
-```
+Validation is performed by the `LaunchConfig` pydantic model, which ships with the `chutes-cvm`
+CLI (via `pydantic-settings`) — there is nothing extra to install. `chutes-cvm config verify <file>`
+checks a config without launching.
 
 ## Configuration Precedence
 
-Values are resolved in this order (highest to lowest):
+Values are resolved by the `LaunchConfig` model in this order (highest to lowest):
 
 1. **CLI arguments** (`--hostname`, `--base-image`, `--vm-image-dir`, `--docker-hub-username` / `--docker-hub-token` when **both** are set, etc.)
-2. **YAML config file** (your config.yaml)
-3. **Hard-coded defaults** (in `chutes-cvm launch`)
+2. **Environment variables** (`CHUTES_CVM_*`, e.g. `CHUTES_CVM_VM_IP`)
+3. **YAML config file** (your config.yaml)
+4. **Field defaults** (declared on the model)
 
 For Docker Hub: if you pass **both** `--docker-hub-username` and `--docker-hub-token`, they override the optional `docker_hub` block in YAML. Otherwise `docker_hub.username` / `docker_hub.token` from YAML are used when present.
 
@@ -108,7 +106,7 @@ docker_hub:
 - Schema: both `username` and `token` are required when `docker_hub` is present (`maxLength` 64 / 128).
 - The host writes `docker-hub-username` and `docker-hub-token` onto the config volume (cleartext); treat the volume like other secrets.
 - `chutes-cvm launch` runs `volumes/create-config.sh` every launch: **new** qcow2 if the path is missing, otherwise **mount, remove everything at the volume root, then write** the current YAML-derived files. Stop the VM if QEMU still has that qcow2 open.
-- See `config.tmpl.yaml`, `config.prod.example.yaml`, and `config.debug.example.yaml` for commented examples.
+- Run `chutes-cvm config init` to generate a starter config from the schema; see `config.prod.example.yaml` and `config.debug.example.yaml` for commented examples.
 
 ## Production vs Debug Configs
 
@@ -200,7 +198,7 @@ Config validation error: 'storage' is a required property
 Path: volumes
 ```
 
-**Fix:** Add the `storage` section to volumes (see `config.tmpl.yaml`).
+**Fix:** Add the `storage` section to volumes (see the example configs).
 
 ### Invalid Volume Size Format
 
@@ -243,7 +241,7 @@ network:
 
 ## Migrating Old Configs
 
-If you have configs from an older layout (e.g. missing `storage`), add the `volumes.storage` section to match `config-schema.json` and the current examples.
+If you have configs from an older layout (e.g. missing `storage`), add the `volumes.storage` section to match the `LaunchConfig` schema and the current examples.
 
 The schema validation will catch missing required sections, preventing runtime errors.
 
@@ -278,11 +276,11 @@ Check YAML syntax:
 Config validation error: Additional properties are not allowed ('old_field' was unexpected)
 ```
 
-Remove deprecated fields from your config. Check `config.tmpl.yaml` for current schema.
+Remove deprecated fields from your config. Run `chutes-cvm config init` for a current template.
 
 ## Schema Reference
 
-See `config-schema.json` for the complete schema definition. Key sections:
+See the `LaunchConfig` schema for the complete schema definition. Key sections:
 
 - **vm**: hostname (required), base_image (optional), vm_image_directory (optional)
 - **miner**: ss58, seed (both required)
@@ -321,4 +319,4 @@ volumes:
 
 ### Full Config with All Options
 
-See `config.tmpl.yaml` for a complete example with all available options and documentation.
+Run `chutes-cvm config init`, or see `config.prod.example.yaml`, for a complete example with all available options and documentation.

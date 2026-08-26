@@ -23,9 +23,9 @@ import sys
 from chutes_cvm.paths import SCRIPTS_DIR as _SCRIPTS_DIR
 from chutes_cvm.paths import default_config_path
 
-# _SCRIPTS_DIR is the package's bundled shell scripts (chutes_cvm/scripts/): the VM-launch
-# orchestrator (quick-launch → `up`), volumes/, network/, discover-profile, reset-gpus.
-# _run_script execs one of them; they travel with the package, so no host-tools on disk.
+# _SCRIPTS_DIR is the package's bundled shell scripts (chutes_cvm/scripts/): the privileged
+# volume/network helpers the Python launch orchestrator calls, plus teardown, discover-profile,
+# reset-gpus. _run_script execs one of them; they travel with the package, so no host-tools on disk.
 
 # verify_host's exit codes → (banner label, ANSI attributes). Kept here so the CLI owns
 # presentation while chutes_cvm.guest.verify stays a plain int-returning gate.
@@ -39,8 +39,8 @@ _VERIFY_STATUS = {
 def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
     """Exec a bundled chutes_cvm/scripts/<name> shell entrypoint, forwarding argv.
 
-    ``cwd`` sets the working directory — the orchestrator (quick-launch.sh) needs it set to
-    the scripts dir so its sibling ``./volumes/`` / ``./network/`` calls resolve."""
+    ``cwd`` sets the working directory — a helper that calls sibling ``./volumes/`` /
+    ``./network/`` scripts needs it set to the scripts dir so those resolve."""
     script = _SCRIPTS_DIR / name
     if not script.exists():
         print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
@@ -113,23 +113,6 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     return 0 if pci_operations_wedged() else 1
 
 
-def _cmd_init(args: argparse.Namespace) -> int:
-    """Write a starter config.yaml (from the bundled template) into the current directory."""
-    import shutil
-
-    template = _SCRIPTS_DIR / "config" / "config.tmpl.yaml"
-    dest = "config.yaml"
-    if os.path.exists(dest) and not args.force:
-        print(
-            f"chutes-cvm: {dest} already exists — pass --force to overwrite.",
-            file=sys.stderr,
-        )
-        return 1
-    shutil.copyfile(template, dest)
-    print(f"Created {dest} (from {template.name}). Edit it, then `chutes-cvm launch`.")
-    return 0
-
-
 def _cmd_stop(args: argparse.Namespace) -> int:
     """Stop the running TDX VM only — leaves the bridge and volumes in place."""
     from chutes_cvm.guest.__main__ import stop_existing_vm
@@ -139,9 +122,32 @@ def _cmd_stop(args: argparse.Namespace) -> int:
 
 
 def _cmd_down(args: argparse.Namespace) -> int:
-    """Full teardown: stop the VM and tear down its bridge + benchmark-netlog service."""
+    """Full teardown: stop the VM and tear down its bridge + benchmark-netlog service.
+
+    Resolves the network values from config in Python and passes them to teardown.sh as flags
+    (no `chutes-cvm config` eval round-trip); teardown falls back to its own defaults when a
+    config is absent or unreadable.
+    """
+    from chutes_cvm.guest.config import ConfigError, load_launch_config
+
+    forward: "list[str]" = []
     config = args.config or default_config_path()
-    forward = [config] if os.path.exists(config) else []
+    if config and os.path.exists(config):
+        try:
+            cfg = load_launch_config(config).flat()
+            forward = [
+                "--bridge-ip",
+                cfg["bridge_ip"],
+                "--vm-ip",
+                cfg["vm_ip"],
+                "--public-iface",
+                cfg["public_iface"],
+            ]
+        except ConfigError as exc:
+            print(
+                f"chutes-cvm: could not read {config} ({exc}); tearing down with defaults.",
+                file=sys.stderr,
+            )
     return _run_script("teardown.sh", forward, cwd=str(_SCRIPTS_DIR))
 
 
@@ -228,17 +234,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Set up this TDX host (args forwarded; `chutes-cvm setup-host --help`).",
     )
 
-    init = sub.add_parser(
-        "init",
-        help="Write a starter config.yaml into the current directory (edit it, then launch).",
-    )
-    init.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite an existing config.yaml.",
-    )
-    init.set_defaults(func=_cmd_init)
-
     stop = sub.add_parser(
         "stop",
         help="Stop the running TDX VM only (leaves the bridge and volumes in place).",
@@ -291,7 +286,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "config",
         add_help=False,
-        help="Render/validate a config.yaml to KEY=value env (args forwarded).",
+        help="Manage the launch config.yaml — init / verify (args forwarded; "
+        "`chutes-cvm config --help`).",
     )
     sub.add_parser(
         "measurements",
@@ -306,7 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
 # Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
 # before argparse because REMAINDER mishandles leading options (e.g. `launch-vm --image`,
 # `setup-host --help`). Each underlying main owns its own --help. `launch-vm` is the hidden
-# QEMU primitive (no visible subparser); `launch` is the end-to-end orchestrator.
+# QEMU primitive (no visible subparser); `launch` is the Python end-to-end orchestrator
+# (chutes_cvm.guest.launch) that drives the bash volume/network helpers then calls launch-vm.
 _PASSTHROUGH = (
     "launch",
     "launch-vm",
@@ -322,10 +319,12 @@ def main(argv: "list[str] | None" = None) -> int:
     if raw and raw[0] in _PASSTHROUGH:
         forward = raw[1:]
         if raw[0] == "launch":
-            # The end-to-end orchestrator is a bundled shell script; run it from the
-            # scripts dir so its ./volumes/ and ./network/ sibling calls resolve. Its final
-            # step is `chutes-cvm launch-vm` (the primitive below).
-            return _run_script("quick-launch.sh", forward, cwd=str(_SCRIPTS_DIR))
+            # The end-to-end orchestrator is Python (decisions/precedence/validation/gates);
+            # it invokes the bundled bash helpers for the privileged volume/network steps and
+            # finally boots via the launch-vm primitive below.
+            from chutes_cvm.guest.launch import main as _launch_orchestrator
+
+            return _launch_orchestrator(forward)
         if raw[0] == "launch-vm":
             from chutes_cvm.guest.__main__ import main as _launch_main
 

@@ -133,7 +133,7 @@ Images are saved to `/var/lib/chutes/base-images/`.
 ### Step 4: Create configuration file
 
 ```bash
-chutes-cvm init
+chutes-cvm config init
 # Edit config.yaml with your settings
 ```
 

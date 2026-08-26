@@ -1,34 +1,32 @@
 #!/bin/bash
 # teardown.sh — full teardown of a TEE VM environment (stop VM + bridge + benchmark-netlog).
 #
-# Invoked by `chutes-cvm down [config.yaml]` (cli.py _cmd_down). Loads the config (if given)
-# so bridge cleanup uses the right PUBLIC_IFACE / BRIDGE_IP / VM_IP, stops the VM (via
-# `chutes-cvm stop`), tears the bridge down, and stops the benchmark-netlog service.
+# Invoked by `chutes-cvm down` (cli.py _cmd_down), which resolves the network values from
+# config in Python and passes them as flags so bridge cleanup uses the right PUBLIC_IFACE /
+# BRIDGE_IP / VM_IP. Stops the VM (via `chutes-cvm stop`), tears the bridge down, and stops the
+# benchmark-netlog service.
 #
 # For a VM-only stop that LEAVES the shared bridge in place (e.g. the measurement capture
 # VM), use `chutes-cvm stop` directly instead of this.
 #
-#   teardown.sh [config.yaml]
+#   teardown.sh [--bridge-ip IP/CIDR] [--vm-ip IP] [--public-iface IFACE]
 set -euo pipefail
 
-CONFIG_FILE="${1:-}"
-
-# Defaults mirror quick-launch.sh (used when no config / config omits them).
+# Defaults mirror the launch orchestrator (chutes_cvm.guest.launch; used when a flag is omitted).
 VM_IP="192.168.100.2"
 BRIDGE_IP="192.168.100.1/24"
 PUBLIC_IFACE=""
 
-if [[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]]; then
-  echo "Loading network config from: $CONFIG_FILE"
-  # chutes-cvm config renders VM_IP / BRIDGE_IP / PUBLIC_IFACE (among others) as KEY=value.
-  if CONFIG_OUTPUT=$(chutes-cvm config "$CONFIG_FILE" 2>/dev/null); then
-    eval "$CONFIG_OUTPUT"
-  else
-    echo "⚠ Could not parse $CONFIG_FILE; using default network values for teardown." >&2
-  fi
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --bridge-ip) BRIDGE_IP="$2"; shift 2 ;;
+    --vm-ip) VM_IP="$2"; shift 2 ;;
+    --public-iface) PUBLIC_IFACE="$2"; shift 2 ;;
+    *) echo "teardown.sh: unknown argument '$1'" >&2; exit 1 ;;
+  esac
+done
 
-# Resolve the public interface the same way quick-launch does: empty or a stale NIC name
+# Resolve the public interface the same way the launch orchestrator does: empty or a stale NIC name
 # falls back to the default-route device so bridge --clean removes the right iptables rules.
 if [[ -z "$PUBLIC_IFACE" ]] || ! ip link show "$PUBLIC_IFACE" >/dev/null 2>&1; then
   DETECTED_IFACE=$(ip -j route show default 2>/dev/null \

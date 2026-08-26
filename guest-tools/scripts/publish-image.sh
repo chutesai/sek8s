@@ -2,7 +2,7 @@
 # publish-image.sh — Upload a built guest image + its direct-boot artifacts to R2.
 #
 # Uploads the versioned local build outputs to the canonical R2 object names that
-# vm.chutes.ai serves and `quick-launch --download` fetches:
+# vm.chutes.ai serves and `chutes-cvm image download` fetches:
 #   <version>[-debug].qcow2   -> <bucket>/tdx-guest[-debug].qcow2
 #   <version>[-debug].vmlinuz -> <bucket>/tdx-guest[-debug].vmlinuz
 #   <version>[-debug].initrd  -> <bucket>/tdx-guest[-debug].initrd
@@ -12,7 +12,7 @@
 # The .vmlinuz/.initrd/.cmdline are produced by stage-boot-artifacts.sh during the
 # build; all four must travel together so the fleet boots byte-identical bits. The
 # manifest (sha256 + size per artifact, keyed by role) is the coherence contract that
-# ties the set together — `quick-launch --download` verifies against it, so a stale or
+# ties the set together — `chutes-cvm image download` verifies against it, so a stale or
 # mismatched artifact fails loudly instead of as an opaque boot/attestation error.
 #
 # rclone remote "r2" must be configured. If the rclone config is password

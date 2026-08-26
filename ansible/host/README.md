@@ -184,7 +184,7 @@ all:
 
 The inventory hostname (`my-tee-host` above) is used as both `chutes-miner --name` and `vm.hostname` in `config.yaml`. These must match the TEE server name registered in chutes-miner — do not use an SSH alias as the inventory key.
 
-The generated `config.yaml` matches the shape of [`config.tmpl.yaml`](../../src/chutes-cvm/chutes_cvm/scripts/config/config.tmpl.yaml).
+The `config.yaml` shape is defined by the `LaunchConfig` model in [`config.py`](../../src/chutes-cvm/chutes_cvm/guest/config.py); `chutes-cvm config init` generates a starter file from it.
 
 ---
 
