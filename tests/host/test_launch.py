@@ -23,11 +23,32 @@ from chutes_cvm.guest.launch import (
 P = "chutes_cvm.guest.launch"
 
 
-def _cfg(**over) -> dict:
-    """A flat config dict with all model defaults, overlaid with `over` (what launch works with)."""
-    d = LaunchConfig().flat()
-    d.update(over)
-    return d
+# Convenience: build a LaunchConfig from flat kwargs (mapped to the model's nested fields).
+_FLAT_TO_PATH = {
+    "hostname": "vm.hostname",
+    "base_image": "vm.base_image",
+    "vm_image_dir": "vm.vm_image_directory",
+    "miner_ss58": "miner.ss58",
+    "miner_seed": "miner.seed",
+    "vm_ip": "network.vm_ip",
+    "network_type": "network.type",
+    "cache_volume": "volumes.cache.path",
+    "storage_volume": "volumes.storage.path",
+    "config_volume": "volumes.config.path",
+    "foreground": "runtime.foreground",
+}
+
+
+def _cfg(**over) -> LaunchConfig:
+    """A LaunchConfig with model defaults, overlaid with `over` given as flat kwargs."""
+    config = LaunchConfig()
+    for key, val in over.items():
+        obj_path, _, field = _FLAT_TO_PATH[key].rpartition(".")
+        obj = config
+        for part in obj_path.split("."):
+            obj = getattr(obj, part)
+        setattr(obj, field, val)
+    return config
 
 
 # ── CLI override plumbing into the model ─────────────────────────────────────────
@@ -36,8 +57,8 @@ def _cfg(**over) -> dict:
 def test_resolve_config_applies_cli_overrides():
     args = _build_parser().parse_args(["--hostname", "h", "--skip-bind", "--no-gpus"])
     cfg, benchmark, pass_gpus, ephemeral = _resolve_config(args)
-    assert cfg["hostname"] == "h"
-    assert cfg["bind_devices"] is False  # --skip-bind → bind_devices False
+    assert cfg.vm.hostname == "h"
+    assert cfg.devices.bind_devices is False  # --skip-bind → bind_devices False
     assert pass_gpus is False
     assert benchmark is False and ephemeral is False
 
@@ -46,7 +67,7 @@ def test_no_gpus_and_foreground_flags():
     args = _build_parser().parse_args(["--no-gpus", "--foreground", "--benchmark"])
     cfg, benchmark, pass_gpus, ephemeral = _resolve_config(args)
     assert pass_gpus is False
-    assert cfg["foreground"] is True
+    assert cfg.runtime.foreground is True
     assert benchmark is True
 
 
@@ -62,25 +83,25 @@ def test_docker_creds_must_be_paired():
 def test_derived_volume_names_from_hostname():
     cfg = _cfg(hostname="box1")
     _apply_derived_defaults(cfg, benchmark=False, ephemeral=False)
-    assert cfg["cache_volume"] == "cache-box1.raw"
-    assert cfg["storage_volume"] == "storage-box1.raw"
-    assert cfg["config_volume"] == "config-box1.qcow2"
-    assert cfg["base_image"].endswith("tdx-guest")
-    assert cfg["vm_image_dir"] == "/var/lib/chutes/vm-images"
+    assert cfg.volumes.cache.path == "cache-box1.raw"
+    assert cfg.volumes.storage.path == "storage-box1.raw"
+    assert cfg.volumes.config.path == "config-box1.qcow2"
+    assert cfg.vm.base_image.endswith("tdx-guest")
+    assert cfg.vm.vm_image_directory == "/var/lib/chutes/vm-images"
 
 
 def test_ephemeral_uses_tmp_image_dir():
     cfg = _cfg(hostname="b")
     _apply_derived_defaults(cfg, benchmark=False, ephemeral=True)
-    assert cfg["vm_image_dir"] == "/tmp/chutes-vm-images"
+    assert cfg.vm.vm_image_directory == "/tmp/chutes-vm-images"
 
 
 def test_benchmark_fills_placeholders_and_image():
     cfg = _cfg(hostname="b")
     _apply_derived_defaults(cfg, benchmark=True, ephemeral=False)
-    assert cfg["base_image"].endswith("tdx-guest-benchmark")
-    assert cfg["miner_ss58"] == "benchmark"
-    assert cfg["miner_seed"] == "benchmark"
+    assert cfg.vm.base_image.endswith("tdx-guest-benchmark")
+    assert cfg.miner.ss58 == "benchmark"
+    assert cfg.miner.seed == "benchmark"
 
 
 # ── validation ───────────────────────────────────────────────────────────────────
@@ -224,6 +245,34 @@ def test_main_benchmark_skips_measurement_gate():
         rc = launch.main(argv)
     assert rc == 0
     boot.assert_called_once()
+
+
+def test_main_debug_image_skips_measurement_gate():
+    # Debug (RC) images attest under the RC gate (rc:true measurement, which verify reports as
+    # 'pending'), so the prod-measurement gate must not block them.
+    argv = _STD_ARGV + ["--base-image", "/base/tdx-guest-debug"]
+    with _happy(_measurement_published=False), patch(
+        f"{P}._boot", return_value=0
+    ) as boot:
+        rc = launch.main(argv)
+    assert rc == 0
+    boot.assert_called_once()
+
+
+# ── debug-image detection ────────────────────────────────────────────────────────
+
+
+def test_is_debug_image_from_manifest():
+    with patch(f"{P}.image_set._load_manifest", return_value={"debug": True}):
+        assert launch._is_debug_image("/base/anything") is True
+    with patch(f"{P}.image_set._load_manifest", return_value={"debug": False}):
+        assert launch._is_debug_image("/base/anything") is False
+
+
+def test_is_debug_image_falls_back_to_name_when_manifest_unreadable():
+    with patch(f"{P}.image_set._load_manifest", side_effect=FileNotFoundError):
+        assert launch._is_debug_image("/base/tdx-guest-debug/") is True
+        assert launch._is_debug_image("/base/tdx-guest/") is False
 
 
 # ── the measurement gate itself (mirrors host verify's API check) ────────────────

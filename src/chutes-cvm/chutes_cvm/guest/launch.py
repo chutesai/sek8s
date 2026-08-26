@@ -94,6 +94,17 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
+def _is_debug_image(base_image: str) -> bool:
+    """True if the base image set is the debug (RC) build. The image-set manifest declares
+    ``debug`` authoritatively; fall back to the ``tdx-guest-debug`` naming if it can't be read.
+    Debug images boot fail-open and attest under the RC gate, so the prod-measurement gate does
+    not apply (same as benchmark)."""
+    try:
+        return bool(image_set._load_manifest(base_image).get("debug"))
+    except (FileNotFoundError, ValueError, OSError):
+        return "debug" in os.path.basename(base_image.rstrip("/")).lower()
+
+
 def _measurement_published(config_path: str, force: bool) -> bool:
     """Return True if launch may proceed: the control plane has a published measurement for this
     host class (so the VM will attest). Mirrors `chutes-cvm host verify`'s API check — capture the
@@ -238,17 +249,17 @@ def _ensure_raw_volume(vol: str, size: str, label: str, kind: str) -> None:
     _run([_helper("volumes", "create-cache.sh"), vol, size, label])
 
 
-def _setup_config_volume(cfg: dict, benchmark: bool) -> None:
+def _setup_config_volume(config: LaunchConfig, benchmark: bool) -> None:
     """Create/refresh the config volume via volumes/create-config.sh.
 
     Benchmark passes hostname + network positionally with empty miner creds; production passes
     every value by NAME through the environment (create-config.sh reads those), so long/optional
     fields (docker creds, operator key) stay off the command line.
     """
-    vol = cfg["config_volume"]
+    vol = config.volumes.config.path
     action = "Refreshing existing" if os.path.exists(_volume_path(vol)) else "Creating"
     print(f"{action} config volume: {vol}")
-    gateway = cfg["bridge_ip"].split("/")[0]
+    gateway = config.network.bridge_ip.split("/")[0]
     helper = _helper("volumes", "create-config.sh")
     if benchmark:
         _run(
@@ -256,27 +267,27 @@ def _setup_config_volume(cfg: dict, benchmark: bool) -> None:
                 "sudo",
                 helper,
                 vol,
-                cfg["hostname"],
+                config.vm.hostname,
                 "",
                 "",
-                cfg["vm_ip"],
+                config.network.vm_ip,
                 gateway,
-                cfg["vm_dns"],
+                config.network.dns,
             ]
         )
     else:
         _run(
             [
                 "sudo",
-                f"HOSTNAME={cfg['hostname']}",
-                f"MINER_SS58={cfg['miner_ss58']}",
-                f"MINER_SEED={cfg['miner_seed']}",
-                f"VM_IP={cfg['vm_ip']}",
+                f"HOSTNAME={config.vm.hostname}",
+                f"MINER_SS58={config.miner.ss58}",
+                f"MINER_SEED={config.miner.seed}",
+                f"VM_IP={config.network.vm_ip}",
                 f"VM_GATEWAY={gateway}",
-                f"VM_DNS={cfg['vm_dns']}",
-                f"DOCKER_HUB_USER={cfg['docker_hub_username']}",
-                f"DOCKER_HUB_TOKEN={cfg['docker_hub_token']}",
-                f"OPERATOR_SIGNING_KEY={cfg['operator_signing_key']}",
+                f"VM_DNS={config.network.dns}",
+                f"DOCKER_HUB_USER={config.docker_hub.username}",
+                f"DOCKER_HUB_TOKEN={config.docker_hub.token}",
+                f"OPERATOR_SIGNING_KEY={config.rc.operator_signing_key}",
                 helper,
                 vol,
             ]
@@ -345,19 +356,19 @@ def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
     return vm_image
 
 
-def _setup_bridge(cfg: dict) -> str:
+def _setup_bridge(config: LaunchConfig) -> str:
     """Set up TAP bridge networking via network/setup-bridge.sh; return the TAP interface name."""
     result = proc.run(
         [
             _helper("network", "setup-bridge.sh"),
             "--bridge-ip",
-            cfg["bridge_ip"],
+            config.network.bridge_ip,
             "--vm-ip",
-            f"{cfg['vm_ip']}/24",
+            f"{config.network.vm_ip}/24",
             "--vm-dns",
-            cfg["vm_dns"],
+            config.network.dns,
             "--public-iface",
-            cfg["public_iface"],
+            config.network.public_interface,
             "--multi-queue",
         ],
         cwd=str(SCRIPTS_DIR),
@@ -374,7 +385,7 @@ def _setup_bridge(cfg: dict) -> str:
     raise LaunchError("could not extract the TAP interface from setup-bridge output")
 
 
-def _install_benchmark_netlog(cfg: dict) -> None:
+def _install_benchmark_netlog(config: LaunchConfig) -> None:
     """Install + (re)start the benchmark network-logging service from the bundled network/ files."""
     net = SCRIPTS_DIR / "network"
     srcs = {
@@ -397,7 +408,7 @@ def _install_benchmark_netlog(cfg: dict) -> None:
     env_file = "/etc/chutes/benchmark-netlog.env"
     if not os.path.exists(env_file):
         _run(["sudo", "mkdir", "-p", "/etc/chutes"])
-        content = f"BRIDGE_SUBNET={cfg['bridge_ip']}\nNETLOG_DIR=/var/log/chutes/benchmark-netlog\n"
+        content = f"BRIDGE_SUBNET={config.network.bridge_ip}\nNETLOG_DIR=/var/log/chutes/benchmark-netlog\n"
         proc.run(
             ["sudo", "tee", env_file],
             input=content.encode(),
@@ -490,9 +501,11 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _resolve_config(args: argparse.Namespace) -> "tuple[dict, bool, bool, bool]":
+def _resolve_config(
+    args: argparse.Namespace,
+) -> "tuple[LaunchConfig, bool, bool, bool]":
     """Resolve config via the LaunchConfig model (CLI > env > YAML > defaults) and return
-    (flat_cfg, benchmark, pass_gpus, ephemeral). The last three are launch-runtime flags, not
+    (config, benchmark, pass_gpus, ephemeral). The last three are launch-runtime flags, not
     persisted config, so they stay out of the model."""
     # Docker Hub creds must be set together when given on the CLI.
     if bool(args.docker_hub_username) != bool(args.docker_hub_token):
@@ -524,39 +537,51 @@ def _resolve_config(args: argparse.Namespace) -> "tuple[dict, bool, bool, bool]"
     if args.config_file:
         print("✓ Configuration loaded")
 
-    return model.flat(), bool(args.benchmark), not args.no_gpus, bool(args.ephemeral)
+    return model, bool(args.benchmark), not args.no_gpus, bool(args.ephemeral)
 
 
-def _apply_derived_defaults(cfg: dict, benchmark: bool, ephemeral: bool) -> None:
+def _apply_derived_defaults(
+    config: LaunchConfig, benchmark: bool, ephemeral: bool
+) -> None:
     """Fill benchmark placeholders, the default base image, VM-image dir, and volume names."""
     if benchmark:
-        cfg["base_image"] = (
-            cfg["base_image"] or "/var/lib/chutes/base-images/tdx-guest-benchmark"
+        config.vm.base_image = (
+            config.vm.base_image or "/var/lib/chutes/base-images/tdx-guest-benchmark"
         )
-        cfg["miner_ss58"] = cfg["miner_ss58"] or "benchmark"
-        cfg["miner_seed"] = cfg["miner_seed"] or "benchmark"
+        config.miner.ss58 = config.miner.ss58 or "benchmark"
+        config.miner.seed = config.miner.seed or "benchmark"
 
-    cfg["base_image"] = cfg["base_image"] or "/var/lib/chutes/base-images/tdx-guest"
+    config.vm.base_image = (
+        config.vm.base_image or "/var/lib/chutes/base-images/tdx-guest"
+    )
     if ephemeral:
-        cfg["vm_image_dir"] = "/tmp/chutes-vm-images"  # nosec B108
+        config.vm.vm_image_directory = "/tmp/chutes-vm-images"  # nosec B108
     else:
-        cfg["vm_image_dir"] = cfg["vm_image_dir"] or "/var/lib/chutes/vm-images"
+        config.vm.vm_image_directory = (
+            config.vm.vm_image_directory or "/var/lib/chutes/vm-images"
+        )
 
-    cfg["cache_volume"] = cfg["cache_volume"] or f"cache-{cfg['hostname']}.raw"
-    cfg["storage_volume"] = cfg["storage_volume"] or f"storage-{cfg['hostname']}.raw"
-    cfg["config_volume"] = cfg["config_volume"] or f"config-{cfg['hostname']}.qcow2"
+    config.volumes.cache.path = (
+        config.volumes.cache.path or f"cache-{config.vm.hostname}.raw"
+    )
+    config.volumes.storage.path = (
+        config.volumes.storage.path or f"storage-{config.vm.hostname}.raw"
+    )
+    config.volumes.config.path = (
+        config.volumes.config.path or f"config-{config.vm.hostname}.qcow2"
+    )
 
 
-def _validate(cfg: dict, benchmark: bool) -> None:
-    if cfg["network_type"] not in ("tap", "user"):
+def _validate(config: LaunchConfig, benchmark: bool) -> None:
+    if config.network.type not in ("tap", "user"):
         raise LaunchError("network type must be 'tap' or 'user'")
     missing = []
-    if not cfg["hostname"]:
+    if not config.vm.hostname:
         missing.append("hostname (vm.hostname or --hostname)")
     if not benchmark:
-        if not cfg["miner_ss58"]:
+        if not config.miner.ss58:
             missing.append("miner.ss58 (miner.ss58 or --miner-ss58)")
-        if not cfg["miner_seed"]:
+        if not config.miner.seed:
             missing.append("miner.seed (miner.seed or --miner-seed)")
     if missing:
         raise LaunchError(
@@ -578,20 +603,22 @@ def main(argv: "list[str] | None" = None) -> int:
         args.config_file = os.path.abspath(args.config_file)
 
     try:
-        cfg, benchmark, pass_gpus, ephemeral = _resolve_config(args)
-        cfg["public_iface"] = _resolve_public_iface(cfg["public_iface"])
-        _apply_derived_defaults(cfg, benchmark, ephemeral)
-        _validate(cfg, benchmark)
+        config, benchmark, pass_gpus, ephemeral = _resolve_config(args)
+        config.network.public_interface = _resolve_public_iface(
+            config.network.public_interface
+        )
+        _apply_derived_defaults(config, benchmark, ephemeral)
+        _validate(config, benchmark)
     except LaunchError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     print("\n=== TEE VM Orchestration ===")
     print(f"Mode: {'benchmark' if benchmark else 'standard'}")
-    print(f"Hostname: {cfg['hostname']}")
-    print(f"Base image: {cfg['base_image']}")
-    print(f"VM image dir: {cfg['vm_image_dir']}")
-    print(f"Network: {cfg['network_type']}\n")
+    print(f"Hostname: {config.vm.hostname}")
+    print(f"Base image: {config.vm.base_image}")
+    print(f"VM image dir: {config.vm.vm_image_directory}")
+    print(f"Network: {config.network.type}\n")
 
     if not args.force and _chutes_td_running():
         print(
@@ -613,9 +640,18 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"✓ TDX active (via {source})")
     _ensure_numa_zone_reclaim()
 
-    # Benchmark VMs use dummy creds and are not registered/attested against a published
-    # measurement, so the gate only applies to a standard launch.
-    if not benchmark:
+    # The gate is a PROD-launch readiness check. Benchmark VMs use dummy creds and aren't
+    # attested; debug (RC) images boot fail-open and attest under the RC gate using their rc:true
+    # measurement, which the API's `accepted` status deliberately excludes — so the prod gate does
+    # not apply to either.
+    if benchmark:
+        pass
+    elif _is_debug_image(config.vm.base_image):
+        print(
+            "\nStep 1: Debug (RC) image — attests under the RC gate, not the prod-measurement "
+            "check; skipping."
+        )
+    else:
         print("\nStep 1: Confirming a published measurement for this host class...")
         if not _measurement_published(
             args.config_file or default_config_path(), args.force
@@ -630,32 +666,38 @@ def main(argv: "list[str] | None" = None) -> int:
         if not benchmark:
             print("\nStep 2: Preparing cache volume...")
             _ensure_raw_volume(
-                cfg["cache_volume"], cfg["cache_size"], "tdx-cache", "cache"
+                config.volumes.cache.path,
+                config.volumes.cache.size,
+                "tdx-cache",
+                "cache",
             )
 
         print("\nStep 3: Preparing storage volume...")
         _ensure_raw_volume(
-            cfg["storage_volume"], cfg["storage_size"], "storage", "storage"
+            config.volumes.storage.path,
+            config.volumes.storage.size,
+            "storage",
+            "storage",
         )
 
         print("\nStep 4: Setting up config volume...")
-        _setup_config_volume(cfg, benchmark)
+        _setup_config_volume(config, benchmark)
 
         print("\nStep 4b: Preparing VM image (verify set + per-VM copy)...")
         vm_image = _prepare_vm_image(
-            cfg["base_image"], cfg["hostname"], cfg["vm_image_dir"]
+            config.vm.base_image, config.vm.hostname, config.vm.vm_image_directory
         )
 
         net_iface = ""
-        if cfg["network_type"] == "tap":
+        if config.network.type == "tap":
             print("\nStep 5: Setting up bridge networking...")
-            net_iface = _setup_bridge(cfg)
+            net_iface = _setup_bridge(config)
             print(f"✓ Bridge configured (TAP: {net_iface})")
             if benchmark:
                 print("\nStep 5b: Installing benchmark network logging...")
-                _install_benchmark_netlog(cfg)
+                _install_benchmark_netlog(config)
 
-        rc = _boot(cfg, vm_image, net_iface, benchmark, pass_gpus)
+        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus)
     except LaunchError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -674,7 +716,11 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 def _boot(
-    cfg: dict, vm_image: str, net_iface: str, benchmark: bool, pass_gpus: bool
+    config: LaunchConfig,
+    vm_image: str,
+    net_iface: str,
+    benchmark: bool,
+    pass_gpus: bool,
 ) -> int:
     """Assemble the boot-primitive argument list and call the QEMU primitive in-process."""
     # Deferred import: the boot primitive pulls the heavy, host-specific chain
@@ -682,21 +728,21 @@ def _boot(
     # `guest launch --help` and the early config/gate paths light.
     from chutes_cvm.guest.__main__ import main as launch_vm_main
 
-    launch_args = ["--image", vm_image, "--network-type", cfg["network_type"]]
+    launch_args = ["--image", vm_image, "--network-type", config.network.type]
     if pass_gpus:
         launch_args.append("--pass-gpus")
-    if cfg["network_type"] == "tap":
+    if config.network.type == "tap":
         launch_args += ["--net-iface", net_iface]
     if benchmark:
         # Benchmark: no cache volume (partner manages storage); config volume carries only
         # hostname + network; --ssh shows the login hint.
-        launch_args += ["--ssh", "--config-volume", cfg["config_volume"]]
-        launch_args += ["--storage-volume", cfg["storage_volume"]]
+        launch_args += ["--ssh", "--config-volume", config.volumes.config.path]
+        launch_args += ["--storage-volume", config.volumes.storage.path]
     else:
-        launch_args += ["--config-volume", cfg["config_volume"]]
-        launch_args += ["--cache-volume", cfg["cache_volume"]]
-        launch_args += ["--storage-volume", cfg["storage_volume"]]
-    if cfg["foreground"]:
+        launch_args += ["--config-volume", config.volumes.config.path]
+        launch_args += ["--cache-volume", config.volumes.cache.path]
+        launch_args += ["--storage-volume", config.volumes.storage.path]
+    if config.runtime.foreground:
         launch_args.append("--foreground")
 
     print("\nLaunching Chutes VM...")

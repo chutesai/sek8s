@@ -60,14 +60,14 @@ def _cmd_down(args: argparse.Namespace) -> int:
     cfg_ok = bool(config and os.path.exists(config))
     if cfg_ok:
         try:
-            flat = LaunchConfig.from_file(config).flat()
+            cfg = LaunchConfig.from_file(config)
             net_flags = [
                 "--bridge-ip",
-                flat["bridge_ip"],
+                cfg.network.bridge_ip,
                 "--vm-ip",
-                flat["vm_ip"],
+                cfg.network.vm_ip,
                 "--public-iface",
-                flat["public_iface"],
+                cfg.network.public_interface,
             ]
         except ConfigError as exc:
             cfg_ok = False

@@ -154,33 +154,6 @@ class LaunchConfig(BaseSettings):
             sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=_yaml_path))
         return tuple(sources)
 
-    def flat(self) -> dict:
-        """Flatten to the keys the launch orchestrator works with (one place; the model stays the
-        structured source of truth)."""
-        return {
-            "hostname": self.vm.hostname,
-            "base_image": self.vm.base_image,
-            "vm_image_dir": self.vm.vm_image_directory,
-            "miner_ss58": self.miner.ss58,
-            "miner_seed": self.miner.seed,
-            "vm_ip": self.network.vm_ip,
-            "bridge_ip": self.network.bridge_ip,
-            "vm_dns": self.network.dns,
-            "public_iface": self.network.public_interface,
-            "network_type": self.network.type,
-            "ssh_port": self.network.ssh_port,
-            "cache_size": self.volumes.cache.size,
-            "cache_volume": self.volumes.cache.path,
-            "storage_size": self.volumes.storage.size,
-            "storage_volume": self.volumes.storage.path,
-            "config_volume": self.volumes.config.path,
-            "bind_devices": self.devices.bind_devices,
-            "foreground": self.runtime.foreground,
-            "docker_hub_username": self.docker_hub.username,
-            "docker_hub_token": self.docker_hub.token,
-            "operator_signing_key": self.rc.operator_signing_key,
-        }
-
     @classmethod
     def from_file(cls, config_file: "str | None" = None, **overrides) -> "LaunchConfig":
         """Build the resolved config. ``config_file`` is the YAML layer; ``overrides`` is the CLI

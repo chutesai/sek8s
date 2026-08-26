@@ -69,9 +69,12 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   if this host class has no published measurement (`status != accepted`), it refuses early instead
   of booting a VM that would only fail attestation, with **status-aware guidance** — `unknown` →
   run `host submit-profile`; `pending` → already submitted, just wait for Chutes to publish. Fails
-  closed if the API is unreachable; `--force` overrides (with a warning); benchmark launches (dummy
-  creds, not attested) skip the gate. `host verify` gives the same `pending`-vs-`unknown` guidance
-  (previously it always told you to submit, even when already submitted).
+  closed if the API is unreachable; `--force` overrides (with a warning). The gate is a *prod*
+  readiness check, so it is skipped for **benchmark** (dummy creds, not attested) and **debug (RC)**
+  images (they boot fail-open and attest under the RC gate using their `rc:true` measurement, which
+  the API's `accepted` status deliberately excludes). `host verify` gives the same
+  `pending`-vs-`unknown` guidance (previously it always told you to submit, even when already
+  submitted).
 - **`chutes-cvm image download` / `config init` / `guest stop` / `guest down`** — the launch
   orchestrator's modes that used to be flags are now first-class commands: `image download [--debug]`
   fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` stops

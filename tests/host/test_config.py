@@ -56,12 +56,12 @@ def test_cli_overrides_env_and_yaml(tmp_path, monkeypatch):
     assert cfg.network.vm_ip == "1.2.3.4"  # CLI (init) beats env and YAML
 
 
-def test_flat_projection(tmp_path):
-    flat = LaunchConfig.from_file(_write(tmp_path, _YAML)).flat()
-    assert flat["hostname"] == "yaml-host"
-    assert flat["vm_ip"] == "10.0.0.5"
-    assert flat["cache_size"] == "9000G"
-    assert flat["bind_devices"] is False
+def test_yaml_loads_into_nested_model(tmp_path):
+    cfg = LaunchConfig.from_file(_write(tmp_path, _YAML))
+    assert cfg.vm.hostname == "yaml-host"
+    assert cfg.network.vm_ip == "10.0.0.5"
+    assert cfg.volumes.cache.size == "9000G"
+    assert cfg.devices.bind_devices is False
 
 
 def test_missing_config_file_raises():
