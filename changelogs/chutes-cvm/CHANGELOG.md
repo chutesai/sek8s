@@ -45,8 +45,9 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   on host hardware with or without a running guest.
 - **`chutes-cvm guest launch`** — end-to-end VM launch orchestrator (`chutes_cvm.guest.launch`): a
   Python decision layer that resolves config with precedence (CLI > YAML > defaults), validates, runs
-  the host gates (TDX active, NUMA, duplicate-VM guard), then invokes the bundled bash helpers for
-  the privileged steps (volumes, config volume, per-VM image, bridge) and boots via the QEMU boot
+  the host gates (TDX active, NUMA, duplicate-VM guard), then runs each privileged step — the
+  bundled bash helpers for the tool-sequence ones (volumes, config volume, bridge), and in-process
+  `sudo` file ops for the per-VM image copy — and boots via the QEMU boot
   primitive. This is the one command a miner uses to bring a VM up. Per the AGENT.md bash-vs-Python
   rule, Python owns the decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd,
   ip/iptables).
@@ -125,7 +126,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
 - **`detect_profile` no longer gates on a local baselined set.** It resolves the GPU profile and the
   live fingerprint (which still drive the launch `-smp`/`-m`); acceptance is the control plane's call.
 - **VM-management scripts now ship inside the `chutes-cvm` package.** The privileged bash helpers
-  (`prepare-vm-image.sh`, `discover-profile.sh`, and the `volumes/`, `network/`, `devices/` scripts)
+  (`discover-profile.sh` and the `volumes/`, `network/`, `devices/` scripts)
   plus the `config/` schemas moved from `host-tools/scripts/` into `chutes_cvm/scripts/`, resolve
   package-relative, and are bundled in the wheel. `host-tools/scripts/` now holds only config
   examples and the deprecated `quick-launch.sh` compat shim. Ansible host launch/upgrade invokes

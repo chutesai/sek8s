@@ -2,10 +2,12 @@
 
 This is the decision layer (ported from the former quick-launch.sh): parse args + config with
 precedence (CLI > YAML > defaults), validate, run the host gates (TDX active, NUMA), refuse a
-duplicate chutes-td, then perform each privileged step by invoking the bundled bash helper that
-owns it (volumes, config volume, per-VM image, bridge), and finally boot via the QEMU boot
-primitive (``chutes_cvm.guest.__main__``). Per AGENT.md's bash-vs-Python rule, Python owns the
-decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd, ip/iptables).
+duplicate chutes-td, then perform each privileged step — invoking the bundled bash helper that
+owns it for the ones whose logic *is* a sequence of special-tool calls (volumes via
+cryptsetup/nbd, config volume, bridge via ip/iptables), or doing it in-process where it is plain
+file work (the per-VM image copy + sidecar staging, as `sudo cp`/`mkdir`/`rm`) — and finally boot
+via the QEMU boot primitive (``chutes_cvm.guest.__main__``). Per AGENT.md's bash-vs-Python rule,
+Python owns the decisions and bash still owns the tool-sequence system mutations.
 
 The privileged helpers create volumes with relative default names (``cache-<host>.raw`` …) and
 reference sibling ``volumes/`` / ``network/`` scripts, so — exactly as quick-launch did — the
@@ -15,11 +17,13 @@ orchestration runs with the bundled scripts dir as its working directory.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import sys
 
 from chutes_cvm import proc
+from chutes_cvm.guest import image_set
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
@@ -209,20 +213,65 @@ def _setup_config_volume(cfg: dict, benchmark: bool) -> None:
         )
 
 
+_DIRECT_BOOT_SIDECARS = ("vmlinuz", "initrd", "cmdline")
+
+
 def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
-    """Verify the image set + instantiate the per-VM copy; return the per-VM image path."""
-    result = proc.run(
-        [_helper("prepare-vm-image.sh"), base_image, hostname, vm_image_dir],
-        cwd=str(SCRIPTS_DIR),
-        capture_output=True,
-        text=True,
+    """Verify the image set and instantiate the per-VM copy; return the per-VM image path.
+
+    The per-VM image is a full copy of the base qcow2 (not an overlay): luksRemoveKey later
+    destroys the old key slot in-place on the only copy, matching the storage/cache volumes.
+
+    Python owns the decisions/data — verify the set against its manifest and resolve the qcow2 +
+    its manifest sha256 (image_set.resolve), derive the per-VM name, and pick which stale copies
+    to reap. The file mutations are privileged (the image dir is root-owned under /var/lib/chutes),
+    so each runs via sudo, matching the per-step-sudo pattern the rest of launch uses.
+    """
+    try:
+        qcow2, sha256 = image_set.resolve(base_image, full=False)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        raise LaunchError(f"image set verification failed: {exc}") from exc
+    print(
+        f"Verified image set via manifest: {qcow2} (sha256={sha256})", file=sys.stderr
     )
-    sys.stderr.write(result.stderr)
-    if result.returncode != 0:
-        raise LaunchError("VM image preparation failed (see output above)")
-    vm_image = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-    if not vm_image:
-        raise LaunchError("prepare-vm-image did not return a VM image path")
+
+    if not os.path.isdir(vm_image_dir):
+        _run(["sudo", "mkdir", "-p", vm_image_dir])
+
+    vm_image = os.path.join(vm_image_dir, f"tdx-{hostname}-{sha256[:16]}.qcow2")
+
+    # Reap stale per-VM images (and their sidecars) from previous base versions for this host.
+    for stale in sorted(
+        glob.glob(os.path.join(vm_image_dir, f"tdx-{hostname}-*.qcow2"))
+    ):
+        if stale == vm_image:
+            continue
+        print(f"Removing stale VM image: {stale}", file=sys.stderr)
+        stale_base = stale[: -len(".qcow2")]
+        _run(
+            ["sudo", "rm", "-f", stale]
+            + [f"{stale_base}.{ext}" for ext in _DIRECT_BOOT_SIDECARS]
+        )
+
+    if os.path.exists(vm_image):
+        print(f"Using existing VM image: {vm_image}", file=sys.stderr)
+    else:
+        print(f"Copying base image to per-VM image: {vm_image}", file=sys.stderr)
+        _run(["sudo", "cp", qcow2, vm_image])
+
+    # Direct-boot sidecars must travel with the per-VM copy the launcher boots (it resolves
+    # <image-base>.{vmlinuz,initrd,cmdline} next to that copy). Re-sync unconditionally so a
+    # reused per-VM image also refreshes. Missing base sidecars are fatal — no direct boot.
+    base_no_ext, vm_no_ext = qcow2[: -len(".qcow2")], vm_image[: -len(".qcow2")]
+    for ext in _DIRECT_BOOT_SIDECARS:
+        src = f"{base_no_ext}.{ext}"
+        if not os.path.isfile(src):
+            raise LaunchError(
+                f"direct-boot artifact missing next to base image: {src} — the image must ship "
+                "with .vmlinuz/.initrd/.cmdline (stage-boot-artifacts, published with the qcow2)"
+            )
+        _run(["sudo", "cp", src, f"{vm_no_ext}.{ext}"])
+
     return vm_image
 
 

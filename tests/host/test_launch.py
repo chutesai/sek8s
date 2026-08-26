@@ -218,3 +218,80 @@ def test_main_missing_creds_is_error(capsys):
         rc = launch.main(["--hostname", "h", "--network-type", "user"])
     assert rc == 1
     assert "miner.ss58" in capsys.readouterr().err
+
+
+def _stage_image_set(tmp_path, sha):
+    """A base image-set dir with a qcow2 + its 3 direct-boot sidecars; returns (set_dir, qcow2)."""
+    base = tmp_path / "base"
+    base.mkdir()
+    qcow2 = base / "x.qcow2"
+    qcow2.write_bytes(b"q")
+    for ext in ("vmlinuz", "initrd", "cmdline"):
+        (base / f"x.{ext}").write_bytes(b"s")
+    return str(base), str(qcow2)
+
+
+def test_prepare_vm_image_resolves_in_python_then_copies_via_sudo(tmp_path):
+    """The image set is verified + resolved in Python (image_set.resolve); the privileged file
+    mutations are done in-process as `sudo cp` (root-owned image dir), not shelled to a script
+    that guessed a Python interpreter."""
+    sha = "abc123def456abcd"  # 16 hex → [:16] is itself
+    set_dir, qcow2 = _stage_image_set(tmp_path, sha)
+    vm_dir = tmp_path / "vm-images"
+    vm_dir.mkdir()
+    calls: list[list[str]] = []
+
+    with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)) as res, patch(
+        f"{P}._run", side_effect=lambda cmd, **k: calls.append(cmd)
+    ):
+        out = launch._prepare_vm_image(set_dir, "h", str(vm_dir))
+
+    res.assert_called_once_with(set_dir, full=False)
+    vm_image = str(vm_dir / f"tdx-h-{sha}.qcow2")
+    assert out == vm_image
+    # qcow2 + 3 sidecars, each copied via `sudo cp`, into the per-VM name.
+    cps = [c for c in calls if c[:2] == ["sudo", "cp"]]
+    assert cps[0] == ["sudo", "cp", qcow2, vm_image]
+    assert [c[-1] for c in cps[1:]] == [
+        str(vm_dir / f"tdx-h-{sha}.{ext}") for ext in ("vmlinuz", "initrd", "cmdline")
+    ]
+
+
+def test_prepare_vm_image_reaps_stale_versions(tmp_path):
+    sha = "newnewnewnewnew0"
+    set_dir, qcow2 = _stage_image_set(tmp_path, sha)
+    vm_dir = tmp_path / "vm"
+    vm_dir.mkdir()
+    stale = vm_dir / "tdx-h-oldoldoldoldold0.qcow2"  # a previous version's per-VM copy
+    stale.write_bytes(b"old")
+    calls: list[list[str]] = []
+
+    with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)), patch(
+        f"{P}._run", side_effect=lambda cmd, **k: calls.append(cmd)
+    ):
+        launch._prepare_vm_image(set_dir, "h", str(vm_dir))
+
+    rms = [c for c in calls if c[:2] == ["sudo", "rm"]]
+    assert len(rms) == 1
+    # the stale qcow2 AND its sidecars are removed
+    assert str(stale) in rms[0]
+    assert str(vm_dir / "tdx-h-oldoldoldoldold0.vmlinuz") in rms[0]
+
+
+def test_prepare_vm_image_missing_sidecar_raises(tmp_path):
+    base = tmp_path / "base"
+    base.mkdir()
+    qcow2 = base / "x.qcow2"
+    qcow2.write_bytes(b"q")  # no sidecars staged
+    vm_dir = tmp_path / "vm"
+    vm_dir.mkdir()
+    with patch(f"{P}.image_set.resolve", return_value=(str(qcow2), "abc123def456abcd")):
+        with patch(f"{P}._run"):
+            with pytest.raises(LaunchError, match="direct-boot artifact missing"):
+                launch._prepare_vm_image(str(base), "h", str(vm_dir))
+
+
+def test_prepare_vm_image_surfaces_verification_failure():
+    with patch(f"{P}.image_set.resolve", side_effect=ValueError("manifest mismatch")):
+        with pytest.raises(LaunchError, match="image set verification failed"):
+            launch._prepare_vm_image("/base/set", "h", "/vm")
