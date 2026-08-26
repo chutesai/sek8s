@@ -98,7 +98,13 @@ def verify_host(
             "  Submitted this host class for baselining — Chutes will generate its "
             "measurements; re-check readiness later."
         )
-    else:
+    elif status == "pending":
+        # Already stored, just no published measurement yet — resubmitting would be a no-op.
+        print(
+            "  This host class is already submitted; Chutes will generate and publish its "
+            "measurements. Re-check readiness later — no action needed."
+        )
+    else:  # unknown — never submitted
         print(
             "  Run `chutes-cvm host submit-profile` to register this host class so Chutes can "
             "generate its measurements before you launch/upgrade."

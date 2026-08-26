@@ -238,13 +238,24 @@ def test_measurement_published_true_when_accepted(capsys):
     assert "Published measurement" in capsys.readouterr().out
 
 
-def test_measurement_published_false_when_pending_force_overrides(capsys):
+def test_measurement_published_pending_says_already_submitted(capsys):
+    # pending = already stored → advise waiting, NOT resubmitting; --force still overrides.
     resp = {"status": "pending", "fingerprint": "abc", "detail": "awaiting generation"}
     with patch("chutes_cvm.guest.preflight.run_preflight", return_value=resp):
         assert launch._measurement_published("/cfg.yaml", force=False) is False
         assert launch._measurement_published("/cfg.yaml", force=True) is True
     err = capsys.readouterr().err
-    assert "Refusing to launch" in err and "submit-profile" in err
+    assert "Refusing to launch" in err
+    assert "already submitted" in err
+    assert "submit-profile" not in err
+
+
+def test_measurement_published_unknown_says_submit_profile(capsys):
+    # unknown = never submitted → advise submit-profile.
+    resp = {"status": "unknown", "fingerprint": "abc"}
+    with patch("chutes_cvm.guest.preflight.run_preflight", return_value=resp):
+        assert launch._measurement_published("/cfg.yaml", force=False) is False
+    assert "submit-profile" in capsys.readouterr().err
 
 
 def test_measurement_published_fails_closed_on_api_error():

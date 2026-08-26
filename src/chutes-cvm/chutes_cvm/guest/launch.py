@@ -131,6 +131,23 @@ def _measurement_published(config_path: str, force: bool) -> bool:
         f"(status: {status or 'unreachable'}; fingerprint {fingerprint})."
         + (f" {detail}" if detail else "")
     )
+    # Remediation depends on the status: pending = already submitted (just wait); unknown =
+    # never submitted (submit it); unreachable = couldn't confirm.
+    if status == "pending":
+        remedy = (
+            "This host class is already submitted; Chutes will generate and publish its "
+            "measurements.\n  Retry once `chutes-cvm host verify` shows READY — no action needed."
+        )
+    elif status == "unknown":
+        remedy = (
+            "Register this host class with `chutes-cvm host submit-profile`, then retry once "
+            "Chutes\n  publishes its measurements (`chutes-cvm host verify` shows readiness)."
+        )
+    else:  # unreachable / other
+        remedy = (
+            "Could not confirm with the control plane. Check connectivity and retry, or run "
+            "`chutes-cvm host verify` to diagnose."
+        )
     if force:
         print(
             f"⚠ {problem}\n  Proceeding anyway (--force) — the VM will fail attestation if this "
@@ -140,9 +157,8 @@ def _measurement_published(config_path: str, force: bool) -> bool:
         return True
     print(
         f"✗ {problem}\n"
-        "  Refusing to launch: the VM would boot but fail attestation. Register this host class\n"
-        "  with `chutes-cvm host submit-profile`, then retry once Chutes publishes its\n"
-        "  measurements (`chutes-cvm host verify` shows readiness). Pass --force to launch anyway.",
+        "  Refusing to launch: the VM would boot but fail attestation.\n"
+        f"  {remedy} Pass --force to launch anyway.",
         file=sys.stderr,
     )
     return False

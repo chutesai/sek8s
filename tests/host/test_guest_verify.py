@@ -34,16 +34,22 @@ def test_ready_when_accepted():
         assert verify.verify_host(scripts_dir="/x") == verify.READY
 
 
-def test_warning_when_pending():
+def test_warning_when_pending(capsys):
+    # pending = already stored → advise waiting, NOT resubmitting.
     stack, _, _ = _patch(status="pending")
     with stack:
         assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+    out = capsys.readouterr().out
+    assert "already submitted" in out
+    assert "submit-profile" not in out
 
 
-def test_warning_when_unknown():
+def test_warning_when_unknown(capsys):
+    # unknown = never submitted → advise submit-profile.
     stack, _, _ = _patch(status="unknown")
     with stack:
         assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+    assert "submit-profile" in capsys.readouterr().out
 
 
 def test_blocked_when_qemu_gate_fails():
