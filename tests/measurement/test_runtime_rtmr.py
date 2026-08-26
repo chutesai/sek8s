@@ -137,7 +137,9 @@ def test_generate_rtmr3_passes_luks_passphrase_from_env(monkeypatch, capsys):
         seen["passphrase"] = luks_passphrase
         return "COMPUTED", [("hash", "/etc/x")]
 
-    with patch("chutes_cvm.measurement.runtime_rtmr.compute_rtmr3", side_effect=_fake):
+    with patch(
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr3", side_effect=_fake
+    ):
         rc = gm._generate_rtmr3(args)
     assert rc == 0
     assert seen["passphrase"] == "s3cret"
@@ -180,9 +182,12 @@ def test_compute_measurements_assembles_entry(monkeypatch):
         return "R3HEX", [("hash", "/etc/x")]
 
     with patch.object(gm, "_rtmr0_block", return_value=block), patch(
-        "chutes_cvm.measurement.runtime_rtmr.compute_rtmr1_2",
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2",
         return_value=("R1HEX", "R2HEX"),
-    ), patch("chutes_cvm.measurement.runtime_rtmr.compute_rtmr3", side_effect=_fake_r3):
+    ), patch(
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr3",
+        side_effect=_fake_r3,
+    ):
         entry = gm._compute_measurements(_gen_args())
 
     assert seen["passphrase"] == "s3cret"  # LUKS_PASSPHRASE threaded through to rtmr3
@@ -247,7 +252,8 @@ def test_generate_register_rtmr3_routes_and_prints_hex(capsys):
         return "R3ONLYHEX", [("hash", "/etc/x")]
 
     with patch(
-        "chutes_cvm.measurement.runtime_rtmr.compute_rtmr3", side_effect=_fake_r3
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr3",
+        side_effect=_fake_r3,
     ):
         rc = gm._cmd_generate(_gen_args(register="rtmr3"))
     assert rc == 0

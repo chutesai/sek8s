@@ -7,11 +7,7 @@ the config.yaml, cross-source deep-merge, removed-key errors, and template gener
 import pytest
 import yaml
 from chutes_cvm.guest import config as cfgmod
-from chutes_cvm.guest.config import (
-    ConfigError,
-    load_launch_config,
-    render_config_template,
-)
+from chutes_cvm.guest.config import ConfigError, LaunchConfig, render_config_template
 
 _YAML = {
     "vm": {"hostname": "yaml-host"},
@@ -28,7 +24,7 @@ def _write(tmp_path, data) -> str:
 
 
 def test_defaults_when_no_sources():
-    cfg = load_launch_config(None)
+    cfg = LaunchConfig.from_file(None)
     assert cfg.vm.hostname == ""
     assert cfg.network.vm_ip == "192.168.100.2"
     assert cfg.network.type == "tap"
@@ -38,7 +34,7 @@ def test_defaults_when_no_sources():
 
 
 def test_nested_yaml_loads_natively(tmp_path):
-    cfg = load_launch_config(_write(tmp_path, _YAML))
+    cfg = LaunchConfig.from_file(_write(tmp_path, _YAML))
     assert cfg.vm.hostname == "yaml-host"
     assert cfg.network.vm_ip == "10.0.0.5"
     assert cfg.network.type == "user"
@@ -49,19 +45,19 @@ def test_nested_yaml_loads_natively(tmp_path):
 def test_env_overrides_yaml_and_deep_merges(tmp_path, monkeypatch):
     # env sets one network leaf; the YAML's other network leaf must survive (deep merge).
     monkeypatch.setenv("CHUTES_CVM_NETWORK__BRIDGE_IP", "172.16.0.1/24")
-    cfg = load_launch_config(_write(tmp_path, _YAML))
+    cfg = LaunchConfig.from_file(_write(tmp_path, _YAML))
     assert cfg.network.bridge_ip == "172.16.0.1/24"  # env
     assert cfg.network.vm_ip == "10.0.0.5"  # YAML still applies
 
 
 def test_cli_overrides_env_and_yaml(tmp_path, monkeypatch):
     monkeypatch.setenv("CHUTES_CVM_NETWORK__VM_IP", "172.16.0.9")
-    cfg = load_launch_config(_write(tmp_path, _YAML), network={"vm_ip": "1.2.3.4"})
+    cfg = LaunchConfig.from_file(_write(tmp_path, _YAML), network={"vm_ip": "1.2.3.4"})
     assert cfg.network.vm_ip == "1.2.3.4"  # CLI (init) beats env and YAML
 
 
 def test_flat_projection(tmp_path):
-    flat = load_launch_config(_write(tmp_path, _YAML)).flat()
+    flat = LaunchConfig.from_file(_write(tmp_path, _YAML)).flat()
     assert flat["hostname"] == "yaml-host"
     assert flat["vm_ip"] == "10.0.0.5"
     assert flat["cache_size"] == "9000G"
@@ -70,22 +66,24 @@ def test_flat_projection(tmp_path):
 
 def test_missing_config_file_raises():
     with pytest.raises(ConfigError, match="not found"):
-        load_launch_config("/no/such/config.yaml")
+        LaunchConfig.from_file("/no/such/config.yaml")
 
 
 def test_removed_advanced_section_raises(tmp_path):
     with pytest.raises(ConfigError, match="advanced"):
-        load_launch_config(_write(tmp_path, {"advanced": {"x": 1}}))
+        LaunchConfig.from_file(_write(tmp_path, {"advanced": {"x": 1}}))
 
 
 def test_removed_cache_enabled_raises(tmp_path):
     with pytest.raises(ConfigError, match="cache.enabled"):
-        load_launch_config(_write(tmp_path, {"volumes": {"cache": {"enabled": True}}}))
+        LaunchConfig.from_file(
+            _write(tmp_path, {"volumes": {"cache": {"enabled": True}}})
+        )
 
 
 def test_bad_network_type_raises(tmp_path):
     with pytest.raises(ConfigError):
-        load_launch_config(_write(tmp_path, {"network": {"type": "bogus"}}))
+        LaunchConfig.from_file(_write(tmp_path, {"network": {"type": "bogus"}}))
 
 
 def test_template_is_valid_and_roundtrips(tmp_path):
@@ -96,7 +94,7 @@ def test_template_is_valid_and_roundtrips(tmp_path):
     assert doc["network"]["type"] == "tap"
     assert doc["volumes"]["cache"]["size"] == "5000G"
     # The generated file must load back through the model without error.
-    cfg = load_launch_config(_write(tmp_path, doc))
+    cfg = LaunchConfig.from_file(_write(tmp_path, doc))
     assert cfg.network.type == "tap"
 
 
@@ -110,7 +108,7 @@ def test_config_verify_command(tmp_path, capsys):
 def test_config_init_command_writes_file(tmp_path):
     out = tmp_path / "generated.yaml"
     assert cfgmod.main(["init", "--output", str(out)]) == 0
-    cfg = load_launch_config(str(out))
+    cfg = LaunchConfig.from_file(str(out))
     assert cfg.network.type == "tap"
     # Refuses to overwrite without --force.
     assert cfgmod.main(["init", "--output", str(out)]) == 1

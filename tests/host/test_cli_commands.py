@@ -156,9 +156,9 @@ def test_config_init_writes_config_and_guards_overwrite(tmp_path, monkeypatch):
 
 def test_config_init_generates_valid_config_from_schema(tmp_path, monkeypatch):
     # `config init` generates the config from the LaunchConfig model; it must load back cleanly.
-    from chutes_cvm.guest.config import load_launch_config
+    from chutes_cvm.guest.config import LaunchConfig
 
     monkeypatch.chdir(tmp_path)
     assert cli.main(["config", "init"]) == 0
-    cfg = load_launch_config(str(tmp_path / "config.yaml"))
+    cfg = LaunchConfig.from_file(str(tmp_path / "config.yaml"))
     assert cfg.network.type == "tap"

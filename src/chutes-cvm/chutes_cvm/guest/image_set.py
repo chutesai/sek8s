@@ -63,6 +63,8 @@ import shlex
 import subprocess
 import sys
 
+from chutes_cvm.paths import SCRIPTS_DIR
+
 # Roles in the manifest. The on-disk filename for each is the qcow2 basename with the
 # role as its extension (<base>.qcow2 / <base>.vmlinuz / <base>.initrd / <base>.cmdline).
 ROLES = ("qcow2", "vmlinuz", "initrd", "cmdline")
@@ -193,8 +195,6 @@ def _cmd_download(args: argparse.Namespace) -> int:
     Delegates to the bundled download-image-set.sh, which downloads the full set into
     /var/lib/chutes/base-images/<variant>/ and runs `image verify --full` over it.
     """
-    from chutes_cvm.paths import SCRIPTS_DIR
-
     base = "tdx-guest-debug" if args.debug else "tdx-guest"
     script = SCRIPTS_DIR / "download-image-set.sh"
     if not script.exists():

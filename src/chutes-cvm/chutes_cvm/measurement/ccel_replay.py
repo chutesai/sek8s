@@ -30,6 +30,7 @@ import argparse
 import hashlib
 import struct
 import sys
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -298,8 +299,6 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     confirm RTMR0 decomposes into a reusable constant baseline + a small set of
     topology-varying events.
     """
-    from collections import defaultdict
-
     ga: dict[int, list[Event]] = defaultdict(list)
     gb: dict[int, list[Event]] = defaultdict(list)
     for e in parse_event_log(Path(args.eventlog_a).read_bytes()):

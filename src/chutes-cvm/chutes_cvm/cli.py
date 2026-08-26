@@ -72,14 +72,14 @@ def _cmd_down(args: argparse.Namespace) -> int:
     `chutes-cvm config` eval round-trip); teardown falls back to its own defaults if config is
     absent/unreadable.
     """
-    from chutes_cvm.guest.config import ConfigError, load_launch_config
+    from chutes_cvm.guest.config import ConfigError, LaunchConfig
 
     config = args.config or default_config_path()
     net_flags: "list[str]" = []
     cfg_ok = bool(config and os.path.exists(config))
     if cfg_ok:
         try:
-            flat = load_launch_config(config).flat()
+            flat = LaunchConfig.from_file(config).flat()
             net_flags = [
                 "--bridge-ip",
                 flat["bridge_ip"],

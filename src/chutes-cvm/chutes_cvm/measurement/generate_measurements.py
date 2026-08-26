@@ -40,7 +40,19 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.measurement import ccel_replay as cc
+from chutes_cvm.measurement.platform_tables import MeasurementMetadata
+from chutes_cvm.measurement.runtime_rtmr import (
+    MeasurementError,
+    compute_rtmr1_2,
+    compute_rtmr3,
+)
+from chutes_cvm.measurement.topology_spec import (
+    build_topology_spec,
+    measurement_cpu_args,
+)
 from chutes_cvm.paths import firmware_dir
 
 # The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
@@ -215,7 +227,6 @@ def enumerate_topologies(qemu_filter: str | None = None) -> list[Topology]:
     """Every registered (profile, qemu_version, fingerprint) from the profiles'
     `baselined_measurements` — the hand-curated offline registry (no live host).
     `qemu_filter` (e.g. "10.2.1") restricts to this release's supported QEMU."""
-    from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 
     out: list[Topology] = []
     for name, profile in GPU_PROFILES.items():
@@ -242,12 +253,6 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
     Raises ValueError on a hard error (unknown profile, duplicate hardware names, or MRTD
     divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
     """
-    from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
-    from chutes_cvm.measurement.platform_tables import MeasurementMetadata
-    from chutes_cvm.measurement.topology_spec import (
-        build_topology_spec,
-        measurement_cpu_args,
-    )
 
     def fork_rtmr0(profile, fp):
         spec = build_topology_spec(
@@ -374,8 +379,6 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
     data assembly — no file output; raises ValueError (topology/aggregation) or MeasurementError
     (rtmr1/2/3) on failure. Replaces the old compute-rtmr0/1-2/rtmr3 + aggregate roles.
     """
-    from chutes_cvm.measurement.runtime_rtmr import compute_rtmr1_2, compute_rtmr3
-
     block = _rtmr0_block(args)
     rtmr1, rtmr2 = compute_rtmr1_2(args.image, tdx_measure_bin=args.tdx_measure_bin)
     rtmr3, _ = compute_rtmr3(
@@ -405,9 +408,6 @@ def _generate_full(args: argparse.Namespace) -> int:
     """A full `generate` (no --register): compute every register (via _compute_measurements) and
     write the version's single measurements.yaml to --output. compute → serialize → write.
     """
-    import yaml
-    from chutes_cvm.measurement.runtime_rtmr import MeasurementError
-
     try:
         entry = _compute_measurements(args)
     except ValueError as exc:
@@ -437,8 +437,6 @@ def _generate_rtmr3(args: argparse.Namespace) -> int:
     (the passphrase the image was encrypted with) to unlock it and recompute — always a fresh
     value, never a cached one.
     """
-    from chutes_cvm.measurement.runtime_rtmr import MeasurementError, compute_rtmr3
-
     try:
         rtmr3, per_file = compute_rtmr3(
             args.image,

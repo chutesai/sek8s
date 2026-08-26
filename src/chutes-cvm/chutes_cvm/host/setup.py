@@ -6,12 +6,15 @@ All OS-version differences are encoded in the profile — this module
 contains no version-specific branching.
 """
 
+import argparse
+import glob
 import os
 import re
 import subprocess
 import sys
 
-from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile
+from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile, resolve_profile
+from chutes_cvm.host.support_matrix import format_topology_matrix
 
 # Fabric Manager version must match the NVIDIA driver version in the guest
 # image.  FM communicates with GPU firmware shared between host and guest;
@@ -142,13 +145,11 @@ def _remove_stale_ppa_sources(ppa: PPA):
     Cleans up entries left by add-apt-repository or prior manual installs
     so that our suite-pinned entry is the only one.
     """
-    import glob as globmod
-
     patterns = [
         f"/etc/apt/sources.list.d/*{ppa.team}*{ppa.name}*",
     ]
     for pattern in patterns:
-        for path in globmod.glob(pattern):
+        for path in glob.glob(pattern):
             print(f"  Removing stale PPA source: {path}")
             _run(["sudo", "rm", "-f", path])
 
@@ -502,8 +503,6 @@ def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
     The file is a JSON5-ish format (allows comments and trailing commas) so
     we use a regex patch rather than json.loads to avoid stripping comments.
     """
-    import re as _re
-
     if not os.path.exists(conf_path):
         print(f"  {conf_path} not found — QCNL not installed yet, skipping")
         return
@@ -511,7 +510,7 @@ def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
     with open(conf_path) as f:
         original = f.read()
 
-    updated = _re.sub(
+    updated = re.sub(
         r'"use_secure_cert"\s*:\s*true',
         '"use_secure_cert": false',
         original,
@@ -533,8 +532,6 @@ def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
     'port = 4050' so QGS listens on vsock and restarts the service if the
     file was changed.
     """
-    import re as _re
-
     if not os.path.exists(conf_path):
         print(f"  {conf_path} not found — QGS not installed yet, skipping")
         return
@@ -542,9 +539,7 @@ def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
     with open(conf_path) as f:
         original = f.read()
 
-    updated = _re.sub(
-        r"^#?\s*port\s*=.*$", "port = 4050", original, flags=_re.MULTILINE
-    )
+    updated = re.sub(r"^#?\s*port\s*=.*$", "port = 4050", original, flags=re.MULTILINE)
 
     if updated == original:
         print(f"  {conf_path} already set to vsock port 4050")
@@ -775,11 +770,6 @@ def main(argv: "list[str] | None" = None) -> int:
     Detects the Ubuntu version, resolves the matching host profile, and executes the
     setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
     """
-    import argparse
-
-    from chutes_cvm.host.profiles import resolve_profile
-    from chutes_cvm.host.support_matrix import format_topology_matrix
-
     parser = argparse.ArgumentParser(
         prog="chutes-cvm host setup",
         description="Set up TDX host for confidential GPU computing",

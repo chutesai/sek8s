@@ -13,7 +13,9 @@ generates a starter one:
 
 from __future__ import annotations
 
+import argparse
 import os
+import sys
 from typing import Any, Literal
 
 import yaml
@@ -266,8 +268,6 @@ def render_config_template() -> str:
 
 def _cmd_init(args) -> int:
     """`chutes-cvm config init` — write a starter config.yaml (from the schema) to --output."""
-    import sys
-
     if os.path.exists(args.output) and not args.force:
         print(
             f"chutes-cvm: {args.output} already exists — pass --force to overwrite.",
@@ -284,10 +284,8 @@ def _cmd_init(args) -> int:
 
 def _cmd_verify(args) -> int:
     """`chutes-cvm config verify <file>` — validate a config.yaml against the schema."""
-    import sys
-
     try:
-        load_launch_config(args.config_file)
+        LaunchConfig.from_file(args.config_file)
     except ConfigError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -297,8 +295,6 @@ def _cmd_verify(args) -> int:
 
 def main(argv=None):
     """`chutes-cvm config <verb>` — manage the launch config.yaml (init / verify)."""
-    import argparse
-
     parser = argparse.ArgumentParser(
         prog="chutes-cvm config", description="Manage the launch config.yaml."
     )
@@ -330,6 +326,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    import sys
-
     sys.exit(main())

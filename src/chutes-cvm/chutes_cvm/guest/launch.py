@@ -15,10 +15,12 @@ orchestration runs with the bundled scripts dir as its working directory.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 
+from chutes_cvm.guest.config import ConfigError, LaunchConfig
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
 _PROCESS_NAME_CHUTES_TD = "chutes-td"
@@ -119,8 +121,6 @@ def _iface_exists(name: str) -> bool:
 
 def _default_route_iface() -> str:
     """The interface of the default route (empty if none)."""
-    import json
-
     out = subprocess.run(
         ["ip", "-j", "route", "show", "default"], capture_output=True, text=True
     ).stdout.strip()
@@ -378,8 +378,6 @@ def _resolve_config(args: argparse.Namespace) -> "tuple[dict, bool, bool, bool]"
     """Resolve config via the LaunchConfig model (CLI > env > YAML > defaults) and return
     (flat_cfg, benchmark, pass_gpus, ephemeral). The last three are launch-runtime flags, not
     persisted config, so they stay out of the model."""
-    from chutes_cvm.guest.config import ConfigError, load_launch_config
-
     # Docker Hub creds must be set together when given on the CLI.
     if bool(args.docker_hub_username) != bool(args.docker_hub_token):
         raise LaunchError(
@@ -404,7 +402,7 @@ def _resolve_config(args: argparse.Namespace) -> "tuple[dict, bool, bool, bool]"
     if args.config_file:
         print(f"Loading configuration from: {args.config_file}")
     try:
-        model = load_launch_config(args.config_file, **overrides)
+        model = LaunchConfig.from_file(args.config_file, **overrides)
     except ConfigError as exc:
         raise LaunchError(f"config: {exc}") from exc
     if args.config_file:
@@ -554,6 +552,9 @@ def _boot(
     cfg: dict, vm_image: str, net_iface: str, benchmark: bool, pass_gpus: bool
 ) -> int:
     """Assemble the launch-vm argument list and call the QEMU primitive in-process."""
+    # Deferred import: the launch-vm primitive pulls the heavy, host-specific chain
+    # (detection/gpu/qemu/passthrough) that only an actual boot needs — importing it here keeps
+    # `launch --help` and the early config/gate paths light.
     from chutes_cvm.guest.__main__ import main as launch_vm_main
 
     launch_args = ["--image", vm_image, "--network-type", cfg["network_type"]]

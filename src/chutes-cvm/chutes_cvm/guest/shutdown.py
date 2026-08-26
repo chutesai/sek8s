@@ -18,6 +18,9 @@ import time
 import urllib.error
 import urllib.request
 
+from chutes_cvm.guest.config import ConfigError, LaunchConfig
+from substrateinterface import Keypair, KeypairType
+
 # Contract mirrored from sek8s_common (constants + auth.authorize(purpose="status")) and the
 # system-manager status API (mounted at /status, PORT=8080, REQUIRE_TLS=false → plain HTTP).
 _HOTKEY_HEADER = "X-Chutes-Hotkey"
@@ -36,10 +39,8 @@ def graceful_shutdown(config_path: "str | None", timeout: float = 10.0) -> str:
     """Ask the guest to power off cleanly via the system-manager API. Returns the VM IP on
     success; raises ShutdownError if the config/creds are missing or the API can't be reached.
     """
-    from chutes_cvm.guest.config import ConfigError, load_launch_config
-
     try:
-        cfg = load_launch_config(config_path)
+        cfg = LaunchConfig.from_file(config_path)
     except ConfigError as exc:
         raise ShutdownError(f"config: {exc}") from exc
 
@@ -52,8 +53,6 @@ def graceful_shutdown(config_path: "str | None", timeout: float = 10.0) -> str:
     vm_ip = cfg.network.vm_ip
 
     try:
-        from substrateinterface import Keypair, KeypairType
-
         kp = Keypair.create_from_seed(seed, crypto_type=KeypairType.SR25519)
     except Exception as exc:
         raise ShutdownError(f"invalid miner seed: {exc}") from exc
