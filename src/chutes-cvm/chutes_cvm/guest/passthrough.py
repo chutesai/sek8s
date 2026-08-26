@@ -1,9 +1,9 @@
 """GPU passthrough for QEMU using per-SKU GpuProfile rules."""
 
 import os
-import subprocess
 import time
 
+from chutes_cvm import proc
 from chutes_cvm.guest.detection import (
     detect_cx7_bridge_pfs,
     detect_infiniband_pfs,
@@ -52,13 +52,13 @@ def _run_gpu_tools(*args: str):
         _gpu_tools_cmd = ensure_gpu_tools_available()
     cmd = ["sudo", _gpu_tools_cmd, *args]
     try:
-        subprocess.run(
+        proc.run(
             cmd,
             check=True,
-            stderr=subprocess.STDOUT,
+            stderr=proc.STDOUT,
             timeout=GPU_TOOLS_TIMEOUT_SECS,
         )
-    except subprocess.TimeoutExpired:
+    except proc.TimeoutExpired:
         raise RuntimeError(
             f"nvidia-gpu-tools timed out after {GPU_TOOLS_TIMEOUT_SECS}s "
             f"(args: {args}). GPU hardware may be wedged — a host reboot is "
@@ -76,7 +76,7 @@ def _check_fabric_manager(profile: GpuProfile):
     if not profile.requires_fabric_manager:
         return
     try:
-        result = subprocess.run(
+        result = proc.run(
             ["systemctl", "is-active", "nvidia-fabricmanager"],
             capture_output=True,
             text=True,
@@ -84,7 +84,7 @@ def _check_fabric_manager(profile: GpuProfile):
         )
         if result.stdout.strip() == "active":
             return
-    except (subprocess.TimeoutExpired, OSError):
+    except (proc.TimeoutExpired, OSError):
         pass
     raise RuntimeError(
         f"nvidia-fabricmanager is not running (required for {profile.name}). "
@@ -140,13 +140,13 @@ def _device_config_readable(bdf: str) -> bool:
     """Return True if the device's PCI config space responds (vendor ID read)."""
     vendor_path = f"/sys/bus/pci/devices/{bdf}/vendor"
     try:
-        result = subprocess.run(
+        result = proc.run(
             ["cat", vendor_path],
             capture_output=True,
             timeout=5,
         )
         return result.returncode == 0 and result.stdout.strip() != b"0xffff"
-    except (subprocess.TimeoutExpired, OSError):
+    except (proc.TimeoutExpired, OSError):
         return False
 
 
@@ -269,6 +269,7 @@ def _build_pci_topology(
 ):
     """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology."""
     numa = use_numa_topology(profile.enable_numa_topology)
+    topo: "PciTopologyState | NumaPciTopologyState"
     if numa:
         print("  PCI topology: NUMA-local PXB-PCIe bridges")
         topo = NumaPciTopologyState()

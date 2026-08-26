@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import time
+
+from chutes_cvm import proc
 
 
 def expand_cpulist(raw: str) -> list[int]:
@@ -39,10 +40,10 @@ def host_node_cpus(host_node: int) -> list[int]:
         return []
 
 
-def _run_root(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+def _run_root(cmd: list[str], **kwargs) -> proc.CompletedProcess:
     if os.geteuid() == 0:
-        return subprocess.run(cmd, **kwargs)
-    return subprocess.run(["sudo", *cmd], **kwargs)
+        return proc.run(cmd, **kwargs)
+    return proc.run(["sudo", *cmd], **kwargs)
 
 
 def _read_pidfile(pidfile: str) -> int | None:
@@ -68,7 +69,7 @@ def find_qemu_pid(*, pidfile: str) -> int | None:
 
 def _vcpu_thread_ids(pid: int) -> list[tuple[int, int]]:
     """Return (vcpu_index, thread_id) pairs sorted by vcpu index."""
-    result = subprocess.run(
+    result = proc.run(
         ["ps", "-T", "-p", str(pid)],
         capture_output=True,
         text=True,
@@ -102,7 +103,7 @@ def _vcpu_thread_ids_wchan_fallback(pid: int) -> list[int]:
 
 
 def _iothread_ids(pid: int) -> list[int]:
-    result = subprocess.run(
+    result = proc.run(
         ["ps", "-T", "-p", str(pid)],
         capture_output=True,
         text=True,
@@ -149,8 +150,8 @@ def pin_qemu_threads(
         target_cpu = cpus[vcpu_id % len(cpus)]
         result = _run_root(
             ["taskset", "-pc", str(target_cpu), str(tid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=proc.DEVNULL,
+            stderr=proc.DEVNULL,
             check=False,
         )
         if result.returncode == 0:
@@ -175,8 +176,8 @@ def pin_qemu_threads(
         target_cpu = node0_cpus[iot_start + iot_idx]
         result = _run_root(
             ["taskset", "-pc", str(target_cpu), str(tid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=proc.DEVNULL,
+            stderr=proc.DEVNULL,
             check=False,
         )
         if result.returncode == 0:

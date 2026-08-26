@@ -2,8 +2,9 @@
 
 import concurrent.futures
 import os
-import subprocess
 import time
+
+from chutes_cvm import proc
 
 # Number of SR-IOV VFs to create per InfiniBand PF for VM passthrough
 IB_VFS_PER_PF = 1
@@ -40,8 +41,8 @@ def load_vfio_modules():
     modules = ["vfio_pci", "vfio_iommu_type1", "vfio_virqfd"]
     for module in modules:
         try:
-            subprocess.run(["modprobe", module], check=False, capture_output=True)
-        except Exception:
+            proc.run(["modprobe", module], check=False, capture_output=True)
+        except Exception:  # nosec B110
             pass
 
 
@@ -147,13 +148,13 @@ def _sysfs_write(path: str, value: str, timeout: float = 10.0) -> bool:
     operation hangs.
     """
     try:
-        subprocess.run(
+        proc.run(
             ["sudo", "bash", "-c", f"echo {value} > {path}"],
             timeout=timeout,
             capture_output=True,
         )
         return True
-    except subprocess.TimeoutExpired:
+    except proc.TimeoutExpired:
         return False
     except OSError:
         return False
@@ -167,13 +168,13 @@ def has_stale_vfio_devices(devices: list[str]) -> bool:
 def _d_state_pci_tasks() -> list[str]:
     """Return cmdlines of D-state vfio unbind or nvidia-gpu-tools tasks."""
     try:
-        result = subprocess.run(
+        result = proc.run(
             ["ps", "-eo", "stat,args"],
             capture_output=True,
             text=True,
             timeout=5,
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except (proc.TimeoutExpired, OSError):
         return []
     if result.returncode != 0:
         return []
@@ -305,17 +306,17 @@ def install_udev_rules(scripts_dir: str):
         )
     if not os.path.exists(udev_rules_dst):
         print("  Installing udev rules...")
-        subprocess.check_call(
+        proc.check_call(
             ["sudo", "cp", udev_rules_src, "/etc/udev/rules.d/"],
-            stderr=subprocess.STDOUT,
+            stderr=proc.STDOUT,
         )
-        subprocess.check_call(
+        proc.check_call(
             ["sudo", "udevadm", "control", "--reload-rules"],
-            stderr=subprocess.STDOUT,
+            stderr=proc.STDOUT,
         )
-        subprocess.check_call(
+        proc.check_call(
             ["sudo", "udevadm", "trigger"],
-            stderr=subprocess.STDOUT,
+            stderr=proc.STDOUT,
         )
     else:
         print("  Udev rules already present (skipping install)")

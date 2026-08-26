@@ -87,7 +87,7 @@ def _stage_artifacts(tmp_path):
 def test_compute_rtmr1_2_parses_and_uppercases(tmp_path):
     image = _stage_artifacts(tmp_path)
     fake = MagicMock(returncode=0, stdout="RTMR1: abcdef\nRTMR2: 012ABC\n", stderr="")
-    with patch("chutes_cvm.measurement.runtime_rtmr.subprocess.run", return_value=fake):
+    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=fake):
         r1, r2 = rr.compute_rtmr1_2(image)
     assert r1 == "ABCDEF"
     assert r2 == "012ABC"
@@ -101,7 +101,7 @@ def test_compute_rtmr1_2_missing_artifact_raises(tmp_path):
 def test_compute_rtmr1_2_unparseable_output_raises(tmp_path):
     image = _stage_artifacts(tmp_path)
     fake = MagicMock(returncode=0, stdout="nothing useful here\n", stderr="")
-    with patch("chutes_cvm.measurement.runtime_rtmr.subprocess.run", return_value=fake):
+    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=fake):
         with pytest.raises(rr.MeasurementError, match="could not parse"):
             rr.compute_rtmr1_2(image)
 
@@ -112,9 +112,9 @@ def test_compute_rtmr1_2_unparseable_output_raises(tmp_path):
 def test_root_is_luks_detects_encrypted():
     enc = MagicMock(returncode=0, stdout="/dev/sda2: crypto_LUKS\n", stderr="")
     pt = MagicMock(returncode=0, stdout="/dev/sda2: ext4\n", stderr="")
-    with patch("chutes_cvm.measurement.runtime_rtmr.subprocess.run", return_value=enc):
+    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=enc):
         assert rr.root_is_luks("x.qcow2") is True
-    with patch("chutes_cvm.measurement.runtime_rtmr.subprocess.run", return_value=pt):
+    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=pt):
         assert rr.root_is_luks("x.qcow2") is False
 
 

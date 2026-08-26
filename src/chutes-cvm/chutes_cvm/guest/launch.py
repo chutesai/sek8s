@@ -17,9 +17,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 
+from chutes_cvm import proc
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
@@ -36,7 +36,7 @@ def _chutes_td_running() -> bool:
     qemu-system/qemu-kvm process whose cmdline carries the chutes-td process name.
     """
     try:
-        pids = subprocess.run(
+        pids = proc.run(
             ["pgrep", "-f", "qemu-system|qemu-kvm"],
             capture_output=True,
             text=True,
@@ -71,7 +71,7 @@ def _tdx_active() -> "tuple[bool, str]":
                 return True, "/proc/cpuinfo"
     except OSError:
         pass
-    dmesg = subprocess.run(["sudo", "dmesg"], capture_output=True, text=True).stdout
+    dmesg = proc.run(["sudo", "dmesg"], capture_output=True, text=True).stdout
     if any(
         "module initialized" in ln for ln in dmesg.splitlines() if "tdx" in ln.lower()
     ):
@@ -81,12 +81,12 @@ def _tdx_active() -> "tuple[bool, str]":
 
 def _ensure_numa_zone_reclaim() -> None:
     """Ensure vm.zone_reclaim_mode=0 (cross-node allocation for QEMU/KVM); fix if not."""
-    current = subprocess.run(
+    current = proc.run(
         ["sysctl", "-n", "vm.zone_reclaim_mode"], capture_output=True, text=True
     ).stdout.strip()
     if current != "0":
         print(f"⚠ vm.zone_reclaim_mode={current or 'unknown'} — setting to 0")
-        subprocess.run(["sudo", "sysctl", "-w", "vm.zone_reclaim_mode=0"], check=False)
+        proc.run(["sudo", "sysctl", "-w", "vm.zone_reclaim_mode=0"], check=False)
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
@@ -113,15 +113,12 @@ def _resolve_public_iface(configured: str) -> str:
 
 
 def _iface_exists(name: str) -> bool:
-    return (
-        subprocess.run(["ip", "link", "show", name], capture_output=True).returncode
-        == 0
-    )
+    return proc.run(["ip", "link", "show", name], capture_output=True).returncode == 0
 
 
 def _default_route_iface() -> str:
     """The interface of the default route (empty if none)."""
-    out = subprocess.run(
+    out = proc.run(
         ["ip", "-j", "route", "show", "default"], capture_output=True, text=True
     ).stdout.strip()
     try:
@@ -214,16 +211,16 @@ def _setup_config_volume(cfg: dict, benchmark: bool) -> None:
 
 def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
     """Verify the image set + instantiate the per-VM copy; return the per-VM image path."""
-    proc = subprocess.run(
+    result = proc.run(
         [_helper("prepare-vm-image.sh"), base_image, hostname, vm_image_dir],
         cwd=str(SCRIPTS_DIR),
         capture_output=True,
         text=True,
     )
-    sys.stderr.write(proc.stderr)
-    if proc.returncode != 0:
+    sys.stderr.write(result.stderr)
+    if result.returncode != 0:
         raise LaunchError("VM image preparation failed (see output above)")
-    vm_image = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+    vm_image = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
     if not vm_image:
         raise LaunchError("prepare-vm-image did not return a VM image path")
     return vm_image
@@ -231,7 +228,7 @@ def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
 
 def _setup_bridge(cfg: dict) -> str:
     """Set up TAP bridge networking via network/setup-bridge.sh; return the TAP interface name."""
-    proc = subprocess.run(
+    result = proc.run(
         [
             _helper("network", "setup-bridge.sh"),
             "--bridge-ip",
@@ -248,11 +245,11 @@ def _setup_bridge(cfg: dict) -> str:
         capture_output=True,
         text=True,
     )
-    sys.stdout.write(proc.stdout)
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
+    sys.stdout.write(result.stdout)
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
         raise LaunchError("bridge setup failed")
-    for line in proc.stdout.splitlines():
+    for line in result.stdout.splitlines():
         if line.startswith("Network interface:"):
             return line.split(":", 1)[1].strip()
     raise LaunchError("could not extract the TAP interface from setup-bridge output")
@@ -282,14 +279,14 @@ def _install_benchmark_netlog(cfg: dict) -> None:
     if not os.path.exists(env_file):
         _run(["sudo", "mkdir", "-p", "/etc/chutes"])
         content = f"BRIDGE_SUBNET={cfg['bridge_ip']}\nNETLOG_DIR=/var/log/chutes/benchmark-netlog\n"
-        subprocess.run(
+        proc.run(
             ["sudo", "tee", env_file],
             input=content.encode(),
-            stdout=subprocess.DEVNULL,
+            stdout=proc.DEVNULL,
             check=True,
         )
     _run(["sudo", "systemctl", "daemon-reload"])
-    subprocess.run(["sudo", "systemctl", "enable", "benchmark-netlog"], check=False)
+    proc.run(["sudo", "systemctl", "enable", "benchmark-netlog"], check=False)
     _run(["sudo", "systemctl", "restart", "benchmark-netlog"])
     print("✓ benchmark-netlog service installed and running")
 
@@ -297,7 +294,7 @@ def _install_benchmark_netlog(cfg: dict) -> None:
 def _run(cmd: "list[str]") -> None:
     """Run a privileged step from the scripts working directory; raise LaunchError on failure."""
     print(f"  $ {' '.join(cmd)}")
-    if subprocess.run(cmd, cwd=str(SCRIPTS_DIR)).returncode != 0:
+    if proc.run(cmd, cwd=str(SCRIPTS_DIR)).returncode != 0:
         raise LaunchError(f"command failed: {' '.join(cmd)}")
 
 
@@ -422,7 +419,7 @@ def _apply_derived_defaults(cfg: dict, benchmark: bool, ephemeral: bool) -> None
 
     cfg["base_image"] = cfg["base_image"] or "/var/lib/chutes/base-images/tdx-guest"
     if ephemeral:
-        cfg["vm_image_dir"] = "/tmp/chutes-vm-images"
+        cfg["vm_image_dir"] = "/tmp/chutes-vm-images"  # nosec B108
     else:
         cfg["vm_image_dir"] = cfg["vm_image_dir"] or "/var/lib/chutes/vm-images"
 

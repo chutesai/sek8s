@@ -7,9 +7,10 @@ setup logic.  Adding a new Ubuntu version requires one subclass and one
 HOST_PROFILES entry.
 """
 
-import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+from chutes_cvm import proc
 
 
 @dataclass
@@ -170,7 +171,7 @@ HOST_PROFILES: dict[str, HostProfile] = {
 
 def detect_ubuntu_version() -> str:
     """Detect the running Ubuntu version via lsb_release."""
-    result = subprocess.run(
+    result = proc.run(
         ["lsb_release", "-rs"],
         capture_output=True,
         text=True,

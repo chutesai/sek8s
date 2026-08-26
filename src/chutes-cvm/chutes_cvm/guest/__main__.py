@@ -10,10 +10,10 @@ import argparse
 import os
 import platform
 import signal
-import subprocess
 import sys
 import time
 
+from chutes_cvm import proc
 from chutes_cvm.guest.detection import (
     detect_gpu_numa_nodes,
     detect_host_mem_gb,
@@ -40,8 +40,8 @@ from chutes_cvm.guest.qemu import (
 )
 from chutes_cvm.paths import firmware_dir
 
-PIDFILE = "/tmp/tdx-td-pid.pid"
-LOGFILE = "/tmp/tdx-guest-td.log"
+PIDFILE = "/tmp/tdx-td-pid.pid"  # nosec B108
+LOGFILE = "/tmp/tdx-guest-td.log"  # nosec B108
 PROCESS_NAME = "chutes-td"
 
 DEFAULT_MEM = "100G"
@@ -64,7 +64,7 @@ def print_vm_status(ssh_port: int, show_ssh: bool = False):
             if show_ssh:
                 print("Login:")
                 print(f"   ssh -p {ssh_port} root@<host-ip>")
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 
@@ -206,9 +206,9 @@ def launch_vm(args) -> int:
         launch_prefix = ["numactl", f"--interleave={interleave}"]
 
     print("Launching QEMU...")
-    result = subprocess.run(
+    result = proc.run(
         launch_prefix + qemu_cmds.to_args(),
-        stderr=subprocess.STDOUT,
+        stderr=proc.STDOUT,
     )
     if result.returncode != 0:
         print(f"Error: QEMU failed (exit {result.returncode}).", file=sys.stderr)
@@ -274,7 +274,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         stop_existing_vm()
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
     if args.clean:

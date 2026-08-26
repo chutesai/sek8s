@@ -22,9 +22,10 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
+
+from chutes_cvm import proc
 
 
 class MeasurementError(RuntimeError):
@@ -67,18 +68,18 @@ def compute_rtmr1_2(
     with tempfile.TemporaryDirectory() as td:
         meta_path = os.path.join(td, "metadata.json")
         Path(meta_path).write_text(json.dumps(metadata))
-        proc = subprocess.run(
+        result = proc.run(
             [tdx_measure_bin, "--runtime-only", meta_path],
             capture_output=True,
             text=True,
         )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-4:]
+    if result.returncode != 0:
+        tail = (result.stderr or result.stdout or "").strip().splitlines()[-4:]
         raise MeasurementError(
             "tdx-measure --runtime-only failed "
-            f"(exit {proc.returncode}):\n    " + "\n    ".join(tail)
+            f"(exit {result.returncode}):\n    " + "\n    ".join(tail)
         )
-    out = proc.stdout
+    out = result.stdout
     m1, m2 = _RTMR1_RE.search(out), _RTMR2_RE.search(out)
     if not m1 or not m2:
         raise MeasurementError(
@@ -95,17 +96,17 @@ def _detect_ext4_root(image: str, key_args: "list[str] | tuple" = ()) -> str:
 
     ``key_args`` (``--key all:file:<keyfile>``) unlock a LUKS root so the decrypted ext4 shows.
     """
-    proc = subprocess.run(
+    result = proc.run(
         ["guestfish", "--ro", "-a", image, *key_args],
         input="run\nlist-filesystems\n",
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
+    if result.returncode != 0:
         raise MeasurementError(
-            f"guestfish failed to list filesystems: {proc.stderr.strip()}"
+            f"guestfish failed to list filesystems: {result.stderr.strip()}"
         )
-    for line in proc.stdout.splitlines():
+    for line in result.stdout.splitlines():
         # lines look like "/dev/sda2: ext4"
         dev, _, fstype = line.partition(":")
         if fstype.strip() == "ext4":
@@ -164,12 +165,12 @@ def rtmr3_chain(files: list[tuple[str, str]]) -> tuple[str, list[tuple[str, str]
 
 def root_is_luks(image: str) -> bool:
     """True if the image's root is LUKS-encrypted (virt-filesystems prints ``crypto_LUKS``)."""
-    proc = subprocess.run(
+    result = proc.run(
         ["virt-filesystems", "--long", "--all", "-a", image],
         capture_output=True,
         text=True,
     )
-    return "crypto_LUKS" in proc.stdout
+    return "crypto_LUKS" in result.stdout
 
 
 def compute_rtmr3(
@@ -211,13 +212,13 @@ def compute_rtmr3(
         part = root_part or _detect_ext4_root(image, key_args)
         mnt = tempfile.mkdtemp(suffix="-rtmr3")
         try:
-            proc = subprocess.run(
+            result = proc.run(
                 ["guestmount", "--ro", "-a", image, *key_args, "-m", part, mnt],
                 capture_output=True,
                 text=True,
             )
-            if proc.returncode != 0:
-                raise MeasurementError(f"guestmount failed: {proc.stderr.strip()}")
+            if result.returncode != 0:
+                raise MeasurementError(f"guestmount failed: {result.stderr.strip()}")
             try:
                 conf = os.path.join(mnt, "etc/tdx-measure.conf")
                 if not os.path.isfile(conf):
@@ -226,7 +227,7 @@ def compute_rtmr3(
                     )
                 return rtmr3_chain(_measured_files(mnt, conf))
             finally:
-                subprocess.run(["guestunmount", mnt], capture_output=True)
+                proc.run(["guestunmount", mnt], capture_output=True)
         finally:
             try:
                 os.rmdir(mnt)

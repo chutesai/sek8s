@@ -147,7 +147,7 @@ def test_restore_runs_script_when_present(tmp_path):
     with (
         patch("chutes_cvm.host.tune.RESTORE_SCRIPT", restore_path),
         patch("chutes_cvm.host.tune.os.path.isfile", return_value=True),
-        patch("chutes_cvm.host.tune.subprocess.run", run),
+        patch("chutes_cvm.host.tune.proc.run", run),
     ):
         tune.restore_tuning()
 
@@ -159,7 +159,7 @@ def test_restore_is_noop_when_script_missing(tmp_path):
     with (
         patch("chutes_cvm.host.tune.RESTORE_SCRIPT", str(tmp_path / "missing.sh")),
         patch("chutes_cvm.host.tune.os.path.isfile", return_value=False),
-        patch("chutes_cvm.host.tune.subprocess.run", run),
+        patch("chutes_cvm.host.tune.proc.run", run),
     ):
         tune.restore_tuning()
 
@@ -172,7 +172,7 @@ def test_restore_warns_on_nonzero_exit(tmp_path, capsys):
     with (
         patch("chutes_cvm.host.tune.RESTORE_SCRIPT", restore_path),
         patch("chutes_cvm.host.tune.os.path.isfile", return_value=True),
-        patch("chutes_cvm.host.tune.subprocess.run", run),
+        patch("chutes_cvm.host.tune.proc.run", run),
     ):
         tune.restore_tuning()
 

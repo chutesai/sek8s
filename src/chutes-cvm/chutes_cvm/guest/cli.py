@@ -18,9 +18,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 
+from chutes_cvm import proc
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
 
@@ -33,7 +33,7 @@ def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
     if not script.exists():
         print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
         return 1
-    return subprocess.call(["bash", str(script), *argv], cwd=cwd)
+    return proc.call(["bash", str(script), *argv], cwd=cwd)
 
 
 def _cmd_stop(args: argparse.Namespace) -> int:

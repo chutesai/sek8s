@@ -10,9 +10,9 @@ import argparse
 import glob
 import os
 import re
-import subprocess
 import sys
 
+from chutes_cvm import proc
 from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile, resolve_profile
 from chutes_cvm.host.support_matrix import format_topology_matrix
 
@@ -28,7 +28,7 @@ FM_PKG_VERSION = "595.71.05-0ubuntu0.26.04.1"
 def _run(cmd: list[str], **kwargs):
     """Run a command, printing it first. Raises on failure."""
     print(f"  $ {' '.join(cmd)}")
-    subprocess.run(cmd, check=True, **kwargs)
+    proc.run(cmd, check=True, **kwargs)
 
 
 def _add_repo(repo: APTRepo):
@@ -133,7 +133,7 @@ def _fetch_signing_key(fingerprint: str, dest: str):
     """
     url = f"https://keyserver.ubuntu.com/pks/lookup" f"?op=get&search=0x{fingerprint}"
     print(f"  Fetching signing key {fingerprint[:16]}...")
-    subprocess.run(
+    proc.run(
         ["sudo", "curl", "-fsSL", "-o", dest, url],
         check=True,
     )
@@ -159,7 +159,7 @@ def _write_system_file(path: str, content: str):
     _run(
         ["sudo", "tee", path],
         input=content.encode(),
-        stdout=subprocess.DEVNULL,
+        stdout=proc.DEVNULL,
     )
 
 
@@ -189,7 +189,7 @@ def _grub_set_kernel(kernel_version: str):
     grub_cfg = "/boot/grub/grub.cfg"
 
     # MID: awk '/Advanced options for Ubuntu/{print $(NF-1)}' | cut -d\' -f2
-    mid_raw = subprocess.run(
+    mid_raw = proc.run(
         ["awk", "/Advanced options for Ubuntu/{print $(NF-1)}", grub_cfg],
         capture_output=True,
         text=True,
@@ -197,7 +197,7 @@ def _grub_set_kernel(kernel_version: str):
     ).stdout.strip()
     first_mid_line = mid_raw.split("\n", 1)[0] if mid_raw else ""
     if first_mid_line:
-        mid = subprocess.run(
+        mid = proc.run(
             ["cut", "-d'", "-f2"],
             input=first_mid_line,
             capture_output=True,
@@ -208,7 +208,7 @@ def _grub_set_kernel(kernel_version: str):
         mid = ""
 
     # KID: awk "/with Linux $KERNELVER/"'{print $(NF-1)}' | cut -d\' -f2 | head -n1
-    kid_raw = subprocess.run(
+    kid_raw = proc.run(
         ["awk", f"/with Linux {kernel_version}/{{print $(NF-1)}}", grub_cfg],
         capture_output=True,
         text=True,
@@ -219,7 +219,7 @@ def _grub_set_kernel(kernel_version: str):
         raise RuntimeError(
             f"Could not find kernel {kernel_version} in grub.cfg menu entries"
         )
-    kid = subprocess.run(
+    kid = proc.run(
         ["cut", "-d'", "-f2"],
         input=first_kid_line,
         capture_output=True,
@@ -281,7 +281,7 @@ _BLACKWELL_HGX_GPU_IDS = ("10de:2901", "10de:3182")  # B200, B300
 def _detect_blackwell_hgx_gpus() -> bool:
     """Return True if any B200/B300 GPUs are present on this host."""
     try:
-        output = subprocess.run(
+        output = proc.run(
             ["lspci", "-Dnn"],
             capture_output=True,
             text=True,
@@ -292,7 +292,7 @@ def _detect_blackwell_hgx_gpus() -> bool:
             for line in output.stdout.splitlines()
             for gpu_id in _BLACKWELL_HGX_GPU_IDS
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except (proc.TimeoutExpired, OSError):
         return False
 
 
@@ -337,7 +337,7 @@ def _setup_host_fabric_manager():
         print(f"  ✓ {ib_umad_conf} written")
 
     # Load ib_umad now (idempotent — modprobe is a no-op if already loaded).
-    subprocess.run(["sudo", "modprobe", "ib_umad"], check=False)
+    proc.run(["sudo", "modprobe", "ib_umad"], check=False)
 
     # Install host-side FM stack.  The CUDA apt repo is expected to be
     # configured already (same repo used by nvidia-gpu-tools setup).
@@ -354,7 +354,7 @@ def _setup_host_fabric_manager():
     # Conflicts error otherwise.  We don't auto-remove to keep setup safe
     # for clean hosts; the operator must remove the old package manually.
     try:
-        dpkg_out = subprocess.run(
+        dpkg_out = proc.run(
             ["dpkg-query", "-W", "-f", "${db:Status-Abbrev} ${Package}\n"],
             capture_output=True,
             text=True,
@@ -375,7 +375,7 @@ def _setup_host_fabric_manager():
                 f"  sudo apt remove -y {' '.join(stale_fm)}\n"
                 f"Then re-run setup."
             )
-    except (subprocess.TimeoutExpired, OSError, IndexError):
+    except (proc.TimeoutExpired, OSError, IndexError):
         pass
 
     # Pin to the exact version — matches how the Ansible guest role pins
@@ -421,7 +421,7 @@ def _setup_host_fabric_manager():
 
     # Check if already running before enable/start to avoid unnecessary restarts.
     already_running = (
-        subprocess.run(
+        proc.run(
             ["systemctl", "is-active", "--quiet", "nvidia-fabricmanager"],
             check=False,
         ).returncode
@@ -480,7 +480,7 @@ def _blacklist_gpu_drivers():
     # are unloaded here; the nvidia stack is left alone (fabric manager may have
     # loaded it explicitly). rmmod is best-effort — if the module is still bound
     # to devices the per-device unbind at launch handles it.
-    result = subprocess.run(
+    result = proc.run(
         ["lsmod"],
         capture_output=True,
         text=True,
@@ -489,7 +489,7 @@ def _blacklist_gpu_drivers():
     for mod in ("nouveau", "nova_core", "nvidiafb"):
         if mod in loaded:
             print(f"  Unloading {mod} module (currently loaded)...")
-            subprocess.run(["sudo", "rmmod", mod], check=False)
+            proc.run(["sudo", "rmmod", mod], check=False)
             print(f"  ✓ {mod} unloaded")
 
 
@@ -615,12 +615,12 @@ def _setup_ntp():
     print("\nStep: Configuring chrony (NTP, immediate clock step)...")
     # timesyncd only slews; mask it so chrony owns the clock. Tolerant — it may be absent/masked.
     for action in ("stop", "disable", "mask"):
-        subprocess.run(["systemctl", action, "systemd-timesyncd"], check=False)
+        proc.run(["systemctl", action, "systemd-timesyncd"], check=False)
     _write_system_file("/etc/chrony/chrony.conf", _CHRONY_CONF)
     _run(["systemctl", "enable", "--now", "chrony"])
     # Force an immediate step, then best-effort wait for the first sync (never fatal).
-    subprocess.run(["chronyc", "makestep"], check=False)
-    waited = subprocess.run(["chronyc", "waitsync", "60", "1", "0", "1"], check=False)
+    proc.run(["chronyc", "makestep"], check=False)
+    waited = proc.run(["chronyc", "waitsync", "60", "1", "0", "1"], check=False)
     if waited.returncode != 0:
         print(
             "  ⚠ chrony did not confirm sync within 60s — continuing "
@@ -634,7 +634,7 @@ def _ensure_chutes_dirs():
     print("\nStep: Ensuring /var/lib/chutes directories...")
     for d in ("/var/lib/chutes/base-images", "/var/lib/chutes/vm-overlays"):
         os.makedirs(d, exist_ok=True)
-        os.chmod(d, 0o755)
+        os.chmod(d, 0o755)  # nosec B103
         print(f"  {d}")
 
 
@@ -714,7 +714,7 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     # automatically; not all kernel builds ship it (e.g. 25.10 generic).
     modules_extra = f"linux-modules-extra-{kernel_version}"
     print(f"  Ensuring {modules_extra} is installed...")
-    result = subprocess.run(
+    result = proc.run(
         ["apt", "install", "--yes", "--allow-downgrades", modules_extra],
     )
     if result.returncode != 0:

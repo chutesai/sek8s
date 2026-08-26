@@ -23,8 +23,9 @@ from __future__ import annotations
 import argparse
 import glob
 import os
-import subprocess
 import sys
+
+from chutes_cvm import proc
 
 # Written by apply_tuning(); consumed by restore_tuning(). Stored under
 # /var/lib/chutes/ so it survives /tmp cleanups while the VM is running.
@@ -47,12 +48,12 @@ def _write_root(path: str, value: str) -> None:
         with open(path, "w") as f:
             f.write(value)
         return
-    subprocess.run(
+    proc.run(
         ["sudo", "tee", path],
         input=value,
         text=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=proc.DEVNULL,
+        stderr=proc.DEVNULL,
         check=False,
     )
 
@@ -110,7 +111,7 @@ def apply_tuning() -> None:
             os.makedirs(os.path.dirname(RESTORE_SCRIPT), exist_ok=True)
             with open(RESTORE_SCRIPT, "w") as f:
                 f.write("\n".join(restore_cmds) + "\n")
-            os.chmod(RESTORE_SCRIPT, 0o755)
+            os.chmod(RESTORE_SCRIPT, 0o755)  # nosec B103
             print(f"Restore snapshot written to {RESTORE_SCRIPT}")
         except OSError as exc:
             print(f"Warning: could not write restore script: {exc}")
@@ -125,7 +126,7 @@ def restore_tuning() -> None:
         print("Nothing to restore: no tuning snapshot found.")
         return
     print("Restoring host CPU settings...")
-    result = subprocess.run([RESTORE_SCRIPT], check=False)
+    result = proc.run([RESTORE_SCRIPT], check=False)
     if result.returncode != 0:
         print(f"Warning: restore script exited {result.returncode}")
 

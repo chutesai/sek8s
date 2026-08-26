@@ -5,7 +5,7 @@ bundled in the package is pip-installed into the chutes-cvm venv and symlinked o
 module only verifies it is present and runs — it does not install it lazily.
 """
 
-import subprocess
+from chutes_cvm import proc
 
 
 def _cli_healthy() -> bool:
@@ -16,14 +16,14 @@ def _cli_healthy() -> bool:
     bumps the system Python leaves the symlink resolving but the wheel's modules unreachable, so
     the CLI raises ModuleNotFoundError. Verify it runs (``--help`` exits 0), not just ``which``.
     """
-    which = subprocess.run(["which", "nvidia-gpu-tools"], capture_output=True)
+    which = proc.run(["which", "nvidia-gpu-tools"], capture_output=True)
     if which.returncode != 0:
         return False
     try:
-        probe = subprocess.run(
+        probe = proc.run(
             ["nvidia-gpu-tools", "--help"], capture_output=True, timeout=15
         )
-    except (subprocess.TimeoutExpired, OSError):
+    except (proc.TimeoutExpired, OSError):
         return False
     return probe.returncode == 0
 

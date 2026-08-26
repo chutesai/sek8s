@@ -78,7 +78,7 @@ def build_topology_spec(
     """
     gpu_topology = fingerprint.gpu
     numa = isinstance(gpu_topology, NumaTopology)
-    if numa:
+    if isinstance(gpu_topology, NumaTopology):
         gpu_nodes: list[int] = list(gpu_topology.gpu_nodes)
         nvsw_nodes: list[int] = list(gpu_topology.nvswitch_nodes)
         ib_nodes: list[int] = list(gpu_topology.ib_nodes)

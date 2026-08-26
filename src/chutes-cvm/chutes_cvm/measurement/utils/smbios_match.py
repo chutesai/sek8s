@@ -53,7 +53,10 @@ def real_smbios_digest(ccel: Path) -> bytes:
         raise SystemExit("No EV_EFI_HANDOFF_TABLES event in RTMR0 of this CCEL")
     if len(hits) > 1:
         print(f"warning: {len(hits)} handoff-tables events; using the first")
-    return hits[0].digest(RTMR_ALG)
+    digest = hits[0].digest(RTMR_ALG)
+    if digest is None:
+        raise SystemExit("EV_EFI_HANDOFF_TABLES event has no digest for the RTMR alg")
+    return digest
 
 
 def candidates(d: Path) -> dict[str, bytes]:

@@ -60,9 +60,9 @@ import hashlib
 import json
 import os
 import shlex
-import subprocess
 import sys
 
+from chutes_cvm import proc
 from chutes_cvm.paths import SCRIPTS_DIR
 
 # Roles in the manifest. The on-disk filename for each is the qcow2 basename with the
@@ -202,7 +202,7 @@ def _cmd_download(args: argparse.Namespace) -> int:
             f"chutes-cvm: download-image-set.sh not found at {script}", file=sys.stderr
         )
         return 1
-    return subprocess.call(["bash", str(script), base])
+    return proc.call(["bash", str(script), base])
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:

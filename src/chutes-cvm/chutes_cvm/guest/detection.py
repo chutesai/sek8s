@@ -8,8 +8,8 @@ import glob
 import os
 import platform
 import re
-import subprocess
 
+from chutes_cvm import proc
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
 from chutes_cvm.guest.gpu.topology import (
@@ -115,7 +115,7 @@ def detect_host_cpu_identity() -> "tuple[str | None, str | None]":
     except (OSError, ValueError):
         pass
     processor_id = None
-    if None not in (fam, model, step):
+    if fam is not None and model is not None and step is not None:
         base_fam = fam if fam < 0xF else 0xF
         ext_fam = (fam - 0xF) if fam >= 0xF else 0
         eax = (
@@ -149,13 +149,13 @@ def detect_os_version() -> str | None:
 def detect_qemu_version() -> str | None:
     """Return the host qemu-system-x86_64 upstream version (e.g. '10.2.1'), or None."""
     try:
-        out = subprocess.run(
+        out = proc.run(
             ["qemu-system-x86_64", "--version"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+    except (FileNotFoundError, proc.TimeoutExpired, OSError):
         return None
     match = re.search(r"version (\d+(?:\.\d+)*)", out.stdout)
     return match.group(1) if match else None
@@ -175,6 +175,11 @@ def verify_host_qemu_supported() -> None:
             "(`qemu-system-x86_64 --version`). Install qemu-system-x86 and retry."
         )
     os_version = detect_os_version()
+    if os_version is None:
+        raise ValueError(
+            "Could not determine the host OS release (/etc/os-release); "
+            "cannot verify the expected QEMU version."
+        )
     expected = SUPPORTED_QEMU_BY_OS.get(os_version)
     if expected is None:
         raise ValueError(
@@ -209,7 +214,7 @@ def _lspci_lines(vendor: str) -> list[str]:
     -D ensures BDFs are always in full domain form (0000:bb:dd.f),
     matching nvidia-gpu-tools output and sysfs expectations.
     """
-    output = subprocess.check_output(["lspci", "-Dnn"], stderr=subprocess.STDOUT)
+    output = proc.check_output(["lspci", "-Dnn"], stderr=proc.STDOUT)
     return [line for line in output.decode().splitlines() if vendor in line]
 
 
@@ -287,7 +292,7 @@ def get_gpu_bdfs() -> list[str] | None:
     """
     try:
         cmd = ensure_gpu_tools_available()
-        out = subprocess.run(
+        out = proc.run(
             [cmd, "--query-cc-mode"],
             capture_output=True,
             text=True,
@@ -305,7 +310,7 @@ def get_gpu_bdfs() -> list[str] | None:
             if m:
                 bdfs.append(m.group(1))
         return sorted(bdfs) if bdfs else None
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, RuntimeError):
+    except (FileNotFoundError, proc.TimeoutExpired, ValueError, RuntimeError):
         return None
 
 
@@ -337,19 +342,27 @@ def host_topology_fingerprint(
     (NumaTopology); otherwise the guest is flat and only counts matter (FlatTopology).
     Same fingerprint => same RTMR0 for a given profile + QEMU + image."""
     host_cpus = detect_host_cpus()
-    vcpus = host_cpus - profile.host_reserved_cpus if host_cpus is not None else None
     host_gb = detect_host_mem_gb()
-    mem_gb = (
-        profile.guest_mem_gb(host_gb, len(gpu_bdfs)) if host_gb is not None else None
-    )
+    sockets = detect_host_sockets()
     cpu_vendor, cpu_processor_id = detect_host_cpu_identity()
+    # A fingerprint's fields are concrete (they must match a baseline exactly), so a host we
+    # can't fully read cannot be fingerprinted — fail loudly rather than emit a None-filled
+    # fingerprint that could never match.
+    if host_cpus is None or host_gb is None or sockets is None or cpu_vendor is None:
+        raise ValueError(
+            "Cannot fingerprint this host — failed to detect "
+            f"cpus={host_cpus}, mem_gb={host_gb}, sockets={sockets}, vendor={cpu_vendor!r}."
+        )
+    vcpus = host_cpus - profile.host_reserved_cpus
+    mem_gb = profile.guest_mem_gb(host_gb, len(gpu_bdfs))
     cpu = CpuTopology(
         vcpus=vcpus,
-        sockets=detect_host_sockets(),
+        sockets=sockets,
         cpu_vendor=cpu_vendor,
         cpu_processor_id=cpu_processor_id,
     )
     node_count = detect_numa_node_count()
+    gpu: "NumaTopology | FlatTopology"
     if profile.enable_numa_topology and node_count == 2:
         gpu = NumaTopology(
             gpu_nodes=_device_numa_layout(gpu_bdfs),
@@ -434,7 +447,7 @@ def detect_cx7_bridge_pfs() -> list[str]:
         if _is_vf(bdf):
             continue
         try:
-            result = subprocess.run(
+            result = proc.run(
                 ["lspci", "-vv", "-s", bdf],
                 capture_output=True,
                 text=True,
@@ -442,7 +455,7 @@ def detect_cx7_bridge_pfs() -> list[str]:
             )
             if "SMDL=SW_MNG" in result.stdout:
                 bridge_pfs.append(bdf)
-        except (subprocess.TimeoutExpired, OSError):
+        except (proc.TimeoutExpired, OSError):
             continue
     return sorted(bridge_pfs)
 

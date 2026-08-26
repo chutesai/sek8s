@@ -80,7 +80,7 @@ def test_image_dispatches_to_engine():
 def test_image_download_selects_production_by_default():
     from chutes_cvm.guest import image_set
 
-    with patch("chutes_cvm.guest.image_set.subprocess.call", return_value=0) as call:
+    with patch("chutes_cvm.guest.image_set.proc.call", return_value=0) as call:
         assert image_set.main(["download"]) == 0
     # download-image-set.sh is invoked with the production variant.
     assert call.call_args.args[0][-1] == "tdx-guest"
@@ -89,7 +89,7 @@ def test_image_download_selects_production_by_default():
 def test_image_download_debug_flag_selects_debug_set():
     from chutes_cvm.guest import image_set
 
-    with patch("chutes_cvm.guest.image_set.subprocess.call", return_value=0) as call:
+    with patch("chutes_cvm.guest.image_set.proc.call", return_value=0) as call:
         assert image_set.main(["download", "--debug"]) == 0
     assert call.call_args.args[0][-1] == "tdx-guest-debug"
 

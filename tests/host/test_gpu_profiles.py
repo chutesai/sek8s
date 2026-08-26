@@ -403,7 +403,7 @@ def test_detect_qemu_version_parses_upstream_version():
         (),
         {"stdout": "QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.1)\n"},
     )()
-    with patch("chutes_cvm.guest.detection.subprocess.run", return_value=fake):
+    with patch("chutes_cvm.guest.detection.proc.run", return_value=fake):
         assert detection.detect_qemu_version() == "10.2.1"
 
 

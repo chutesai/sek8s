@@ -24,7 +24,7 @@ _FAKE_CMD = QemuCommand(
     return_value=("/k", "/i", "root=UUID=x ro"),
 )
 @patch("chutes_cvm.guest.__main__.verify_host_qemu_supported")
-@patch("chutes_cvm.guest.__main__.subprocess.run")
+@patch("chutes_cvm.guest.__main__.proc.run")
 @patch("chutes_cvm.guest.__main__.setup_passthrough")
 @patch("chutes_cvm.guest.__main__.add_vsock")
 @patch("chutes_cvm.guest.__main__.add_volumes")

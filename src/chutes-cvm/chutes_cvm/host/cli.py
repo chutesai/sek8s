@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
 import sys
 
+from chutes_cvm import proc
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
@@ -31,7 +31,7 @@ def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
     if not script.exists():
         print(f"chutes-cvm: {name} not found at {script}", file=sys.stderr)
         return 1
-    return subprocess.call(["bash", str(script), *argv], cwd=cwd)
+    return proc.call(["bash", str(script), *argv], cwd=cwd)
 
 
 # verify/submit exit codes → (banner label, ANSI attributes).

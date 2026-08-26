@@ -297,7 +297,7 @@ def test_every_profile_base_packages_include_host_deps(version):
 
 @patch("chutes_cvm.host.setup._run")
 @patch("chutes_cvm.host.setup._write_system_file")
-@patch("chutes_cvm.host.setup.subprocess.run", return_value=MagicMock(returncode=0))
+@patch("chutes_cvm.host.setup.proc.run", return_value=MagicMock(returncode=0))
 def test_setup_ntp_masks_timesyncd_writes_conf_and_enables_chrony(
     mock_sub, mock_write, mock_run
 ):
@@ -316,7 +316,7 @@ def test_setup_ntp_masks_timesyncd_writes_conf_and_enables_chrony(
     )
 
 
-@patch("chutes_cvm.host.setup.subprocess.run", return_value=MagicMock(returncode=1))
+@patch("chutes_cvm.host.setup.proc.run", return_value=MagicMock(returncode=1))
 @patch("chutes_cvm.host.setup._write_system_file")
 @patch("chutes_cvm.host.setup._run")
 def test_setup_ntp_tolerates_waitsync_failure(mock_run, mock_write, mock_sub):

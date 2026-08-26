@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import yaml
+from chutes_cvm import proc
 from substrateinterface import Keypair, KeypairType
 
 DEFAULT_API_BASE = "https://api.chutes.ai"
@@ -62,16 +62,16 @@ def _discover_profile_json(scripts_dir: str) -> str:
     script = Path(scripts_dir) / "discover-profile.sh"
     if not script.exists():
         raise PreflightError(f"discover-profile.sh not found at {script}")
-    proc = subprocess.run(
+    result = proc.run(
         ["bash", str(script), "--json-only"],
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
+    if result.returncode != 0:
         raise PreflightError(
-            f"discover-profile.sh failed: {proc.stderr.strip() or 'no output'}"
+            f"discover-profile.sh failed: {result.stderr.strip() or 'no output'}"
         )
-    lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     if not lines:
         raise PreflightError("discover-profile.sh produced no JSON file path")
     path = Path(lines[-1].strip())
@@ -148,7 +148,7 @@ def _post(
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # nosec B310
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         detail = f"HTTP {exc.code}"
@@ -157,7 +157,7 @@ def _post(
             detail = (
                 err.get("detail") or err.get("message") or err.get("error") or detail
             )
-        except Exception:
+        except Exception:  # nosec B110
             pass
         raise PreflightError(f"API rejected the submission ({exc.code}): {detail}")
     except urllib.error.URLError as exc:

@@ -41,13 +41,13 @@ import argparse
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from chutes_cvm import proc
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.measurement import ccel_replay as cc
 from chutes_cvm.measurement.platform_tables import MeasurementMetadata
@@ -193,7 +193,7 @@ def generate_acpi_blobs(
     # so a metadata path immediately after `dist` would be greedily eaten as the version.
     # Capture the output (the fork's docker build log is very noisy) and, on failure,
     # raise just the tail — the caller renders it as a one-line PENDING reason.
-    proc = subprocess.run(
+    result = proc.run(
         [
             tdx_measure_bin,
             str(meta_path),
@@ -206,13 +206,13 @@ def generate_acpi_blobs(
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0:
+    if result.returncode != 0:
         tail = "\n    ".join(
-            (proc.stderr or proc.stdout or "").strip().splitlines()[-4:]
+            (result.stderr or result.stdout or "").strip().splitlines()[-4:]
         )
         raise RuntimeError(
             f"tdx-measure --create-acpi-tables (dist={dist}) failed "
-            f"(exit {proc.returncode}):\n    {tail}"
+            f"(exit {result.returncode}):\n    {tail}"
         )
     return json.loads(result_path.read_text())
 

@@ -72,7 +72,7 @@ def graceful_shutdown(config_path: "str | None", timeout: float = 10.0) -> str:
     )
     print(f"Requesting graceful shutdown of the guest at {vm_ip} …")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode(errors="replace")[:200]
