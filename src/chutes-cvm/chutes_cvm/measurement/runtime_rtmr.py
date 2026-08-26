@@ -53,7 +53,9 @@ def compute_rtmr1_2(
     direct-boot mode. Returns bare uppercase hex. Needs the fork on PATH (or an absolute
     ``tdx_measure_bin``); no TDX/GPU/topology input.
     """
-    base = os.path.splitext(image)[0]
+    # Absolute so the paths written into metadata.json resolve correctly — the tdx-measure fork
+    # opens them relative to the metadata file (a temp dir), not this process's cwd.
+    base = os.path.splitext(os.path.abspath(image))[0]
     kernel, initrd = base + ".vmlinuz", base + ".initrd"
     cmdline_file = base + ".cmdline"
     for f in (kernel, initrd, cmdline_file):
@@ -186,6 +188,8 @@ def compute_rtmr3(
     Returns (uppercase hex, per-file [(sha384hex, root-relative path)]). Requires guestmount
     (libguestfs-tools). ``root_part`` overrides the ext4 auto-detection.
     """
+    # Absolute so guestmount/guestfish don't depend on this process's cwd.
+    image = os.path.abspath(image)
     if not os.path.isfile(image):
         raise MeasurementError(f"image not found: {image}")
     if not _have("guestmount") or not _have("guestfish"):

@@ -7,6 +7,8 @@ tdx-measure subprocesses are mocked; the SHA-384 math is real.
 
 import argparse
 import hashlib
+import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -104,6 +106,27 @@ def test_compute_rtmr1_2_unparseable_output_raises(tmp_path):
     with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=fake):
         with pytest.raises(rr.MeasurementError, match="could not parse"):
             rr.compute_rtmr1_2(image)
+
+
+def test_compute_rtmr1_2_metadata_paths_are_absolute(tmp_path, monkeypatch):
+    """A relative --image must yield ABSOLUTE kernel/initrd paths in the tdx-measure metadata:
+    the fork resolves them relative to the metadata file (a temp dir), not the caller's cwd.
+    """
+    _stage_artifacts(tmp_path)  # stages img.{vmlinuz,initrd,cmdline} under tmp_path
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        # cmd = [tdx-measure, --runtime-only, <meta_path>]; read what got written.
+        captured.update(json.loads(Path(cmd[2]).read_text())["direct"])
+        return MagicMock(returncode=0, stdout="RTMR1: aa\nRTMR2: bb\n", stderr="")
+
+    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", side_effect=_fake_run):
+        rr.compute_rtmr1_2("img.qcow2")  # relative path
+
+    assert os.path.isabs(captured["kernel"])
+    assert captured["kernel"] == str(tmp_path / "img.vmlinuz")
+    assert captured["initrd"] == str(tmp_path / "img.initrd")
 
 
 # ── RTMR3 LUKS handling (always fresh; unlock with LUKS_PASSPHRASE) ─────────────
