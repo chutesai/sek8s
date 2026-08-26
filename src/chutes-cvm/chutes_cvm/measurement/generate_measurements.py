@@ -6,6 +6,11 @@ host profiles (`GET /servers/tdx/host_profiles`) and produces one entry per clas
 API's fingerprint through onto it so the reconciler can join the published measurement to the
 submitted host profile. RTMR generation itself is offline (fork + Docker; no TDX/GPU).
 
+By default only *measured* host classes are processed — the set a third party can verify against
+an already-published measurement. `--include-pending` also processes classes awaiting generation
+(the generator's queue: a newly submitted profile is "pending" until its measurement exists), which
+is what the release build passes to turn new submissions into published measurements.
+
 `generate` (no --register) computes the whole block for an image version — MRTD +
 per-topology RTMR0 + RTMR1/RTMR2 (from the staged direct-boot artifacts) + RTMR3
 (over the encrypted root's /etc/tdx-measure.conf files) — and writes measurements.yaml.
@@ -240,14 +245,21 @@ def generate_acpi_blobs(
 # ── Host profiles (from the API) → per-topology generation inputs ──────────────
 
 
-def fetch_host_profiles(api_base: str) -> list[dict]:
-    """GET the published host profiles: ``[{"fingerprint", "profile"}, ...]``.
+def fetch_host_profiles(api_base: str, include_pending: bool = False) -> list[dict]:
+    """GET the published host profiles: ``[{"fingerprint", "measured", "profile"}, ...]``.
 
     The API owns the fingerprint and is the source of truth for known host classes. This public,
     unauthenticated endpoint returns each stored discover-profile document plus its 64-hex
     fingerprint; the generator builds one measurement per profile and carries the fingerprint
-    through verbatim (never recomputed)."""
+    through verbatim (never recomputed).
+
+    Default is measured-only — the host classes a third party can verify against a published
+    measurement. ``include_pending`` also returns classes awaiting generation (the generator's
+    queue: a submitted profile is only "measured" once its measurement exists, so generation must
+    fetch the pending set first)."""
     url = f"{api_base.rstrip('/')}{_HOST_PROFILES_PATH}"
+    if include_pending:
+        url += "?include_pending=true"
     req = urllib.request.Request(
         url, headers={"User-Agent": "chutes-cvm-measurements/1.0"}
     )
@@ -356,7 +368,7 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             )
         return (out.get("rtmr0") or "").upper(), out.get("mrtd", "")
 
-    records = fetch_host_profiles(args.api_base)
+    records = fetch_host_profiles(args.api_base, args.include_pending)
     hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
     mrtds: set[str] = set()
     pending: list[str] = []
@@ -567,13 +579,14 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     """List the published host classes the API knows — the profiles `generate` builds
-    measurements for. Prints ``<fingerprint>  <count>x [<pci_device_ids>]`` per class.
+    measurements for. Prints ``<fingerprint> [pending] <count>x [<pci_device_ids>]`` per class.
     """
-    for record in fetch_host_profiles(args.api_base):
+    for record in fetch_host_profiles(args.api_base, args.include_pending):
         fp = record.get("fingerprint") or "<no-fingerprint>"
+        state = "" if record.get("measured", True) else " [pending]"
         gpu = (record.get("profile") or {}).get("gpu") or {}
         ids = ",".join(gpu.get("pci_device_ids") or []) or "?"
-        print(f"{fp}  {gpu.get('count', '?')}x [{ids}]")
+        print(f"{fp}{state}  {gpu.get('count', '?')}x [{ids}]")
     return 0
 
 
@@ -583,6 +596,13 @@ def _add_api_arg(p: argparse.ArgumentParser) -> None:
         default=os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE,
         help="control-plane base URL for the host-profile source "
         f"(default: {DEFAULT_API_BASE}; env CHUTES_API_BASE)",
+    )
+    p.add_argument(
+        "--include-pending",
+        action="store_true",
+        help="also process host classes awaiting measurement generation (the generator's "
+        "queue — use after a new host profile is submitted); default is measured classes only, "
+        "which is what third parties verify against published measurements",
     )
 
 

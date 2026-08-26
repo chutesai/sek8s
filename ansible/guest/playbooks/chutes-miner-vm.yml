@@ -516,6 +516,10 @@
           # Source of the known host classes + their fingerprints (the build host must reach it).
           - --api-base
           - "{{ measurements_api_base | default('https://api.chutes.ai') }}"
+          # This build is the measurement generator, so it processes the full queue — including
+          # host classes awaiting generation (a newly submitted profile is 'pending' until its
+          # measurement exists here). Third-party verification runs omit this and see measured only.
+          - --include-pending
       environment:
         # RTMR3 mounts the root; LUKS_PASSPHRASE unlocks it when the image is encrypted (prod).
         LUKS_PASSPHRASE: "{{ luks_passphrase | default('') }}"

@@ -350,30 +350,54 @@ def test_topology_from_profile_rejects_unknown_device():
         gm.topology_from_profile({"gpu": {"pci_device_ids": ["dead"], "count": 8}})
 
 
-def test_fetch_host_profiles_parses_list(monkeypatch):
-    payload = [{"fingerprint": "a" * 64, "profile": _H200_DOC}]
+class _Resp:
+    def __init__(self, payload):
+        self._payload = payload
 
-    class _Resp:
-        def __enter__(self):
-            return self
+    def __enter__(self):
+        return self
 
-        def __exit__(self, *a):
-            return False
+    def __exit__(self, *a):
+        return False
 
-        def read(self):
-            return json.dumps(payload).encode()
+    def read(self):
+        return json.dumps(self._payload).encode()
+
+
+def _fetch_capturing_url(include_pending):
+    payload = [{"fingerprint": "a" * 64, "measured": True, "profile": _H200_DOC}]
+    seen = {}
+
+    def _urlopen(req, *a, **k):
+        seen["url"] = req.full_url
+        return _Resp(payload)
 
     with patch(
         "chutes_cvm.measurement.generate_measurements.urllib.request.urlopen",
-        return_value=_Resp(),
+        side_effect=_urlopen,
     ):
-        out = gm.fetch_host_profiles("https://api.example")
-    assert out == payload
+        out = gm.fetch_host_profiles(
+            "https://api.example", include_pending=include_pending
+        )
+    return out, seen["url"]
+
+
+def test_fetch_host_profiles_measured_only_by_default():
+    out, url = _fetch_capturing_url(include_pending=False)
+    assert out[0]["fingerprint"] == "a" * 64
+    assert url.endswith("/servers/tdx/host_profiles")
+    assert "include_pending" not in url
+
+
+def test_fetch_host_profiles_include_pending_adds_query():
+    _, url = _fetch_capturing_url(include_pending=True)
+    assert url.endswith("/servers/tdx/host_profiles?include_pending=true")
 
 
 def _rtmr0_args(**over):
     d = dict(
         api_base="https://api.example",
+        include_pending=False,
         bios_dir="/fw",
         tdx_measure_bin="tdx-measure",
         dist="ubuntu:26.04",

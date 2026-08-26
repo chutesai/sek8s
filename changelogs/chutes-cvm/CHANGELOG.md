@@ -17,7 +17,10 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
     The reconciler joins published measurements to submitted host profiles on that fingerprint, so it
     is required — an entry without one is unmatchable ("pending" forever even though it launches). The
     in-repo baseline registry (`known_topologies`, `GpuProfile.baselined_measurements`) is removed:
-    adding hardware is `chutes-cvm host submit-profile`, not a code change here.
+    adding hardware is `chutes-cvm host submit-profile`, not a code change here. By default only
+    *measured* classes are processed (what a third party can verify); **`--include-pending`** also
+    processes classes awaiting generation (the generator's queue), which the release build passes to
+    turn newly submitted profiles into published measurements.
   - **`generate`** — with no `--register`, computes EVERY register in one POST-LUKS call — mrtd +
     RTMR0 (all API host classes) + RTMR1/RTMR2 (the image's staged direct-boot artifacts) + RTMR3
     (mounting the root, unlocking it with `LUKS_PASSPHRASE`) — and writes the version's single
