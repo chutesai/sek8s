@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""Offline per-topology RTMR0 generator → teeMeasurements block.
+"""Offline TDX measurements generator → the version's teeMeasurements block.
 
-Implements the release-time generator from local/offline-rtmr0-findings.md §7:
+`generate` (no --register) computes the whole block for an image version — MRTD +
+per-topology RTMR0 + RTMR1/RTMR2 (from the staged direct-boot artifacts) + RTMR3
+(over the encrypted root's /etc/tdx-measure.conf files) — and writes measurements.yaml.
+`--register {rtmr0,rtmr3}` narrows it to one register (standalone partials for the
+GPU-VM build, which has no aggregation). `list` enumerates supported topologies.
+
+The bulk of this module is the novel part — offline per-topology RTMR0 generation (no
+guest boot), from local/offline-rtmr0-findings.md §7:
 RTMR0 is a SHA-384 chain over the CCEL's MrIndex==1 records — 14 events on this
 branch's direct boot (19 on indirect, with the #15-18 boot variables) — of which
 **5 vary** per topology and the rest are constant (firmware/boot). From one baseline
@@ -571,11 +578,6 @@ def main(argv: list[str] | None = None) -> int:
         "--root-part",
         default=None,
         help="ext4 root partition device for --register rtmr3 (default: auto-detect via guestfish)",
-    )
-    gen.add_argument(
-        "--baseline",
-        default="",
-        help="DEPRECATED (accepted-but-ignored): the fork self-generates the complete RTMR0.",
     )
     gen.set_defaults(func=_cmd_generate)
 

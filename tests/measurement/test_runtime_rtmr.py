@@ -156,7 +156,6 @@ def _gen_args(**over):
         image="final.qcow2",
         output="-",
         root_part=None,
-        baseline="",
         profile="",
         qemu="10.2.1",
         tdx_measure_bin="tdx-measure",
