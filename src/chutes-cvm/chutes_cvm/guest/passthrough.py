@@ -1,6 +1,5 @@
 """GPU passthrough for QEMU using per-SKU GpuProfile rules."""
 
-import os
 import time
 
 from chutes_cvm import proc
@@ -32,6 +31,7 @@ from chutes_cvm.guest.vfio import (
     unbind_stale_vfio_devices,
     wait_pci_operations_idle,
 )
+from chutes_cvm.paths import SCRIPTS_DIR
 
 _gpu_tools_cmd: str | None = None
 
@@ -91,13 +91,8 @@ def _check_fabric_manager(profile: GpuProfile):
         "The NVSwitch fabric will not initialize properly without it, causing "
         "GPU ERR! states in the guest.\n"
         "Run host setup to install and start it:\n"
-        "  python3 host-tools/scripts/chutes/host/setup.py"
+        "  chutes-cvm host setup"
     )
-
-
-def _scripts_dir() -> str:
-    """Return the host-tools/scripts/ directory."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def _configure_nvswitches(
@@ -257,7 +252,7 @@ def _prepare_devices(
     print("  Binding devices to vfio-pci (explicit BDF list)...")
     bind_explicit_devices_to_vfio(all_devices)
 
-    install_udev_rules(_scripts_dir())
+    install_udev_rules(str(SCRIPTS_DIR))
 
 
 def _build_pci_topology(
