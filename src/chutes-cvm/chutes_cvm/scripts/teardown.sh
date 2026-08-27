@@ -3,16 +3,16 @@
 #
 # Invoked by `chutes-cvm guest down` (guest/cli.py _cmd_down), which resolves the network values from
 # config in Python and passes them as flags so bridge cleanup uses the right PUBLIC_IFACE /
-# BRIDGE_IP / VM_IP. Stops the VM (via `chutes-cvm guest stop`), tears the bridge down, and stops the
-# benchmark-netlog service.
+# BRIDGE_IP / VM_IP. Force-kills the VM (via `chutes-cvm guest stop --force`), tears the bridge down,
+# and stops the benchmark-netlog service.
 #
 # For a VM-only stop that LEAVES the shared bridge in place (e.g. the measurement capture
 # VM), use `chutes-cvm guest stop` directly instead of this.
 #
 #   teardown.sh [--bridge-ip IP/CIDR] [--vm-ip IP] [--public-iface IFACE] [--no-stop]
 #
-# --no-stop: skip the force-kill (`chutes-cvm guest stop`) — the caller already asked the guest to power
-# off gracefully (chutes-cvm guest down); we still wait for it to exit, then clean the bridge/netlog.
+# --no-stop: skip the force-kill (`chutes-cvm guest stop --force`) — the caller already asked the guest
+# to power off gracefully (chutes-cvm guest down); we still wait for it to exit, then clean up.
 set -euo pipefail
 
 # Defaults mirror the launch orchestrator (chutes_cvm.guest.launch; used when a flag is omitted).
@@ -44,8 +44,9 @@ echo "=== Cleaning Up TEE VM Environment ==="
 if [[ "$NO_STOP" == "true" ]]; then
   echo "Graceful shutdown already requested; waiting for the guest to power off..."
 else
-  echo "Stopping Chutes VM (if running)..."
-  chutes-cvm guest stop 2>/dev/null || true
+  echo "Force-stopping Chutes VM (if running)..."
+  # --force: this is teardown's hard-kill step; `guest stop` alone now powers off gracefully.
+  chutes-cvm guest stop --force 2>/dev/null || true
 fi
 
 echo "Waiting for VM processes to exit..."

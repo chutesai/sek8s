@@ -1,8 +1,10 @@
 """Tests for the `chutes-cvm guest <verb>` dispatcher (chutes_cvm.guest.cli).
 
 The guest noun groups the TDX VM runtime lifecycle: launch (forwarded to the Python
-orchestrator), stop, and down (graceful-by-default via the guest API, --force to force-kill).
-GPU/PCI hardware ops (reset-gpus / vfio-wedged) live under `host` — see test_host_cli.py.
+orchestrator), stop, and down. Both stop and down shut the guest off gracefully via the
+system-manager API by default (--force force-kills QEMU); down additionally tears down the
+bridge/benchmark-netlog. GPU/PCI hardware ops (reset-gpus / vfio-wedged) live under `host` —
+see test_host_cli.py.
 """
 
 from unittest.mock import patch
@@ -27,10 +29,37 @@ def test_launch_forwards_to_python_orchestrator():
     assert orch.call_args.args[0] == ["config.yaml", "--benchmark"]
 
 
-def test_stop_calls_stop_existing_vm():
-    with patch("chutes_cvm.guest.__main__.stop_existing_vm") as stop:
-        assert guestcli.main(["stop"]) == 0
-    stop.assert_called_once_with()
+def test_stop_is_graceful_by_default():
+    # `guest stop` asks the guest to power off via the API — no force-kill, no bridge teardown.
+    with patch(
+        "chutes_cvm.guest.shutdown.graceful_shutdown", return_value="192.168.100.2"
+    ) as graceful, patch("chutes_cvm.guest.__main__.stop_existing_vm") as kill, patch(
+        "chutes_cvm.guest.cli._run_script", return_value=0
+    ) as run:
+        assert guestcli.main(["stop", "--config", "/nope/config.yaml"]) == 0
+    graceful.assert_called_once()
+    kill.assert_not_called()
+    run.assert_not_called()  # stop leaves the bridge/volumes in place
+
+
+def test_stop_force_kills_without_teardown():
+    with patch("chutes_cvm.guest.__main__.stop_existing_vm") as kill, patch(
+        "chutes_cvm.guest.cli._run_script", return_value=0
+    ) as run:
+        assert guestcli.main(["stop", "--force"]) == 0
+    kill.assert_called_once_with()
+    run.assert_not_called()  # still no teardown — that is `down`'s job
+
+
+def test_stop_graceful_failure_suggests_force(capsys):
+    from chutes_cvm.guest.shutdown import ShutdownError
+
+    with patch(
+        "chutes_cvm.guest.shutdown.graceful_shutdown",
+        side_effect=ShutdownError("unreachable"),
+    ):
+        assert guestcli.main(["stop", "--config", "/nope/config.yaml"]) == 1
+    assert "--force" in capsys.readouterr().err
 
 
 def test_down_force_kills_and_tears_down():

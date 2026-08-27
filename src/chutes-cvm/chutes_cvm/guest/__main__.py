@@ -69,7 +69,7 @@ def print_vm_status(ssh_port: int, show_ssh: bool = False):
 
 
 def stop_existing_vm():
-    print("Clean VM")
+    print("Force-stopping VM (SIGTERM to QEMU)...")
     try:
         with open(PIDFILE) as pid_file:
             pid = int(pid_file.read().strip())

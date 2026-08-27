@@ -77,15 +77,17 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   just like a production image's, which the `(version, rc)` join checks directly.
 - **`chutes-cvm image download` / `config init` / `guest stop` / `guest down`** — the launch
   orchestrator's modes that used to be flags are now first-class commands: `image download [--debug]`
-  fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` stops
-  only the VM (leaving the bridge up), and `guest down` tears the whole environment down (VM + bridge
-  + benchmark-netlog).
-- **`chutes-cvm guest down` shuts the guest down gracefully by default.** It POSTs a hotkey-signed
-  request to the guest system-manager API (`http://<vm_ip>:8080/status/system/shutdown`, the same
-  endpoint the chutes-miner control plane uses) so the VM powers off cleanly — a miner can shut
-  down gracefully with only their config.yaml, no chutes-miner CLI needed — then tears down the
-  host-side bridge + netlog. `--force` skips the API and force-kills QEMU (the previous behavior);
-  a graceful attempt that can't reach the API stops and points the operator at `--force`.
+  fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` shuts
+  down only the VM (leaving the bridge up), and `guest down` tears the whole environment down (VM +
+  bridge + benchmark-netlog).
+- **`chutes-cvm guest stop` and `guest down` shut the guest down gracefully by default.** Both POST
+  a hotkey-signed request to the guest system-manager API (`http://<vm_ip>:8080/status/system/shutdown`,
+  the same endpoint the chutes-miner control plane uses) so the VM powers off cleanly — a miner can
+  shut down gracefully with only their config.yaml, no chutes-miner CLI needed. `stop` does just the
+  guest shutdown (bridge + volumes left in place); `down` additionally tears down the host-side
+  bridge + benchmark-netlog — the extra dependency cleanup is the only difference. `--force` skips
+  the API and force-kills QEMU on either command; a graceful attempt that can't reach the API stops
+  and points the operator at `--force`.
 
 ### Changed
 - **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
