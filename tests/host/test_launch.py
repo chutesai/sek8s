@@ -192,7 +192,7 @@ def _happy(**over):
         "_resolve_public_iface": "eth0",
         "_chutes_td_running": False,
         "_tdx_active": (True, "sysfs"),
-        "_measurement_published": True,
+        "_launchable": True,
         "_prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
     defaults.update(over)
@@ -228,94 +228,91 @@ def test_main_force_overrides_duplicate_guard():
     boot.assert_called_once()
 
 
-def test_main_refuses_when_measurement_unpublished():
-    # No published measurement for this host class → stop before any GPU/volume work.
-    with _happy(_measurement_published=False), patch(f"{P}._boot") as boot:
+def test_main_refuses_when_not_launchable():
+    # No published measurement for this image x host class → stop before any GPU/volume work.
+    with _happy(_launchable=False), patch(f"{P}._boot") as boot:
         rc = launch.main(_STD_ARGV)
     assert rc == 1
     boot.assert_not_called()
 
 
-def test_main_benchmark_skips_measurement_gate():
+def test_main_benchmark_skips_launch_gate():
     # Benchmark VMs use dummy creds and aren't attested, so a failing gate must not block them.
     argv = ["--hostname", "h", "--benchmark", "--network-type", "user", "--no-gpus"]
-    with _happy(_measurement_published=False), patch(
-        f"{P}._boot", return_value=0
-    ) as boot:
+    with _happy(_launchable=False), patch(f"{P}._boot", return_value=0) as boot:
         rc = launch.main(argv)
     assert rc == 0
     boot.assert_called_once()
 
 
-def test_main_debug_image_skips_measurement_gate():
-    # Debug (RC) images attest under the RC gate (rc:true measurement, which verify reports as
-    # 'pending'), so the prod-measurement gate must not block them.
+def test_main_debug_image_is_still_gated():
+    # A debug (RC) image is NOT special-cased: its rc:true measurement must be published just like
+    # a production image's, so a non-launchable debug image is refused (no more blanket skip).
     argv = _STD_ARGV + ["--base-image", "/base/tdx-guest-debug"]
-    with _happy(_measurement_published=False), patch(
-        f"{P}._boot", return_value=0
-    ) as boot:
+    with _happy(_launchable=False), patch(f"{P}._boot") as boot:
         rc = launch.main(argv)
-    assert rc == 0
-    boot.assert_called_once()
+    assert rc == 1
+    boot.assert_not_called()
 
 
-# ── debug-image detection ────────────────────────────────────────────────────────
+# ── the launch gate itself (mirrors host verify's API check) ─────────────────────
 
 
-def test_is_debug_image_from_manifest():
-    with patch(f"{P}.image_set._load_manifest", return_value={"debug": True}):
-        assert launch._is_debug_image("/base/anything") is True
-    with patch(f"{P}.image_set._load_manifest", return_value={"debug": False}):
-        assert launch._is_debug_image("/base/anything") is False
-
-
-def test_is_debug_image_falls_back_to_name_when_manifest_unreadable():
-    with patch(f"{P}.image_set._load_manifest", side_effect=FileNotFoundError):
-        assert launch._is_debug_image("/base/tdx-guest-debug/") is True
-        assert launch._is_debug_image("/base/tdx-guest/") is False
-
-
-# ── the measurement gate itself (mirrors host verify's API check) ────────────────
-
-
-def test_measurement_published_true_when_accepted(capsys):
-    with patch(
+def test_launchable_true_when_measurement_covers(capsys):
+    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
         "chutes_cvm.guest.preflight.run_preflight",
-        return_value={"status": "accepted", "fingerprint": "abc"},
+        return_value={"launchable": True, "fingerprint": "abc", "detail": "covers"},
     ):
-        assert launch._measurement_published("/cfg.yaml", force=False) is True
-    assert "Published measurement" in capsys.readouterr().out
+        assert launch._launchable("/cfg.yaml", "/base", force=False) is True
+    assert "covers" in capsys.readouterr().out
 
 
-def test_measurement_published_pending_says_already_submitted(capsys):
-    # pending = already stored → advise waiting, NOT resubmitting; --force still overrides.
-    resp = {"status": "pending", "fingerprint": "abc", "detail": "awaiting generation"}
-    with patch("chutes_cvm.guest.preflight.run_preflight", return_value=resp):
-        assert launch._measurement_published("/cfg.yaml", force=False) is False
-        assert launch._measurement_published("/cfg.yaml", force=True) is True
+def test_launchable_false_refuses_but_force_overrides(capsys):
+    resp = {
+        "launchable": False,
+        "fingerprint": "abc",
+        "detail": "no measurement for 1.4.0",
+    }
+    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
+        "chutes_cvm.guest.preflight.run_preflight", return_value=resp
+    ):
+        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
+        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
     err = capsys.readouterr().err
     assert "Refusing to launch" in err
-    assert "already submitted" in err
-    assert "submit-profile" not in err
+    assert "submit-profile" in err
 
 
-def test_measurement_published_unknown_says_submit_profile(capsys):
-    # unknown = never submitted → advise submit-profile.
-    resp = {"status": "unknown", "fingerprint": "abc"}
-    with patch("chutes_cvm.guest.preflight.run_preflight", return_value=resp):
-        assert launch._measurement_published("/cfg.yaml", force=False) is False
-    assert "submit-profile" in capsys.readouterr().err
+def test_launchable_passes_image_version_rc_to_preflight():
+    # The manifest's (version, rc) must be what's joined against — a debug image asks about rc:true.
+    with patch(f"{P}.image_set.version_and_rc", return_value=("2.0.0", True)), patch(
+        "chutes_cvm.guest.preflight.run_preflight",
+        return_value={"launchable": True, "fingerprint": "abc", "detail": "ok"},
+    ) as rp:
+        assert launch._launchable("/cfg.yaml", "/base", force=False) is True
+    assert rp.call_args.kwargs["version"] == "2.0.0"
+    assert rp.call_args.kwargs["rc"] is True
 
 
-def test_measurement_published_fails_closed_on_api_error():
+def test_launchable_fails_closed_on_api_error():
     from chutes_cvm.guest.preflight import PreflightError
 
-    with patch(
+    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
         "chutes_cvm.guest.preflight.run_preflight",
         side_effect=PreflightError("API unreachable"),
     ):
-        assert launch._measurement_published("/cfg.yaml", force=False) is False
-        assert launch._measurement_published("/cfg.yaml", force=True) is True
+        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
+        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
+
+
+def test_launchable_blocks_on_unreadable_manifest(capsys):
+    # Can't read the image version → can't know what we're booting → fail closed (force overrides).
+    with patch(
+        f"{P}.image_set.version_and_rc", side_effect=FileNotFoundError("no manifest")
+    ):
+        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
+        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
+    assert "image version" in capsys.readouterr().err
 
 
 def test_main_blocks_when_tdx_inactive(capsys):

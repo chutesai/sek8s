@@ -72,7 +72,8 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_submit_profile(args: argparse.Namespace) -> int:
-    # Registration is the non-dry-run path of the same gate flow (was `verify-host --submit`).
+    # Registration is the same gate flow with --submit (was `verify-host --submit`): it runs the
+    # read-only check, then registers the class if it is not yet launchable.
     return _run_verify(
         None, args.config, args.api, submit=True, banner="host class submission"
     )

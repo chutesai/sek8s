@@ -1,8 +1,10 @@
 """Tests for the host-readiness verify entrypoint (chutes_cvm.guest.verify).
 
-verify_host is now API-backed: Gate A is the local QEMU check, Gate B is a dry-run
-preflight (run_preflight) whose status maps to READY/WARNING, and any preflight failure
-fails closed to BLOCKED.
+verify_host is API-backed: Gate A is the local QEMU check; Gate B reads the image's
+(version, rc) from its manifest and asks POST /servers/tdx/preflight (run_preflight) whether a
+published measurement covers this host — ``launchable`` maps to READY/WARNING. Any preflight
+failure, or an unreadable image manifest, fails closed to BLOCKED. ``--submit`` additionally
+registers the class (submit_profile) when it is not yet launchable.
 """
 
 from contextlib import ExitStack
@@ -12,41 +14,42 @@ from chutes_cvm.guest import verify
 from chutes_cvm.guest.preflight import PreflightError
 
 
-def _patch(status="accepted", qemu_raises=False, preflight_raises=False):
-    """Patch the QEMU gate and run_preflight. Returns (ExitStack, preflight_mock)."""
+def _patch(
+    launchable=True,
+    qemu_raises=False,
+    preflight_raises=False,
+    image_raises=False,
+):
+    """Patch the QEMU gate, image (version, rc) resolution, and run_preflight.
+    Returns (ExitStack, gate_mock, preflight_mock)."""
     stack = ExitStack()
     gate = stack.enter_context(
         patch("chutes_cvm.guest.verify.verify_host_qemu_supported")
     )
     if qemu_raises:
         gate.side_effect = ValueError("qemu 10.1.0 != expected 10.2.1")
+    img = stack.enter_context(patch("chutes_cvm.guest.verify._image_version_rc"))
+    if image_raises:
+        img.side_effect = FileNotFoundError("no manifest")
+    else:
+        img.return_value = ("1.4.0", False)
     pf = stack.enter_context(patch("chutes_cvm.guest.verify.run_preflight"))
     if preflight_raises:
         pf.side_effect = PreflightError("API unreachable")
     else:
-        pf.return_value = {"status": status, "detail": "d", "fingerprint": "fp"}
+        pf.return_value = {"launchable": launchable, "detail": "d", "fingerprint": "fp"}
     return stack, gate, pf
 
 
-def test_ready_when_accepted():
-    stack, _, _ = _patch(status="accepted")
+def test_ready_when_launchable():
+    stack, _, _ = _patch(launchable=True)
     with stack:
         assert verify.verify_host(scripts_dir="/x") == verify.READY
 
 
-def test_warning_when_pending(capsys):
-    # pending = already stored → advise waiting, NOT resubmitting.
-    stack, _, _ = _patch(status="pending")
-    with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.WARNING
-    out = capsys.readouterr().out
-    assert "already submitted" in out
-    assert "submit-profile" not in out
-
-
-def test_warning_when_unknown(capsys):
-    # unknown = never submitted → advise submit-profile.
-    stack, _, _ = _patch(status="unknown")
+def test_warning_when_not_launchable(capsys):
+    # No measurement covers this image x host yet → WARNING, advise submit-profile.
+    stack, _, _ = _patch(launchable=False)
     with stack:
         assert verify.verify_host(scripts_dir="/x") == verify.WARNING
     assert "submit-profile" in capsys.readouterr().out
@@ -67,6 +70,14 @@ def test_blocked_when_preflight_fails():
         assert verify.verify_host(scripts_dir="/x") == verify.BLOCKED
 
 
+def test_blocked_when_image_unreadable():
+    # Can't determine what would boot -> can't check it -> fail closed, before any API call.
+    stack, _, pf = _patch(image_raises=True)
+    with stack:
+        assert verify.verify_host(scripts_dir="/x") == verify.BLOCKED
+        pf.assert_not_called()
+
+
 def test_blocked_when_target_os_unsupported():
     stack, _, pf = _patch()
     with stack:
@@ -77,7 +88,7 @@ def test_blocked_when_target_os_unsupported():
 def test_target_os_skips_live_qemu_gate_and_passes_target_qemu():
     # --target-os mode ignores the live QEMU (the upgrade replaces it), so even a raising
     # gate doesn't block; and the target's QEMU is what gets checked at the API.
-    stack, gate, pf = _patch(status="accepted", qemu_raises=True)
+    stack, gate, pf = _patch(launchable=True, qemu_raises=True)
     with stack:
         assert verify.verify_host(target_os="26.04", scripts_dir="/x") == verify.READY
         gate.assert_not_called()
@@ -85,13 +96,16 @@ def test_target_os_skips_live_qemu_gate_and_passes_target_qemu():
             pf.call_args.kwargs.get("target_qemu")
             == verify.SUPPORTED_QEMU_BY_OS["26.04"]
         )
-        assert pf.call_args.kwargs.get("dry_run") is True
+        assert pf.call_args.kwargs.get("version") == "1.4.0"
+        assert pf.call_args.kwargs.get("rc") is False
 
 
-def test_submit_flips_preflight_out_of_dry_run():
-    # `verify-host --submit` (was `preflight`) registers an unbaselined host class: Gate B
-    # runs the real (non-dry-run) submission, and a pending status is still WARNING.
-    stack, _, pf = _patch(status="pending")
-    with stack:
+def test_submit_registers_when_not_launchable():
+    # `verify --submit` registers an unmeasured class via submit_profile; still WARNING.
+    stack, _, _ = _patch(launchable=False)
+    with stack, patch(
+        "chutes_cvm.guest.verify.submit_profile",
+        return_value={"status": "pending", "stored": True, "fingerprint": "fp"},
+    ) as sub:
         assert verify.verify_host(scripts_dir="/x", submit=True) == verify.WARNING
-        assert pf.call_args.kwargs.get("dry_run") is False
+        sub.assert_called_once()

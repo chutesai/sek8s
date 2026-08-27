@@ -94,21 +94,11 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
-def _is_debug_image(base_image: str) -> bool:
-    """True if the base image set is the debug (RC) build. The image-set manifest declares
-    ``debug`` authoritatively; fall back to the ``tdx-guest-debug`` naming if it can't be read.
-    Debug images boot fail-open and attest under the RC gate, so the prod-measurement gate does
-    not apply (same as benchmark)."""
-    try:
-        return bool(image_set._load_manifest(base_image).get("debug"))
-    except (FileNotFoundError, ValueError, OSError):
-        return "debug" in os.path.basename(base_image.rstrip("/")).lower()
-
-
-def _measurement_published(config_path: str, force: bool) -> bool:
-    """Return True if launch may proceed: the control plane has a published measurement for this
-    host class (so the VM will attest). Mirrors `chutes-cvm host verify`'s API check — capture the
-    host profile, sign it, ask the API. Without an accepted verdict the VM would boot and then fail
+def _launchable(config_path: str, base_image: str, force: bool) -> bool:
+    """Return True if launch may proceed: the control plane confirms an image of THIS host's
+    ``(version, rc)`` will attest here. Mirrors `chutes-cvm host verify`'s API check — read the
+    image's (version, rc) from its manifest, capture + sign the host profile, and ask
+    POST /servers/tdx/preflight. Without a launchable verdict the VM would boot and then fail
     attestation, so refuse early (return False) unless ``force`` overrides with a warning.
     """
     # Deferred: preflight pulls substrateinterface (signing) — only needed for an actual launch,
@@ -119,50 +109,55 @@ def _measurement_published(config_path: str, force: bool) -> bool:
         run_preflight,
     )
 
+    try:
+        version, rc = image_set.version_and_rc(base_image)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        # Can't read the manifest -> can't know what we're booting. Fail closed unless forced.
+        if force:
+            print(
+                f"⚠ could not read image version from {base_image} ({exc}); proceeding anyway "
+                "(--force) — attestation may fail.",
+                file=sys.stderr,
+            )
+            return True
+        print(
+            f"✗ could not read image version from {base_image}: {exc}\n"
+            "  Refusing to launch. Re-run `chutes-cvm image download`, or pass --force.",
+            file=sys.stderr,
+        )
+        return False
+
+    label = f"{version}{' (rc)' if rc else ''}"
     api_base = os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
         resp = run_preflight(
             config_path=config_path,
             scripts_dir=str(SCRIPTS_DIR),
+            version=version,
+            rc=rc,
             api_base=api_base,
-            dry_run=True,
         )
-        status = resp.get("status")
+        launchable = bool(resp.get("launchable"))
         fingerprint = resp.get("fingerprint", "?")
         detail = resp.get("detail", "")
     except PreflightError as exc:
-        status, fingerprint, detail = None, "?", str(exc)
+        launchable, fingerprint, detail = False, "?", str(exc)
 
-    if status == "accepted":
-        print(f"✓ Published measurement covers this host (fingerprint {fingerprint})")
+    if launchable:
+        print(f"✓ {detail} (fingerprint {fingerprint})")
         return True
 
-    problem = (
-        f"no published measurement for this host class yet "
-        f"(status: {status or 'unreachable'}; fingerprint {fingerprint})."
-        + (f" {detail}" if detail else "")
+    problem = f"this host cannot attest {label} yet (fingerprint {fingerprint})." + (
+        f" {detail}" if detail else ""
     )
-    # Remediation depends on the status: pending = already submitted (just wait); unknown =
-    # never submitted (submit it); unreachable = couldn't confirm.
-    if status == "pending":
-        remedy = (
-            "This host class is already submitted; Chutes will generate and publish its "
-            "measurements.\n  Retry once `chutes-cvm host verify` shows READY — no action needed."
-        )
-    elif status == "unknown":
-        remedy = (
-            "Register this host class with `chutes-cvm host submit-profile`, then retry once "
-            "Chutes\n  publishes its measurements (`chutes-cvm host verify` shows readiness)."
-        )
-    else:  # unreachable / other
-        remedy = (
-            "Could not confirm with the control plane. Check connectivity and retry, or run "
-            "`chutes-cvm host verify` to diagnose."
-        )
+    remedy = (
+        "Register this host class with `chutes-cvm host submit-profile`, then retry once Chutes\n"
+        "  publishes the measurement (`chutes-cvm host verify` shows readiness)."
+    )
     if force:
         print(
             f"⚠ {problem}\n  Proceeding anyway (--force) — the VM will fail attestation if this "
-            "host class is truly unpublished.",
+            "image is truly unmeasured for this host.",
             file=sys.stderr,
         )
         return True
@@ -640,21 +635,18 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"✓ TDX active (via {source})")
     _ensure_numa_zone_reclaim()
 
-    # The gate is a PROD-launch readiness check. Benchmark VMs use dummy creds and aren't
-    # attested; debug (RC) images boot fail-open and attest under the RC gate using their rc:true
-    # measurement, which the API's `accepted` status deliberately excludes — so the prod gate does
-    # not apply to either.
+    # The gate is a launch-readiness check: does a published measurement for THIS image's
+    # (version, rc) cover this host class? Benchmark VMs use dummy creds and aren't attested, so
+    # they skip it; a debug (RC) image is not special-cased — its rc:true measurement must be
+    # published just like a production image's, which the (version, rc) join checks directly.
     if benchmark:
         pass
-    elif _is_debug_image(config.vm.base_image):
-        print(
-            "\nStep 1: Debug (RC) image — attests under the RC gate, not the prod-measurement "
-            "check; skipping."
-        )
     else:
-        print("\nStep 1: Confirming a published measurement for this host class...")
-        if not _measurement_published(
-            args.config_file or default_config_path(), args.force
+        print("\nStep 1: Confirming this host can attest the image...")
+        if not _launchable(
+            args.config_file or default_config_path(),
+            config.vm.base_image,
+            args.force,
         ):
             return 1
 

@@ -1,15 +1,19 @@
-"""Attestation preflight — ask the control plane whether this host class can launch.
+"""Attestation preflight — ask the control plane whether this exact image can launch here.
 
-The miner never computes or matches a topology fingerprint: it captures its raw
-platform metadata (``discover-profile.sh``), signs it with the miner hotkey, and POSTs
-it to ``api.chutes.ai``. The API computes the fingerprint and answers with a status:
+The miner never computes or matches a topology fingerprint: it captures its raw platform
+metadata (``discover-profile.sh``), signs it with the miner hotkey, and POSTs it to
+``api.chutes.ai``. Two of the three host-profile operations live here:
 
-    accepted  — a published measurement covers this host class; it can launch
-    pending   — submitted, awaiting measurement generation
-    unknown   — neither (only via dry_run; a real submission is parked -> pending)
+    run_preflight(version, rc)  — POST /servers/tdx/preflight: does a published measurement for
+                                  THIS image's (version, rc) cover this host? -> ``launchable`` bool
+    submit_profile()            — POST /servers/tdx/host_profiles: register an unmeasured class so
+                                  Chutes generates its measurements
 
-This replaces the old in-repo ``known_topologies`` match. The API owns the fingerprint
-and the accept decision; if that key ever changes it changes there, not here.
+(The third, GET /servers/tdx/host_profiles, is the generator's/third-party listing — not here.)
+
+The preflight is the whole launch decision in one boolean: launchable -> boot; not -> submit the
+profile, then retry once Chutes publishes the measurement. The API owns the fingerprint and the
+verdict; if that key ever changes it changes there, not here.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlencode
 
 import yaml
 from chutes_cvm import proc
@@ -27,15 +32,13 @@ from substrateinterface import Keypair, KeypairType
 
 DEFAULT_API_BASE = "https://api.chutes.ai"
 
-# Status -> exit code. accepted launches (0); pending/unknown are "not yet" (2); a
-# transport/auth failure fails CLOSED (1) — the boot's LUKS key release needs the API
-# anyway, so refusing to launch loses nothing.
-_STATUS_EXIT = {"accepted": 0, "pending": 2, "unknown": 2}
+# A transport/auth failure (no verdict) fails CLOSED — the boot's LUKS key release needs the API
+# anyway, so refusing to launch when we cannot confirm loses nothing.
 FAIL_CLOSED = 1
 
 
 class PreflightError(Exception):
-    """Any failure that prevents getting a status (bad config, transport, API error)."""
+    """Any failure that prevents getting a verdict (bad config, transport, API error)."""
 
 
 def _load_miner_creds(config_path: str) -> "tuple[str, str]":
@@ -129,12 +132,10 @@ def _sign(seed: str, body: bytes, nonce: str) -> "tuple[str, str]":
 
 
 def _post(
-    api_base: str, hotkey: str, nonce: str, signature: str, body: bytes, dry_run: bool
+    path: str, api_base: str, hotkey: str, nonce: str, signature: str, body: bytes
 ) -> dict:
-    """POST the signed profile; return the parsed {fingerprint, status, stored, detail}."""
-    url = f"{api_base.rstrip('/')}/servers/tdx/host_profiles"
-    if dry_run:
-        url += "?dry_run=true"
+    """POST the signed profile body to ``path`` on the API; return the parsed JSON dict."""
+    url = f"{api_base.rstrip('/')}{path}"
     req = urllib.request.Request(
         url,
         data=body,
@@ -159,22 +160,21 @@ def _post(
             )
         except Exception:  # nosec B110
             pass
-        raise PreflightError(f"API rejected the submission ({exc.code}): {detail}")
+        raise PreflightError(f"API rejected the request ({exc.code}): {detail}")
     except urllib.error.URLError as exc:
         raise PreflightError(f"API unreachable at {api_base}: {exc.reason}")
     except (ValueError, json.JSONDecodeError) as exc:
         raise PreflightError(f"API returned an unparseable response: {exc}")
 
 
-def run_preflight(
-    config_path: str,
-    scripts_dir: str,
-    api_base: str = DEFAULT_API_BASE,
-    dry_run: bool = False,
-    target_qemu: "str | None" = None,
-) -> dict:
-    """Discover -> sign -> POST -> status. Returns the API response dict; raises
-    PreflightError on any failure to reach a status (caller fails closed)."""
+def _signed_profile(
+    config_path: str, scripts_dir: str, target_qemu: "str | None" = None
+) -> "tuple[str, str, str, bytes]":
+    """Discover this host's profile and sign it with the miner hotkey.
+
+    Returns (hotkey, nonce, signature, body) for a POST. ``target_qemu`` swaps the profile's QEMU
+    version first, for the pre-upgrade check. Shared by the preflight check and the submit path.
+    """
     ss58, seed = _load_miner_creds(config_path)
     profile_json = _discover_profile_json(scripts_dir)
     if target_qemu:
@@ -189,9 +189,43 @@ def run_preflight(
             f"  warning: config miner.ss58 ({ss58}) does not match the seed's hotkey ({hotkey}); "
             "signing with the seed's hotkey."
         )
-    return _post(api_base, hotkey, nonce, signature, body, dry_run)
+    return hotkey, nonce, signature, body
 
 
-def status_exit_code(status: "str | None") -> int:
-    """READY(0) for accepted; WARNING(2) for pending/unknown/other."""
-    return _STATUS_EXIT.get(status or "", 2)
+def run_preflight(
+    config_path: str,
+    scripts_dir: str,
+    version: str,
+    rc: bool,
+    api_base: str = DEFAULT_API_BASE,
+    target_qemu: "str | None" = None,
+) -> dict:
+    """Discover -> sign -> POST /servers/tdx/preflight -> verdict.
+
+    Asks whether a published measurement for an image of ``(version, rc)`` covers this host class.
+    Returns {fingerprint, launchable, detail}; raises PreflightError on any failure to reach a
+    verdict (the caller fails closed)."""
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, scripts_dir, target_qemu
+    )
+    query = urlencode({"version": version, "rc": "true" if rc else "false"})
+    return _post(
+        f"/servers/tdx/preflight?{query}", api_base, hotkey, nonce, signature, body
+    )
+
+
+def submit_profile(
+    config_path: str,
+    scripts_dir: str,
+    api_base: str = DEFAULT_API_BASE,
+    target_qemu: "str | None" = None,
+) -> dict:
+    """Discover -> sign -> POST /servers/tdx/host_profiles -> register.
+
+    Stores this host class so Chutes generates its measurements. Returns
+    {fingerprint, status, stored, detail}; raises PreflightError on failure. Run when the preflight
+    reports the class is not yet launchable."""
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, scripts_dir, target_qemu
+    )
+    return _post("/servers/tdx/host_profiles", api_base, hotkey, nonce, signature, body)

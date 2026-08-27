@@ -69,6 +69,10 @@ from chutes_cvm.paths import SCRIPTS_DIR
 # role as its extension (<base>.qcow2 / <base>.vmlinuz / <base>.initrd / <base>.cmdline).
 ROLES = ("qcow2", "vmlinuz", "initrd", "cmdline")
 
+# Where `chutes-cvm image download` puts the production set; the launch default and the base a
+# `host verify` checks when the config names no explicit base_image.
+DEFAULT_BASE_IMAGE = "/var/lib/chutes/base-images/tdx-guest"
+
 _CHUNK = 1024 * 1024
 
 
@@ -143,6 +147,20 @@ def _load_manifest(image_dir: str) -> dict:
     if not isinstance(artifacts, dict) or any(r not in artifacts for r in ROLES):
         raise ValueError(f"manifest.json in {image_dir} is missing artifact roles")
     return manifest
+
+
+def version_and_rc(image_dir: str) -> "tuple[str, bool]":
+    """``(version, rc)`` for the base image set from its manifest.
+
+    ``rc`` is the manifest's ``debug`` flag: a debug build attests under its ``rc:true`` measurement
+    and a production build under its ``rc:false`` one, so the pair (version, rc) is exactly what the
+    control-plane preflight joins against to decide whether this image can boot on a host.
+    """
+    manifest = _load_manifest(image_dir)
+    version = str(manifest.get("version") or "")
+    if not version:
+        raise ValueError(f"image set at {image_dir} has no version in its manifest")
+    return version, bool(manifest.get("debug"))
 
 
 def resolve(image_dir: str, full: bool) -> tuple[str, str]:

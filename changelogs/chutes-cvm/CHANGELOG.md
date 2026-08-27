@@ -64,17 +64,17 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   primitive. This is the one command a miner uses to bring a VM up. Per the AGENT.md bash-vs-Python
   rule, Python owns the decisions and bash still owns the root system mutations (cryptsetup/mkfs/nbd,
   ip/iptables).
-- **Launch gates on a published measurement.** Before any GPU/volume/boot work, `guest launch`
-  runs the same control-plane check as `host verify` (capture host profile → sign → ask the API):
-  if this host class has no published measurement (`status != accepted`), it refuses early instead
-  of booting a VM that would only fail attestation, with **status-aware guidance** — `unknown` →
-  run `host submit-profile`; `pending` → already submitted, just wait for Chutes to publish. Fails
-  closed if the API is unreachable; `--force` overrides (with a warning). The gate is a *prod*
-  readiness check, so it is skipped for **benchmark** (dummy creds, not attested) and **debug (RC)**
-  images (they boot fail-open and attest under the RC gate using their `rc:true` measurement, which
-  the API's `accepted` status deliberately excludes). `host verify` gives the same
-  `pending`-vs-`unknown` guidance (previously it always told you to submit, even when already
-  submitted).
+- **Launch gates on a measurement for THIS image, not just the host class.** Before any
+  GPU/volume/boot work, `guest launch` runs the same control-plane check as `host verify`: it reads
+  the base image's `(version, rc)` from its manifest, captures + signs the host profile, and asks
+  `POST /servers/tdx/preflight` whether a *published measurement for that exact `(version, rc)`*
+  covers this host class. A stored host profile is no longer treated as launchable — a class can be
+  registered (or measured for a different version) yet have no measurement for the image you are
+  about to boot. If it is not launchable it refuses early instead of booting a VM that would only
+  fail attestation, pointing you at `host submit-profile`; fails closed if the API is unreachable;
+  `--force` overrides (with a warning). Only **benchmark** VMs skip it (dummy creds, not attested);
+  **debug (RC)** images are no longer special-cased — their `rc:true` measurement must be published
+  just like a production image's, which the `(version, rc)` join checks directly.
 - **`chutes-cvm image download` / `config init` / `guest stop` / `guest down`** — the launch
   orchestrator's modes that used to be flags are now first-class commands: `image download [--debug]`
   fetches + verifies a base image set, `config init` scaffolds a `config.yaml`, `guest stop` stops
@@ -140,13 +140,16 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   / `submit-profile` / `tune` / `restore` replace the former top-level `setup-host` / `verify-host`
   / `tune-host` / `restore-host`; the standalone `discover-profile` command is dropped (its capture
   is done inline by the verify/submit flow — `discover-profile.sh` stays as the bundled helper).
-  `host verify` is API-backed: Gate A (host runs its OS release's QEMU) stays local; Gate B captures
-  the host's platform metadata (discover-profile.sh), signs it with the miner hotkey (sr25519), and
-  asks the control plane — which owns the fingerprint and returns accepted / pending / unknown —
-  instead of the in-repo `known_topologies` set. `--target-os` checks against a target OS's QEMU
-  (pre-upgrade). `host submit-profile` is the non-dry-run path that registers an unbaselined host
-  class for baselining (this replaces the separate `preflight` command). Fails closed (BLOCKED)
-  when it can't get a verdict. Adds `substrate-interface` to the chutes-cvm package for the signature.
+  `host verify` is API-backed: Gate A (host runs its OS release's QEMU) stays local; Gate B reads the
+  base image's `(version, rc)` from its manifest, captures the host's platform metadata
+  (discover-profile.sh), signs it with the miner hotkey (sr25519), and asks
+  `POST /servers/tdx/preflight` whether a published measurement for that `(version, rc)` covers this
+  host class — the control plane owns the fingerprint and returns a single `launchable` verdict,
+  replacing the in-repo `known_topologies` set. `--target-os` checks against a target OS's QEMU, and
+  `--base-image` picks which image set to check (pre-upgrade). `host submit-profile` registers an
+  unmeasured host class (`POST /servers/tdx/host_profiles`, a distinct operation from the preflight
+  check), run when the check reports the class is not yet launchable. Fails closed (BLOCKED) when it
+  can't get a verdict. Adds `substrate-interface` to the chutes-cvm package for the signature.
 - **`detect_profile` no longer gates on a local baselined set.** It resolves the GPU profile and the
   live fingerprint (which still drive the launch `-smp`/`-m`); acceptance is the control plane's call.
 - **VM-management scripts now ship inside the `chutes-cvm` package.** The privileged bash helpers

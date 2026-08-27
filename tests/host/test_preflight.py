@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.guest import preflight
-from chutes_cvm.guest.preflight import PreflightError, run_preflight, status_exit_code
+from chutes_cvm.guest.preflight import PreflightError, run_preflight, submit_profile
 
 SAMPLE_PROFILE = json.dumps(
     {
@@ -21,13 +21,6 @@ SAMPLE_PROFILE = json.dumps(
         "numa": {"node_count": 2},
     }
 )
-
-
-def test_status_exit_code():
-    assert status_exit_code("accepted") == 0
-    assert status_exit_code("pending") == 2
-    assert status_exit_code("unknown") == 2
-    assert status_exit_code(None) == 2
 
 
 def test_override_qemu_replaces_version():
@@ -66,37 +59,77 @@ def test_sign_message_format_and_headers():
     assert signed == f"5HOTKEY:1700000000:{hashlib.sha256(b'body').hexdigest()}"
 
 
-def test_run_preflight_flow(tmp_path):
+def _creds(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("miner:\n  ss58: 5HOTKEY\n  seed: '0xseed'\n")
+    return str(cfg)
+
+
+def test_run_preflight_flow_hits_preflight_endpoint(tmp_path):
     with patch(
         "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
         "chutes_cvm.guest.preflight._post",
-        return_value={"status": "accepted", "fingerprint": "fp", "detail": "ok"},
+        return_value={"launchable": True, "fingerprint": "fp", "detail": "ok"},
     ) as post:
-        resp = run_preflight(config_path=str(cfg), scripts_dir="/x", dry_run=True)
-    assert resp["status"] == "accepted"
-    args = post.call_args.args  # (api_base, hotkey, nonce, signature, body, dry_run)
-    assert args[-1] is True
-    assert b"2335" in args[4]
+        resp = run_preflight(
+            config_path=_creds(tmp_path), scripts_dir="/x", version="1.4.0", rc=False
+        )
+    assert resp["launchable"] is True
+    # _post(path, api_base, hotkey, nonce, signature, body)
+    path = post.call_args.args[0]
+    assert path.startswith("/servers/tdx/preflight?")
+    assert "version=1.4.0" in path and "rc=false" in path
+    assert b"2335" in post.call_args.args[5]
 
 
-def test_run_preflight_target_qemu_override(tmp_path):
-    cfg = tmp_path / "config.yaml"
-    cfg.write_text("miner:\n  ss58: 5HOTKEY\n  seed: '0xseed'\n")
+def test_run_preflight_encodes_rc_true(tmp_path):
     with patch(
         "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
-        "chutes_cvm.guest.preflight._post", return_value={"status": "pending"}
+        "chutes_cvm.guest.preflight._post", return_value={"launchable": False}
     ) as post:
-        run_preflight(config_path=str(cfg), scripts_dir="/x", target_qemu="26.99")
-    body = json.loads(post.call_args.args[4].decode())
+        run_preflight(
+            config_path=_creds(tmp_path), scripts_dir="/x", version="2.0.0", rc=True
+        )
+    assert "rc=true" in post.call_args.args[0]
+
+
+def test_run_preflight_target_qemu_override(tmp_path):
+    with patch(
+        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+    ), patch(
+        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+    ), patch(
+        "chutes_cvm.guest.preflight._post", return_value={"launchable": False}
+    ) as post:
+        run_preflight(
+            config_path=_creds(tmp_path),
+            scripts_dir="/x",
+            version="1.4.0",
+            rc=False,
+            target_qemu="26.99",
+        )
+    body = json.loads(post.call_args.args[5].decode())
     assert body["launch_determinism"]["qemu_version"] == "26.99"
+
+
+def test_submit_profile_hits_host_profiles_endpoint(tmp_path):
+    with patch(
+        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+    ), patch(
+        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+    ), patch(
+        "chutes_cvm.guest.preflight._post",
+        return_value={"status": "pending", "fingerprint": "fp", "stored": True},
+    ) as post:
+        resp = submit_profile(config_path=_creds(tmp_path), scripts_dir="/x")
+    assert resp["stored"] is True
+    assert post.call_args.args[0] == "/servers/tdx/host_profiles"
 
 
 def test_post_http_error_surfaces_detail():
@@ -109,10 +142,14 @@ def test_post_http_error_surfaces_detail():
     )
     with patch("urllib.request.urlopen", side_effect=err):
         with pytest.raises(PreflightError, match="403.*blacklisted"):
-            preflight._post("https://api", "hk", "n", "sig", b"{}", False)
+            preflight._post(
+                "/servers/tdx/preflight", "https://api", "hk", "n", "sig", b"{}"
+            )
 
 
 def test_post_unreachable_fails_closed_message():
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
         with pytest.raises(PreflightError, match="unreachable"):
-            preflight._post("https://api", "hk", "n", "sig", b"{}", False)
+            preflight._post(
+                "/servers/tdx/preflight", "https://api", "hk", "n", "sig", b"{}"
+            )
