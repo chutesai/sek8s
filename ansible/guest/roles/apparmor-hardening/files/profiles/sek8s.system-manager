@@ -32,6 +32,14 @@ profile sek8s.system-manager flags=(enforce) {
   /run/system-manager/ rw,
   /run/system-manager/** rw,
 
+  # `journalctl` (the /status log-streaming endpoint) reads the journal directly — persistent
+  # and/or volatile store — plus machine-id. Without these it execs but returns nothing.
+  /var/log/journal/ r,
+  /var/log/journal/** r,
+  /run/log/journal/ r,
+  /run/log/journal/** r,
+  /etc/machine-id r,
+
   # containerd socket for image operations
   /run/k3s/containerd/containerd.sock rw,
 
@@ -78,6 +86,23 @@ profile sek8s.system-manager flags=(enforce) {
   network inet6 dgram,
   network unix stream,
   network unix dgram,
+
+  # System D-Bus. Two legitimate needs, both over the polkit-gated system bus:
+  #   - login1 (logind): `sudo /sbin/shutdown` requests the graceful poweroff from logind.
+  #   - systemd1 (the manager): `systemctl show <unit> --property=...` reads unit status for the
+  #     /status service-health endpoint.
+  # AppArmor mediates both the socket connect (file rule) and the method calls (abi 4.0), and that
+  # mediation is NOT relaxed by complain mode — so without these, both fail "Failed to connect to
+  # bus: Permission denied" even though sudo escalates fine.
+  #
+  # We deliberately do NOT grant /run/systemd/private (PID 1's private control socket, which
+  # BYPASSES polkit) — only the system bus, where a non-root caller's management methods stay
+  # polkit-gated. That keeps this profile from becoming a bypass-polkit control primitive if a
+  # sudo-allowlisted root command (cache-rm et al.) were ever abused.
+  /run/dbus/system_bus_socket rw,
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.login1),
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.systemd1),
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
 
   # Subprocess spawning (download workers inherit this profile)
   signal send peer=sek8s.system-manager,
