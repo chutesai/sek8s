@@ -136,9 +136,15 @@ wait_for_k3s() {
             continue
         fi
         
-        # Check basic API connectivity
-        if kubectl get --raw='/readyz' >/dev/null 2>&1; then
-            log "API server readiness check passed"
+        # Check the API server is actually SERVING, not just reporting ready. /readyz can flip green
+        # while the apiserver listener is still cycling after a `systemctl restart k3s` — k3s
+        # notifies systemd-ready when its supervisor is up, before the embedded apiserver is
+        # continuously bound on :6443. Gate on /openapi/v2 too: it is the exact path
+        # `kubectl apply --validate` fetches, so a green check here predicts the init scripts' applies
+        # will succeed (a plain /readyz check did not).
+        if kubectl get --raw='/readyz' >/dev/null 2>&1 \
+            && kubectl get --raw='/openapi/v2' >/dev/null 2>&1; then
+            log "API server readiness check passed (openapi served)"
             return 0
         fi
         

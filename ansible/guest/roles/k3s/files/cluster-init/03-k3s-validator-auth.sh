@@ -23,6 +23,33 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [03-k3s-validator-auth] $1" | tee -a "$LOG_FILE"
 }
 
+# Retry a kubectl operation through a transient API blip. Even after wait_for_k3s gates on
+# /openapi/v2, k3s can briefly refuse connections on :6443 while the apiserver listener settles
+# after a `systemctl restart k3s`. Retry so a momentary blip does not fail the script — which,
+# because this script is security-critical, would power the VM off. A GENUINELY unreachable API
+# still exhausts the retries and exits non-zero, preserving that intended safe-failure behaviour.
+retry_kubectl() {
+    local attempts=10 delay=3 n=1
+    until "$@"; do
+        if [ "$n" -ge "$attempts" ]; then
+            log "ERROR: kubectl failed after ${attempts} attempts: $*"
+            return 1
+        fi
+        log "kubectl transient failure (attempt ${n}/${attempts}) — retrying in ${delay}s"
+        sleep "$delay"
+        n=$((n + 1))
+    done
+}
+
+# The Secret apply is a pipeline (client-side manifest gen | server-side apply); wrap it in a
+# function so retry_kubectl can re-run the whole thing on a transient apply failure.
+apply_validator_secret() {
+    kubectl create secret generic validator-auth \
+        --from-literal=allowed-validators="$VALIDATOR_SS58" \
+        -n attestation-system \
+        --dry-run=client -o yaml | kubectl apply -f -
+}
+
 VALIDATOR_SS58_FILE="/run/chutes/validator-ss58"
 
 if [ ! -f "$VALIDATOR_SS58_FILE" ]; then
@@ -42,10 +69,7 @@ log "Creating/updating validator-auth Secret with ephemeral SS58 (${VALIDATOR_SS
 # Use apply (not create) to handle both first boot (Secret absent) and subsequent boots
 # (Secret exists with previous boot's SS58).  kubectl create --dry-run=client -o yaml
 # generates the manifest; kubectl apply -f - creates or patches it in place.
-kubectl create secret generic validator-auth \
-    --from-literal=allowed-validators="$VALIDATOR_SS58" \
-    -n attestation-system \
-    --dry-run=client -o yaml | kubectl apply -f -
+retry_kubectl apply_validator_secret
 
 log "validator-auth Secret updated"
 
@@ -54,6 +78,6 @@ log "validator-auth Secret updated"
 # We must explicitly restart the attestation-proxy DaemonSet so it picks up the
 # new ALLOWED_VALIDATORS value from the updated Secret.
 log "Restarting attestation-proxy DaemonSet to apply new validator auth key..."
-kubectl rollout restart daemonset/attestation-proxy -n attestation-system
+retry_kubectl kubectl rollout restart daemonset/attestation-proxy -n attestation-system
 
 log "attestation-proxy rollout restart triggered"
