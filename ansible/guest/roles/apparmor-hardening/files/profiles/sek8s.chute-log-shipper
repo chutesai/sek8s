@@ -8,14 +8,21 @@ abi <abi/4.0>,
 
 include <tunables/global>
 
-profile sek8s.chute-log-shipper flags=(enforce) {
+# attach_disconnected: the service runs in a systemd sandbox mount namespace, which leaves /dev
+# nodes (e.g. /dev/null) "disconnected" from this profile's root — without the flag AppArmor fails
+# the path lookup (error=-13) even in complain. (Confirmed against the live audit.)
+profile sek8s.chute-log-shipper flags=(enforce, attach_disconnected) {
   include <abstractions/base>
   include <abstractions/nameservice>
   include <abstractions/python>
 
-  # Python interpreter and venv (the sek8s package, installed under /opt/sek8s).
+  # Python interpreter and venv (the sek8s package, installed under /opt/sek8s). mr on the venv
+  # because C-extension .so files are mmap'd. /opt/sek8s/src is READ-ONLY: it is RTMR3-measured, and
+  # the service runs with PYTHONDONTWRITEBYTECODE=1 (see the unit file) so no .pyc are written into
+  # the measured tree at runtime — a runtime write would drift RTMR3 on the next boot.
+  /opt/sek8s/ r,
   /opt/sek8s/venv/bin/python3{,.*} mrix,
-  /opt/sek8s/venv/** r,
+  /opt/sek8s/venv/** mr,
   /opt/sek8s/src/** r,
 
   # Environment file.
@@ -38,10 +45,22 @@ profile sek8s.chute-log-shipper flags=(enforce) {
   # CRI socket for `k3s crictl` (via the restricted wrapper).
   /run/k3s/containerd/containerd.sock rw,
 
-  # Restricted crictl wrapper + the k3s binary it execs.
+  # Restricted crictl wrapper + the k3s binary it execs. /usr/local/bin/k3s is a symlink into the
+  # versioned data dir, and AppArmor mediates the RESOLVED path — so the real binary must be granted
+  # too, or the exec is denied in enforce. The k3s multi-call binary also shells out to the iptables
+  # backend on invocation (even for `crictl`), so those are granted to keep it functional; see the
+  # note below — a log reader touching iptables is worth revisiting.
   /usr/local/bin/crictl-pods-helper rix,
   /usr/local/bin/k3s mrix,
+  /var/lib/rancher/k3s/data/*/bin/k3s mrix,
+  /etc/rancher/k3s/config.yaml r,
+  /etc/machine-id r,
   /bin/bash rix,
+
+  # crictl reads its config here to learn the CRI (containerd) socket endpoint; without it
+  # `crictl pods` dies at config load before it can query anything.
+  /var/lib/rancher/k3s/agent/etc/ r,
+  /var/lib/rancher/k3s/agent/etc/crictl.yaml r,
 
   # System libraries.
   /usr/lib/** rm,
@@ -54,6 +73,7 @@ profile sek8s.chute-log-shipper flags=(enforce) {
   @{PROC}/** r,
   @{sys}/** r,
   /dev/null rw,
+  /dev/tty rw,
   /dev/urandom r,
   owner @{PROC}/@{pid}/fd/ r,
 

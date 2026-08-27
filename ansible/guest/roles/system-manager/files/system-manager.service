@@ -11,6 +11,10 @@ Type=simple
 User=system-manager
 Group=tdx
 WorkingDirectory=/opt/sek8s
+# Never write .pyc into /opt/sek8s/src (RTMR3-measured, on the writable persistent root). Lazy
+# bytecode compilation at runtime would add files to the measured tree and drift RTMR3 on the next
+# boot. Subprocesses (e.g. the cache-download worker) inherit this, so they stay clean too.
+Environment="PYTHONDONTWRITEBYTECODE=1"
 EnvironmentFile=/etc/system-manager/system-manager.env
 # Miner credentials for cache pre-download; written at runtime by config-manager from config volume
 EnvironmentFile=/etc/system-manager/miner.env

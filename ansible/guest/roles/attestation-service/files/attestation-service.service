@@ -13,6 +13,9 @@ WorkingDirectory=/opt/sek8s
 # Use virtual environment
 Environment="PATH=/opt/sek8s/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="VIRTUAL_ENV=/opt/sek8s/venv"
+# Keep the RTMR3-measured /opt/sek8s/src tree free of runtime-written .pyc (see the note in
+# system-manager.service) so the measurement stays stable across reboots.
+Environment="PYTHONDONTWRITEBYTECODE=1"
 EnvironmentFile=/etc/attestation-service/attestation-service.env
 
 # Run the admission controller

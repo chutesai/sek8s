@@ -10,6 +10,9 @@ Type=simple
 User=chute-log-shipper
 Group=chute-log-shipper
 WorkingDirectory=/opt/sek8s
+# Keep the RTMR3-measured /opt/sek8s/src tree free of runtime-written .pyc (see the note in
+# system-manager.service) so the measurement stays stable across reboots.
+Environment="PYTHONDONTWRITEBYTECODE=1"
 EnvironmentFile=/etc/chute-log-shipper/chute-log-shipper.env
 ExecStart=/opt/sek8s/venv/bin/python -m sek8s.services.log_shipper
 Restart=always
