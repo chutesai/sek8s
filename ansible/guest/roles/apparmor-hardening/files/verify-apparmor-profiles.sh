@@ -10,6 +10,7 @@ PROFILES=(
     sek8s.setup-cache
     sek8s.deny-sensitive-default
     sek8s.attestation-proxy
+    sek8s.chute-log-shipper
 )
 
 APPARMOR_PROFILES="/sys/kernel/security/apparmor/profiles"
