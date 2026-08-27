@@ -11,7 +11,12 @@ abi <abi/4.0>,
 
 include <tunables/global>
 
-profile sek8s.attestation-proxy flags=(enforce) {
+# attach_disconnected: the attestation socket is a hostPath BIND MOUNT, so its inode is
+# "disconnected" from this profile's mount-namespace root. Without this flag AppArmor fails the
+# path lookup on connect() ("Failed name lookup - disconnected path") and returns EACCES before any
+# rule is evaluated — even in complain mode. The flag reattaches such paths to / so the socket rule
+# below can match (this is why Docker's default profile carries it).
+profile sek8s.attestation-proxy flags=(enforce, attach_disconnected) {
   include <abstractions/base>
   include <abstractions/nameservice>
   include <abstractions/python>
@@ -33,9 +38,16 @@ profile sek8s.attestation-proxy flags=(enforce) {
   /etc/attestation-service/ r,
   /etc/attestation-service/** r,
 
-  # Attestation unix socket (host-side attestation service)
-  /var/run/attestation/ r,
-  /var/run/attestation/** rw,
+  # Attestation unix socket (host-side attestation service).
+  # It is bind-mounted from the host, so with attach_disconnected (above) AppArmor reattaches it
+  # under its SOURCE path — /run/attestation-service/... — which is the name that shows in the
+  # audit log, not the pod mount point (/var/run/attestation -> /run/attestation). Grant the source
+  # path for the connect (rw = write is what connect() to a pathname socket needs); the mount-point
+  # paths are kept as a belt-and-suspenders in case a kernel resolves it differently.
+  /run/attestation-service/ r,
+  /run/attestation-service/** rw,
+  /run/attestation/ r,
+  /run/attestation/** rw,
 
   # Bittensor data dir (emptyDir mount in k8s pod)
   /home/chutes/.bittensor/ rw,

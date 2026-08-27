@@ -35,11 +35,14 @@
 # enforced, so a too-strict profile can't power off the VM (setup-cache et al.
 # carry OnFailure=poweroff) — you still get a login and a full denial log to
 # tighten profiles against. Production keeps flags=(enforce) untouched.
+# Match only the `enforce` token, not the whole flag list, so profiles carrying extra flags
+# (e.g. `flags=(enforce, attach_disconnected)`) still flip to `flags=(complain, attach_disconnected)`
+# rather than being left in enforce on a debug build.
 - name: Debug builds — set sek8s AppArmor profiles to complain mode
   ansible.builtin.replace:
     path: "/etc/apparmor.d/{{ item }}"
-    regexp: 'flags=\(enforce\)'
-    replace: 'flags=(complain)'
+    regexp: 'flags=\(enforce'
+    replace: 'flags=(complain'
   loop:
     - sek8s.system-manager
     - sek8s.setup-cache
