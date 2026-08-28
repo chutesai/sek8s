@@ -44,6 +44,7 @@
     dest: /etc/docker/certs.d/registry.chutes.ai/client.cert
     state: link
     force: true
+    follow: false  # target is generated at boot (setup_vm_tls); don't follow it at build time
 
 - name: Create client.key symlink for cosign mTLS
   ansible.builtin.file:
@@ -51,3 +52,4 @@
     dest: /etc/docker/certs.d/registry.chutes.ai/client.key
     state: link
     force: true
+    follow: false  # target is generated at boot (setup_vm_tls); don't follow it at build time
