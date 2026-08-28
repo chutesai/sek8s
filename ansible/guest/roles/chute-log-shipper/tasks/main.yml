@@ -54,6 +54,15 @@
     group: chute-log-shipper
     mode: '0640'
 
+# Readable crictl config: the non-root service cannot read k3s's own root-only crictl.yaml.
+- name: Deploy chute-log-shipper crictl config
+  ansible.builtin.copy:
+    src: crictl.yaml
+    dest: /etc/chute-log-shipper/crictl.yaml
+    owner: root
+    group: chute-log-shipper
+    mode: '0640'
+
 - name: Install restricted crictl wrapper (read-only pods/ps JSON only)
   ansible.builtin.copy:
     src: crictl-pods-helper
