@@ -3,7 +3,7 @@
 The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installable host CLI
 (`pip`/`install.sh`). Versioned with SemVer via `src/chutes-cvm/VERSION`. Run
 `make promote-changelogs` to aggregate fragments into the current version section.
-## [0.1.0] - 2026-08-25
+## [0.1.0] - 2026-08-29
 
 ### Added
 - **`chutes-cvm measurements`** — TDX measurement generation is now a first-class command
@@ -197,6 +197,13 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   ansible owns bootstrap, secrets, and fleet reboot/verify. The `host_tools` role now self-ensures
   its own install prerequisites (python3-venv/pip **+ git** for the sparse fetch), so no separate
   pre-CLI `host_prerequisites` step is needed in setup.
+
+### Fixed
+- Bridge networking now clamps TCP MSS to the egress interface's PMTU (`setup-bridge.sh`),
+  so guest TLS handshakes survive a small-MTU `public_interface` such as a WireGuard tunnel
+  (MTU 1280). Previously the guest advertised an MSS from its own 1500 NIC, and oversized
+  handshake segments were black-holed on the smaller uplink — connections established but
+  stalled during the TLS handshake.
 
 ### Removed
 - **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm host setup` (above). The
