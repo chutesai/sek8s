@@ -38,19 +38,22 @@ profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
   # Network (curl, wget, scp, socat, nc need it)
   network,
 
-  # System D-Bus. `abi <abi/4.0>` mediates D-Bus *method calls* separately from the
-  # socket, so `network,` plus `/** rwlkm` is not enough: without these rules any
-  # confined shell running `systemctl is-active <unit>` fails with
-  # "Failed to connect to bus: Permission denied" (the same symptom documented in
-  # sek8s.system-manager). That broke the k3s cluster-init steps, which the wrapper
-  # invokes as `bash <script>` — exec'ing /usr/bin/bash by name attaches this profile,
-  # while the wrapper itself (exec'd as /usr/local/bin/k3s-post-start.sh) stays
-  # unconfined, so the identical `systemctl is-active k3s` check passed in the parent
-  # and failed in every step.
+  # System D-Bus + the AF_UNIX socket beneath it. `abi <abi/4.0>` mediates AF_UNIX
+  # sockets (the `unix` rule class) AND D-Bus method calls separately from file access,
+  # so `network,` plus `/** rwlkm` is not enough on its own: `network,` does NOT cover
+  # AF_UNIX, so without a `unix` rule the connect() to the bus/systemd socket is denied
+  # at connect time — `systemctl is-active <unit>` fails with
+  # "Failed to connect to bus: Permission denied" (same symptom as sek8s.system-manager).
+  # The `unix` rule allows the socket connect; the `dbus` rules allow the messages that
+  # follow. BOTH are required — the dbus rules alone leave the connect denied. This broke
+  # the k3s cluster-init steps, which the wrapper invokes as `bash <script>` (exec'ing
+  # /usr/bin/bash by name attaches this profile), while the wrapper itself
+  # (/usr/local/bin/k3s-post-start.sh) runs unconfined and so was unaffected.
   #
-  # This grants no new power: the profile already allows `/** rwlkm` and `capability,`,
-  # so a shell confined here can already stop a service by other means. The profile's
-  # job is denying the model cache and runtime secrets, and D-Bus reaches neither.
+  # Grants no new power: the profile already allows `/** rwlkm` and `capability,`, so a
+  # shell confined here can already stop a service by other means; its job is denying the
+  # model cache and runtime secrets by path, which neither the bus nor these sockets reach.
+  unix (connect, send, receive) type=stream peer=(label=unconfined),
   dbus (send, receive) bus=system peer=(name=org.freedesktop.systemd1),
   dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
 
