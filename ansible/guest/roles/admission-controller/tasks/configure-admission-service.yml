@@ -33,6 +33,14 @@
         group: root
         mode: '0644'
 
+    - name: Grant registry mTLS leaf access via drop-in (cosign --registry-client-cert)
+      ansible.builtin.copy:
+        src: 40-registry-tls.conf
+        dest: /etc/systemd/system/admission-controller.service.d/40-registry-tls.conf
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Reload systemd and start admission controller
       ansible.builtin.systemd:
         name: admission-controller

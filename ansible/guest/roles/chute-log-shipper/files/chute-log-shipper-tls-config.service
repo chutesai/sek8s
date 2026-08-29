@@ -1,13 +1,13 @@
 [Unit]
-Description=Grant chute-log-shipper group-read on the registry mTLS leaf
+Description=Grant registry-tls group-read on the registry mTLS leaf
 Requires=chute-log-shipper-tls-config.path
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# The leaf is minted root:root (dir 0700, key 0600) by the initramfs
-# setup_vm_tls script, which we must NOT modify (RTMR2 stability). Re-group it
-# to the service's own group and open group-read so the dedicated non-root uid
-# can present it as its mTLS client identity. The files stay root-owned, so
-# containerd/cosign (which read them as root) are unaffected.
-ExecStart=/bin/sh -c 'chgrp chute-log-shipper /run/chutes/registry-tls /run/chutes/registry-tls/client.crt /run/chutes/registry-tls/client.key && chmod 0710 /run/chutes/registry-tls && chmod 0640 /run/chutes/registry-tls/client.key'
+# The leaf is minted root:root (dir 0700, key 0600) by the initramfs setup_vm_tls
+# script, which we must NOT modify (RTMR2 stability). Re-group it to the shared
+# registry-tls group and open group-read so the non-root consumers can present it
+# as their mTLS client identity: chute-log-shipper (log egress) and admission
+# (cosign --registry-client-cert). Files stay root-owned.
+ExecStart=/bin/sh -c 'chgrp registry-tls /run/chutes/registry-tls /run/chutes/registry-tls/client.crt /run/chutes/registry-tls/client.key && chmod 0710 /run/chutes/registry-tls && chmod 0640 /run/chutes/registry-tls/client.key'

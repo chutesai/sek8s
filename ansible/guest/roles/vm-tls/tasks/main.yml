@@ -23,33 +23,15 @@
     mode: '0755'
   notify: update initramfs
 
-# containerd reads registry mTLS certs directly from /run/chutes/registry-tls
-# (configured in registries.yaml). cosign, however, resolves client certs via
-# the Docker certs.d convention, so symlink the initramfs-generated leaf cert
-# into /etc/docker/certs.d/registry.chutes.ai/ (cosign expects client.cert /
-# client.key filenames). The symlink targets are on tmpfs and only resolve at
-# runtime once setup_vm_tls has minted the leaf cert.
-
-- name: Create docker certs.d directory for registry.chutes.ai
-  ansible.builtin.file:
-    path: /etc/docker/certs.d/registry.chutes.ai
-    state: directory
-    owner: root
-    group: root
-    mode: '0755'
-
-- name: Create client.cert symlink for cosign mTLS
-  ansible.builtin.file:
-    src: /run/chutes/registry-tls/client.crt
-    dest: /etc/docker/certs.d/registry.chutes.ai/client.cert
-    state: link
-    force: true
-    follow: false  # target is generated at boot (setup_vm_tls); don't follow it at build time
-
-- name: Create client.key symlink for cosign mTLS
-  ansible.builtin.file:
-    src: /run/chutes/registry-tls/client.key
-    dest: /etc/docker/certs.d/registry.chutes.ai/client.key
-    state: link
-    force: true
-    follow: false  # target is generated at boot (setup_vm_tls); don't follow it at build time
+# containerd reads the registry mTLS leaf directly from /run/chutes/registry-tls
+# (configured in registries.yaml). cosign/go-containerregistry does NOT honor the
+# Docker certs.d convention, so it is passed the leaf explicitly via
+# --registry-client-cert (see clients/cosign.py). Both non-root consumers reach
+# the root-owned leaf through this shared group, chgrp'd onto it post-boot by
+# chute-log-shipper-tls-config.service.
+- name: Create registry-tls group (shared read access to the registry mTLS leaf)
+  ansible.builtin.group:
+    name: registry-tls
+    gid: 10152
+    state: present
+    system: true

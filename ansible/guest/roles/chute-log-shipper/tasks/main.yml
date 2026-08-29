@@ -21,14 +21,14 @@
     system: true
 
 # Dedicated non-root uid (not 1000, not the system-manager uid 10150), per the
-# system-manager isolation rule. Primary group is its own group so the mTLS
-# leaf can be re-grouped to it; supplemental containerd grants CRI socket access.
+# system-manager isolation rule. Supplemental groups: containerd (CRI socket),
+# registry-tls (shared read on the mTLS leaf, created by the vm-tls role).
 - name: Create chute-log-shipper user
   ansible.builtin.user:
     name: chute-log-shipper
     uid: "{{ chute_log_shipper_uid }}"
     group: chute-log-shipper
-    groups: "systemd-journal,containerd"
+    groups: "systemd-journal,containerd,registry-tls"
     append: true
     system: true
     shell: /usr/sbin/nologin
