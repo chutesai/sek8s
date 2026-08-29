@@ -8,6 +8,9 @@ SCRIPT_DIR="${SCRIPT_DIR:-/usr/local/bin/k3s-init-scripts}"
 MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
 LOG_FILE="${LOG_FILE:-/var/log/k3s-post-start.log}"
 MAX_SCRIPT_TIMEOUT="${MAX_SCRIPT_TIMEOUT:-300}"  # 5 minutes per script
+# How often to feed the systemd watchdog while a step script is running. Must stay
+# well under WatchdogSec in k3s-post-start.service.
+WATCHDOG_PING_INTERVAL="${WATCHDOG_PING_INTERVAL:-30}"
 export MARKER_DIR  # Scripts may use this for run-once behavior
 
 # Security-critical scripts that must succeed or the VM powers off.
@@ -77,7 +80,26 @@ run_script() {
     
     log "Executing: $script_path (timeout: ${MAX_SCRIPT_TIMEOUT}s)"
     
-    if timeout "$MAX_SCRIPT_TIMEOUT" bash "$script_path" > "$script_log" 2>&1; then
+    # Run the step in the background and keep feeding the watchdog while it runs.
+    # Blocking here without pings means the quiet window equals the script's runtime,
+    # so any step slower than WatchdogSec got the whole unit SIGABRT'd mid-run — and
+    # because the step never finished, its completion marker was never written and the
+    # restart replayed the same kill forever. `timeout` still bounds the step; the
+    # watchdog's job is to catch a wedged *wrapper*, which the ping loop cannot mask
+    # (a wedge outside this loop stops the pings).
+    timeout "$MAX_SCRIPT_TIMEOUT" bash "$script_path" > "$script_log" 2>&1 &
+    local script_pid=$!
+    local waited=0
+    while kill -0 "$script_pid" 2>/dev/null; do
+        sleep 1
+        waited=$((waited + 1))
+        if [ $((waited % WATCHDOG_PING_INTERVAL)) -eq 0 ]; then
+            send_watchdog
+        fi
+    done
+    wait "$script_pid" || exit_code=$?
+
+    if [ $exit_code -eq 0 ]; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
@@ -94,7 +116,6 @@ run_script() {
         rm -f "$script_log"
         return 0
     else
-        exit_code=$?
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
