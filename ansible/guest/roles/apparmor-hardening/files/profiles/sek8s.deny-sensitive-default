@@ -38,6 +38,22 @@ profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
   # Network (curl, wget, scp, socat, nc need it)
   network,
 
+  # System D-Bus. `abi <abi/4.0>` mediates D-Bus *method calls* separately from the
+  # socket, so `network,` plus `/** rwlkm` is not enough: without these rules any
+  # confined shell running `systemctl is-active <unit>` fails with
+  # "Failed to connect to bus: Permission denied" (the same symptom documented in
+  # sek8s.system-manager). That broke the k3s cluster-init steps, which the wrapper
+  # invokes as `bash <script>` — exec'ing /usr/bin/bash by name attaches this profile,
+  # while the wrapper itself (exec'd as /usr/local/bin/k3s-post-start.sh) stays
+  # unconfined, so the identical `systemctl is-active k3s` check passed in the parent
+  # and failed in every step.
+  #
+  # This grants no new power: the profile already allows `/** rwlkm` and `capability,`,
+  # so a shell confined here can already stop a service by other means. The profile's
+  # job is denying the model cache and runtime secrets, and D-Bus reaches neither.
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.systemd1),
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
+
   # Confines by PATH (cache/secrets), not privilege: allow capabilities broadly so
   # normal root tooling (dmesg -> CAP_SYS_RESOURCE, chown, mount) keeps working, but
   # deny the ones that let a confined process drop below AppArmor entirely. sys_module
