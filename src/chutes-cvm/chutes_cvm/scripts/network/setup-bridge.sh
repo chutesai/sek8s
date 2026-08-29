@@ -62,6 +62,7 @@ if [[ -n "$DO_CLEAN" ]]; then
   sudo iptables -D FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -d "${VM_IP%/*}" -j ACCEPT 2>/dev/null || true
   sudo iptables -D FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
   sudo iptables -t nat -D POSTROUTING -s "$BRIDGE_NET" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || true
+  sudo iptables -t mangle -D FORWARD -o "$PUBLIC_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
   sudo ip link delete "$TAP_IFACE" 2>/dev/null || true
   sudo ip link delete "$BRIDGE_NAME" 2>/dev/null || true
   echo "Bridge network setup cleaned."
@@ -128,6 +129,7 @@ sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$NODE_PORT
 sudo iptables -t nat -D PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$STATUS_PORT" -j DNAT --to-destination "${VM_IP%/*}:$STATUS_PORT" 2>/dev/null || true
 sudo iptables -D FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -d "${VM_IP%/*}" -j ACCEPT 2>/dev/null || true
 sudo iptables -t nat -D POSTROUTING -s "$BRIDGE_NET" -o "$PUBLIC_IFACE" -j MASQUERADE 2>/dev/null || true
+sudo iptables -t mangle -D FORWARD -o "$PUBLIC_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || true
 
 # Port forwarding rules (add current config)
 sudo iptables -t nat -A PREROUTING -i "$PUBLIC_IFACE" -p tcp --dport "$SSH_PORT" -j DNAT --to-destination "${VM_IP%/*}:22"
@@ -147,6 +149,13 @@ sudo iptables -C FORWARD -i "$PUBLIC_IFACE" -o "$BRIDGE_NAME" -m state --state R
 
 # NAT for outbound traffic
 sudo iptables -t nat -A POSTROUTING -s "${BRIDGE_IP%/*}/24" -o "$PUBLIC_IFACE" -j MASQUERADE
+
+# Clamp MSS to the egress interface's PMTU so guest TLS handshakes fit a small-MTU uplink
+# (e.g. a WireGuard public_interface at 1280). The guest advertises MSS from its own 1500
+# NIC and can't see the real egress size; the bridge can, so it clamps here — sized to
+# whatever $PUBLIC_IFACE is, no hardcoded value.
+sudo iptables -t mangle -C FORWARD -o "$PUBLIC_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+  sudo iptables -t mangle -A FORWARD -o "$PUBLIC_IFACE" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 
 echo "   ✓ NAT and forwarding rules configured"
 echo
