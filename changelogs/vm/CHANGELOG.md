@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-08-26
+## [1.4.0] - 2026-08-29
 
 ### Added
 - New initramfs script `write-validator-auth` (init-bottom) writes the per-VM ephemeral validator auth SS58 to `/run/chutes/validator-auth.env` — directly in the initramfs `/run` tmpfs, which `initramfs-tools` moves to the real root's `/run` before exec'ing init. The file is fully ephemeral (cleared on every reboot, never touches the root filesystem), and the write logic is measured into RTMR2. VM powers off on invalid or missing SS58.
@@ -286,6 +286,12 @@ Version source of truth: `ansible/guest/VERSION`
   generation — turning newly submitted profiles into published measurements — where a third-party
   verification run would see measured classes only. The GPU-VM build's
   `measurements generate --register rtmr3` step is unaffected (RTMR3 is image-only, no API call).
+- OPA per-decision logging is now off by default. `opa-config.yaml` hardcoded
+  `decision_logs.console: true`, which wrote the full AdmissionReview input (complete pod specs) to the
+  journal for every admitted object — high-volume noise that evicted boot/attestation history from the
+  journal window, and tenant workload detail in a log the miner can read over the status API. The config
+  and unit are now templated, so the existing `opa_decision_logs` and `opa_log_level` variables are live
+  rather than dead; debug builds can opt back in with `-e opa_decision_logs=true`.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.

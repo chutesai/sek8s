@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `src/attestation-proxy/VERSION`
 
-## [0.3.2] - 2026-07-18
+## [0.3.2] - 2026-08-29
 
 ### Changed
 - Forward `server` response header to clients (removed from hop-by-hop suppression list)
@@ -21,6 +21,9 @@ Version source of truth: `src/attestation-proxy/VERSION`
   the validator pins it to the VM's registered CA and authenticates with signed
   request headers. Client-cert mTLS (`MTLS_REQUIRED`) is intentionally NOT
   enabled on the proxy — it is not how validators authenticate.
+- Install a loguru sink with `diagnose=False` at startup
+  (`sek8s_common.log_config.configure_logging`), so exception tracebacks no longer render frame-local
+  values into the proxy's logs. The tracebacks themselves are unchanged.
 
 ### Removed
 - `run_server_async()` — replaced by the shared `WebServer.serve()`.

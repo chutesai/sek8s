@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-08-19
+## [0.4.0] - 2026-08-29
 
 ### Added
 - `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
@@ -43,6 +43,8 @@ Version source of truth: `src/sek8s/VERSION`
     validator terminated (stop); other 2xx = keep sending; `403`/`404` = rejected (stop + log the
     reason); `413` = payload too large → split the batch and retry the halves (and shrink the batch
     ceiling); any other non-2xx / connection error = transient retry with backoff. No `seq` is sent.
+- System status `/services` allowlist now covers `chute-log-shipper` and `opa`. The prod VM has no console
+  or SSH access, so an unlisted unit cannot be status-checked or log-tailed by the miner CLI at all.
 
 ### Changed
 - Split cosign signature verification into two keys: `chutes.pub` for the private localregistry (and wildcard fallback), `dockerhub.pub` for Docker Hub `parachutes/*` images
@@ -66,6 +68,11 @@ Version source of truth: `src/sek8s/VERSION`
   dynamically-fetched cosign keys are now RSA-verified (not PGP-verified)
   against the attested root key before being written to tmpfs. Key paths and
   behavior are unchanged.
+- Guest services now install a loguru sink with `diagnose=False`
+  (`sek8s_common.log_config.configure_logging`, called from each service entrypoint). Loguru's default
+  renders frame-local *values* into exception tracebacks, which on an error path could write request data
+  into a journal the miner can read over the status API. Tracebacks are otherwise unchanged — `backtrace`
+  stays on, so every frame, line, and source line is still logged.
 
 ### Removed
 - system-manager's `ImageManager` no longer pulls images. Removed the cosign-verified pull
