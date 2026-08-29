@@ -21,14 +21,14 @@
     system: true
 
 # Dedicated non-root uid (not 1000, not the system-manager uid 10150), per the
-# system-manager isolation rule. Supplemental groups: containerd (CRI socket),
-# registry-tls (shared read on the mTLS leaf, created by the vm-tls role).
+# system-manager isolation rule. Supplemental containerd grants CRI socket access;
+# registry mTLS leaf access is layered on by the vm-tls role via a drop-in.
 - name: Create chute-log-shipper user
   ansible.builtin.user:
     name: chute-log-shipper
     uid: "{{ chute_log_shipper_uid }}"
     group: chute-log-shipper
-    groups: "systemd-journal,containerd,registry-tls"
+    groups: "systemd-journal,containerd"
     append: true
     system: true
     shell: /usr/sbin/nologin
@@ -94,27 +94,6 @@
     owner: root
     group: root
     mode: '0644'
-
-- name: Install registry mTLS leaf permission units
-  ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "/etc/systemd/system/{{ item }}"
-    owner: root
-    group: root
-    mode: '0644'
-  loop:
-    - chute-log-shipper-tls-config.path
-    - chute-log-shipper-tls-config.service
-
-# Enable-only (no state: started) at build time: the registry mTLS leaf and the
-# cvm.chutes.ai endpoint do not exist on the build VM. On a real boot the
-# initramfs mints the leaf before multi-user.target, so the path unit fixes
-# perms and the service auto-starts (WantedBy=multi-user.target).
-- name: Enable registry mTLS leaf permission path unit
-  ansible.builtin.systemd:
-    name: chute-log-shipper-tls-config.path
-    enabled: true
-    daemon_reload: true
 
 - name: Enable chute-log-shipper service
   ansible.builtin.systemd:

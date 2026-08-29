@@ -1,9 +1,9 @@
 [Unit]
 Description=sek8s Chute Log Shipper (guest-side crash-log capture)
-# Needs k3s (CRI socket + pod logs) and the per-boot registry mTLS leaf, whose
-# group perms are fixed up by chute-log-shipper-tls-config once it appears.
-After=network-online.target k3s.service chute-log-shipper-tls-config.service
-Wants=network-online.target k3s.service chute-log-shipper-tls-config.path
+# Needs k3s (CRI socket + pod logs). Registry mTLS leaf access (group + ordering
+# after the leaf-perms unit) is layered on by the vm-tls role's drop-in.
+After=network-online.target k3s.service
+Wants=network-online.target k3s.service
 
 [Service]
 Type=simple
