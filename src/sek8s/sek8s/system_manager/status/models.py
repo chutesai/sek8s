@@ -29,6 +29,11 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
         unit="admission-controller.service",
         description="sek8s admission controller",
     ),
+    "opa": ServiceDefinition(
+        service_id="opa",
+        unit="opa.service",
+        description="Open Policy Agent backing the admission controller",
+    ),
     "system-manager": ServiceDefinition(
         service_id="system-manager",
         unit="system-manager.service",
@@ -38,6 +43,11 @@ SERVICE_ALLOWLIST: Dict[str, ServiceDefinition] = {
         service_id="attestation-service",
         unit="attestation-service.service",
         description="TDX/nvtrust attestation service",
+    ),
+    "chute-log-shipper": ServiceDefinition(
+        service_id="chute-log-shipper",
+        unit="chute-log-shipper.service",
+        description="Chute crash-log capture agent (ships pre-registration pod logs to the validator)",
     ),
     "k3s": ServiceDefinition(
         service_id="k3s",

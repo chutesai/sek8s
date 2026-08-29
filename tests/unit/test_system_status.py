@@ -49,12 +49,27 @@ def test_list_services(status_client):
     expected = {
         "admission-controller",
         "attestation-service",
+        "chute-log-shipper",
         "k3s",
         "nvidia-persistenced",
         "nvidia-fabricmanager",
+        "opa",
         "system-manager",
     }
     assert expected.issubset(service_ids)
+
+
+def test_allowlist_units_match_service_ids():
+    """Every allowlist key must map to the unit the guest image actually installs."""
+    expected_units = {
+        "chute-log-shipper": "chute-log-shipper.service",
+        "opa": "opa.service",
+    }
+    for service_id, unit in expected_units.items():
+        assert SERVICE_ALLOWLIST[service_id].unit == unit
+    # Keys and service_id fields must not drift apart — the id is the API path segment.
+    for service_id, definition in SERVICE_ALLOWLIST.items():
+        assert definition.service_id == service_id
 
 
 def test_service_status_parsing(status_client, fake_runner):

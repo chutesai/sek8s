@@ -10,7 +10,7 @@ Group=opa
 ExecStart=/usr/local/bin/opa run --server \
     --config-file=/etc/opa/opa.yaml \
     --addr=localhost:8181 \
-    --log-level=info \
+    --log-level={{ opa_log_level }} \
     /etc/opa/policies
 Restart=always
 RestartSec=5

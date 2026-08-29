@@ -7,13 +7,36 @@ The System Status service is a read-only FastAPI endpoint that runs inside the g
 
 | Capability | Description |
 | --- | --- |
-| Service inventory | Enumerate the fixed allowlist of managed systemd units (admission controller, **system manager**, attestation service, k3s server, `nvidia-persistenced`, `nvidia-fabricmanager`, and `infiniband-config`). |
+| Service inventory | Enumerate the fixed allowlist of managed systemd units: the long-running sek8s services (admission controller, **system manager**, attestation service, **chute log shipper**), k3s server, the boot one-shots that gate them (`storage-bind-mounts`, **`signing-keys-config`**, **`registry-tls-config`**, **`verify-apparmor-profiles`**), and the GPU/fabric units (`nvidia-persistenced`, `nvidia-fabricmanager`, `infiniband-config`). |
 | Service status | Return summarized health derived from `systemctl show` for an allowlisted unit. |
 | Service logs | Tail the latest N log lines (`journalctl -u <unit>`) with optional time window filtering. |
 | GPU telemetry | Surface `nvidia-smi` output in either default (summary) or `-q` (detailed) modes with optional GPU index selection. |
 | Overview summary | Aggregate all service statuses with the latest `nvidia-smi` result to produce an "ok"/"degraded" snapshot. |
 
 Future enhancements (e.g., additional units) must be added explicitly to the allowlist to avoid broadening the attack surface.
+
+Because the prod VM has no console or SSH access, this allowlist is the **only** operator/tooling view of a
+unit — and it is also the **only** way journal content leaves the guest. That makes the allowlist a
+confidentiality boundary, not just a convenience:
+
+- **The miner is the party this guest is confidential *from*.** Miner-authenticated calls to
+  `/services/{id}/logs` are how the miner CLI reads guest journals, so anything a unit logs is effectively
+  published to the host operator. A unit qualifies only when its journal is free of **tenant/validator**
+  material: chute log content, admission review objects (pod specs, env, mounts), key material.
+- **Secondarily, the validator reads the same endpoints**, so units handling the *miner's own* credentials
+  stay off the list too — not to protect them from the miner, but to keep `MINER_SEED` away from the validator.
+  This is why `config-manager.service` (config-volume credential handling) is excluded.
+
+`opa.service` is on the list, but only because `decision_logs` is off by default (see
+`ansible/guest/roles/admission-controller/defaults/main.yml`). A build with `-e opa_decision_logs=true`
+puts full AdmissionReview inputs in that journal and therefore behind this endpoint — acceptable for a debug
+build (which already has console access), never for prod.
+
+**Caveat — loguru tracebacks.** The FastAPI services call `logger.exception(...)` and loguru's default
+`diagnose=True` renders frame-local *values* into the traceback. On an error path that can put request
+data into the journal of an allowlisted unit. The chute log shipper is clear (it never calls
+`logger.exception`, and every one of its log statements carries only `config_id`, pod name, counts, and
+status codes — never log content), but `admission-controller` warrants a `diagnose=False` sink.
 
 ## API Surface
 
@@ -68,5 +91,6 @@ All other paths return 404.
 ## Open Questions / Next Steps
 
 - Determine the final authentication story (e.g., reuse validator signature headers similar to the attestation proxy or rely on mTLS). The initial implementation focuses on the read-only execution layer; transport-level protections can be layered in once the consuming component is chosen.
-- Extend the allowlist if additional services (OPA, attestation proxy) need coverage.
+- Configure loguru with `diagnose=False` for the guest services so exception tracebacks cannot render request data into an allowlisted journal.
+- Remaining un-exposed units that may warrant coverage (all secret-free journals): `gpu-verify`, `rtmr3-verify`, `setup-cache` / `verify-cache-volume` / `verify-storage`, `attestation-service-init`. `config-manager` is excluded by the rule above.
 - Consider Prometheus metrics (command success/failure counts) if observability gaps appear.
