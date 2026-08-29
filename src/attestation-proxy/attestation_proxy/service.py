@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
 from sek8s_common.auth import authorize
+from sek8s_common.log_config import configure_logging
 from sek8s_common.server import WebServer
 
 SERVICE_NAMESPACE = os.getenv("WORKLOAD_NAMESPACE", "chutes")
@@ -441,6 +442,7 @@ def run():
         os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
         config = AttestationProxyConfig()
+        configure_logging(config.debug)
 
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)

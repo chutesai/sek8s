@@ -7,7 +7,7 @@ The System Status service is a read-only FastAPI endpoint that runs inside the g
 
 | Capability | Description |
 | --- | --- |
-| Service inventory | Enumerate the fixed allowlist of managed systemd units: the long-running sek8s services (admission controller, **system manager**, attestation service, **chute log shipper**), k3s server, the boot one-shots that gate them (`storage-bind-mounts`, **`signing-keys-config`**, **`registry-tls-config`**, **`verify-apparmor-profiles`**), and the GPU/fabric units (`nvidia-persistenced`, `nvidia-fabricmanager`, `infiniband-config`). |
+| Service inventory | Enumerate the fixed allowlist of managed systemd units: the long-running sek8s services (admission controller, **OPA**, **system manager**, attestation service, **chute log shipper**), k3s server, `storage-bind-mounts`, and the GPU/fabric units (`nvidia-persistenced`, `nvidia-fabricmanager`, `infiniband-config`). |
 | Service status | Return summarized health derived from `systemctl show` for an allowlisted unit. |
 | Service logs | Tail the latest N log lines (`journalctl -u <unit>`) with optional time window filtering. |
 | GPU telemetry | Surface `nvidia-smi` output in either default (summary) or `-q` (detailed) modes with optional GPU index selection. |
@@ -32,11 +32,16 @@ confidentiality boundary, not just a convenience:
 puts full AdmissionReview inputs in that journal and therefore behind this endpoint — acceptable for a debug
 build (which already has console access), never for prod.
 
-**Caveat — loguru tracebacks.** The FastAPI services call `logger.exception(...)` and loguru's default
-`diagnose=True` renders frame-local *values* into the traceback. On an error path that can put request
-data into the journal of an allowlisted unit. The chute log shipper is clear (it never calls
-`logger.exception`, and every one of its log statements carries only `config_id`, pod name, counts, and
-status codes — never log content), but `admission-controller` warrants a `diagnose=False` sink.
+**Traceback hygiene.** Loguru's default `diagnose=True` renders frame-local *values* into exception
+tracebacks, which on an error path would put request data into an allowlisted journal. The admission path
+(`services/admission_controller.py`, `validators/`, `clients/cosign.py`) uses stdlib `logging`, which never
+renders locals, so it was never exposed — but the guest mixes both libraries, so every service entrypoint now
+calls `sek8s_common.log_config.configure_logging()` to install a `diagnose=False` sink. That makes the property
+hold for the whole process regardless of which library a future call site reaches for. Only values are
+suppressed — `backtrace` stays on, so tracebacks still carry every frame, line, and source line, including the
+call chain above the catching point. The chute log shipper is
+independently clear: it never calls `logger.exception`, and every one of its log statements carries only
+`config_id`, pod name, counts, and status codes — never log content.
 
 ## API Surface
 
@@ -91,6 +96,9 @@ All other paths return 404.
 ## Open Questions / Next Steps
 
 - Determine the final authentication story (e.g., reuse validator signature headers similar to the attestation proxy or rely on mTLS). The initial implementation focuses on the read-only execution layer; transport-level protections can be layered in once the consuming component is chosen.
-- Configure loguru with `diagnose=False` for the guest services so exception tracebacks cannot render request data into an allowlisted journal.
-- Remaining un-exposed units that may warrant coverage (all secret-free journals): `gpu-verify`, `rtmr3-verify`, `setup-cache` / `verify-cache-volume` / `verify-storage`, `attestation-service-init`. `config-manager` is excluded by the rule above.
+- Remaining un-exposed units, should a triage gap show up in practice (all secret-free journals):
+  `signing-keys-config`, `registry-tls-config`, `verify-apparmor-profiles`, `gpu-verify`, `rtmr3-verify`,
+  `setup-cache` / `verify-cache-volume` / `verify-storage`, `attestation-service-init`. These are boot one-shots
+  whose failure already surfaces through the long-running service that depends on them, so they are deliberately
+  left off rather than widening the endpoint. `config-manager` is excluded by the credential rule above.
 - Consider Prometheus metrics (command success/failure counts) if observability gaps appear.
