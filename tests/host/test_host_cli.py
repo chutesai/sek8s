@@ -1,7 +1,8 @@
 """Tests for the `chutes-cvm host <verb>` dispatcher (chutes_cvm.host.cli).
 
-verify / submit-profile route to the shared gate flow (chutes_cvm.guest.verify.verify_host,
-with submit False/True); tune / restore call the tuning helpers; setup forwards to host.setup;
+verify runs the read-only gate flow (chutes_cvm.guest.verify.verify_host); submit-profile
+registers the hardware profile directly (chutes_cvm.guest.preflight.submit_profile), independent
+of the guest image; tune / restore call the tuning helpers; setup forwards to host.setup;
 reset-gpus / vfio-wedged are host-hardware ops (GPUs, PCI subsystem).
 """
 
@@ -17,11 +18,16 @@ def test_verify_runs_gate_without_submit():
     assert vh.call_args.kwargs["target_os"] == "26.04"
 
 
-def test_submit_profile_sets_submit_true():
-    with patch("chutes_cvm.guest.verify.verify_host", return_value=2) as vh:
-        assert hostcli.main(["submit-profile"]) == 2
-    assert vh.call_args.kwargs["submit"] is True
-    assert vh.call_args.kwargs["target_os"] is None
+def test_submit_profile_registers_directly_without_image_gate():
+    # submit-profile posts the hardware profile directly — no verify_host / image readiness gate,
+    # so a fresh host with no image downloaded can still register.
+    with patch(
+        "chutes_cvm.guest.preflight.submit_profile",
+        return_value={"stored": True, "fingerprint": "fp123"},
+    ) as sp, patch("chutes_cvm.guest.verify.verify_host") as vh:
+        assert hostcli.main(["submit-profile"]) == 0
+    assert sp.called
+    vh.assert_not_called()  # the image/readiness gate is bypassed for registration
 
 
 def test_tune_dispatches():

@@ -72,11 +72,28 @@ def _cmd_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_submit_profile(args: argparse.Namespace) -> int:
-    # Registration is the same gate flow with --submit (was `verify-host --submit`): it runs the
-    # read-only check, then registers the class if it is not yet launchable.
-    return _run_verify(
-        None, args.config, args.api, submit=True, banner="host class submission"
+    # Registration is independent of the guest image: it captures + signs this host's hardware
+    # profile and POSTs it for baselining. No image / version / readiness gate — that is `host
+    # verify`, which needs a downloaded image to know which measurement to check against. A fresh
+    # host (no image yet) is exactly when you submit, so requiring the image here was wrong.
+    from chutes_cvm.guest.preflight import PreflightError, submit_profile
+
+    print(_color("── chutes-cvm: host class submission ──", "1;36"))
+    try:
+        result = submit_profile(
+            config_path=args.config, scripts_dir=str(SCRIPTS_DIR), api_base=args.api
+        )
+    except PreflightError as exc:
+        print(f"Registration failed: {exc}")
+        print(_color("\nResult: FAILED", "1;31"))
+        return 1
+    already = "" if result.get("stored") else " (already on file)"
+    print(
+        f"Registered this host class for measurement{already} "
+        f"(fingerprint {result.get('fingerprint', '?')}) — Chutes will generate its measurements."
     )
+    print(_color("\nResult: SUBMITTED", "1;32"))
+    return 0
 
 
 def _cmd_tune(args: argparse.Namespace) -> int:
@@ -165,9 +182,9 @@ def main(argv: "list[str] | None" = None) -> int:
         "submit-profile",
         help="Register this host class with Chutes so it can generate measurements.",
         description=(
-            "Capture this host's platform metadata, sign it with the miner hotkey, and submit it "
-            "to the control plane for baselining (the non-dry-run of `host verify`). Use when "
-            "`host verify` reports the host class is not yet baselined."
+            "Capture this host's hardware profile, sign it with the miner hotkey, and register it "
+            "with the control plane for baselining. Independent of the guest image — run it on a "
+            "fresh host before any image is downloaded. Exit 0 submitted / 1 failed."
         ),
     )
     _add_api_args(submit)
