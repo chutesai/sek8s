@@ -29,8 +29,12 @@ kubectl create secret generic miner-credentials \
   --from-literal=seed=$MINER_SEED \
   -n chutes
 
+# attestation-system also needs the seed: the attestation proxy signs each response with the
+# miner hotkey (rc proof-of-possession) so the validator can authorize release-candidate
+# measurements at runtime.
 kubectl create secret generic miner-credentials \
   --from-literal=ss58=$MINER_SS58 \
+  --from-literal=seed=$MINER_SEED \
   -n attestation-system
 
 touch "$MARKER_FILE"
