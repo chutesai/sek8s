@@ -194,6 +194,14 @@ spec:
             secretKeyRef:
               name: miner-credentials
               key: ss58
+        # Miner sr25519 seed for the release-candidate hotkey proof-of-possession. optional so
+        # the same image still runs on VMs whose secret predates the seed key.
+        - name: MINER_SEED
+          valueFrom:
+            secretKeyRef:
+              name: miner-credentials
+              key: seed
+              optional: true
         - name: ALLOWED_VALIDATORS
           valueFrom:
             secretKeyRef:

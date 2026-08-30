@@ -4,7 +4,13 @@ import base64
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from attestation_proxy.signing import load_private_key, sign_response_body
+from attestation_proxy.signing import (
+    RC_ATTESTATION_PURPOSE,
+    load_miner_keypair,
+    load_private_key,
+    sign_hotkey_attestation,
+    sign_response_body,
+)
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import (
@@ -46,7 +52,7 @@ def _make_proxy_config():
     return config
 
 
-def _make_server(server_class, private_key=None):
+def _make_server(server_class, private_key=None, miner_keypair=None):
     """Construct a proxy server instance bypassing __init__ and inject attrs."""
     shared = MagicMock()
     shared.consecutive_socket_failures = 0
@@ -57,8 +63,19 @@ def _make_server(server_class, private_key=None):
     server.shared = shared
     server.server_name = server_class.__name__.upper()
     server._private_key = private_key
+    server._miner_keypair = miner_keypair
     server.app = MagicMock()
     return server
+
+
+# 32-byte hex seed for a deterministic sr25519 keypair in tests (never a real miner seed).
+_TEST_SEED = "0x" + "ab" * 32
+
+
+def _make_test_keypair():
+    from substrateinterface import Keypair
+
+    return Keypair.create_from_seed(_TEST_SEED)
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +280,91 @@ async def test_proxy_request_strips_upstream_server_header_internal():
     )
 
     assert "server" not in {k.lower() for k in response.headers.keys()}
+
+
+# ---------------------------------------------------------------------------
+# Miner-hotkey proof-of-possession signing
+# ---------------------------------------------------------------------------
+
+
+def test_load_miner_keypair_none_seed():
+    assert load_miner_keypair(None) is None
+    assert load_miner_keypair("") is None
+
+
+def test_load_miner_keypair_invalid_seed():
+    assert load_miner_keypair("not-a-valid-seed") is None
+
+
+def test_load_miner_keypair_from_seed():
+    keypair = load_miner_keypair(_TEST_SEED)
+    assert keypair is not None
+    assert keypair.ss58_address == _make_test_keypair().ss58_address
+
+
+def test_sign_hotkey_attestation_round_trip():
+    from substrateinterface import Keypair
+
+    keypair = _make_test_keypair()
+    ss58, nonce, signature = sign_hotkey_attestation(keypair)
+
+    assert ss58 == keypair.ss58_address
+    assert nonce.isdigit()
+    message = f"{ss58}:{nonce}:{RC_ATTESTATION_PURPOSE}"
+    # Verify exactly as the validator's rc gate does (hex signature over the string message).
+    assert Keypair(ss58_address=ss58).verify(message, bytes.fromhex(signature))
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_adds_hotkey_headers_when_seed_present(rsa_key):
+    from attestation_proxy.service import ExternalProxyServer
+    from substrateinterface import Keypair
+
+    keypair = _make_test_keypair()
+    server = _make_server(
+        ExternalProxyServer, private_key=rsa_key, miner_keypair=keypair
+    )
+    server.shared.http_client.request = AsyncMock(
+        return_value=_make_httpx_response(content=b"body")
+    )
+
+    response = await server.proxy_request(
+        target_url="http://fake-upstream",
+        method="GET",
+        path="/service/chute-service-x/verify",
+        headers={},
+        body=b"",
+    )
+
+    lower = {k.lower(): v for k, v in response.headers.items()}
+    assert lower["x-chutes-hotkey"] == keypair.ss58_address
+    assert lower["x-chutes-nonce"].isdigit()
+    message = f"{keypair.ss58_address}:{lower['x-chutes-nonce']}:{RC_ATTESTATION_PURPOSE}"
+    assert Keypair(ss58_address=keypair.ss58_address).verify(
+        message, bytes.fromhex(lower["x-chutes-signature"])
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_no_hotkey_headers_without_seed(rsa_key):
+    from attestation_proxy.service import ExternalProxyServer
+
+    server = _make_server(ExternalProxyServer, private_key=rsa_key, miner_keypair=None)
+    server.shared.http_client.request = AsyncMock(
+        return_value=_make_httpx_response(content=b"body")
+    )
+
+    response = await server.proxy_request(
+        target_url="http://fake-upstream",
+        method="GET",
+        path="/service/chute-service-x/verify",
+        headers={},
+        body=b"",
+    )
+
+    keys = {k.lower() for k in response.headers.keys()}
+    assert "x-chutes-hotkey" not in keys
+    assert "x-chutes-signature" not in keys
 
 
 @pytest.mark.asyncio

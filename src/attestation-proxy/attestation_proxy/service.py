@@ -9,7 +9,12 @@ from urllib.parse import urljoin
 import backoff
 import httpx
 from attestation_proxy.config import AttestationProxyConfig
-from attestation_proxy.signing import load_private_key, sign_response_body
+from attestation_proxy.signing import (
+    load_miner_keypair,
+    load_private_key,
+    sign_hotkey_attestation,
+    sign_response_body,
+)
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
@@ -331,10 +336,18 @@ class ExternalProxyServer(BaseProxyServer):
                 f"TLS private key could not be loaded from {config.tls_key_path}; "
                 "cannot start external proxy without signing key"
             )
+        # Optional: miner hotkey for the rc proof-of-possession. None when no seed is
+        # configured (old charts) -> responses go out unsigned, unchanged behaviour.
+        self._miner_keypair = load_miner_keypair(config.miner_seed)
 
     @backoff.on_exception(backoff.expo, httpx.ConnectError, max_tries=2, max_time=5)
     async def proxy_request(self, *args, **kwargs) -> Response:
-        """Proxy request and attach an X-Signature header for key-possession proof."""
+        """Proxy request and attach an X-Signature header for key-possession proof.
+
+        When a miner seed is configured, also attach a miner-hotkey proof-of-possession
+        (X-Chutes-Hotkey/Nonce/Signature) so the validator can authorize release-candidate
+        measurements at runtime. Absent the seed the headers are simply omitted.
+        """
         response = await super().proxy_request(*args, **kwargs)
         assert (
             self._private_key is not None
@@ -342,6 +355,11 @@ class ExternalProxyServer(BaseProxyServer):
         response.headers["X-Signature"] = sign_response_body(
             self._private_key, response.body
         )
+        if self._miner_keypair is not None:
+            ss58, nonce, signature = sign_hotkey_attestation(self._miner_keypair)
+            response.headers["X-Chutes-Hotkey"] = ss58
+            response.headers["X-Chutes-Nonce"] = nonce
+            response.headers["X-Chutes-Signature"] = signature
         return response
 
     def _setup_routes(self):
