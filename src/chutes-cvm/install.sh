@@ -21,6 +21,9 @@
 #   --dest DIR         checkout location for bootstrap (default: an ephemeral temp dir)
 #   --editable         force editable install; --no-editable forces non-editable
 #   --ref REF          branch/tag to fetch (env SEK8S_REF, default main)
+#   --force            install even if a DIFFERENT chutes-cvm already resolves on PATH (which
+#                      would otherwise shadow the shim); by default that is a hard error
+#                      (see the pre-install path-conflict guard)
 #   SEK8S_REPO         git URL (default https://github.com/chutesai/sek8s.git) — uses the host's
 #                      existing git credentials (the repo is private)
 #   CHUTES_CVM_VENV    venv location (default /opt/chutes-cvm/venv)
@@ -36,6 +39,7 @@ BIN_DIR="${CHUTES_CVM_BIN:-/usr/local/bin}"
 SHIM="$BIN_DIR/chutes-cvm"
 DEST=""
 EDITABLE="auto"
+FORCE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -43,6 +47,7 @@ while [ $# -gt 0 ]; do
         --ref) REF="$2"; shift 2 ;;
         --editable) EDITABLE=1; shift ;;
         --no-editable) EDITABLE=0; shift ;;
+        --force) FORCE=1; shift ;;
         -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]:-$0}" 2>/dev/null | sed 's/^# \?//'; exit 0 ;;
         *) echo "install.sh: unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -60,6 +65,27 @@ if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
 # invoking user (into a user-owned temp dir, or as root under ansible) so cleanup stays simple.
 SUDO=""
 if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then SUDO="sudo"; fi
+
+# ── Path-conflict guard (fail closed, before mutating anything) ─────────────────
+# We manage exactly one entry point: the shim at $SHIM. If a DIFFERENT chutes-cvm already
+# resolves on PATH, our shim would be shadowed by it and a plain `chutes-cvm` would keep running
+# the other one — an ambiguous, half-broken environment. Refuse rather than silently create that
+# state; --force overrides. Empty (fresh install) or our own shim (re-install) are both fine.
+EXISTING_CVM="$(command -v chutes-cvm 2>/dev/null || true)"
+if [ -n "$EXISTING_CVM" ] && [ "$EXISTING_CVM" != "$SHIM" ]; then
+    if [ "$FORCE" -eq 1 ]; then
+        log "WARNING: a different chutes-cvm is on PATH ($EXISTING_CVM); installing anyway (--force)."
+    else
+        cat >&2 <<EOF
+ERROR: a different chutes-cvm already resolves on PATH:
+    $EXISTING_CVM
+This install manages the shim at $SHIM, but the above would still win, leaving an ambiguous
+environment. It is usually a dev/editable install (e.g. a repo .venv) shadowing the managed shim.
+Remove or deactivate it, or re-run with --force to install anyway.
+EOF
+        exit 1
+    fi
+fi
 
 # ── Resolve source: repo-present (this script inside a checkout) vs bootstrap fetch ────────────
 SELF="${BASH_SOURCE[0]:-}"
