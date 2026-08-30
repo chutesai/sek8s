@@ -17,13 +17,41 @@ dependencies never burdens one that doesn't. The low-level QEMU-boot primitive
 """
 
 import argparse
+import os
 import sys
+
+
+def _installed_version() -> str:
+    """The version of the installed ``chutes-cvm`` distribution (accurate for editable,
+    non-editable, and PyPI installs alike, since it reads the dist metadata)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("chutes-cvm")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _cmd_version(_args: argparse.Namespace) -> int:
+    """Print the version and where this CLI resolves from — the `package`/`python` lines let a
+    miner spot a stray editable/.venv install shadowing the install.sh shim on PATH."""
+    import chutes_cvm
+
+    print(f"chutes-cvm {_installed_version()}")
+    print(f"  package: {os.path.dirname(os.path.abspath(chutes_cvm.__file__))}")
+    print(f"  python:  {sys.executable}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chutes-cvm",
         description="Operate and inspect Chutes confidential GPU VMs on this host.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"chutes-cvm {_installed_version()}",
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="<command>")
 
@@ -61,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Offline TDX measurement generation — generate / list "
         "(build-host tool; args forwarded, `chutes-cvm measurements --help`).",
     )
+
+    # Not a passthrough noun group: a self-contained utility so a miner can confirm which
+    # chutes-cvm (and version) is actually on PATH. Also available as `chutes-cvm --version`.
+    p_version = sub.add_parser(
+        "version",
+        help="Print the installed chutes-cvm version and where it resolves from.",
+    )
+    p_version.set_defaults(func=_cmd_version)
 
     return parser
 

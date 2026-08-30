@@ -8,6 +8,8 @@ operator VM lifecycle lives under the `guest` noun (see test_guest_cli.py for it
 
 from unittest.mock import patch
 
+import pytest
+
 from chutes_cvm import cli
 
 
@@ -117,3 +119,23 @@ def test_config_init_generates_valid_config_from_schema(tmp_path, monkeypatch):
     assert cli.main(["config", "init"]) == 0
     cfg = LaunchConfig.from_file(str(tmp_path / "config.yaml"))
     assert cfg.network.type == "tap"
+
+
+def test_version_command(capsys):
+    # `chutes-cvm version` prints the version plus where it resolves from (drift detection).
+    assert cli.main(["version"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("chutes-cvm ")
+    assert "package:" in out and "python:" in out
+
+
+def test_version_flag_exits_zero(capsys):
+    # `chutes-cvm --version` is the argparse action: prints and exits 0.
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--version"])
+    assert exc.value.code == 0
+    assert capsys.readouterr().out.startswith("chutes-cvm ")
+
+
+def test_version_is_a_visible_command():
+    assert "version" in _visible_commands()
