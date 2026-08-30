@@ -43,3 +43,15 @@ def default_config_path() -> str:
     ``./config.yaml`` in the current directory — where ``chutes-cvm config init`` writes it. Ansible
     and the launch orchestrator pass an explicit path instead of relying on this."""
     return os.environ.get("CHUTES_CVM_CONFIG") or "config.yaml"
+
+
+# Chutes control-plane base URL. Lives here (not in the substrate-heavy preflight module) so the
+# CLI can wire it as an argparse default without eagerly importing preflight.
+DEFAULT_API_BASE = "https://api.chutes.ai"
+
+
+def default_api_base() -> str:
+    """The control-plane base URL when a caller passes none: ``CHUTES_API_BASE`` override, else
+    the production default. Lets `--api` default from the environment so miners need no flag.
+    """
+    return os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE

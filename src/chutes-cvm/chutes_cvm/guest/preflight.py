@@ -28,9 +28,8 @@ from urllib.parse import urlencode
 
 import yaml
 from chutes_cvm import proc
+from chutes_cvm.paths import DEFAULT_API_BASE
 from substrateinterface import Keypair, KeypairType
-
-DEFAULT_API_BASE = "https://api.chutes.ai"
 
 # A transport/auth failure (no verdict) fails CLOSED — the boot's LUKS key release needs the API
 # anyway, so refusing to launch when we cannot confirm loses nothing.

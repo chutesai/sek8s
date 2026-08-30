@@ -22,7 +22,7 @@ import os
 import sys
 
 from chutes_cvm import proc
-from chutes_cvm.paths import SCRIPTS_DIR
+from chutes_cvm.paths import SCRIPTS_DIR, default_api_base, default_config_path
 
 
 def _run_script(name: str, argv: "list[str]", cwd: "str | None" = None) -> int:
@@ -125,14 +125,18 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
 
 
 def _add_api_args(p: argparse.ArgumentParser) -> None:
+    # Both default from the environment (resolved at parse time) so miners need no flags:
+    # --config from CHUTES_CVM_CONFIG (else ./config.yaml), --api from CHUTES_API_BASE (else prod).
     p.add_argument(
         "--config",
         metavar="PATH",
+        default=default_config_path(),
         help="Launch config.yaml with the miner hotkey (default: ./config.yaml; env CHUTES_CVM_CONFIG).",
     )
     p.add_argument(
         "--api",
         metavar="URL",
+        default=default_api_base(),
         help="Control-plane base URL (default: https://api.chutes.ai; env CHUTES_API_BASE).",
     )
 
