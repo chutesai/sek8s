@@ -94,27 +94,44 @@ def compute_rtmr1_2(
 
 
 def _detect_ext4_root(image: str, key_args: "list[str] | tuple" = ()) -> str:
-    """Return the first ext4 filesystem device in the image (guestfish list-filesystems).
+    """Return the OS root filesystem device in the image.
 
-    ``key_args`` (``--key all:file:<keyfile>``) unlock a LUKS root so the decrypted ext4 shows.
+    Uses libguestfs ``inspect-os``, which identifies the actual OS root — correctly the
+    LUKS-decrypted root, not the separate /boot partition. ``key_args``
+    (``--key all:file:<keyfile>``) unlock a LUKS root during launch so it is decrypted and
+    inspectable. Falls back to the first ext4 for a plaintext single-root image where inspect-os
+    finds no OS.
+
+    A naive "first ext4" is wrong POST-LUKS: the encrypted root reads as ``crypto_LUKS``, so the
+    first ext4 is the separate /boot (no ``/etc``). RTMR3 was computed PRE-LUKS on the plaintext
+    root before; now it runs against the encrypted image and must inspect the real OS root.
     """
-    result = proc.run(
-        ["guestfish", "--ro", "-a", image, *key_args],
-        input="run\nlist-filesystems\n",
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise MeasurementError(
-            f"guestfish failed to list filesystems: {result.stderr.strip()}"
+
+    def _guestfish(script: str) -> str:
+        result = proc.run(
+            ["guestfish", "--ro", "-a", image, *key_args],
+            input=script,
+            capture_output=True,
+            text=True,
         )
-    for line in result.stdout.splitlines():
+        if result.returncode != 0:
+            raise MeasurementError(f"guestfish failed: {result.stderr.strip()}")
+        return result.stdout
+
+    # Primary: the OS root libguestfs identifies (handles LUKS + a separate /boot).
+    for line in _guestfish("run\ninspect-os\n").splitlines():
+        dev = line.strip()
+        if dev.startswith("/dev/"):
+            return dev
+
+    # Fallback: first ext4 (plaintext single-root image with no inspectable OS).
+    for line in _guestfish("run\nlist-filesystems\n").splitlines():
         # lines look like "/dev/sda2: ext4"
         dev, _, fstype = line.partition(":")
         if fstype.strip() == "ext4":
             return dev.strip()
     raise MeasurementError(
-        "could not find an ext4 root partition; pass root_part explicitly"
+        "could not find an OS root partition; pass root_part explicitly"
     )
 
 
