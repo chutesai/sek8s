@@ -282,7 +282,6 @@ def _setup_config_volume(config: LaunchConfig, benchmark: bool) -> None:
                 f"VM_DNS={config.network.dns}",
                 f"DOCKER_HUB_USER={config.docker_hub.username}",
                 f"DOCKER_HUB_TOKEN={config.docker_hub.token}",
-                f"OPERATOR_SIGNING_KEY={config.rc.operator_signing_key}",
                 helper,
                 vol,
             ]
@@ -441,7 +440,6 @@ _CLI_TO_SECTION = {
     "ssh_port": ("network", "ssh_port"),
     "docker_hub_username": ("docker_hub", "username"),
     "docker_hub_token": ("docker_hub", "token"),
-    "operator_signing_key": ("rc", "operator_signing_key"),
 }
 
 # CLI volume flags → (volumes subsection, key).
@@ -486,7 +484,6 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--network-type", dest="network_type", choices=["tap", "user"])
     p.add_argument("--docker-hub-username", dest="docker_hub_username")
     p.add_argument("--docker-hub-token", dest="docker_hub_token")
-    p.add_argument("--operator-signing-key", dest="operator_signing_key")
     p.add_argument("--skip-bind", action="store_true", default=None)
     p.add_argument("--no-gpus", action="store_true", default=None)
     p.add_argument("--foreground", action="store_true", default=None)

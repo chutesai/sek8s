@@ -7,10 +7,9 @@
 #
 #   prod.yml  — encrypts the root filesystem and installs the fail-CLOSED prod
 #               initramfs (LUKS unlock + root rotation). Distinct measurement.
-#   debug.yml — installs the fail-OPEN debug initramfs (operator-key RC provisioning,
-#               static k3s key, no LUKS) and performs NO encryption. Distinct
-#               measurement. The debug-only scripts (rc-sign, *_debug entries) are
-#               installed ONLY by this set, so prod carries none of that code.
+#   debug.yml — installs the fail-OPEN debug initramfs (static k3s key, no LUKS) and
+#               performs NO encryption. Distinct measurement. The debug-only *_debug
+#               entries are installed ONLY by this set, so prod carries none of that code.
 
 - name: Encrypt root filesystem and install production initramfs
   ansible.builtin.include_tasks: prod.yml

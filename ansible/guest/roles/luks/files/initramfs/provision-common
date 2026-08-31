@@ -4,19 +4,22 @@
 # entry scripts. Identical implementation for both: load the VM identity written by
 # fetch_key_and_unlock, generate the runtime (RTMR3-extended) quote, POST /provision
 # (which registers the VM root CA and — for prod — rotates volume passphrases), and
-# write the k3s EncryptionConfiguration. The prod/debug differences live in the entry
-# scripts via two hooks, so no rc / signing / fail-open code appears here or in prod:
+# write the k3s EncryptionConfiguration. The prod/debug difference lives in one entry hook,
+# so no fail-open code appears here or in prod:
 #
 #   handle_failure <reason>   fatal-error behavior. Prod: poweroff -f (fail closed).
 #                             Debug: log and continue (fail open). Default here is
 #                             fail-closed, so a missing override can only fail safe.
-#   attest_extra_headers <n>  echoes extra curl header args for the /provision POST.
-#                             Prod: nothing. Debug: the operator-signature header.
 #
 # Volume LUKS (device detection, luksOpen/format, passphrase rotation) is NOT here —
 # it is prod-only and lives in the prod setup_storage entry. Debug has no encrypted
 # volumes; it calls provision_request with an empty volume list (CA registration only)
 # and supplies its own static k3s key.
+
+# sr25519 miner-hotkey signer (hotkey_sign → X-Chutes-Signature), sourced so the init-bottom
+# /provision flow proves hotkey possession over the chained quote nonce. Derives from the seed
+# stashed to /run tmpfs by init-premount (read_hotkey), which persists across the invocations.
+. /scripts/hotkey-sign
 
 # ── Shared globals ────────────────────────────────────────────────────────────
 VM_NAME=""
@@ -33,7 +36,6 @@ handle_failure() {
     sleep 10
     poweroff -f
 }
-attest_extra_headers() { :; }
 
 # ── VM identity (written to /run/chutes by fetch_key_and_unlock) ───────────────
 load_vm_data() {
@@ -58,9 +60,8 @@ load_vm_data() {
 #   volumes_json: comma-separated quoted labels, e.g. '"storage","tdx-cache"' for prod,
 #   or '' for debug (register the CA only, no volume secrets). Generates the runtime
 #   quote (RTMR3 extended by rtmr3-measure before this runs) bound to the boot's
-#   luks-quote-nonce + cert-hash, adds the operator-signature header when the entry's
-#   attest_extra_headers provides one, POSTs, and leaves the response at
-#   $PROVISION_RESPONSE for the caller to parse. Returns 0 on HTTP 200/201.
+#   luks-quote-nonce + cert-hash, adds the miner-hotkey proof header (hotkey_sign), POSTs,
+#   and leaves the response at $PROVISION_RESPONSE for the caller to parse. Returns 0 on 200/201.
 provision_request() {
     local volumes_json="$1"
     local quote_file="/tmp/luks_quote.bin"
@@ -108,11 +109,16 @@ provision_request() {
     rm -f "$quote_file"
     log_end_msg 0
 
-    # Operator-signature header for this call (empty in prod; the signature header in
-    # debug). Spliced unquoted so it word-splits into separate curl args; the base64
-    # signature contains no spaces.
-    local extra_headers
-    extra_headers=$(attest_extra_headers "$quote_nonce")
+    # The exact request body — built once so the hotkey signature hashes the same bytes curl sends.
+    local body
+    body="{\"quote\":\"${quote_b64}\",\"volumes\":[${volumes_json}]}"
+
+    # Miner-hotkey proof-of-possession over the chained quote nonce: sr25519 over
+    # {ss58}:{quote_nonce}:{sha256(body)}. X-Chutes-Nonce must carry the SAME nonce as X-Quote-Nonce
+    # so verify_hotkey_auth's server_nonce check passes.
+    local hk_hdr="" _hk_sig
+    _hk_sig=$(hotkey_sign "$quote_nonce" "$body")
+    [ -n "$_hk_sig" ] && hk_hdr="-H X-Chutes-Signature:$_hk_sig"
 
     log_begin_msg "POST /provision (volumes=[${volumes_json}])"
 
@@ -122,8 +128,9 @@ provision_request() {
     http_code=$(curl -s -w "%{http_code}" \
         -X POST \
         -H "X-Quote-Nonce: $quote_nonce" \
+        -H "X-Chutes-Nonce: $quote_nonce" \
         -H "X-Chutes-Hotkey: $HOTKEY" \
-        ${extra_headers} \
+        ${hk_hdr} \
         -H "User-Agent: TDX-LUKS-Storage/1.0" \
         -H "Content-Type: application/json" \
         --max-time "$timeout" \
@@ -131,7 +138,7 @@ provision_request() {
         --cacert "$ca_cert" \
         --cert "$client_cert" \
         --key "$client_key" \
-        -d "{\"quote\":\"${quote_b64}\",\"volumes\":[${volumes_json}]}" \
+        -d "$body" \
         -o "$PROVISION_RESPONSE" \
         "$endpoint_url")
 

@@ -18,14 +18,6 @@ miner:
 #   username: "your_dockerhub_username"
 #   token: "dckr_pat_xxxxxxxx"
 
-# RC-gate ONLY (measurements marked rc=true API-side). Host PATH to the operator RSA
-# private key — it is copied onto the config volume as operator-signing-key.pem so the
-# initramfs can sign the attestation nonce (proof-of-possession). Add the matching PUBLIC
-# key to the API's accepted RC measurement. The key is referenced by path, never inlined
-# here. CLI override: --operator-signing-key. Omit for normal prod launches.
-# rc:
-#   operator_signing_key: "/absolute/path/to/operator-signing-key.pem"
-
 network:
   vm_ip: "192.168.100.2"
   bridge_ip: "192.168.100.1/24"

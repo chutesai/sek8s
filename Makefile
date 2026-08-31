@@ -10,7 +10,10 @@ DC=docker compose -p ${PROJECT} -f ${COMPOSE_FILE} -f ${COMPOSE_BASE_FILE}
 POETRY ?= "poetry"
 
 SRC_DIR := src
-PACKAGES := $(shell ls $(SRC_DIR))
+# Python packages only: the Python tooling below derives src/<pkg>/<import>/ paths and
+# -p/--cov import names from this list, so non-Python packages under src/ (e.g. the
+# sr25519-signer Rust crate) must not appear in it.
+PACKAGES := $(patsubst $(SRC_DIR)/%/pyproject.toml,%,$(wildcard $(SRC_DIR)/*/pyproject.toml))
 VERSION := $(shell head ansible/guest/VERSION | grep -Eo "\d+.\d+.\d+")
 
 # Package filter: "make <target> sek8s" selects one package

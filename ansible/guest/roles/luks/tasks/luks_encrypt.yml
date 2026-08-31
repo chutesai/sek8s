@@ -225,8 +225,7 @@
 
 # Shared boot-attestation / provision libraries sourced by the prod entry scripts
 # (fetch_key_and_unlock -> attest-common; setup_storage -> provision-common). Staged
-# into the initramfs by the fetch_key hook. The debug-only rc-sign lib is intentionally
-# NOT installed here — prod carries none of it and keeps a distinct measurement.
+# into the initramfs by the fetch_key hook.
 - name: Copy shared boot-attestation library (attest-common)
   ansible.builtin.copy:
     src: files/initramfs/attest-common
@@ -239,6 +238,16 @@
   ansible.builtin.copy:
     src: files/initramfs/provision-common
     dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/provision-common"
+    mode: '0755'
+    owner: root
+    group: root
+
+# The sr25519 hotkey signer is installed for BOTH prod and debug (see debug_install.yml) — it
+# proves hotkey possession on every boot. The fetch_key hook stages it via its /scripts/* file glob.
+- name: Copy sr25519 hotkey signing library (hotkey-sign)
+  ansible.builtin.copy:
+    src: files/initramfs/hotkey-sign
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/hotkey-sign"
     mode: '0755'
     owner: root
     group: root

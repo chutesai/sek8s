@@ -113,13 +113,6 @@ class DockerHubSection(BaseModel):
     )
 
 
-class RcSection(BaseModel):
-    operator_signing_key: str = Field(
-        default="",
-        description="RC-gate only: host path to the operator RSA private key",
-    )
-
-
 class LaunchConfig(BaseSettings):
     """Resolved VM launch configuration (CLI > env > config.yaml > defaults)."""
 
@@ -137,7 +130,6 @@ class LaunchConfig(BaseSettings):
     devices: DevicesSection = DevicesSection()
     runtime: RuntimeSection = RuntimeSection()
     docker_hub: DockerHubSection = DockerHubSection()
-    rc: RcSection = RcSection()
 
     @classmethod
     def settings_customise_sources(

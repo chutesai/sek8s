@@ -382,6 +382,22 @@
       ansible.builtin.include_role:
         name: security
 
+- name: Install sr25519 signer (guest boot-time hotkey proof-of-possession)
+  hosts: vm
+  become: true
+  tags:
+    - sr25519
+    - build
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    # Before the luks play rebuilds the final initramfs — fetch_key copy_exec's /usr/bin/sr25519
+    # into it, so the binary must exist first (and while the VM is still up).
+    - name: Install sr25519 signer
+      ansible.builtin.include_role:
+        name: sr25519
+
 - name: Extend RTMR3 with guest software stack
   hosts: vm
   become: true

@@ -13,13 +13,13 @@
 #   scripts/init-top/load-tdx       shared
 #   scripts/attest-common           shared  (boot-attestation lib)
 #   scripts/provision-common        shared  (/provision + k3s-encryption lib)
-#   scripts/rc-sign                 DEBUG   (operator-key signing lib)
+#   scripts/hotkey-sign             shared  (sr25519 miner-hotkey signing lib)
 #   scripts/init-premount/fetch_key_and_unlock_debug   DEBUG entry (fail-open, no LUKS)
 #   scripts/init-bottom/setup_storage_debug            DEBUG entry (static k3s key)
 #   scripts/init-bottom/write-validator-auth_debug     DEBUG entry (fail-open)
 #
 # NOT installed: luks-helpers (LUKS-only), fetch_key_and_unlock / setup_storage (prod
-# entries). Prod-only code never lands in the debug image, and rc-sign / *_debug never
+# entries). Prod-only code never lands in the debug image, and the *_debug entries never
 # land in prod — the two initramfs images carry different files and different measurements.
 
 - name: Check if nbd device is connected

@@ -157,11 +157,20 @@ main() {
         log_end_msg 0
 
         log_begin_msg "Confirming root passphrase rotation with API"
+        # The exact request body — built once so the hotkey signature hashes the same bytes sent.
+        local body='{"volumes":{"root":{"rotated":true}}}'
+        # Miner-hotkey proof-of-possession: sr25519 over {ss58}:{ROOT_CONFIRM_NONCE}:{sha256(body)}.
+        # X-Chutes-Nonce carries the same nonce as X-Confirm-Nonce (verify_hotkey_auth server_nonce).
+        local hk_hdr="" _hk_sig
+        _hk_sig=$(hotkey_sign "$ROOT_CONFIRM_NONCE" "$body")
+        [ -n "$_hk_sig" ] && hk_hdr="-H X-Chutes-Signature:$_hk_sig"
         local confirm_code
         confirm_code=$(curl -s -w "%{http_code}" \
             -X POST \
             -H "X-Confirm-Nonce: $ROOT_CONFIRM_NONCE" \
+            -H "X-Chutes-Nonce: $ROOT_CONFIRM_NONCE" \
             -H "X-Chutes-Hotkey: $HOTKEY" \
+            ${hk_hdr} \
             -H "Content-Type: application/json" \
             -H "User-Agent: TDX-LUKS-Client/1.0" \
             --max-time "$TIMEOUT" \
@@ -169,9 +178,9 @@ main() {
             --cacert "$API_CA_CERT" \
             --cert "$CLIENT_CERT" \
             --key "$CLIENT_KEY" \
-            -d '{"volumes":{"root":{"rotated":true}}}' \
+            -d "$body" \
             -o /dev/null \
-            "${TDX_BASE_URL}/servers/${VM_NAME}/luks/confirm")
+            "${TDX_BASE_URL}/servers/${VM_NAME}/provision/confirm")
 
         if [ "$confirm_code" = "200" ]; then
             log_end_msg 0

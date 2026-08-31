@@ -260,11 +260,19 @@ confirm_rotation() {
 
     log_begin_msg "Confirming LUKS passphrase rotation"
 
+    # Miner-hotkey proof-of-possession over the chained confirm nonce: sr25519 over
+    # {ss58}:{CONFIRM_NONCE}:{sha256(body)}. X-Chutes-Nonce carries the same nonce as X-Confirm-Nonce.
+    local hk_hdr="" _hk_sig
+    _hk_sig=$(hotkey_sign "$CONFIRM_NONCE" "$body")
+    [ -n "$_hk_sig" ] && hk_hdr="-H X-Chutes-Signature:$_hk_sig"
+
     local http_code resp_file=/tmp/confirm_response
     http_code=$(curl -s -w "%{http_code}" \
         -X POST \
         -H "X-Confirm-Nonce: $CONFIRM_NONCE" \
+        -H "X-Chutes-Nonce: $CONFIRM_NONCE" \
         -H "X-Chutes-Hotkey: $HOTKEY" \
+        ${hk_hdr} \
         -H "Content-Type: application/json" \
         -H "User-Agent: TDX-LUKS-Storage/1.0" \
         --max-time "$timeout" \
@@ -280,6 +288,11 @@ confirm_rotation() {
     # root CA here — setup_vm_tls still needs ca.key to sign the attestation-proxy
     # and registry leaf certs, and deletes it before pivot_root.
     rm -f /run/chutes/cert-hash
+
+    # Last hotkey-signed API call is done — shred the stashed seed before init-bottom finishes, so
+    # it never survives the initramfs /run -> real-root /run move into userspace. Runs on both the
+    # success and failure paths below.
+    hotkey_shred_seed
 
     if [ "$http_code" = "200" ]; then
         rm -f "$resp_file"

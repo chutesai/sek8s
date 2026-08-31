@@ -106,8 +106,8 @@
     - run
 
 # ── Install debug initramfs script set ────────────────────────────────────────
-# Shared pieces (identical files to prod) + debug-only pieces (rc-sign + *_debug
-# entries). luks-helpers and the prod entry scripts are deliberately NOT installed.
+# Shared pieces (identical files to prod) + the debug-only *_debug entries. luks-helpers and
+# the prod entry scripts are deliberately NOT installed.
 
 - name: Copy TDX initramfs hook (stages binaries + shell libs)
   ansible.builtin.copy:
@@ -141,10 +141,12 @@
     owner: root
     group: root
 
-- name: Copy operator-key signing library (rc-sign, DEBUG ONLY)
+# The sr25519 hotkey PoP runs on every boot, prod and debug, so hotkey-sign is installed in
+# both (mirrors luks_encrypt.yml).
+- name: Copy sr25519 hotkey signing library (hotkey-sign)
   ansible.builtin.copy:
-    src: files/initramfs/rc-sign
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/rc-sign"
+    src: files/initramfs/hotkey-sign
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/hotkey-sign"
     mode: '0755'
     owner: root
     group: root

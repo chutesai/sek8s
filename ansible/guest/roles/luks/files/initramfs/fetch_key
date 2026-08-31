@@ -18,6 +18,7 @@ copy_exec /usr/bin/openssl
 copy_exec /usr/bin/chown
 copy_exec /usr/bin/sha256sum
 copy_exec /usr/bin/sha384sum
+copy_exec /usr/bin/sr25519
 
 # Tools for storage setup (init-bottom script)
 copy_exec /sbin/blkid
@@ -72,12 +73,11 @@ manual_add_modules vmw_vsock_virtio_transport_common
 manual_add_modules xfs
 
 # Shared shell libraries sourced by the boot scripts (luks-helpers, attest-common,
-# provision-common, and — debug images only — rc-sign). These live as regular files
-# directly under /etc/initramfs-tools/scripts/; the init-top/init-premount/init-bottom
-# stages are subdirectories staged by initramfs-tools itself, so a non-recursive
-# regular-file glob picks up only the libs. Copy exactly the libs installed for THIS
-# image: a prod image never installs rc-sign, so prod never stages it and keeps a
-# distinct measurement — the hook itself carries no debug-specific reference.
+# provision-common, hotkey-sign). These live as regular files directly under
+# /etc/initramfs-tools/scripts/; the init-top/init-premount/init-bottom stages are
+# subdirectories staged by initramfs-tools itself, so a non-recursive regular-file glob
+# picks up only the libs. Copies exactly the libs installed for THIS image, so prod and
+# debug keep distinct measurements — the hook itself carries no variant-specific reference.
 mkdir -p "$DESTDIR/scripts"
 for _lib in /etc/initramfs-tools/scripts/*; do
     [ -f "$_lib" ] || continue

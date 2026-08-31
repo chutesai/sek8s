@@ -1,0 +1,48 @@
+---
+# Build the sr25519 signer (static musl) on the control host and install it into the guest, so the
+# initramfs can prove miner-hotkey possession at boot (openssl cannot do Schnorr/Ristretto). The
+# luks fetch_key hook stages /usr/bin/sr25519 via copy_exec, so it lands in the measured initramfs.
+#
+# Must run BEFORE the luks role rebuilds the initramfs (so the binary exists when copy_exec runs).
+# The pinned rust-toolchain.toml (1.94.0 + musl) makes the shipped binary reproducible — a toolchain
+# bump changes the bytes and therefore RTMR2, so it is a deliberate, versioned change.
+
+- name: Build the sr25519 static binary on the control host
+  delegate_to: localhost
+  run_once: true
+  become: false
+  block:
+    - name: Detect cargo on the control host
+      ansible.builtin.command: which cargo
+      register: _sr_cargo
+      changed_when: false
+      failed_when: false
+
+    - name: Require a cargo toolchain (rustup + the pinned musl target)
+      ansible.builtin.fail:
+        msg: >-
+          cargo not found on the control host. The sr25519 signer needs a rustup toolchain with the
+          {{ sr25519_musl_target }} target (see src/sr25519/rust-toolchain.toml, channel 1.94.0).
+          Install rustup and run `make build-sr25519`, then re-run.
+      when: _sr_cargo.rc != 0
+
+    - name: Build sr25519 (release, static musl — honors the pinned rust-toolchain.toml)
+      ansible.builtin.command:
+        cmd: cargo build --release --target {{ sr25519_musl_target }}
+        chdir: "{{ sr25519_src_dir }}"
+      changed_when: true
+
+    - name: Assert the static binary was produced
+      ansible.builtin.stat:
+        path: "{{ sr25519_bin_src }}"
+      register: _sr_bin
+      failed_when: not _sr_bin.stat.exists
+
+# Reads the control-host binary and pushes it to the guest.
+- name: Install the sr25519 binary into the guest
+  ansible.builtin.copy:
+    src: "{{ sr25519_bin_src }}"
+    dest: "{{ sr25519_bin_dest }}"
+    owner: root
+    group: root
+    mode: "0755"

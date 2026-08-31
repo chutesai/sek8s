@@ -97,25 +97,12 @@ EOF
         print_info "  ✓ Docker Hub credential files"
     fi
 
-    # RC-gate only (OPERATOR_SIGNING_KEY = host path to the operator RSA private key, from
-    # arg 10 or the env var). Copied to the config volume as operator-signing-key.pem; the
-    # RTMR2-measured initramfs (rc-sign) signs the attestation nonce with it for rc=true
-    # measurements, and the API verifies with the matching public key. The private key never
-    # leaves the per-VM config volume + the initramfs /run tmpfs — not baked into any image.
-    if [[ -n "$OPERATOR_SIGNING_KEY" ]]; then
-        if [[ ! -f "$OPERATOR_SIGNING_KEY" ]]; then
-            print_error "Operator signing key not found: $OPERATOR_SIGNING_KEY"
-            exit 1
-        fi
-        install -m 600 "$OPERATOR_SIGNING_KEY" "$MOUNT_DIR/operator-signing-key.pem"
-        print_info "  ✓ operator signing key (RC-gate)"
-    fi
 }
 
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
-Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [operator-signing-key]
+Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token]
 
 Create a new config qcow2, or refresh an existing one (same path, ext4 label $LABEL).
 
@@ -133,8 +120,6 @@ Values (positional order = env var name):
   vm-dns      / VM_DNS         VM DNS server (default: 8.8.8.8)
   docker-hub-user  / DOCKER_HUB_USER   Optional Docker Hub username (with token)
   docker-hub-token / DOCKER_HUB_TOKEN  Optional Docker Hub PAT/password (with user)
-  operator-signing-key / OPERATOR_SIGNING_KEY  RC-gate only: host path to the operator
-                               RSA private key (PEM), copied on as operator-signing-key.pem
 
 Examples:
   $0 config.qcow2 chutes-miner "5abc..." "seed123" 192.168.100.2 192.168.100.1
@@ -147,7 +132,6 @@ The volume will contain:
   /miner-seed       - Miner seed credential
   /network-config.yaml - Netplan network configuration
   /docker-hub-username, /docker-hub-token - optional Docker Hub credentials (mode 0600)
-  /operator-signing-key.pem - optional RC-gate operator key (mode 0600, via OPERATOR_SIGNING_KEY)
 
 The volume will be formatted with:
   - Filesystem: ext4
@@ -178,11 +162,10 @@ VM_GATEWAY="${6:-${VM_GATEWAY:-}}"
 VM_DNS="${7:-${VM_DNS:-8.8.8.8}}"
 DOCKER_HUB_USER="${8:-${DOCKER_HUB_USER:-}}"
 DOCKER_HUB_TOKEN="${9:-${DOCKER_HUB_TOKEN:-}}"
-OPERATOR_SIGNING_KEY="${10:-${OPERATOR_SIGNING_KEY:-}}"
 
 if [[ -z "$OUTPUT_PATH" ]]; then
     print_error "Output path is required (arg 1 or \$OUTPUT_PATH)"
-    echo "Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [operator-signing-key]"
+    echo "Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token]"
     echo "  Any value may instead be supplied via its same-named env var. Run '$0 --help'."
     exit 1
 fi

@@ -10,15 +10,17 @@
 #   handle_failure <reason>   fatal-error behavior. Prod: poweroff -f (fail closed).
 #                             Debug: log and continue (fail open). Default here is
 #                             fail-closed, so a missing override can only fail safe.
-#   pre_attest_hook           runs while the config volume is still mounted, before
-#                             unmount. Prod: no-op. Debug: stash the operator key.
 #   detect_first_boot         sets FIRST_BOOT. Prod: inspect the LUKS2 first-boot
 #                             token. Debug (no LUKS): stays "false".
-#   attest_extra_headers <n>  echoes extra curl header args for the attestation POST.
-#                             Prod: nothing. Debug: the operator-signature header.
 #
 # Entry scripts source this AFTER /scripts/functions, then override the hooks they
 # need, then call run_boot_attestation.
+
+# sr25519 miner-hotkey signer (hotkey_stash_seed / hotkey_sign / hotkey_shred_seed → the
+# X-Chutes-Signature proof). Sourced here so every entry that sources attest-common — and
+# provision-common, which sources it likewise — can prove hotkey possession over each call's
+# server-issued nonce.
+. /scripts/hotkey-sign
 
 # ── Shared globals (attestation) ──────────────────────────────────────────────
 NONCE=""
@@ -63,9 +65,7 @@ handle_failure() {
     sleep 5
     poweroff -f
 }
-pre_attest_hook() { :; }
 detect_first_boot() { FIRST_BOOT="false"; }
-attest_extra_headers() { :; }
 
 # ── VM root CA ────────────────────────────────────────────────────────────────
 generate_vm_root_ca() {
@@ -214,23 +214,24 @@ read_vm_name() {
 
 read_hotkey() {
     local cfg_mount="/run/tdx-config"
-    local hotkey_file="$cfg_mount/miner-ss58"
-    log_begin_msg "Reading miner hotkey from config"
-    if [ ! -f "$hotkey_file" ]; then
+    log_begin_msg "Deriving miner hotkey from seed"
+    # Stash the seed to /run tmpfs and derive the AUTHORITATIVE ss58 from it. Deriving (rather
+    # than reading the claimed miner-ss58) is the proof-of-possession: the boot API calls sign
+    # each server nonce with this seed, so a caller cannot assert another miner's hotkey.
+    if ! hotkey_stash_seed "$cfg_mount"; then
         log_end_msg 1
-        log_failure_msg "Miner hotkey file not found: $hotkey_file"
+        log_failure_msg "Failed to derive miner hotkey from $cfg_mount/miner-seed"
         return 1
     fi
-    HOTKEY=$(cat "$hotkey_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
-    if [ -n "$HOTKEY" ]; then
-        log_end_msg 0
-        return 0
-    else
-        log_end_msg 1
-        log_failure_msg "Miner hotkey is empty or invalid in $hotkey_file"
-        cat "$hotkey_file" 2>/dev/null | od -c
-        return 1
+    HOTKEY="$(hotkey_ss58)"
+    # The claimed miner-ss58 is only a cross-check now — warn on mismatch, never trust it.
+    local claimed
+    claimed=$(cat "$cfg_mount/miner-ss58" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
+    if [ -n "$claimed" ] && [ "$claimed" != "$HOTKEY" ]; then
+        log_failure_msg "config miner-ss58 ($claimed) != seed-derived hotkey ($HOTKEY); using the seed's"
     fi
+    log_end_msg 0
+    return 0
 }
 
 # ── Nonce + quote ─────────────────────────────────────────────────────────────
@@ -312,11 +313,18 @@ fetch_luks_key() {
             continue
         fi
 
-        # Extra headers for this attempt (empty in prod; the operator-signature header
-        # in debug, signing the nonce just fetched). Spliced unquoted so it word-splits
-        # into separate curl args; the base64 signature contains no spaces.
-        local extra_headers
-        extra_headers=$(attest_extra_headers "$NONCE")
+        # The exact request body — built once so the hotkey signature hashes the same bytes curl
+        # sends (the API hashes the received body; the two must be byte-identical).
+        local body
+        body="{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}"
+
+        # Miner-hotkey proof-of-possession: sr25519 over {ss58}:{NONCE}:{sha256(body)}. The
+        # X-Chutes-Hotkey and X-Chutes-Nonce headers below carry the other two fields, so the API
+        # reconstructs the same message. Spliced unquoted (hex sig, no spaces); absent when no seed
+        # was stashed, so no empty header is sent.
+        local hk_hdr="" _hk_sig
+        _hk_sig=$(hotkey_sign "$NONCE" "$body")
+        [ -n "$_hk_sig" ] && hk_hdr="-H X-Chutes-Signature:$_hk_sig"
 
         local send_result=1
         local send_error=""
@@ -327,13 +335,14 @@ fetch_luks_key() {
             -H "Content-Type: application/json" \
             -H "User-Agent: TDX-LUKS-Client/1.0" \
             -H "X-Chutes-Nonce: $NONCE" \
-            ${extra_headers} \
+            -H "X-Chutes-Hotkey: $HOTKEY" \
+            ${hk_hdr} \
             --max-time $TIMEOUT \
             --retry 0 \
             --cacert "$API_CA_CERT" \
             --cert "$CLIENT_CERT" \
             --key "$CLIENT_KEY" \
-            -d "{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}" \
+            -d "$body" \
             -o "$response_file" \
             "$API_ENDPOINT")
 
@@ -434,9 +443,6 @@ run_boot_attestation() {
         handle_failure "Failed to read miner hotkey from config volume"
         return 1
     fi
-
-    # Entry hook while the config volume is still mounted (debug: stash operator key).
-    pre_attest_hook
 
     unmount_config_volume
 
