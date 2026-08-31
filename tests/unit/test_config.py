@@ -323,7 +323,7 @@ class TestCosignConfig:
         assert default_registry.require_signature is True
         assert default_registry.verification_method == "key"
         assert default_registry.public_key == Path(
-            "/etc/admission-controller/.cosign/cosign.pub"
+            "/run/chutes/signing-keys/cosign/chutes.pub"
         )
 
     def test_cosign_config_from_env(self):

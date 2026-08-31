@@ -1,4 +1,9 @@
-"""VFIO device binding, PCI cleanup, SR-IOV VF creation, and udev rules."""
+"""VFIO device binding, PCI cleanup, SR-IOV VF creation, and udev rules.
+
+Host-PCI hardware logic shared by both nouns: `guest launch` (guest/passthrough.py) binds
+devices for a VM, and `host vfio-wedged` (host/cli.py) probes the same subsystem. Lives at the
+package root — like proc/paths — so neither noun depends on the other's package.
+"""
 
 import concurrent.futures
 import os

@@ -11,6 +11,7 @@ from typing import Any, List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sek8s_common.constants import MTLS_CLIENT_CERT, MTLS_CLIENT_KEY
 
 
 class LogShipperConfig(BaseSettings):
@@ -22,14 +23,16 @@ class LogShipperConfig(BaseSettings):
         alias="VALIDATOR_BASE_URL",
         description="Base URL of the dedicated CVM mTLS proxy that fronts the ingest endpoint",
     )
+    # The VM's shared mTLS client identity (same env name + default as the cosign client): the one
+    # cert presented for all CVM->Chutes mTLS, which the API validates against the /provision CA.
     mtls_cert_path: Path = Field(
-        default=Path("/run/chutes/registry-tls/client.crt"),
-        alias="MTLS_CERT_PATH",
-        description="Per-boot registry mTLS client leaf presented as the egress identity",
+        default=Path(MTLS_CLIENT_CERT),
+        alias="SEK8S_MTLS_CLIENT_CERT",
+        description="Per-boot VM mTLS client leaf presented as the log-egress identity",
     )
     mtls_key_path: Path = Field(
-        default=Path("/run/chutes/registry-tls/client.key"),
-        alias="MTLS_KEY_PATH",
+        default=Path(MTLS_CLIENT_KEY),
+        alias="SEK8S_MTLS_CLIENT_KEY",
         description="Private key for the mTLS client leaf",
     )
     # HTTP status the validator returns to signal "stop capturing this pod".

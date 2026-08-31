@@ -119,7 +119,7 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     """Exit 0 if host PCI passthrough operations are wedged (a reset is needed before
     launch), else 1. Lets orchestration gate a launch/reset on the machine-parseable code.
     """
-    from chutes_cvm.guest.vfio import pci_operations_wedged
+    from chutes_cvm.vfio import pci_operations_wedged
 
     return 0 if pci_operations_wedged() else 1
 

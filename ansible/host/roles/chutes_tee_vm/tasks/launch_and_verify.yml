@@ -52,14 +52,14 @@
 # SBR/CC-mode op (and therefore VM launch) fails with "SBR cannot run until the
 # host is rebooted". Only a reboot clears it. We detect this up front, and again
 # if the launch itself wedges the host, rebooting and waiting for SSH to return
-# before (re)trying the launch. chutes_cvm.guest.vfio.pci_operations_wedged() is the
+# before (re)trying the launch. chutes_cvm.vfio.pci_operations_wedged() is the
 # same predicate chutes-cvm guest launch uses internally (scans ps for D-state vfio/gpu-tools).
 
 - name: Pre-flight — detect a wedged PCI subsystem
   ansible.builtin.command:
     argv:
       - chutes-cvm
-      - guest
+      - host
       - vfio-wedged
   register: _pci_wedged
   failed_when: false
@@ -90,7 +90,7 @@
       ansible.builtin.command:
         argv:
           - chutes-cvm
-          - guest
+          - host
           - vfio-wedged
       register: _post_wedge
       failed_when: false

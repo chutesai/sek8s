@@ -18,8 +18,8 @@ The config volume (`/var/config`) is an **untrusted input boundary** — the min
   - `src/chutes-cvm/chutes_cvm/scripts/config/config.tmpl.yaml` — user-facing config template
   - `host-tools/scripts/config/config-schema.json` — JSON Schema for config validation
   - `src/chutes-cvm/chutes_cvm/guest/config.py` — YAML parser, emits shell vars
-  - `src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
-  - `host-tools/scripts/volumes/create-config.sh` — creates and populates config volume
+  - `host-tools/scripts/quick-launch.sh` — orchestrates VM launch, calls `create-config.sh`
+  - `src/chutes-cvm/chutes_cvm/scripts/volumes/create-config.sh` — creates and populates config volume
   - `ansible/guest/roles/config/files/process-config.py` — guest-side config validator and applier (already uses PyYAML)
   - `ansible/guest/roles/common/templates/registries.yaml.j2` — containerd registry config (k3s); Ansible content preserved at runtime
   - `sek8s/cosign/client.py` — cosign subprocess runner (`_COSIGN_ENV`); should follow systemd `DOCKER_CONFIG`, not duplicate path logic
@@ -134,7 +134,7 @@ Success = A miner who provides Docker Hub credentials has both containerd (k3s) 
    - Accept `--docker-hub-username` / `--docker-hub-token`.
    - **Precedence**: CLI overrides `config.yaml` when both set.
    - Pass credentials as optional 8th/9th positional args to `create-config.sh`.
-5. **Modified: `host-tools/scripts/volumes/create-config.sh`**
+5. **Modified: `src/chutes-cvm/chutes_cvm/scripts/volumes/create-config.sh`**
    - Accept optional Docker Hub username/token args.
    - Write `docker-hub-username` and `docker-hub-token` on the config volume (mode **0600**).
 6. **Modified: `ansible/guest/roles/config/files/process-config.py`**

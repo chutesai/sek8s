@@ -55,7 +55,7 @@ def test_reset_gpus_delegates_to_script():
 
 
 def test_vfio_wedged_maps_predicate_to_exit_code():
-    with patch("chutes_cvm.guest.vfio.pci_operations_wedged", return_value=True):
+    with patch("chutes_cvm.vfio.pci_operations_wedged", return_value=True):
         assert hostcli.main(["vfio-wedged"]) == 0
-    with patch("chutes_cvm.guest.vfio.pci_operations_wedged", return_value=False):
+    with patch("chutes_cvm.vfio.pci_operations_wedged", return_value=False):
         assert hostcli.main(["vfio-wedged"]) == 1

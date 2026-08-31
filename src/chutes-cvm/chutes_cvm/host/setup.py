@@ -630,9 +630,10 @@ def _setup_ntp():
 
 def _ensure_chutes_dirs():
     """Create the /var/lib/chutes directories chutes-cvm operations expect (base image sets and
-    per-VM overlays). Folded in from the ansible ``chutes_dirs`` role."""
+    per-VM images). Folded in from the ansible ``chutes_dirs`` role. The per-VM dir matches
+    LaunchConfig.vm.vm_image_directory's default (guest/launch.py)."""
     print("\nStep: Ensuring /var/lib/chutes directories...")
-    for d in ("/var/lib/chutes/base-images", "/var/lib/chutes/vm-overlays"):
+    for d in ("/var/lib/chutes/base-images", "/var/lib/chutes/vm-images"):
         os.makedirs(d, exist_ok=True)
         os.chmod(d, 0o755)  # nosec B103
         print(f"  {d}")

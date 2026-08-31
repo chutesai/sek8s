@@ -882,7 +882,10 @@ def _self_signed(tmp_path):
 
 def test_build_ssl_context(tmp_path):
     cert_path, key_path = _self_signed(tmp_path)
-    config = make_config(MTLS_CERT_PATH=str(cert_path), MTLS_KEY_PATH=str(key_path))
+    config = make_config(
+        SEK8S_MTLS_CLIENT_CERT=str(cert_path),
+        SEK8S_MTLS_CLIENT_KEY=str(key_path),
+    )
     context = build_ssl_context(config)
     assert context.verify_mode.name == "CERT_REQUIRED"
 

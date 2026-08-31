@@ -330,6 +330,6 @@ def test_ensure_chutes_dirs_creates_expected(mock_makedirs, mock_chmod):
     _ensure_chutes_dirs()
     made = [c.args[0] for c in mock_makedirs.call_args_list]
     assert "/var/lib/chutes/base-images" in made
-    assert "/var/lib/chutes/vm-overlays" in made
+    assert "/var/lib/chutes/vm-images" in made
     # created idempotently
     assert all(c.kwargs.get("exist_ok") for c in mock_makedirs.call_args_list)

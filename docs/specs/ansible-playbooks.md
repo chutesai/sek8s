@@ -7,7 +7,7 @@
 
 ## Context
 
-Operational Ansible for **bare-metal TDX hosts** that run the sek8s VM stack (`host-tools/scripts`: `chutes-cvm setup-host`, `quick-launch.sh`, etc.). This is **separate** from the **guest VM image build** Ansible under [`ansible/guest/`](../../ansible/guest/) (formerly `ansible/k3s/`).
+Operational Ansible for **bare-metal TDX hosts** that run the sek8s VM stack (`host-tools/scripts`: `chutes-cvm host setup`, `quick-launch.sh`, etc.). This is **separate** from the **guest VM image build** Ansible under [`ansible/guest/`](../../ansible/guest/) (formerly `ansible/k3s/`).
 
 Primary references:
 
@@ -18,12 +18,12 @@ Primary references:
 
 **Packages affected**: No external Ansible collections required; all modules are `ansible.builtin`. Playbooks under **`ansible/host/`** are **not** part of the guest image release line; only **`ansible/guest/*`** (and other VM-domain paths) bump [`ansible/guest/VERSION`](../../ansible/guest/VERSION) per [docs/versioning.md](../versioning.md).
 
-**Key files**: `ansible/host/playbooks/{setup,launch,shutdown,upgrade}.yml`, `ansible/host/inventory/`, `ansible/host/group_vars/`, `ansible/host/roles/` (including **`chutes_vm_config`**, **`chutes_tee_vm`** for live-QEMU pre-check and shared shutdown tasks); [`src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh`](../../src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh) (includes duplicate-QEMU guard and `--force`); [`host-tools/scripts/devices/reset-gpus.sh`](../../host-tools/scripts/devices/reset-gpus.sh).
+**Key files**: `ansible/host/playbooks/{setup,launch,shutdown,upgrade}.yml`, `ansible/host/inventory/`, `ansible/host/group_vars/`, `ansible/host/roles/` (including **`chutes_vm_config`**, **`chutes_tee_vm`** for live-QEMU pre-check and shared shutdown tasks); [`host-tools/scripts/quick-launch.sh`](../../host-tools/scripts/quick-launch.sh) (includes duplicate-QEMU guard and `--force`); [`src/chutes-cvm/chutes_cvm/scripts/devices/reset-gpus.sh`](../../src/chutes-cvm/chutes_cvm/scripts/devices/reset-gpus.sh).
 
 **Dependencies**
 
 - **Operator machine:** Ansible, `chutes-miner`, `kubectl` (upgrade only), `rsync`
-- **Bare metal:** Ubuntu 25.10 or 26.04 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `chutes-cvm setup-host`)
+- **Bare metal:** Ubuntu 25.10 or 26.04 per host profile, `aria2`, Python + PyYAML, PCCS stack (after `chutes-cvm host setup`)
 
 ### External tooling contract (v1)
 
@@ -93,7 +93,7 @@ Operators **provision**, **launch**, and **upgrade** TDX hosts from one inventor
 
 ### 1. Host setup (`setup.yml`)
 
-- Rsync **`host-tools/`**, **`aria2`** + **`python3-yaml`**, **`chutes-cvm setup-host`** (full or **`--install-tools-only`** if TDX already up), **reboot** if `/var/run/reboot-required`, **TDX dmesg** check, **`/var/lib/chutes/*` dirs**, **`pccs_configure`** (automated PCCS when **both** **`pccs_api_key`** and **`pccs_password`** are set; otherwise a notice and no-op; partial config fails).  
+- Rsync **`host-tools/`**, **`aria2`** + **`python3-yaml`**, **`chutes-cvm host setup`**, **reboot** if `/var/run/reboot-required`, **TDX dmesg** check, **`/var/lib/chutes/*` dirs**, **`pccs_configure`** (automated PCCS when **both** **`pccs_api_key`** and **`pccs_password`** are set; otherwise a notice and no-op; partial config fails).  
 - **Does not** launch the VM.
 
 ### 2. Launch (`launch.yml`)

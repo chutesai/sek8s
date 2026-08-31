@@ -94,7 +94,7 @@ Host tools automatically configure iptables rules for k3s API (port 6443) and No
 Production VMs require three attached volumes (created by `chutes-cvm guest launch`):
 
 #### Config Volume (`tdx-config`)
-- **Created by**: `host-tools/scripts/volumes/create-config.sh`
+- **Created by**: `src/chutes-cvm/chutes_cvm/scripts/volumes/create-config.sh`
 - **Filesystem**: ext4 with label `tdx-config`
 - **Mount point**: `/var/config`
 - **Contents**:
@@ -106,14 +106,14 @@ Production VMs require three attached volumes (created by `chutes-cvm guest laun
   - `docker-hub-token` - (optional) Docker Hub PAT for authenticated pulls and cosign
 
 #### Cache Volume (`tdx-cache`)
-- **Created by**: `host-tools/scripts/volumes/create-cache.sh`
+- **Created by**: `src/chutes-cvm/chutes_cvm/scripts/volumes/create-cache.sh`
 - **Filesystem**: XFS with label `tdx-cache`
 - **Mount point**: `/var/snap`
 - **Purpose**: Persistent storage for HF/model caches (e.g., `/var/snap/cache` for model weights)
 - **Size**: Configurable (default 5000G)
 
 #### Storage Volume (`storage`)
-- **Created by**: `host-tools/scripts/volumes/create-cache.sh` (with label `storage`)
+- **Created by**: `src/chutes-cvm/chutes_cvm/scripts/volumes/create-cache.sh` (with label `storage`)
 - **Filesystem**: XFS with label `storage`
 - **Mount point**: `/cache/storage` (contents bind-mounted into standard paths)
 - **Purpose**: Persistent k3s state, containerd data, kubelet pods, admission controller certs, and chutes agent state
@@ -170,8 +170,8 @@ This Ansible playbook builds the VM image only. The following are handled by hos
 
 - ❌ TDX-enabled host system setup → See `src/chutes-cvm/chutes_cvm/host/`
 - ❌ GPU passthrough configuration → Handled automatically by `chutes-cvm guest launch`
-- ❌ Network infrastructure → See `host-tools/scripts/network/setup-bridge.sh`
-- ❌ Config/cache/storage volume creation → See `host-tools/scripts/volumes/create-*.sh`
+- ❌ Network infrastructure → See `src/chutes-cvm/chutes_cvm/scripts/network/setup-bridge.sh`
+- ❌ Config/cache/storage volume creation → See `src/chutes-cvm/chutes_cvm/scripts/volumes/create-*.sh`
 - ❌ VM launch and orchestration → Handled by `chutes-cvm guest launch`
 - ✅ Guest OS and k3s installation
 - ✅ GPU drivers and attestation services

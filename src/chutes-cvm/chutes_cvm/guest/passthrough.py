@@ -21,7 +21,8 @@ from chutes_cvm.guest.qemu import (
     read_pci_numa_node,
     use_numa_topology,
 )
-from chutes_cvm.guest.vfio import (
+from chutes_cvm.paths import SCRIPTS_DIR
+from chutes_cvm.vfio import (
     bind_explicit_devices_to_vfio,
     ensure_sriov_vfs,
     has_stale_vfio_devices,
@@ -31,7 +32,6 @@ from chutes_cvm.guest.vfio import (
     unbind_stale_vfio_devices,
     wait_pci_operations_idle,
 )
-from chutes_cvm.paths import SCRIPTS_DIR
 
 _gpu_tools_cmd: str | None = None
 

@@ -6,7 +6,7 @@
 # with no reinstall, and every later role/playbook has `chutes-cvm` (with its deps) available.
 # Runs before tdx_bootstrap so `chutes-cvm host setup` works, and self-ensures its own install
 # prerequisites (venv/pip + git for the fetch) so it holds without a separate host_prerequisites
-# step — setup.yml no longer runs one (setup-host installs the host operational deps itself).
+# step — setup.yml no longer runs one (host setup installs the host operational deps itself).
 
 - name: Ensure the chutes-cvm install prerequisites are present (venv/pip + git for the fetch)
   ansible.builtin.apt:

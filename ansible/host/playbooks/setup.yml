@@ -17,7 +17,7 @@
   # packages incl. chrony/aria2/xfsprogs, NTP, kernel/GRUB, driver blacklist, QGS/QCNL, kvm group,
   # /var/lib/chutes dirs) then handles the reboot + TDX-init verify, and pccs_configure applies the
   # vault-held PCCS secrets. The former ntp / host_prerequisites / chutes_dirs roles are folded into
-  # setup-host.
+  # host setup.
   roles:
     - role: host_tools
     - role: tdx_bootstrap

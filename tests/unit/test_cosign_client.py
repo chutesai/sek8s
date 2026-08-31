@@ -8,8 +8,8 @@ from sek8s.config import CosignVerificationConfig
 
 
 def _point_leaf_at(monkeypatch, cert, key):
-    monkeypatch.setattr(cosign_mod, "_REGISTRY_CLIENT_CERT", cert)
-    monkeypatch.setattr(cosign_mod, "_REGISTRY_CLIENT_KEY", key)
+    monkeypatch.setattr(cosign_mod, "_MTLS_CLIENT_CERT", cert)
+    monkeypatch.setattr(cosign_mod, "_MTLS_CLIENT_KEY", key)
 
 
 def test_registry_mtls_args_present_when_leaf_exists(monkeypatch, tmp_path):

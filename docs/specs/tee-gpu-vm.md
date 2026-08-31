@@ -36,8 +36,8 @@ connection-level metadata records for NDA compliance (no TLS payloads).
   - `ansible/guest/roles/cleanup/tasks/main.yml` — build cleanup
   - `ansible/guest/roles/attestation-service/tasks/install-tdx-quote-generator.yml` — TDX quote tools
   - `ansible/guest/roles/sek8s/tasks/install-nvevidence-cli.yml` — GPU evidence CLI
-  - `src/chutes-cvm/chutes_cvm/scripts/quick-launch.sh` — VM launch orchestrator
-  - `host-tools/scripts/network/setup-bridge.sh` — bridge + NAT + DNAT
+  - `host-tools/scripts/quick-launch.sh` — VM launch orchestrator
+  - `src/chutes-cvm/chutes_cvm/scripts/network/setup-bridge.sh` — bridge + NAT + DNAT
   - `src/chutes-cvm/chutes_cvm/guest/qemu.py` — QEMU volume attachment
 - **Dependencies**: `nv-attestation-sdk` (already in `nvevidence/`), `libtdx-attest` (already in attestation-service role), `conntrack` (already in common role system packages), `trustauthority-cli` (Intel SGX/TDX repo)
 
@@ -209,7 +209,7 @@ Success =
 
 ### Phase 2: Host-Side Network Logging Service
 
-**2.1** New script: `host-tools/scripts/network/benchmark-netlog.sh`
+**2.1** New script: `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.sh`
 - Uses `conntrack -E -o timestamp,extended` to stream connection events.
 - Logs to `/var/log/chutes/benchmark-netlog/` with date-stamped files.
 - Captures: timestamp, protocol, src IP:port, dst IP:port, state, bytes, packets.
@@ -217,13 +217,13 @@ Success =
 - No TLS payloads — connection metadata only.
 - Runs `modprobe nf_conntrack` at start to ensure kernel module is loaded.
 
-**2.2** New systemd service: `host-tools/scripts/network/benchmark-netlog.service`
+**2.2** New systemd service: `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.service`
 - `Type=simple`, runs `benchmark-netlog.sh`.
 - `Restart=always`, `RestartSec=5` — gap-free logging.
 - `WantedBy=multi-user.target`.
 - Configurable via `EnvironmentFile` for log directory, bridge subnet, etc.
 
-**2.3** Log rotation: `host-tools/scripts/network/benchmark-netlog.logrotate`
+**2.3** Log rotation: `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.logrotate`
 - Daily rotation, compress old files, configurable retention.
 
 **2.4** Update `quick-launch.sh` benchmark mode:
@@ -315,9 +315,9 @@ nvevidence).
 | `ansible/guest/roles/benchmark/tasks/main.yml` | **New** — install TDX quote gen + trustauthority-cli + nvevidence CLI + verification script |
 | `ansible/guest/roles/benchmark/files/attest.py` | **New** — attestation verification script (Phase 3) |
 | `ansible/guest/roles/benchmark/files/luks-setup.py` | **New** — LUKS encryption helper script |
-| `host-tools/scripts/network/benchmark-netlog.sh` | **New** — conntrack event logger |
-| `host-tools/scripts/network/benchmark-netlog.service` | **New** — systemd unit for persistent logging |
-| `host-tools/scripts/network/benchmark-netlog.logrotate` | **New** — log rotation config |
+| `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.sh` | **New** — conntrack event logger |
+| `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.service` | **New** — systemd unit for persistent logging |
+| `src/chutes-cvm/chutes_cvm/scripts/network/benchmark-netlog.logrotate` | **New** — log rotation config |
 | `host-tools/scripts/quick-launch.sh` | Add `--benchmark`, `--download-benchmark` modes |
 | `host-tools/scripts/config/config.benchmark.example.yaml` | **New** — benchmark config template |
 | `docs/benchmark-mode.md` | **New** — full documentation |

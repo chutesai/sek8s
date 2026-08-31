@@ -188,7 +188,7 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   three ansible roles so that running the CLI fully provisions a host (launch-ready modulo the CLI
   install itself, PCCS secrets, and a reboot): the `ntp` role becomes `_setup_ntp()` (chrony with
   `makestep` to step a skewed BMC RTC before any VM inherits the host clock), the `chutes_dirs` role
-  becomes `_ensure_chutes_dirs()` (`/var/lib/chutes/base-images` + `vm-overlays`), and the host
+  becomes `_ensure_chutes_dirs()` (`/var/lib/chutes/base-images` + `vm-images`), and the host
   operational deps from `host_prerequisites` (chrony, aria2, xfsprogs, python3-yaml) move into a new
   version-independent `HostProfile.base_packages` installed alongside the kernel + TDX stack.
 - **The `setup.yml` host-setup playbook is now thin orchestration.** It runs only `host_tools`

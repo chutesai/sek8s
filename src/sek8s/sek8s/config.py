@@ -508,7 +508,10 @@ class CosignConfig(BaseSettings):
                     registry="*",
                     require_signature=True,
                     verification_method="key",
-                    public_key=Path("/etc/admission-controller/.cosign/cosign.pub"),
+                    # Match the boot-fetched key path (required_key_paths / the rendered
+                    # cosign-registries.json), not the retired /etc/admission-controller/.cosign
+                    # location — else a missing config file denies all chutes-namespace images.
+                    public_key=Path("/run/chutes/signing-keys/cosign/chutes.pub"),
                 )
             ]
 
