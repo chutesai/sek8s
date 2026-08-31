@@ -12,7 +12,7 @@ from attestation_proxy.config import AttestationProxyConfig
 from attestation_proxy.signing import (
     load_miner_keypair,
     load_private_key,
-    sign_hotkey_attestation,
+    sign_response,
     sign_response_body,
 )
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
@@ -344,9 +344,9 @@ class ExternalProxyServer(BaseProxyServer):
     async def proxy_request(self, *args, **kwargs) -> Response:
         """Proxy request and attach an X-Signature header for key-possession proof.
 
-        When a miner seed is configured, also attach a miner-hotkey proof-of-possession
-        (X-Chutes-Hotkey/Nonce/Signature) so the validator can authorize release-candidate
-        measurements at runtime. Absent the seed the headers are simply omitted.
+        When a miner seed is configured, also stamp EVERY response with a miner-hotkey
+        proof-of-possession (X-Chutes-Hotkey/Nonce/Signature); the validator consumes it where it
+        needs one (e.g. the runtime rc-measurement gate). Absent the seed the headers are omitted.
         """
         response = await super().proxy_request(*args, **kwargs)
         assert (
@@ -356,7 +356,7 @@ class ExternalProxyServer(BaseProxyServer):
             self._private_key, response.body
         )
         if self._miner_keypair is not None:
-            ss58, nonce, signature = sign_hotkey_attestation(self._miner_keypair)
+            ss58, nonce, signature = sign_response(self._miner_keypair)
             response.headers["X-Chutes-Hotkey"] = ss58
             response.headers["X-Chutes-Nonce"] = nonce
             response.headers["X-Chutes-Signature"] = signature

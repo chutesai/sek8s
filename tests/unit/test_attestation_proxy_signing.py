@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from attestation_proxy.signing import (
-    RC_ATTESTATION_PURPOSE,
+    HOTKEY_SIGNING_PURPOSE,
     load_miner_keypair,
     load_private_key,
-    sign_hotkey_attestation,
+    sign_response,
     sign_response_body,
 )
 from cryptography.hazmat.primitives import hashes, serialization
@@ -302,15 +302,15 @@ def test_load_miner_keypair_from_seed():
     assert keypair.ss58_address == _make_test_keypair().ss58_address
 
 
-def test_sign_hotkey_attestation_round_trip():
+def test_sign_response_round_trip():
     from substrateinterface import Keypair
 
     keypair = _make_test_keypair()
-    ss58, nonce, signature = sign_hotkey_attestation(keypair)
+    ss58, nonce, signature = sign_response(keypair)
 
     assert ss58 == keypair.ss58_address
     assert nonce.isdigit()
-    message = f"{ss58}:{nonce}:{RC_ATTESTATION_PURPOSE}"
+    message = f"{ss58}:{nonce}:{HOTKEY_SIGNING_PURPOSE}"
     # Verify exactly as the validator's rc gate does (hex signature over the string message).
     assert Keypair(ss58_address=ss58).verify(message, bytes.fromhex(signature))
 
@@ -340,7 +340,7 @@ async def test_proxy_request_adds_hotkey_headers_when_seed_present(rsa_key):
     assert lower["x-chutes-hotkey"] == keypair.ss58_address
     assert lower["x-chutes-nonce"].isdigit()
     message = (
-        f"{keypair.ss58_address}:{lower['x-chutes-nonce']}:{RC_ATTESTATION_PURPOSE}"
+        f"{keypair.ss58_address}:{lower['x-chutes-nonce']}:{HOTKEY_SIGNING_PURPOSE}"
     )
     assert Keypair(ss58_address=keypair.ss58_address).verify(
         message, bytes.fromhex(lower["x-chutes-signature"])
