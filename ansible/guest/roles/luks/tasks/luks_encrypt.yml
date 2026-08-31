@@ -133,12 +133,14 @@
     passphrase: "{{ luks_passphrase }}"
   no_log: true
 
+# A custom (non-keyring) LUKS2 token is added via `token import` reading JSON from stdin —
+# `token add` is only for built-in keyring tokens (--key-description) and has no --json option.
+# The initramfs (fetch_key_and_unlock) only checks that token 15 EXISTS to detect first boot.
+# No secret here (type/version only), so no no_log — a failure must be visible.
 - name: Add first-boot LUKS2 token
   ansible.builtin.shell: >-
-    cryptsetup token add {{ root_partition }}
-    --token-id 15
-    --json '{"type":"chutes-first-boot","keyslots":[],"version":"{{ vm_version }}"}'
-  no_log: true
+    echo '{"type":"chutes-first-boot","keyslots":[],"version":"{{ vm_version }}"}'
+    | cryptsetup token import --token-id 15 {{ root_partition }}
 
 - name: Open LUKS container
   community.crypto.luks_device:
