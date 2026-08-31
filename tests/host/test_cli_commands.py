@@ -9,7 +9,6 @@ operator VM lifecycle lives under the `guest` noun (see test_guest_cli.py for it
 from unittest.mock import patch
 
 import pytest
-
 from chutes_cvm import cli
 
 
