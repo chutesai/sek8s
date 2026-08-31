@@ -19,6 +19,22 @@
           Is this the intended build? The next step launches the TDX guest VM toward this output path.
           Press Enter to continue, or Ctrl+C to abort.
 
+    # The root RSA PUBLIC key is baked into the image and measured into RTMR3, so every build
+    # (ours and third-party reproductions) must use the SAME key. Fetch it from R2 once here, before
+    # any consumer (chutes-gpu verifies the helm key against it; signing-keys bakes it). Published
+    # to R2 from KMS out-of-band in chutes-ops (make export-signing-keys && make publish-signing-key).
+    # A wrong/missing key fails the build here rather than as an opaque RTMR3 mismatch later.
+    - name: Fetch root signing public key from R2
+      ansible.builtin.get_url:
+        url: "{{ root_signing_key_url }}"
+        dest: "{{ root_signing_key_path }}"
+        mode: "0644"
+        force: true
+
+    - name: Verify the fetched root key is a valid RSA public key
+      ansible.builtin.command: "openssl pkey -pubin -in {{ root_signing_key_path }} -noout"
+      changed_when: false
+
 - name: Run TDX guest image
   hosts: host
   become: true
