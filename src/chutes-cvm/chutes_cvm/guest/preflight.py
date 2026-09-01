@@ -2,18 +2,22 @@
 
 The miner never computes or matches a topology fingerprint: it captures its raw platform
 metadata (``discover-profile.sh``), signs it with the miner hotkey, and POSTs it to
-``api.chutes.ai``. Two of the three host-profile operations live here:
+``api.chutes.ai``. Three of the four host-profile operations live here:
 
+    run_host_class_status()     — POST /servers/tdx/host_profiles/status: is this topology known,
+                                  and which published images cover it? Version-free, so it answers
+                                  on a host that has downloaded nothing yet -> `host verify`
     run_preflight(version, rc)  — POST /servers/tdx/preflight: does a published measurement for
                                   THIS image's (version, rc) cover this host? -> ``launchable`` bool
     submit_profile()            — POST /servers/tdx/host_profiles: register an unmeasured class so
                                   Chutes generates its measurements
 
-(The third, GET /servers/tdx/host_profiles, is the generator's/third-party listing — not here.)
+(The fourth, GET /servers/tdx/host_profiles, is the generator's/third-party listing — not here.)
 
-The preflight is the whole launch decision in one boolean: launchable -> boot; not -> submit the
-profile, then retry once Chutes publishes the measurement. The API owns the fingerprint and the
-verdict; if that key ever changes it changes there, not here.
+The split is the two questions a miner actually asks: `host verify` asks about the HOST ("can this
+box run anything, and what"), which must answer before any image is downloaded; `guest launch` asks
+about the IMAGE ("is the version I hold covered here") and gets one boolean. The API owns the
+fingerprint and both verdicts; if that key ever changes it changes there, not here.
 """
 
 from __future__ import annotations
@@ -210,6 +214,31 @@ def run_preflight(
     query = urlencode({"version": version, "rc": "true" if rc else "false"})
     return _post(
         f"/servers/tdx/preflight?{query}", api_base, hotkey, nonce, signature, body
+    )
+
+
+def run_host_class_status(
+    config_path: str,
+    scripts_dir: str,
+    api_base: str = DEFAULT_API_BASE,
+    target_qemu: "str | None" = None,
+) -> dict:
+    """Discover -> sign -> POST /servers/tdx/host_profiles/status -> host class verdict.
+
+    The version-free question behind `host verify`: is this topology known, and which published
+    images cover it? Deliberately takes no version — a host is verified before it has downloaded
+    any image, so nothing here may depend on what is on disk.
+
+    Returns {fingerprint, status, measurements: [{version, rc}, ...], detail}. An empty
+    ``measurements`` means nothing can launch here yet; ``status`` (unknown/pending/accepted) says
+    whether the miner must register the class or simply wait. Raises PreflightError on any failure
+    to reach a verdict.
+    """
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, scripts_dir, target_qemu
+    )
+    return _post(
+        "/servers/tdx/host_profiles/status", api_base, hotkey, nonce, signature, body
     )
 
 

@@ -11,7 +11,7 @@ sek8s_remote_root: /opt/sek8s
 sek8s_remote_host_tools: "{{ sek8s_remote_root }}/host-tools"
 
 sek8s_repo_url: https://github.com/chutesai/sek8s
-sek8s_repo_branch: main
+sek8s_repo_branch: release/next
 
 # PCCS (setup only) — set BOTH or omit BOTH via inventory / Vault / -e.
 # pccs_api_key: ""

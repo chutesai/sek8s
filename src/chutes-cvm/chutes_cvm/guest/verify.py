@@ -6,14 +6,22 @@ a node will relaunch and re-attest rather than going offline.
     python3 -m chutes_cvm.guest.verify --submit     # ... and register an unmeasured host
 
 Two gates: (A) the host runs the QEMU its OS release baselines (local), and (B) the control plane
-has a published measurement for THIS image's (version, rc) that covers this host class — the API
-check: read the image's (version, rc) from its manifest, capture + sign the host's platform
-metadata, and ask POST /servers/tdx/preflight (the API owns the fingerprint and verdict). Gate B
-is read-only; `--submit` additionally registers the host class (POST /servers/tdx/host_profiles)
-so Chutes can generate its measurements (the miner's baselining path — no separate verb).
+knows this host class and has published measurements for it — capture + sign the host's platform
+metadata and ask POST /servers/tdx/host_profiles/status (the API owns the fingerprint and verdict).
 
-Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU, unreadable image, or the check couldn't
-run) · 2 WARNING (gates run, but no published measurement for this image x host yet).
+Gate B is deliberately VERSION-FREE. A host is verified before it has downloaded any image, so the
+question here is "can this box run anything, and what" — never "does version X work". Whether one
+specific image can boot is `guest launch`'s preflight, which reads the (version, rc) it actually
+holds. Gate B is read-only; `--submit` additionally registers the host class
+(POST /servers/tdx/host_profiles) so Chutes can generate its measurements (the miner's baselining
+path — no separate verb).
+
+If a base image happens to be downloaded, its (version, rc) is checked against the covered set as a
+NOTE — flagged, never fatal, since a missing measurement for one image says nothing about whether
+the host class is viable.
+
+Exit: 0 READY · 1 BLOCKED (won't relaunch: wrong QEMU, or the check couldn't run) · 2 WARNING
+(gates run, but nothing published for this host class yet, or the local image is not covered).
 """
 
 import argparse
@@ -25,7 +33,7 @@ from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_su
 from chutes_cvm.guest.preflight import (
     DEFAULT_API_BASE,
     PreflightError,
-    run_preflight,
+    run_host_class_status,
     submit_profile,
 )
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
@@ -38,7 +46,10 @@ WARNING = 2
 def _image_version_rc(config_path: str, base_image: "str | None") -> "tuple[str, bool]":
     """Resolve the base image the host would relaunch and read its ``(version, rc)`` from the
     manifest. ``base_image`` overrides; otherwise the config's ``vm.base_image``, else the
-    production default. Raises ValueError/OSError if no manifest can be read."""
+    production default. Raises ValueError/OSError if no manifest can be read.
+
+    Only for the informational note — verification never depends on an image being present.
+    """
     base = base_image
     if not base:
         try:
@@ -93,25 +104,16 @@ def verify_host(
             f"the live QEMU is ignored because the upgrade replaces it."
         )
 
-    # Gate B: does a published measurement for the image this host would relaunch — its
-    # (version, rc) — cover this host class? Read the image's (version, rc) from its manifest,
-    # capture + sign the host profile, and ask the API (which owns the fingerprint and verdict).
+    # Gate B: is this host class known, and which images cover it? Capture + sign the host
+    # profile and ask the API (which owns the fingerprint and verdict). No version is sent — a
+    # host is verified before it has downloaded anything, so the answer must not depend on disk.
     config = config_path or default_config_path()
     api = api_base or os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
-    try:
-        version, rc = _image_version_rc(config, base_image)
-    except (FileNotFoundError, ValueError, OSError) as exc:
-        # Can't determine what would boot -> can't check it. Fail closed.
-        print(f"BLOCKED (image): {exc}")
-        return BLOCKED
-    label = f"{version}{' (rc)' if rc else ''}"
 
     try:
-        resp = run_preflight(
+        resp = run_host_class_status(
             config_path=config,
             scripts_dir=scripts_dir,
-            version=version,
-            rc=rc,
             api_base=api,
             target_qemu=target_qemu,
         )
@@ -122,11 +124,19 @@ def verify_host(
 
     detail = resp.get("detail", "")
     fingerprint = resp.get("fingerprint", "?")
-    if resp.get("launchable"):
-        print(f"READY: {detail} (fingerprint {fingerprint})")
-        return READY
+    covered = resp.get("measurements") or []
 
-    print(f"WARNING: cannot attest {label} yet — {detail} (fingerprint {fingerprint})")
+    if covered:
+        print(f"READY: {_covered_label(covered)} (fingerprint {fingerprint})")
+        return _note_local_image(config, base_image, covered)
+
+    print(f"WARNING: {detail} (fingerprint {fingerprint})")
+    if resp.get("status") == "pending":
+        # Already on file — re-submitting neither helps nor advances the queue, so don't offer it.
+        print(
+            "  Nothing to do: the class is registered and awaiting measurement generation."
+        )
+        return WARNING
     if submit:
         try:
             sub = submit_profile(
@@ -145,6 +155,41 @@ def verify_host(
             "  Run `chutes-cvm host submit-profile` (or re-run with --submit) to register this "
             "host class so Chutes can generate its measurements before you launch/upgrade."
         )
+    return WARNING
+
+
+def _covered_label(covered: "list[dict]") -> str:
+    """The READY line: which published images this host class can launch."""
+    images = ", ".join(
+        f"{m.get('version')}{' (rc)' if m.get('rc') else ''}" for m in covered
+    )
+    return f"this host class is measured and can launch: {images}"
+
+
+def _note_local_image(
+    config_path: str, base_image: "str | None", covered: "list[dict]"
+) -> int:
+    """Flag whether a DOWNLOADED base image is in the covered set — informational only.
+
+    The host class is already verified by the time this runs, so a missing image, missing manifest,
+    or uncovered version never invalidates that; it only tells the operator the specific image they
+    hold would not attest, which `guest launch` would refuse anyway. No image on disk is the normal
+    case for a freshly verified host, and returns READY untouched.
+    """
+    try:
+        version, rc = _image_version_rc(config_path, base_image)
+    except (FileNotFoundError, ValueError, OSError):
+        # Nothing downloaded yet (or no manifest) — expected before `chutes-cvm image download`.
+        return READY
+    label = f"{version}{' (rc)' if rc else ''}"
+    if any(m.get("version") == version and bool(m.get("rc")) == rc for m in covered):
+        print(f"  Downloaded image {label} is covered.")
+        return READY
+    print(
+        f"  NOTE: the downloaded image {label} is NOT in the covered set — this host class can "
+        "launch the images listed above, but not that one. Download a covered image, or wait for "
+        "its measurement to be published."
+    )
     return WARNING
 
 
@@ -179,8 +224,8 @@ def main() -> int:
     parser.add_argument(
         "--base-image",
         metavar="DIR",
-        help="Base image set to check (default: the config's vm.base_image, else the "
-        "production set). Its manifest gives the (version, rc) the check joins against.",
+        help="Base image set for the informational note (default: the config's vm.base_image, "
+        "else the production set). Verification itself is version-free and needs no image.",
     )
     args = parser.parse_args()
     return verify_host(
