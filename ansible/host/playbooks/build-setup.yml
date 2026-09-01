@@ -13,6 +13,8 @@
 #     patched QEMU in a container; see `chutes-cvm measurements generate`)
 #   - Installs libguestfs-tools (RTMR3 mounts the image root read-only;
 #     see `chutes-cvm measurements generate` / the standalone `rtmr3`)
+#   - Installs rustup for the build user (the guest build compiles the sr25519 initramfs
+#     signer with the pinned toolchain + musl target from src/sr25519/rust-toolchain.toml)
 
 - name: Build host setup
   hosts: td_hosts
@@ -51,6 +53,23 @@
         name: libguestfs-tools
         state: present
         update_cache: true
+
+    - name: Install rustup for the build user (sr25519 guest-image signer)
+      # The sr25519 initramfs signer (src/sr25519) is built with a pinned toolchain + the musl
+      # target from its rust-toolchain.toml; only rustup honors that, and the guest build runs
+      # cargo as this (non-root) build user — so rustup is installed per-user here. The pinned
+      # toolchain and its musl target are provisioned on first build by the sr25519 role (in the
+      # crate dir, resolving rust-toolchain.toml), so no version is duplicated here. Installed with
+      # --default-toolchain none (the crate pins it) and --no-modify-path (the sr25519 role puts
+      # ~/.cargo/bin on PATH itself). Idempotent via `creates`.
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --no-modify-path --default-toolchain none
+      args:
+        creates: "{{ ansible_env.HOME }}/.rustup"
+        executable: /bin/bash
+      become: false
 
     # NOTE: chutes-cvm is NOT installed here. The guest build (chutes-miner-vm.yml)
     # self-installs it from its own checkout (`pip install -e {{ repo_root }}/src/chutes-cvm`)

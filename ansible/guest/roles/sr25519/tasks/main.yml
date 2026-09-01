@@ -11,20 +11,36 @@
   delegate_to: localhost
   run_once: true
   become: false
+  # rustup's shims live in ~/.cargo/bin, which a non-login ansible shell need not have on PATH —
+  # prepend it so `rustup`/`cargo` resolve to the pinned rustup toolchain, not an apt cargo that
+  # ignores rust-toolchain.toml. Harmless when the dir is absent.
+  environment:
+    PATH: "{{ lookup('env', 'HOME') }}/.cargo/bin:{{ lookup('env', 'PATH') }}"
   block:
-    - name: Detect cargo on the control host
-      ansible.builtin.command: which cargo
-      register: _sr_cargo
+    - name: Detect rustup on the control host
+      ansible.builtin.command: which rustup
+      register: _sr_rustup
       changed_when: false
       failed_when: false
 
-    - name: Require a cargo toolchain (rustup + the pinned musl target)
+    - name: Require rustup (the pinned toolchain + musl target need it)
       ansible.builtin.fail:
         msg: >-
-          cargo not found on the control host. The sr25519 signer needs a rustup toolchain with the
-          {{ sr25519_musl_target }} target (see src/sr25519/rust-toolchain.toml, channel 1.94.0).
-          Install rustup and run `make build-sr25519`, then re-run.
-      when: _sr_cargo.rc != 0
+          rustup not found on the build host. The sr25519 signer pins toolchain 1.94.0 and the
+          {{ sr25519_musl_target }} target via src/sr25519/rust-toolchain.toml — only rustup honors
+          that (apt's cargo ignores it and has no musl std, giving "can't find crate for core").
+          Provision it with `ansible-playbook playbooks/build-setup.yml`, then re-run.
+      when: _sr_rustup.rc != 0
+
+    # In the crate dir so rustup resolves the pinned channel from rust-toolchain.toml and adds the
+    # target TO it. Idempotent — rustup no-ops when the target is already present. Self-heals a host
+    # whose 1.94.0 was installed before the musl target (the "can't find crate for core" failure).
+    - name: Ensure the pinned toolchain's musl target is installed
+      ansible.builtin.command:
+        cmd: rustup target add {{ sr25519_musl_target }}
+        chdir: "{{ sr25519_src_dir }}"
+      register: _sr_target
+      changed_when: "'installing' in _sr_target.stdout"
 
     - name: Build sr25519 (release, static musl — honors the pinned rust-toolchain.toml)
       ansible.builtin.command:
