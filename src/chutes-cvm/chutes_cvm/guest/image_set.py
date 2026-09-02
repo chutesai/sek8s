@@ -39,7 +39,8 @@ Usage (``chutes-cvm image <verb>``; also ``python3 -m chutes_cvm.guest.image_set
     chutes-cvm image download [--debug]
 
     # Generate the manifest for a finished image (build / publish / capture staging).
-    # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars.
+    # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars, writing
+    # manifest.json into the qcow2's directory (that directory IS the set).
     chutes-cvm image manifest <qcow2> [-o OUT] [--version V] [--debug]
 
     # Verify an image-set directory and print QCOW2=/SHA256= for the caller to eval.
@@ -238,7 +239,10 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
     if not args.qcow2.endswith(".qcow2"):
         print(f"ERROR: expected a .qcow2 path, got {args.qcow2}", file=sys.stderr)
         return 1
-    output = args.output or (args.qcow2[: -len(".qcow2")] + ".manifest.json")
+    # Default: manifest.json beside the qcow2 — the image set lives in its own directory,
+    # and manifest.json is the only name _load_manifest (verify / launch / download) looks
+    # for, so the generated set is directly consumable and copyable as-is.
+    output = args.output or os.path.join(os.path.dirname(args.qcow2), "manifest.json")
     try:
         write_manifest(args.qcow2, output, version=args.version, debug=args.debug)
     except FileNotFoundError as exc:
@@ -282,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         "-o",
         "--output",
         default="",
-        help="manifest path (default: <base>.manifest.json next to the qcow2)",
+        help="manifest path (default: manifest.json next to the qcow2)",
     )
     p_manifest.add_argument("--version", default="", help="image version (metadata)")
     p_manifest.add_argument(

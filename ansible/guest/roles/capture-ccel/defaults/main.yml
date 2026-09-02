@@ -10,7 +10,7 @@
 
 # Source image = the debug build's output (never launched directly — we always work on a
 # copy, and we mutate that copy's initramfs to inject the dumper).
-measurement_source_image: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-debug.qcow2"
+measurement_source_image: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-debug/{{ vm_version }}-debug.qcow2"
 # Throwaway working image SET (directory) in /tmp — the launcher consumes a set directory
 # (qcow2 + .vmlinuz/.initrd/.cmdline + manifest.json), so we assemble one here from a copy
 # of the build output (with the dumper baked into its initramfs) and launch that.

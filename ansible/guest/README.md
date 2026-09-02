@@ -66,7 +66,7 @@ The build process:
 3. Applies security hardening and admission policies
 4. Encrypts root filesystem with LUKS
 5. Configures initramfs for TDX-based boot unlock
-6. Outputs final encrypted image under `guest-tools/image/<build_env>/<vm_version>.qcow2` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; append `-debug` when `debug_build` is true)
+6. Outputs the final encrypted image SET under `guest-tools/image/<build_env>/<vm_version>/` — the `<vm_version>.qcow2`, its direct-boot `.vmlinuz`/`.initrd`/`.cmdline` sidecars, and `manifest.json` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; a debug build appends `-debug` to both the directory and the image name). The directory is a ready-to-use image set: copy it into `/var/lib/chutes/base-images/<variant>/` to boot it with `chutes-cvm guest launch`.
 
 At the **start** of `chutes-miner-vm.yml` (before the build VM is launched), the playbook prints the build configuration and **pauses for confirmation** (press Enter to continue, Ctrl+C to abort).
 

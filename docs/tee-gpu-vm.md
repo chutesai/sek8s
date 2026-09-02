@@ -54,10 +54,10 @@ cd ansible/guest
 ansible-playbook -i inventory.yml playbooks/tee-gpu-vm.yml
 ```
 
-The resulting image is written to:
+The resulting image set is written to its own directory:
 
 ```
-<img_dir>/<build_env>/<vm_version>.qcow2
+<img_dir>/<build_env>/<vm_version>/<vm_version>.qcow2   (+ .vmlinuz/.initrd/.cmdline, manifest.json)
 ```
 
 ### 3. Reset inventory after building

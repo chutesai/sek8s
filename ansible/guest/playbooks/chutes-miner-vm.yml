@@ -542,7 +542,7 @@
           - --image
           - "{{ final_img_path }}"
           - --output
-          - "{{ repo_root }}/measurements/{{ vm_version }}/measurements.yaml"
+          - "{{ repo_root }}/measurements/{{ vm_version }}{{ '-debug' if debug_build | default(false) else '' }}/measurements.yaml"
           - --tdx-measure-bin
           - "{{ tdx_measure_bin | default('tdx-measure') }}"
           # Source of the known host classes + their fingerprints (the build host must reach it).
@@ -573,7 +573,9 @@
     - compute-measurements
   tasks:
     # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
-    # manifest.json tying them together. chutes_cvm.guest.image_set is the single manifest
+    # manifest.json tying them together, all in the set's own <env>/<version>[-debug]/
+    # directory (so prod and debug never share a manifest, and the directory can be copied
+    # straight into /var/lib/chutes/base-images/<variant>/ for testing). chutes_cvm.guest.image_set is the single manifest
     # generator (also used by publish and the launcher), so the schema never drifts.
     # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
     # download, and for whichever variant this build produced (debug or prod) — so the

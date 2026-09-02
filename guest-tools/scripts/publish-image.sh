@@ -2,12 +2,13 @@
 # publish-image.sh — Upload a built guest image + its direct-boot artifacts to R2.
 #
 # Uploads the versioned local build outputs to the canonical R2 object names that
-# vm.chutes.ai serves and `chutes-cvm image download` fetches:
-#   <version>[-debug].qcow2   -> <bucket>/tdx-guest[-debug].qcow2
-#   <version>[-debug].vmlinuz -> <bucket>/tdx-guest[-debug].vmlinuz
-#   <version>[-debug].initrd  -> <bucket>/tdx-guest[-debug].initrd
-#   <version>[-debug].cmdline -> <bucket>/tdx-guest[-debug].cmdline
-#   manifest.json (generated)  -> <bucket>/tdx-guest[-debug].manifest.json
+# vm.chutes.ai serves and `chutes-cvm image download` fetches. The build writes each set
+# into its own directory, guest-tools/image/<env>/<version>[-debug]/:
+#   <set>/<version>[-debug].qcow2   -> <bucket>/tdx-guest[-debug].qcow2
+#   <set>/<version>[-debug].vmlinuz -> <bucket>/tdx-guest[-debug].vmlinuz
+#   <set>/<version>[-debug].initrd  -> <bucket>/tdx-guest[-debug].initrd
+#   <set>/<version>[-debug].cmdline -> <bucket>/tdx-guest[-debug].cmdline
+#   <set>/manifest.json (generated) -> <bucket>/tdx-guest[-debug].manifest.json
 #
 # The .vmlinuz/.initrd/.cmdline are produced by stage-boot-artifacts.sh during the
 # build; all four must travel together so the fleet boots byte-identical bits. The
@@ -46,7 +47,10 @@ if [ "$DEBUG" = true ]; then
     SUFFIX="-debug"
     REMOTE="tdx-guest-debug"
 fi
-LOCAL_BASE="$REPO_ROOT/guest-tools/image/$ENV/${VERSION}${SUFFIX}"
+# This image set's own directory (one per version AND variant, so prod and debug each have
+# their own manifest.json), and the shared basename of the four artifacts inside it.
+IMAGE_SET_DIR="$REPO_ROOT/guest-tools/image/$ENV/${VERSION}${SUFFIX}"
+LOCAL_BASE="$IMAGE_SET_DIR/${VERSION}${SUFFIX}"
 ARTIFACTS=(qcow2 vmlinuz initrd cmdline)
 
 # Pre-flight: all four must exist so we never publish a qcow2 without its matching
@@ -63,7 +67,7 @@ done
 # Generate the coherence manifest with the single generator (chutes_cvm.guest.image_set), the
 # same one the build and the launcher use, so the schema never drifts. It hashes the qcow2
 # and its <base>.{vmlinuz,initrd,cmdline} sidecars.
-MANIFEST="$LOCAL_BASE.manifest.json"
+MANIFEST="$IMAGE_SET_DIR/manifest.json"
 echo "Generating manifest -> $MANIFEST"
 DEBUG_FLAG=()
 [ "$DEBUG" = true ] && DEBUG_FLAG=(--debug)

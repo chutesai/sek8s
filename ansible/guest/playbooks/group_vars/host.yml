@@ -4,7 +4,15 @@ img_dir: "{{ repo_root }}/guest-tools/image"
 # VM image release version from repo root (distinct from Python package version)
 vm_version: "{{ lookup('file', playbook_dir + '/../VERSION') | trim }}"
 # build_env is set in inventory or role defaults (not here — playbook group_vars would override inventory)
-final_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}{{ '-debug' if debug_build | default(false) else '' }}.qcow2"
+# The publishable output is an image SET, so it gets its OWN directory per version+variant:
+# <env>/<version>[-debug]/ holds the qcow2, its .vmlinuz/.initrd/.cmdline sidecars and
+# manifest.json. That directory is exactly what an image-set consumer expects (the launcher
+# globs a single *.qcow2 and reads manifest.json beside it), so it can be copied straight
+# into /var/lib/chutes/base-images/<variant>/ — and a debug build never clobbers the prod
+# set's manifest. Intermediate checkpoint layers below stay flat in <env>/ (not a set).
+image_set_name: "{{ vm_version }}{{ '-debug' if debug_build | default(false) else '' }}"
+image_set_dir: "{{ img_dir }}/{{ build_env }}/{{ image_set_name }}"
+final_img_path: "{{ image_set_dir }}/{{ image_set_name }}.qcow2"
 base_img_path: "{{ img_dir }}/tdx-guest-ubuntu-{{ ubuntu_version }}.qcow2"
 prepared_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-prepared.qcow2"
 gpu_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-gpu.qcow2"
