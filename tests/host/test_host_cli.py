@@ -21,13 +21,64 @@ def test_verify_runs_gate_without_submit():
 def test_submit_profile_registers_directly_without_image_gate():
     # submit-profile posts the hardware profile directly — no verify_host / image readiness gate,
     # so a fresh host with no image downloaded can still register.
-    with patch(
+    with patch("chutes_cvm.guest.detection.verify_host_qemu_supported"), patch(
         "chutes_cvm.guest.preflight.submit_profile",
         return_value={"stored": True, "fingerprint": "fp123"},
     ) as sp, patch("chutes_cvm.guest.verify.verify_host") as vh:
         assert hostcli.main(["submit-profile"]) == 0
     assert sp.called
     vh.assert_not_called()  # the image/readiness gate is bypassed for registration
+
+
+def test_submit_profile_forwards_target_os():
+    """The pre-upgrade registration: --target-os must reach submit_profile, which rewrites the
+    profile's OS/QEMU/-cpu args to the target release rather than the live host's."""
+    with patch(
+        "chutes_cvm.guest.preflight.submit_profile",
+        return_value={"stored": True, "fingerprint": "fp123"},
+    ) as sp:
+        assert hostcli.main(["submit-profile", "--target-os", "26.04"]) == 0
+    assert sp.call_args.kwargs["target_os"] == "26.04"
+
+
+def test_submit_profile_rejects_unsupported_target_os():
+    with patch("chutes_cvm.guest.preflight.submit_profile") as sp:
+        assert hostcli.main(["submit-profile", "--target-os", "99.99"]) == 1
+    sp.assert_not_called()
+
+
+def test_submit_profile_without_target_os_uses_the_live_host():
+    with patch("chutes_cvm.guest.detection.verify_host_qemu_supported"), patch(
+        "chutes_cvm.guest.preflight.submit_profile",
+        return_value={"stored": True, "fingerprint": "fp123"},
+    ) as sp:
+        assert hostcli.main(["submit-profile"]) == 0
+    assert sp.call_args.kwargs["target_os"] is None
+
+
+def test_submit_profile_blocks_an_unsupported_live_os(capsys):
+    """Registering the live host registers its OS+QEMU, so an unbaselined release must not
+    reach the API — it would burn a generation slot on a class that can never attest."""
+    with patch(
+        "chutes_cvm.guest.detection.verify_host_qemu_supported",
+        side_effect=ValueError("Host OS release '25.10' is not supported"),
+    ), patch("chutes_cvm.guest.preflight.submit_profile") as sp:
+        assert hostcli.main(["submit-profile"]) == 1
+    sp.assert_not_called()
+    assert "--target-os" in capsys.readouterr().out  # points at the pre-upgrade path
+
+
+def test_submit_profile_with_target_os_skips_the_live_qemu_gate():
+    """--target-os is exactly the case where the live QEMU is wrong and about to be replaced."""
+    with patch(
+        "chutes_cvm.guest.detection.verify_host_qemu_supported",
+        side_effect=ValueError("wrong qemu"),
+    ), patch(
+        "chutes_cvm.guest.preflight.submit_profile",
+        return_value={"stored": True, "fingerprint": "fp123"},
+    ) as sp:
+        assert hostcli.main(["submit-profile", "--target-os", "26.04"]) == 0
+    assert sp.call_args.kwargs["target_os"] == "26.04"
 
 
 def test_tune_dispatches():

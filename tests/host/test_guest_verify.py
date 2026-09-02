@@ -117,17 +117,15 @@ def test_blocked_when_target_os_unsupported():
         st.assert_not_called()  # unsupported target fails before any API call
 
 
-def test_target_os_skips_live_qemu_gate_and_passes_target_qemu():
+def test_target_os_skips_live_qemu_gate_and_passes_target_os():
     # --target-os mode ignores the live QEMU (the upgrade replaces it), so even a raising
-    # gate doesn't block; and the target's QEMU is what gets checked at the API.
+    # gate doesn't block; and the target release is what gets checked at the API (preflight
+    # derives that release's QEMU from it).
     stack, gate, st = _patch(qemu_raises=True)
     with stack:
         assert verify.verify_host(target_os="26.04", scripts_dir="/x") == verify.READY
         gate.assert_not_called()
-        assert (
-            st.call_args.kwargs.get("target_qemu")
-            == verify.SUPPORTED_QEMU_BY_OS["26.04"]
-        )
+        assert st.call_args.kwargs.get("target_os") == "26.04"
 
 
 def test_submit_registers_an_unknown_class():
@@ -139,6 +137,28 @@ def test_submit_registers_an_unknown_class():
     ) as sub:
         assert verify.verify_host(scripts_dir="/x", submit=True) == verify.WARNING
         sub.assert_called_once()
+
+
+def test_submit_registers_the_target_os_class_not_the_live_one():
+    """`--target-os X --submit` must register the class the host BECOMES: submitting the live
+    host's OS/QEMU would baseline a (release, QEMU) pair the target release never ships."""
+    stack, _, _ = _patch(covered=[], status="unknown", qemu_raises=True)
+    with stack, patch(
+        "chutes_cvm.guest.verify.submit_profile",
+        return_value={"status": "pending", "stored": True, "fingerprint": "fp"},
+    ) as sub:
+        assert (
+            verify.verify_host(target_os="26.04", scripts_dir="/x", submit=True)
+            == verify.WARNING
+        )
+        assert sub.call_args.kwargs["target_os"] == "26.04"
+
+
+def test_submit_hint_carries_the_target_os(capsys):
+    stack, _, _ = _patch(covered=[], status="unknown", qemu_raises=True)
+    with stack:
+        verify.verify_host(target_os="26.04", scripts_dir="/x")
+    assert "submit-profile --target-os 26.04" in capsys.readouterr().out
 
 
 def test_downloaded_image_in_the_covered_set_is_noted(capsys):

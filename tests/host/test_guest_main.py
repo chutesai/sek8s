@@ -4,7 +4,9 @@
 from unittest.mock import MagicMock, patch
 
 import chutes_cvm.guest.__main__ as guest_main
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.paths import SCRIPTS_DIR
 
 _FAKE_CMD = QemuCommand(
     mem="1G",
@@ -56,3 +58,11 @@ def test_launch_vm_returns_qemu_nonzero(
         net_queues=4,
     )
     assert guest_main.launch_vm(args) == 1
+
+
+def test_discover_profile_reports_the_launch_cpu_args():
+    """discover-profile.sh re-spells the -cpu args in bash. They feed the host profile the
+    control plane fingerprints, so a drift from what the launcher actually passes would
+    baseline a class against CPUID leaves no VM ever boots with."""
+    script = (SCRIPTS_DIR / "discover-profile.sh").read_text()
+    assert f'CPU_ARGS="{GUEST_CPU_ARGS}"' in script

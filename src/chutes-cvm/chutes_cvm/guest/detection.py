@@ -138,6 +138,16 @@ SUPPORTED_QEMU_BY_OS = {
 }
 
 
+# The guest ``-cpu`` args every supported host launches with. ``host`` passes the host CPU
+# model through; ``-avx10`` masks the AVX10 feature off. -cpu shapes the CPUID leaves the
+# guest sees, so this must be one value shared by the launcher
+# (``chutes_cvm.guest.__main__``), the pre-upgrade profile rewrite (``guest.preflight``) and
+# offline measurement (``measurement.topology_spec``) — a divergence moves RTMR0.
+# It was OS-gated while 24.04 was supported (its QEMU 8.2 has no ``avx10`` property to mask);
+# every release in SUPPORTED_QEMU_BY_OS takes the mask, so it is now a constant.
+GUEST_CPU_ARGS = "host,-avx10"
+
+
 def detect_os_version() -> str | None:
     """Return the host OS VERSION_ID (e.g. '26.04') from /etc/os-release, or None."""
     try:

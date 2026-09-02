@@ -138,21 +138,17 @@ MEM_TOTAL_KB=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
 MEM_TOTAL_GB=$(( MEM_TOTAL_KB / 1024 / 1024 ))
 
 # ---------------------------------------------------------------------------
-# OS release + derived QEMU -cpu args
-# Mirrors chutes-cvm guest launch (chutes/guest/__main__.py): the avx10 mask is gated purely on
-# the host's Ubuntu VERSION_ID. -cpu shapes the CPUID leaves the guest sees, so
-# two hosts on different OS releases launch the VM differently — capture it here
-# so a measurement divergence can be traced back to host OS drift.
+# OS release + the QEMU -cpu args it launches with
+# Mirrors chutes-cvm guest launch (GUEST_CPU_ARGS in chutes_cvm/guest/detection.py): every
+# supported release takes the avx10 mask, so this is a constant — keep the two in step, since
+# -cpu shapes the CPUID leaves the guest sees. The release itself is still captured: it is an
+# RTMR0-relevant input (it picks the host QEMU), so a divergence traces back to host OS drift.
 # ---------------------------------------------------------------------------
 OS_VERSION_ID=""
 if [[ -r /etc/os-release ]]; then
     OS_VERSION_ID=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_ID:-}")
 fi
-if [[ "$OS_VERSION_ID" == "24.04" ]]; then
-    CPU_ARGS="host"
-else
-    CPU_ARGS="host,-avx10"
-fi
+CPU_ARGS="host,-avx10"
 
 # ---------------------------------------------------------------------------
 # Host QEMU version — a primary RTMR0 determinant.
@@ -431,7 +427,7 @@ if [[ $REPORT_OUTPUT -eq 1 ]]; then
     row "Guest NUMA topology"       "$([[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]] \
                                         && echo "ACTIVE (host has 2 nodes) → per-node memory backends + PXB-PCIe" \
                                         || echo "FALLBACK (host has ${NUMA_NODE_COUNT} nodes, not 2) → flat map + numactl interleave")"
-    row "QEMU -cpu args"            "$CPU_ARGS  (avx10 gate: VERSION_ID=${OS_VERSION_ID:-?})"
+    row "QEMU -cpu args"            "$CPU_ARGS"
     row "Host CPU topology"         "sockets=${CPU_SOCKETS}, cores/socket=${CPU_CORES_PER_SOCKET}, threads/core=${CPU_THREADS_PER_CORE}"
     if [[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]]; then
         warn "Guest RAM (mem=GPU_count × profile.ram_per_gpu_gb) is profile-derived;"

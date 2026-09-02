@@ -13,12 +13,14 @@ tests/measurement/conftest.py arrange this).
 """
 
 from chutes_cvm.guest.command import DeviceSpec, MachineSpec
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.topology import NumaTopology, TopologyFingerprint
 
-# QEMU version -> guest -cpu string (mirrors chutes_cvm.guest.__main__: "host" on
-# 24.04, else "host,-avx10"). 10.2.1 = 26.04, the only supported host OS.
-_CPU_ARGS_BY_QEMU = {"10.2.1": "host,-avx10"}
+# QEMU version -> guest -cpu string. Every supported release launches with the shared
+# GUEST_CPU_ARGS (10.2.1 = 26.04, the only supported host OS); the mapping stays so a future
+# QEMU that needs a different -cpu form can be pinned without touching the launch path.
+_CPU_ARGS_BY_QEMU = {"10.2.1": GUEST_CPU_ARGS}
 
 # Offline measurement has no real GPU to pass through, but the launch command is
 # built the same way (a vfio-pci endpoint per root port). We hand every device
@@ -30,9 +32,9 @@ _PLACEHOLDER_BDF = "0000:00:00.0"
 
 
 def cpu_args_for_qemu_version(qemu_version: str) -> str:
-    """The guest -cpu args for a QEMU version. Defaults to the -avx10 form.
+    """The guest -cpu args for a QEMU version. Defaults to the shared GUEST_CPU_ARGS.
     This is the LAUNCH form (`-cpu host`); measurement uses measurement_cpu_args."""
-    return _CPU_ARGS_BY_QEMU.get(qemu_version, "host,-avx10")
+    return _CPU_ARGS_BY_QEMU.get(qemu_version, GUEST_CPU_ARGS)
 
 
 def measurement_cpu_args(fingerprint: TopologyFingerprint, qemu_version: str) -> str:

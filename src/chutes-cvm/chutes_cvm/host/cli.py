@@ -7,6 +7,7 @@ top-level ``host`` passthrough in ``chutes_cvm.cli``.
   chutes-cvm host setup            # provision this TDX host (args forwarded to host.setup)
   chutes-cvm host verify           # will this host relaunch + re-attest? (optionally --target-os)
   chutes-cvm host submit-profile   # register this host class with Chutes for baselining
+                                   #   (optionally --target-os, as `host verify`)
   chutes-cvm host tune / restore   # NVIDIA host CPU tuning, and revert
   chutes-cvm host reset-gpus       # reset all GPUs via nvidia-gpu-tools SBR
   chutes-cvm host vfio-wedged      # exit 0 if host PCI passthrough is wedged and needs a reset
@@ -76,12 +77,52 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     # profile and POSTs it for baselining. No image / version / readiness gate — that is `host
     # verify`, which needs a downloaded image to know which measurement to check against. A fresh
     # host (no image yet) is exactly when you submit, so requiring the image here was wrong.
+    from chutes_cvm.guest.detection import (
+        SUPPORTED_QEMU_BY_OS,
+        verify_host_qemu_supported,
+    )
     from chutes_cvm.guest.preflight import PreflightError, submit_profile
 
     print(_color("── chutes-cvm: host class submission ──", "1;36"))
+    target_os = getattr(args, "target_os", None)
+    if target_os:
+        # Register the class this host will BE after the upgrade: the OS release picks the
+        # QEMU that generates the measured guest ACPI, so the profile's release, QEMU and
+        # -cpu args are all rewritten together (chutes_cvm.guest.preflight._apply_target_os).
+        expected = SUPPORTED_QEMU_BY_OS.get(target_os)
+        if expected is None:
+            print(
+                f"Registration failed: target OS {target_os!r} is not supported "
+                f"{sorted(SUPPORTED_QEMU_BY_OS)}."
+            )
+            print(_color("\nResult: FAILED", "1;31"))
+            return 1
+        print(
+            f"Registering for target OS {target_os} (ships QEMU {expected}); "
+            f"the live OS/QEMU is ignored because the upgrade replaces it."
+        )
+    else:
+        # Same gate `host verify` runs: registering the live host means registering its OS and
+        # QEMU, so an unsupported release (or a release running a QEMU it does not ship) would
+        # baseline a class that can never attest. Fail here rather than spend a generation slot
+        # on it — the operator either upgrades, or names where they are headed with --target-os.
+        try:
+            verify_host_qemu_supported()
+        except ValueError as exc:
+            print(f"Registration failed: {exc}")
+            print(
+                "  If you are registering ahead of an OS upgrade, name the release you are "
+                "moving to: `chutes-cvm host submit-profile --target-os "
+                f"{sorted(SUPPORTED_QEMU_BY_OS)[-1]}`."
+            )
+            print(_color("\nResult: FAILED", "1;31"))
+            return 1
     try:
         result = submit_profile(
-            config_path=args.config, scripts_dir=str(SCRIPTS_DIR), api_base=args.api
+            config_path=args.config,
+            scripts_dir=str(SCRIPTS_DIR),
+            api_base=args.api,
+            target_os=target_os,
         )
     except PreflightError as exc:
         print(f"Registration failed: {exc}")
@@ -190,6 +231,13 @@ def main(argv: "list[str] | None" = None) -> int:
             "with the control plane for baselining. Independent of the guest image — run it on a "
             "fresh host before any image is downloaded. Exit 0 submitted / 1 failed."
         ),
+    )
+    submit.add_argument(
+        "--target-os",
+        metavar="VERSION",
+        help="Register the class this host becomes after an OS upgrade, e.g. 26.04 — the "
+        "profile's OS release, QEMU version and -cpu args are all taken from that release "
+        "instead of the live host.",
     )
     _add_api_args(submit)
     submit.set_defaults(func=_cmd_submit_profile)

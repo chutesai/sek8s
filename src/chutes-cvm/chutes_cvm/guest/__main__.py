@@ -8,13 +8,13 @@ low-level debugging, but miners always use `chutes-cvm guest launch`.
 
 import argparse
 import os
-import platform
 import signal
 import sys
 import time
 
 from chutes_cvm import proc
 from chutes_cvm.guest.detection import (
+    GUEST_CPU_ARGS,
     detect_gpu_numa_nodes,
     detect_host_mem_gb,
     detect_nvidia_gpus,
@@ -136,8 +136,7 @@ def launch_vm(args) -> int:
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
-    ubuntu_version = platform.freedesktop_os_release().get("VERSION_ID")
-    cpu_args = "host" if ubuntu_version == "24.04" else "host,-avx10"
+    cpu_args = GUEST_CPU_ARGS
 
     pci_pinning = PcieRootPinning(numa_active)
 

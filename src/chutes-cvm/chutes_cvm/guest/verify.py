@@ -87,7 +87,6 @@ def verify_host(
         except ValueError as exc:
             print(f"BLOCKED (QEMU): {exc}")
             return BLOCKED
-        target_qemu = None  # the live QEMU is already in the discovered profile
     else:
         # Pre-upgrade: check against the target OS's QEMU (the upgrade replaces the live one).
         expected = SUPPORTED_QEMU_BY_OS.get(target_os)
@@ -98,7 +97,6 @@ def verify_host(
                 f"host on an unbaselined QEMU."
             )
             return BLOCKED
-        target_qemu = expected
         print(
             f"Checking against target OS {target_os} (ships QEMU {expected}); "
             f"the live QEMU is ignored because the upgrade replaces it."
@@ -115,7 +113,7 @@ def verify_host(
             config_path=config,
             scripts_dir=scripts_dir,
             api_base=api,
-            target_qemu=target_qemu,
+            target_os=target_os,
         )
     except PreflightError as exc:
         # Fail closed: if we cannot get a verdict, the host would attest into the unknown.
@@ -140,7 +138,10 @@ def verify_host(
     if submit:
         try:
             sub = submit_profile(
-                config_path=config, scripts_dir=scripts_dir, api_base=api
+                config_path=config,
+                scripts_dir=scripts_dir,
+                api_base=api,
+                target_os=target_os,
             )
         except PreflightError as exc:
             print(f"  Registration failed: {exc}")
@@ -151,9 +152,10 @@ def verify_host(
             "measurements; re-check readiness later."
         )
     else:
+        flag = f" --target-os {target_os}" if target_os else ""
         print(
-            "  Run `chutes-cvm host submit-profile` (or re-run with --submit) to register this "
-            "host class so Chutes can generate its measurements before you launch/upgrade."
+            f"  Run `chutes-cvm host submit-profile{flag}` (or re-run with --submit) to register "
+            "this host class so Chutes can generate its measurements before you launch/upgrade."
         )
     return WARNING
 

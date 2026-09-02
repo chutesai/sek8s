@@ -32,6 +32,7 @@ from urllib.parse import urlencode
 
 import yaml
 from chutes_cvm import proc
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS, SUPPORTED_QEMU_BY_OS
 from chutes_cvm.paths import DEFAULT_API_BASE
 from substrateinterface import Keypair, KeypairType
 
@@ -95,13 +96,21 @@ def _discover_profile_json(scripts_dir: str) -> str:
     return data
 
 
-def _override_qemu(profile_json: str, qemu_version: str) -> str:
-    """Return the profile with launch_determinism.qemu_version replaced.
+def _apply_target_os(profile_json: str, target_os: str) -> str:
+    """Return the profile rewritten as if this host were already on ``target_os``.
 
-    Used by the pre-upgrade check (--target-os): the fingerprint depends on the QEMU the
-    guest ACPI is generated with, so to ask "will my topology attest under the QEMU the
-    upgrade brings?" we swap in the target QEMU before the API fingerprints it.
+    Used by the pre-upgrade path (--target-os): the OS release is what picks the QEMU that
+    generates the guest ACPI measured into RTMR0, so every OS-derived field has to move
+    together. Rewriting the release while leaving the live host's QEMU behind would register
+    the class against a (release, QEMU) pair that does not exist — e.g. a 25.10 host asking
+    about 26.04 would submit "26.04 + QEMU 10.1.0", which 26.04 never ships.
     """
+    qemu_version = SUPPORTED_QEMU_BY_OS.get(target_os)
+    if qemu_version is None:
+        raise PreflightError(
+            f"target OS {target_os!r} is not supported {sorted(SUPPORTED_QEMU_BY_OS)}; "
+            f"supported releases ship a QEMU whose RTMR0 is baselined."
+        )
     try:
         doc = json.loads(profile_json)
     except json.JSONDecodeError as exc:
@@ -114,6 +123,15 @@ def _override_qemu(profile_json: str, qemu_version: str) -> str:
             "discover-profile output has no launch_determinism block to override"
         )
     ld["qemu_version"] = qemu_version
+    # The distro build string of a QEMU we are not running is unknowable, so mark it as
+    # projected rather than leaving the live host's (now contradictory) one in place.
+    ld["qemu_version_full"] = (
+        f"QEMU emulator version {qemu_version} (projected for target OS {target_os})"
+    )
+    ld["cpu_args"] = GUEST_CPU_ARGS
+    host = doc.get("host")
+    if isinstance(host, dict):
+        host["os_version_id"] = target_os
     # Compact separators keep the signed body small; key order is irrelevant to the API.
     return json.dumps(doc, separators=(",", ":"))
 
@@ -171,17 +189,18 @@ def _post(
 
 
 def _signed_profile(
-    config_path: str, scripts_dir: str, target_qemu: "str | None" = None
+    config_path: str, scripts_dir: str, target_os: "str | None" = None
 ) -> "tuple[str, str, str, bytes]":
     """Discover this host's profile and sign it with the miner hotkey.
 
-    Returns (hotkey, nonce, signature, body) for a POST. ``target_qemu`` swaps the profile's QEMU
-    version first, for the pre-upgrade check. Shared by the preflight check and the submit path.
+    Returns (hotkey, nonce, signature, body) for a POST. ``target_os`` rewrites the profile's
+    OS-derived fields (release, QEMU, -cpu args) first, for the pre-upgrade check. Shared by the
+    preflight check and the submit path.
     """
     ss58, seed = _load_miner_creds(config_path)
     profile_json = _discover_profile_json(scripts_dir)
-    if target_qemu:
-        profile_json = _override_qemu(profile_json, target_qemu)
+    if target_os:
+        profile_json = _apply_target_os(profile_json, target_os)
     body = profile_json.encode()
     nonce = str(int(time.time()))
     hotkey, signature = _sign(seed, body, nonce)
@@ -201,7 +220,7 @@ def run_preflight(
     version: str,
     rc: bool,
     api_base: str = DEFAULT_API_BASE,
-    target_qemu: "str | None" = None,
+    target_os: "str | None" = None,
 ) -> dict:
     """Discover -> sign -> POST /servers/tdx/preflight -> verdict.
 
@@ -209,7 +228,7 @@ def run_preflight(
     Returns {fingerprint, launchable, detail}; raises PreflightError on any failure to reach a
     verdict (the caller fails closed)."""
     hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_qemu
+        config_path, scripts_dir, target_os
     )
     query = urlencode({"version": version, "rc": "true" if rc else "false"})
     return _post(
@@ -221,7 +240,7 @@ def run_host_class_status(
     config_path: str,
     scripts_dir: str,
     api_base: str = DEFAULT_API_BASE,
-    target_qemu: "str | None" = None,
+    target_os: "str | None" = None,
 ) -> dict:
     """Discover -> sign -> POST /servers/tdx/host_profiles/status -> host class verdict.
 
@@ -235,7 +254,7 @@ def run_host_class_status(
     to reach a verdict.
     """
     hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_qemu
+        config_path, scripts_dir, target_os
     )
     return _post(
         "/servers/tdx/host_profiles/status", api_base, hotkey, nonce, signature, body
@@ -246,14 +265,16 @@ def submit_profile(
     config_path: str,
     scripts_dir: str,
     api_base: str = DEFAULT_API_BASE,
-    target_qemu: "str | None" = None,
+    target_os: "str | None" = None,
 ) -> dict:
     """Discover -> sign -> POST /servers/tdx/host_profiles -> register.
 
     Stores this host class so Chutes generates its measurements. Returns
     {fingerprint, status, stored, detail}; raises PreflightError on failure. Run when the preflight
-    reports the class is not yet launchable."""
+    reports the class is not yet launchable. ``target_os`` registers the class the host will BE
+    after an OS upgrade (target release + the QEMU it ships), not the one it is on now.
+    """
     hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_qemu
+        config_path, scripts_dir, target_os
     )
     return _post("/servers/tdx/host_profiles", api_base, hotkey, nonce, signature, body)
