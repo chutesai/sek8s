@@ -479,24 +479,24 @@
 # encrypted root with LUKS_PASSPHRASE to read RTMR3's userspace files. To build the image
 # WITHOUT measurements (e.g. non-Docker or fast local dev iteration), run `--tags build`, or
 # `--skip-tags compute-measurements` — the whole chain shares the `compute-measurements` tag.
-- name: Provision root filesystem (encrypt for prod / install debug initramfs)
+- name: Prepare boot image (encrypt + measured initramfs for prod / install debug initramfs)
   hosts: host
   become: true
   tags:
-    - luks
+    - prepare-boot-image
     - build
   handlers:
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
-    - name: Provision root filesystem
+    - name: Prepare boot image
       ansible.builtin.include_role:
-        name: luks
+        name: prepare-boot-image
         apply:
-          tags: luks
+          tags: prepare-boot-image
 
-# ── Measurement GATHER (post-luks) ────────────────────────────────────────────
-# The initrd is now final (luks rebuilt it for prod AND debug). Stage this image's
+# ── Measurement GATHER (post-boot-image) ──────────────────────────────────────
+# The initrd is now final (prepare-boot-image rebuilt it for prod AND debug). Stage this image's
 # direct-boot vmlinuz/initrd/cmdline — RTMR1/2 measure these exact bytes.
 #
 # There is NO CCEL capture in this build flow: the tdx-measure fork self-generates the

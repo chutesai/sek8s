@@ -55,7 +55,7 @@ The default is defined in each role's `defaults/main.yml` and can be overridden 
 make build-image
 
 # The playbook will automatically:
-# - Skip the luks role (no encryption)
+# - Run prepare-boot-image in debug mode (debug initramfs, no encryption)
 # - Skip the harden-access role (keep SSH access)
 # - Configure containerd cache for unencrypted device
 ```
@@ -67,7 +67,7 @@ make build-image
 make build-image
 
 # The playbook will:
-# - Run the luks role (encrypt root and setup boot scripts)
+# - Run prepare-boot-image (encrypt root + boot scripts + measured initramfs)
 # - Run the harden-access role (remove SSH access)
 # - Configure containerd cache for encrypted device with attestation
 ```
@@ -76,9 +76,9 @@ make build-image
 
 ### Roles Affected
 
-1. **luks role** - Skipped when `debug_build: true`
+1. **prepare-boot-image role** - Runs `debug.yml` (no encryption) when `debug_build: true`
    - No root encryption
-   - No boot scripts installed
+   - Fail-open debug initramfs installed instead of the LUKS-unlock prod one
    - No attestation setup
 
 2. **harden-access role** - Skipped when `debug_build: true`

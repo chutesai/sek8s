@@ -317,6 +317,13 @@
       # Configuration
       [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
 
+# Generate the RTMR3 canonical manifest over the FINAL root — after /etc/fstab was rewritten to
+# /dev/mapper and /etc/tdx-luks.conf written above, so every measured file is hashed in its final
+# state (nothing excluded). MUST precede the initramfs rebuild below, which embeds the file
+# (covering it under RTMR1). See generate-expected-hashes.yml.
+- name: Generate RTMR3 expected-hashes over the finalized encrypted root
+  ansible.builtin.include_tasks: generate-expected-hashes.yml
+
 - name: Update initramfs and grub in chroot
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "

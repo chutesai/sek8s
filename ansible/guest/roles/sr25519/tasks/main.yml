@@ -3,7 +3,7 @@
 # initramfs can prove miner-hotkey possession at boot (openssl cannot do Schnorr/Ristretto). The
 # luks fetch_key hook stages /usr/bin/sr25519 via copy_exec, so it lands in the measured initramfs.
 #
-# Must run BEFORE the luks role rebuilds the initramfs (so the binary exists when copy_exec runs).
+# Must run BEFORE prepare-boot-image rebuilds the initramfs (so the binary exists when copy_exec runs).
 # The pinned rust-toolchain.toml (1.94.0 + musl) makes the shipped binary reproducible — a toolchain
 # bump changes the bytes and therefore RTMR2, so it is a deliberate, versioned change.
 

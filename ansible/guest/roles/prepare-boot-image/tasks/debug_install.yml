@@ -194,6 +194,14 @@
     owner: root
     group: root
 
+# Generate the RTMR3 canonical manifest over the FINAL debug root — after every measured file
+# (incl. /root/.ssh, cleanup drop-ins, /etc/tdx-luks.conf above) is in its final state, so nothing
+# is excluded. MUST precede the initramfs rebuild below, which embeds the file (RTMR1). The debug
+# root is plaintext, so no /etc/fstab rewrite here — but the same generation keeps prod and debug
+# identical. See generate-expected-hashes.yml.
+- name: Generate RTMR3 expected-hashes over the finalized debug root
+  ansible.builtin.include_tasks: generate-expected-hashes.yml
+
 - name: Update initramfs and grub in chroot
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "

@@ -74,7 +74,7 @@ def validate_ss58_address(address):
     """Validate SS58 address format for Bittensor network.
 
     This validation is intentionally duplicated in the initramfs shell script
-    ansible/guest/roles/luks/files/initramfs/write-validator-auth which runs
+    ansible/guest/roles/prepare-boot-image/files/initramfs/write-validator-auth which runs
     before Python is available.  If you change any of the three criteria below,
     update the shell script to match.
 
