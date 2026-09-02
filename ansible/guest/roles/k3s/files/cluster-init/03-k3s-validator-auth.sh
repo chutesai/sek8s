@@ -52,12 +52,26 @@ apply_validator_secret() {
 
 VALIDATOR_SS58_FILE="/run/chutes/validator-ss58"
 
-if [ ! -f "$VALIDATOR_SS58_FILE" ]; then
+# Prefer the value the k3s-post-start wrapper exported. This script runs as `bash <script>`, so it
+# is confined by sek8s.deny-sensitive-default (/usr/bin/bash is in @{confined_bins}), and that
+# profile denies /run/chutes/** — reading the file directly returns EACCES in production, which
+# previously failed this script and powered the VM off. The wrapper runs unconfined and can read
+# it, so it hands the value down through the environment. The file read is kept as a fallback for
+# unconfined/manual invocation; under confinement it fails, which is still the correct
+# safe-failure outcome.
+if [ -n "${VALIDATOR_SS58:-}" ]; then
+    log "Using VALIDATOR_SS58 exported by k3s-post-start"
+elif [ -f "$VALIDATOR_SS58_FILE" ]; then
+    if ! VALIDATOR_SS58=$(cat "$VALIDATOR_SS58_FILE" 2>&1); then
+        log "ERROR: cannot read $VALIDATOR_SS58_FILE ($VALIDATOR_SS58) — if this is a Permission"
+        log "       denied, the AppArmor deny on /run/chutes/** applies and the wrapper did not"
+        log "       export VALIDATOR_SS58"
+        exit 1
+    fi
+else
     log "ERROR: $VALIDATOR_SS58_FILE not found — initramfs write-validator-auth may have failed"
     exit 1
 fi
-
-VALIDATOR_SS58=$(cat "$VALIDATOR_SS58_FILE")
 
 if [ -z "$VALIDATOR_SS58" ]; then
     log "ERROR: validator-ss58 is empty"

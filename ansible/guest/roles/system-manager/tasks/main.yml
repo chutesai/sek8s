@@ -40,7 +40,7 @@
 - name: Create system-manager group (for config dir ownership)
   ansible.builtin.group:
     name: system-manager
-    gid: "{{ system_manager_gid | default(10150) }}"
+    gid: 10150
     state: present
     system: yes
 
@@ -53,7 +53,7 @@
 - name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config; admission for cosign key read; containerd for k3s ctr)
   ansible.builtin.user:
     name: system-manager
-    uid: "{{ system_manager_uid | default(10150) }}"
+    uid: 10150
     group: tdx
     groups: "system-manager,systemd-journal,video,admission,containerd"
     append: yes

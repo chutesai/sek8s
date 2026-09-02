@@ -60,6 +60,39 @@ mark_script_failed() {
     log "Marked script $script_name as failed with exit code $exit_code"
 }
 
+# Export the initramfs-provided runtime values that the init scripts cannot read themselves.
+#
+# /run/chutes is denied by sek8s-secrets-deny, and the init scripts are launched below as
+# `bash "$script_path"` — exec'ing /usr/bin/bash by NAME, which is in @{confined_bins}, so each
+# script auto-attaches sek8s.deny-sensitive-default and any read under /run/chutes returns EACCES.
+# In production that surfaced as `cat: /run/chutes/validator-ss58: Permission denied`, which failed
+# 03-k3s-validator-auth.sh and powered the VM off. Debug builds load the profile in complain mode,
+# so it never reproduced there.
+#
+# THIS wrapper, by contrast, runs unconfined: AppArmor attaches on the execve target, and that is
+# /usr/local/bin/k3s-post-start.sh, which matches no profile. So it can read the value and hand it
+# down through the environment, which crosses the profile boundary that the filesystem cannot.
+#
+# Read with bash's `$(<file)` redirection, NOT `$(cat file)`: /usr/bin/cat is itself in
+# @{confined_bins}, so exec'ing it would attach the denying profile and reintroduce the bug.
+#
+# Only the validator SS58 is exported. It is an allowlist identifier whose security property is
+# INTEGRITY (delivered via the RTMR2-measured initramfs and republished as a K8s Secret), not
+# confidentiality — unlike the LUKS key material alongside it in /run/chutes, which is never read
+# here and stays behind the deny.
+export_initramfs_runtime_values() {
+    local ss58_file="/run/chutes/validator-ss58"
+    if [ -r "$ss58_file" ]; then
+        VALIDATOR_SS58="$(<"$ss58_file")"
+        export VALIDATOR_SS58
+        log "Exported VALIDATOR_SS58 to init scripts (${VALIDATOR_SS58:0:12}...)"
+    else
+        # Not fatal here: the one consumer (03-k3s-validator-auth.sh) enforces its own
+        # safe-failure behaviour, and failing early would take down steps that do not need it.
+        log "WARNING: $ss58_file not readable; 03-k3s-validator-auth.sh will fail as designed"
+    fi
+}
+
 # Function to run a single script with timeout and error handling
 run_script() {
     local script_path="$1"
@@ -198,6 +231,7 @@ get_script_list() {
 # Main execution
 main() {
     log "Starting k3s post-start setup"
+    export_initramfs_runtime_values
     log "Script directory: $SCRIPT_DIR"
     log "Marker directory: $MARKER_DIR"
     log "Max script timeout: ${MAX_SCRIPT_TIMEOUT}s"
