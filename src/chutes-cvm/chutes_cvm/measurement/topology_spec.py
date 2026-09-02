@@ -48,15 +48,17 @@ def measurement_cpu_args(fingerprint: TopologyFingerprint, qemu_version: str) ->
     Raises if the fingerprint carries no captured CPU model (cpu_processor_id=None):
     generating with the launch base alone would silently emit a measurement for the
     *generating host's* CPU (verified: an unpinned AMD host yields a different, wrong
-    RTMR0), so we refuse rather than publish a plausible-but-wrong value. Capture it
-    with discover-profile.sh on a host of that class and fill in the fingerprint.
+    RTMR0), so we refuse rather than publish a plausible-but-wrong value. The field comes
+    from the class's stored host profile, so the fix is a fresh registration from a host of
+    that class (`chutes-cvm host submit-profile`), not a change here.
     Launch always uses cpu_args_for_qemu_version."""
     if fingerprint.cpu.cpu_vendor is None or fingerprint.cpu.cpu_processor_id is None:
         raise ValueError(
             f"fingerprint {fingerprint.variant_label!r} has no captured CPU model "
             f"(cpu_processor_id is None); offline RTMR0 would be generated for the "
-            f"generating host's CPU. Run discover-profile.sh on a host of this class "
-            f"and fill in the fingerprint's cpu_processor_id before generating."
+            f"generating host's CPU. The stored host profile for this class predates the "
+            f"field — have a host of this class re-register with a current chutes-cvm "
+            f"(`chutes-cvm host submit-profile`) before generating."
         )
     return (
         f"{cpu_args_for_qemu_version(qemu_version)},vendor={fingerprint.cpu.cpu_vendor}"

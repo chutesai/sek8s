@@ -195,16 +195,18 @@ def verify_host_qemu_supported() -> None:
         raise ValueError(
             f"Host OS release {os_version!r} is not supported "
             f"{list(SUPPORTED_QEMU_BY_OS)}. Supported releases ship a QEMU whose "
-            f"RTMR0 is baselined; run discover-profile.sh and send the output so "
-            f"Chutes can baseline this release."
+            f"RTMR0 is baselined, so this host cannot attest until it is upgraded. To "
+            f"register this host's class ahead of that upgrade, run `chutes-cvm host "
+            f"submit-profile --target-os {sorted(SUPPORTED_QEMU_BY_OS)[-1]}`."
         )
     if qemu_version != expected:
         raise ValueError(
             f"Host OS {os_version} ships (and we baseline) QEMU {expected}, but "
             f"found QEMU {qemu_version}. A different QEMU generates different guest "
-            f"ACPI tables → a different TDX RTMR0 → rejected at attestation. Update "
-            f"to the release's QEMU (`sudo apt update && sudo apt full-upgrade`), or "
-            f"run discover-profile.sh and send the output to baseline {qemu_version}."
+            f"ACPI tables → a different TDX RTMR0 → rejected at attestation. Install "
+            f"the release's QEMU (`sudo apt update && sudo apt full-upgrade`). If "
+            f"{os_version} itself has moved to QEMU {qemu_version}, report it to Chutes "
+            f"— the new build has to be baselined before any host on it can attest."
         )
 
 
