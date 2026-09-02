@@ -837,3 +837,73 @@ def test_detect_profile_skips_topology_check_for_unbaselined_profile():
         fingerprint=("anything", "goes"),
     ):
         assert detect_profile() is GPU_PROFILES["B300"]
+
+
+# ---------------------------------------------------------------------------
+# B200_XEON6_256: third B200 sibling (2×64c×2t Xeon 6, ~3 TB RAM)
+# ---------------------------------------------------------------------------
+
+
+def test_b200_xeon6_256_has_correct_cpu_topology():
+    profile = GPU_PROFILES["B200_XEON6_256"]
+    assert profile.host_cpus == 256
+    assert profile.host_sockets == 2
+    # Inherits B200's 16-CPU host reserve (FabricManager + QEMU iothreads).
+    assert profile.host_reserved_cpus == 16
+    assert profile.vcpus == 240
+    assert profile.smp_topology == "240,sockets=2,cores=120,threads=1"
+
+
+def test_b200_xeon6_256_matches_xeon6_ram_sizing():
+    """Same ~3 TB host RAM class as B200_XEON6, so the same guest RAM."""
+    assert (
+        GPU_PROFILES["B200_XEON6_256"].ram_per_gpu_gb
+        == GPU_PROFILES["B200_XEON6"].ram_per_gpu_gb
+    )
+    assert (
+        GPU_PROFILES["B200_XEON6_256"].ram_per_gpu_gb
+        > GPU_PROFILES["B200"].ram_per_gpu_gb
+    )
+
+
+def test_b200_xeon6_256_inherits_b200_passthrough_policy():
+    profile = GPU_PROFILES["B200_XEON6_256"]
+    assert any("--set-cc-mode=on" in a for a in profile.get_cc_mode_args(8)[0])
+    assert profile.should_passthrough_infiniband is False
+    assert profile.should_passthrough_nvswitches(8) is False
+    assert profile.enable_numa_topology is True
+    assert profile.enable_post_launch_tuning is True
+    assert profile.requires_fabric_manager is True
+
+
+def test_b200_xeon6_256_has_no_registered_measurement_yet():
+    """Its guest -smp (240 vcpus) is new, so no RTMR0 is registered for it yet.
+
+    An empty map is what lets the host launch (the hard-match is skipped) while
+    verify-host still reports WARNING instead of claiming a baseline that does
+    not exist. Populate it once the measurement is registered.
+    """
+    profile = GPU_PROFILES["B200_XEON6_256"]
+    assert profile.baselined_measurements == {}
+    assert profile.baselined_topologies == set()
+
+
+def test_match_gpu_model_resolves_256_cpu_b200_variant():
+    from chutes.guest.detection import _match_gpu_model
+
+    line = "0000:0d:00.0 3D controller [0302]: NVIDIA Corporation GB100 [B200] [10de:2901] (rev a1)"
+    assert _match_gpu_model(line, host_cpus=256) == "B200_XEON6_256"
+
+
+def test_detect_profile_resolves_b200_xeon6_256_by_cpu_count():
+    from chutes.guest.detection import detect_profile
+
+    with _patch_detection(
+        lspci_lines=_make_lspci_b200(),
+        host_cpus=256,
+        host_sockets=2,
+        fingerprint=NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1)),
+    ):
+        profile = detect_profile()
+
+    assert profile is GPU_PROFILES["B200_XEON6_256"]
