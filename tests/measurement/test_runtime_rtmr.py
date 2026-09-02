@@ -1,8 +1,8 @@
 """Tests for the version-level runtime RTMRs (RTMR1/RTMR2/RTMR3).
 
 Covers the pure/host-independent logic — the RTMR3 extension chain and file selection, and
-RTMR1/RTMR2 parsing — plus the `build` command's measurements.yaml assembly. The guestmount /
-tdx-measure subprocesses are mocked; the SHA-384 math is real.
+RTMR1/RTMR2 parsing — plus the `build` command's measurements.yaml assembly. The qemu-nbd /
+cryptsetup / tdx-measure subprocesses are mocked; the SHA-384 math is real.
 """
 
 import argparse
@@ -132,23 +132,105 @@ def test_compute_rtmr1_2_metadata_paths_are_absolute(tmp_path, monkeypatch):
 # ── RTMR3 LUKS handling (always fresh; unlock with LUKS_PASSPHRASE) ─────────────
 
 
-def test_root_is_luks_detects_encrypted():
-    enc = MagicMock(returncode=0, stdout="/dev/sda2: crypto_LUKS\n", stderr="")
-    pt = MagicMock(returncode=0, stdout="/dev/sda2: ext4\n", stderr="")
-    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=enc):
-        assert rr.root_is_luks("x.qcow2") is True
-    with patch("chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=pt):
-        assert rr.root_is_luks("x.qcow2") is False
+def _blkid_by_part(types: dict):
+    """proc.run side_effect returning the blkid TYPE for the partition in argv."""
+
+    def _run(argv, *a, **k):
+        part = argv[-1]  # blkid -o value -s TYPE <part>
+        return MagicMock(returncode=0, stdout=types.get(part, "") + "\n", stderr="")
+
+    return _run
+
+
+def test_detect_root_partition_prefers_luks():
+    parts = ["/dev/nbd0p1", "/dev/nbd0p16"]
+    types = {"/dev/nbd0p1": "crypto_LUKS", "/dev/nbd0p16": "ext4"}
+    with patch(
+        "chutes_cvm.measurement.runtime_rtmr.glob.glob", return_value=parts
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.proc.run",
+        side_effect=_blkid_by_part(types),
+    ):
+        assert rr._detect_root_partition("/dev/nbd0") == ("/dev/nbd0p1", True)
+
+
+def test_detect_root_partition_plaintext_ext4():
+    # No LUKS: the ext4 root is returned, is_luks False (sysfs size read is absent in tests -> 0).
+    parts = ["/dev/nbd0p1", "/dev/nbd0p15"]
+    types = {"/dev/nbd0p1": "ext4", "/dev/nbd0p15": "vfat"}
+    with patch(
+        "chutes_cvm.measurement.runtime_rtmr.glob.glob", return_value=parts
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.proc.run",
+        side_effect=_blkid_by_part(types),
+    ):
+        dev, is_luks = rr._detect_root_partition("/dev/nbd0")
+        assert dev == "/dev/nbd0p1"
+        assert is_luks is False
+
+
+def test_detect_root_partition_no_root_raises():
+    with patch(
+        "chutes_cvm.measurement.runtime_rtmr.glob.glob", return_value=["/dev/nbd0p15"]
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.proc.run",
+        side_effect=_blkid_by_part({"/dev/nbd0p15": "vfat"}),
+    ):
+        with pytest.raises(rr.MeasurementError, match="no ext4 or LUKS root"):
+            rr._detect_root_partition("/dev/nbd0")
 
 
 def test_compute_rtmr3_luks_without_passphrase_raises(tmp_path):
+    # An encrypted root with no LUKS_PASSPHRASE fails closed (never mounts the wrong partition).
     img = tmp_path / "enc.qcow2"
     img.write_bytes(b"x")
-    with patch("chutes_cvm.measurement.runtime_rtmr._have", return_value=True), patch(
-        "chutes_cvm.measurement.runtime_rtmr.root_is_luks", return_value=True
+    ok = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("chutes_cvm.measurement.runtime_rtmr.os.geteuid", return_value=0), patch(
+        "chutes_cvm.measurement.runtime_rtmr._have", return_value=True
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._free_nbd_device", return_value="/dev/nbd0"
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._wait_for_path", return_value=True
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._detect_root_partition",
+        return_value=("/dev/nbd0p1", True),
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=ok
     ):
         with pytest.raises(rr.MeasurementError, match="LUKS_PASSPHRASE"):
             rr.compute_rtmr3(str(img))
+
+
+def test_compute_rtmr3_plaintext_needs_no_cryptsetup(tmp_path):
+    # A plaintext (debug) root mounts and measures with cryptsetup absent — same process as prod,
+    # minus the luksOpen. Locks in that the debug measurement path is unaffected.
+    img = tmp_path / "debug.qcow2"
+    img.write_bytes(b"x")
+    root = tmp_path / "mnt"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/tdx-measure.conf").write_text("/etc/hostname\n")
+    (root / "etc/hostname").write_text("h")
+
+    ok = MagicMock(returncode=0, stdout="", stderr="")
+    with patch("chutes_cvm.measurement.runtime_rtmr.os.geteuid", return_value=0), patch(
+        "chutes_cvm.measurement.runtime_rtmr._have",
+        side_effect=lambda t: t != "cryptsetup",
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._free_nbd_device", return_value="/dev/nbd0"
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._wait_for_path", return_value=True
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr._detect_root_partition",
+        return_value=("/dev/nbd0p1", False),
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.tempfile.mkdtemp", return_value=str(root)
+    ), patch(
+        "chutes_cvm.measurement.runtime_rtmr.proc.run", return_value=ok
+    ):
+        rtmr3, per_file = rr.compute_rtmr3(str(img))
+
+    assert len(rtmr3) == 96  # SHA-384 hex, uppercase
+    assert per_file == [(hashlib.sha384(b"h").hexdigest(), "/etc/hostname")]
 
 
 def test_generate_rtmr3_passes_luks_passphrase_from_env(monkeypatch, capsys):

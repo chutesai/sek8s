@@ -46,9 +46,7 @@
         state: started
         enabled: true
 
-    - name: Install libguestfs-tools (guestmount / virt-filesystems for RTMR3)
-      # RTMR3 (folded into `measurements generate`) mounts the image root read-only to replay
-      # the file chain; virt-filesystems detects an encrypted root, unlocked via LUKS_PASSPHRASE.
+    - name: Install libguestfs-tools (guestfish, for stage-boot-artifacts)
       ansible.builtin.apt:
         name: libguestfs-tools
         state: present

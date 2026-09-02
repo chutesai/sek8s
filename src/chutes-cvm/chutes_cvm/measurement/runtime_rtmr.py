@@ -17,12 +17,15 @@ the running VM by construction. Ports host-tools' former compute-rtmr1-2.sh / co
 
 from __future__ import annotations
 
+import contextlib
+import glob
 import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from chutes_cvm import proc
@@ -93,48 +96,6 @@ def compute_rtmr1_2(
 # ── RTMR3 (userspace file chain; version-level, LUKS-independent) ──────────────
 
 
-def _detect_ext4_root(image: str, key_args: "list[str] | tuple" = ()) -> str:
-    """Return the OS root filesystem device in the image.
-
-    Uses libguestfs ``inspect-os``, which identifies the actual OS root — correctly the
-    LUKS-decrypted root, not the separate /boot partition. ``key_args``
-    (``--key all:file:<keyfile>``) unlock a LUKS root during launch so it is decrypted and
-    inspectable. Falls back to the first ext4 for a plaintext single-root image where inspect-os
-    finds no OS.
-
-    A naive "first ext4" is wrong POST-LUKS: the encrypted root reads as ``crypto_LUKS``, so the
-    first ext4 is the separate /boot (no ``/etc``). RTMR3 was computed PRE-LUKS on the plaintext
-    root before; now it runs against the encrypted image and must inspect the real OS root.
-    """
-
-    def _guestfish(script: str) -> str:
-        result = proc.run(
-            ["guestfish", "--ro", "-a", image, *key_args],
-            input=script,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise MeasurementError(f"guestfish failed: {result.stderr.strip()}")
-        return result.stdout
-
-    # Primary: the OS root libguestfs identifies (handles LUKS + a separate /boot).
-    for line in _guestfish("run\ninspect-os\n").splitlines():
-        dev = line.strip()
-        if dev.startswith("/dev/"):
-            return dev
-
-    # Fallback: first ext4 (plaintext single-root image with no inspectable OS).
-    for line in _guestfish("run\nlist-filesystems\n").splitlines():
-        # lines look like "/dev/sda2: ext4"
-        dev, _, fstype = line.partition(":")
-        if fstype.strip() == "ext4":
-            return dev.strip()
-    raise MeasurementError(
-        "could not find an OS root partition; pass root_part explicitly"
-    )
-
-
 def _measured_files(mount_root: str, conf_path: str) -> list[tuple[str, str]]:
     """(root-relative path, full mounted path) for every regular non-symlink file named by
     /etc/tdx-measure.conf, sorted by root-relative path — matching rtmr3-measure/-verify.
@@ -182,81 +143,202 @@ def rtmr3_chain(files: list[tuple[str, str]]) -> tuple[str, list[tuple[str, str]
     return rtmr3.hex().upper(), per_file
 
 
-def root_is_luks(image: str) -> bool:
-    """True if the image's root is LUKS-encrypted (virt-filesystems prints ``crypto_LUKS``)."""
-    result = proc.run(
-        ["virt-filesystems", "--long", "--all", "-a", image],
-        capture_output=True,
-        text=True,
+def _wait_for_path(path: str, timeout: float = 5.0) -> bool:
+    """Poll for a device node to appear — partprobe populates ``/dev`` asynchronously."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return True
+        time.sleep(0.1)
+    return os.path.exists(path)
+
+
+def _free_nbd_device() -> str:
+    """The first ``/dev/nbdN`` with nothing attached (sysfs size 0)."""
+    for i in range(16):
+        try:
+            if Path(f"/sys/block/nbd{i}/size").read_text().strip() == "0":
+                return f"/dev/nbd{i}"
+        except OSError:
+            continue
+    raise MeasurementError(
+        "no free /dev/nbd device — run `modprobe nbd max_part=8` or disconnect a stale one"
     )
-    return "crypto_LUKS" in result.stdout
+
+
+def _detect_root_partition(nbd: str) -> tuple[str, bool]:
+    """``(root partition device, is_luks)`` for a connected nbd image.
+
+    Mirrors the build's own blkid-based layout detection (luks_encrypt.yml): the root is the
+    ``crypto_LUKS`` partition when the image is encrypted, else the largest ext4 (the separate
+    ``/boot`` is a smaller ext4). blkid reads the on-disk signature directly, so detection never
+    depends on libguestfs inspecting the image.
+    """
+    luks_part: str | None = None
+    best_ext4: str | None = None
+    best_size = -1
+    for part in sorted(glob.glob(f"{nbd}p*")):
+        fstype = proc.run(
+            ["blkid", "-o", "value", "-s", "TYPE", part],
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if fstype == "crypto_LUKS":
+            luks_part = part
+        elif fstype == "ext4":
+            try:
+                size = int(
+                    Path(f"/sys/class/block/{os.path.basename(part)}/size").read_text()
+                )
+            except OSError:
+                size = 0
+            if size > best_size:
+                best_size, best_ext4 = size, part
+    if luks_part:
+        return luks_part, True
+    if best_ext4:
+        return best_ext4, False
+    raise MeasurementError(
+        f"no ext4 or LUKS root partition found on {nbd} — is this a bootable image?"
+    )
+
+
+@contextlib.contextmanager
+def _mounted_image_root(
+    image: str, luks_passphrase: str | None, root_part: str | None = None
+):
+    """Mount the image's OS root read-only and yield the mount path.
+
+    Uses qemu-nbd + (for an encrypted root) ``cryptsetup luksOpen`` + ``mount`` — the same tooling
+    the build uses to CREATE the image — rather than libguestfs, whose appliance will not open a
+    LUKS2/argon2id root here (it detects the header but the open silently fails). Requires root,
+    which the measurement flow already has. Tears down mount -> luksClose -> nbd disconnect in all
+    cases so a failure never leaks a mapping or an nbd connection.
+
+    ``root_part`` forces the partition: an absolute ``/dev/...`` path, or a suffix (e.g. ``p1``)
+    appended to the chosen nbd device. When unset the root is auto-detected.
+    """
+    if os.geteuid() != 0:
+        raise MeasurementError(
+            "RTMR3 needs root to mount the image (qemu-nbd/mount) — re-run with sudo"
+        )
+    # cryptsetup is required ONLY for an encrypted root (checked in the LUKS branch below), so a
+    # plaintext (debug) image measures identically without it — the process after mounting is the
+    # same for prod and debug; the only difference is the luksOpen step.
+    for tool in ("qemu-nbd", "mount", "umount", "blkid"):
+        if not _have(tool):
+            raise MeasurementError(
+                f"{tool} not found — install qemu-utils and util-linux"
+            )
+
+    proc.run(["modprobe", "nbd", "max_part=8"], capture_output=True, text=True)
+    nbd = _free_nbd_device()
+    mapper_name: str | None = None
+    mnt: str | None = None
+    connected = False
+    try:
+        result = proc.run(
+            ["qemu-nbd", "--read-only", "--connect", nbd, image],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise MeasurementError(f"qemu-nbd connect failed: {result.stderr.strip()}")
+        connected = True
+        proc.run(["partprobe", nbd], capture_output=True, text=True)
+        if not _wait_for_path(f"{nbd}p1"):
+            raise MeasurementError(
+                f"partitions did not appear on {nbd} after partprobe"
+            )
+
+        if root_part:
+            part = root_part if root_part.startswith("/dev/") else f"{nbd}{root_part}"
+            # blkid (not cryptsetup) tells LUKS from ext4, so plaintext images stay cryptsetup-free.
+            fstype = proc.run(
+                ["blkid", "-o", "value", "-s", "TYPE", part],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            is_luks = fstype == "crypto_LUKS"
+        else:
+            part, is_luks = _detect_root_partition(nbd)
+
+        if is_luks:
+            if not luks_passphrase:
+                raise MeasurementError(
+                    "image root is LUKS-encrypted — set LUKS_PASSPHRASE (the passphrase the image "
+                    "was encrypted with) so RTMR3 can be recomputed from the unlocked root"
+                )
+            if not _have("cryptsetup"):
+                raise MeasurementError(
+                    "image root is LUKS-encrypted but cryptsetup is not installed — install it to "
+                    "unlock the root (plaintext/debug images do not need cryptsetup)"
+                )
+            mapper_name = f"chutes-rtmr3-{os.getpid()}"
+            # Passphrase via stdin (--key-file=-), never argv/ps; exact bytes, no trailing newline.
+            result = proc.run(
+                [
+                    "cryptsetup",
+                    "luksOpen",
+                    "--readonly",
+                    part,
+                    mapper_name,
+                    "--key-file=-",
+                ],
+                input=luks_passphrase,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise MeasurementError(
+                    f"cryptsetup luksOpen failed: {result.stderr.strip()}"
+                )
+            source = f"/dev/mapper/{mapper_name}"
+        else:
+            source = part
+
+        mnt = tempfile.mkdtemp(suffix="-rtmr3")
+        result = proc.run(
+            ["mount", "-o", "ro", source, mnt], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise MeasurementError(f"mount failed: {result.stderr.strip()}")
+        yield mnt
+    finally:
+        if mnt:
+            proc.run(["umount", mnt], capture_output=True, text=True)
+            try:
+                os.rmdir(mnt)
+            except OSError:
+                pass
+        if mapper_name:
+            proc.run(
+                ["cryptsetup", "luksClose", mapper_name], capture_output=True, text=True
+            )
+        if connected:
+            proc.run(["qemu-nbd", "--disconnect", nbd], capture_output=True, text=True)
 
 
 def compute_rtmr3(
     image: str, root_part: str | None = None, luks_passphrase: str | None = None
 ) -> tuple[str, list[tuple[str, str]]]:
-    """Compute RTMR3 by mounting the image read-only and replaying the file chain.
+    """Compute RTMR3 by mounting the image's root read-only and replaying the file chain.
 
-    Always recomputes fresh from the actual root — no cached/reused value. If the root is a
-    plaintext ext4 (the normal PRE-LUKS build stage), it is mounted directly. If it is already
-    LUKS-encrypted (a re-run against a finalized image), ``luks_passphrase`` (the same passphrase
-    the image was encrypted with) unlocks it; without it, this errors rather than guessing.
+    Always recomputes fresh from the actual root — no cached/reused value. A plaintext ext4 root
+    (the PRE-LUKS build stage) is mounted directly; an already-encrypted (post-LUKS) root is
+    unlocked with ``luks_passphrase`` (the same passphrase the image was encrypted with). Both go
+    through qemu-nbd + cryptsetup — the tooling that built the image — so it never depends on
+    libguestfs. Requires root. ``root_part`` overrides the auto-detected root partition.
 
-    Returns (uppercase hex, per-file [(sha384hex, root-relative path)]). Requires guestmount
-    (libguestfs-tools). ``root_part`` overrides the ext4 auto-detection.
+    Returns (uppercase hex, per-file [(sha384hex, root-relative path)]).
     """
-    # Absolute so guestmount/guestfish don't depend on this process's cwd.
     image = os.path.abspath(image)
     if not os.path.isfile(image):
         raise MeasurementError(f"image not found: {image}")
-    if not _have("guestmount") or not _have("guestfish"):
-        raise MeasurementError(
-            "guestmount/guestfish not found — install libguestfs-tools "
-            "(sudo apt install libguestfs-tools)"
-        )
-
-    key_args: list[str] = []
-    keyfile: str | None = None
-    if root_is_luks(image):
-        if not luks_passphrase:
+    with _mounted_image_root(image, luks_passphrase, root_part) as mnt:
+        conf = os.path.join(mnt, "etc/tdx-measure.conf")
+        if not os.path.isfile(conf):
             raise MeasurementError(
-                "image root is LUKS-encrypted — set LUKS_PASSPHRASE (the passphrase the image "
-                "was encrypted with) so RTMR3 can be recomputed from the unlocked root"
+                "/etc/tdx-measure.conf not found in image — rtmr3-measure did not run"
             )
-        # Pass the key via a mode-600 temp file (all:file:) so it never lands in argv/ps.
-        fd, keyfile = tempfile.mkstemp(suffix="-luks-key")
-        os.write(fd, luks_passphrase.encode())
-        os.close(fd)
-        key_args = ["--key", f"all:file:{keyfile}"]
-
-    try:
-        part = root_part or _detect_ext4_root(image, key_args)
-        mnt = tempfile.mkdtemp(suffix="-rtmr3")
-        try:
-            result = proc.run(
-                ["guestmount", "--ro", "-a", image, *key_args, "-m", part, mnt],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise MeasurementError(f"guestmount failed: {result.stderr.strip()}")
-            try:
-                conf = os.path.join(mnt, "etc/tdx-measure.conf")
-                if not os.path.isfile(conf):
-                    raise MeasurementError(
-                        "/etc/tdx-measure.conf not found in image — rtmr3-measure did not run"
-                    )
-                return rtmr3_chain(_measured_files(mnt, conf))
-            finally:
-                proc.run(["guestunmount", mnt], capture_output=True)
-        finally:
-            try:
-                os.rmdir(mnt)
-            except OSError:
-                pass
-    finally:
-        if keyfile:
-            try:
-                os.remove(keyfile)
-            except OSError:
-                pass
+        return rtmr3_chain(_measured_files(mnt, conf))

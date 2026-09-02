@@ -678,7 +678,8 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument(
         "--root-part",
         default=None,
-        help="ext4 root partition device for --register rtmr3 (default: auto-detect via guestfish)",
+        help="root partition override for --register rtmr3: an absolute /dev path or an nbd "
+        "suffix like 'p1' (default: auto-detect the LUKS/ext4 root on the nbd device)",
     )
     gen.set_defaults(func=_cmd_generate)
 
