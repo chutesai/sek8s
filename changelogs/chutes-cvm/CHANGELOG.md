@@ -215,6 +215,10 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   - If a base image *is* downloaded, its `(version, rc)` is checked against the covered set as a
     **note**: an uncovered image is flagged (exit 2) but never invalidates the host-class verdict.
     `--base-image` now selects the image for that note only.
+- **`chutes-cvm image manifest` now writes `manifest.json` next to the qcow2 by default**
+  (previously `<base>.manifest.json`). `manifest.json` is the only name the readers —
+  `image verify`, `image download`, and `guest launch` — look for, so a freshly generated
+  set is directly consumable and copyable as a whole directory. Pass `-o` for the old name.
 
 ### Fixed
 - Bridge networking now clamps TCP MSS to the egress interface's PMTU (`setup-bridge.sh`),
