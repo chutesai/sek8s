@@ -3,7 +3,7 @@
 The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installable host CLI
 (`pip`/`install.sh`). Versioned with SemVer via `src/chutes-cvm/VERSION`. Run
 `make promote-changelogs` to aggregate fragments into the current version section.
-## [0.1.0] - 2026-09-01
+## [0.1.0] - 2026-09-02
 
 ### Added
 - **`chutes-cvm measurements`** — TDX measurement generation is now a first-class command
@@ -88,6 +88,9 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   bridge + benchmark-netlog — the extra dependency cleanup is the only difference. `--force` skips
   the API and force-kills QEMU on either command; a graceful attempt that can't reach the API stops
   and points the operator at `--force`.
+- `chutes-cvm host submit-profile --target-os <release>` — register the host class this machine
+  becomes after an OS upgrade (target release, its QEMU, its `-cpu` args), mirroring
+  `host verify --target-os`. Unsupported releases are rejected before anything is signed or sent.
 
 ### Changed
 - **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
@@ -219,6 +222,14 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   (MTU 1280). Previously the guest advertised an MSS from its own 1500 NIC, and oversized
   handshake segments were black-holed on the smaller uplink — connections established but
   stalled during the TLS handshake.
+- `--target-os` now rewrites every OS-derived field of the submitted host profile, not just
+  the QEMU used for the readiness check. A host asking about (or registering for) a release it
+  has not upgraded to yet no longer submits its live QEMU, `-cpu` args and OS release — e.g. a
+  25.10 host targeting 26.04 previously registered "26.04 + QEMU 10.1.0", a pair 26.04 never
+  ships. `host verify --target-os ... --submit` now registers the target class too.
+- `host submit-profile` on an unsupported OS release (or a supported one running a QEMU it does
+  not ship) is now rejected locally, as `host verify` already was. It previously registered the
+  host class anyway, spending a measurement-generation slot on a class that could never attest.
 
 ### Removed
 - **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm host setup` (above). The
