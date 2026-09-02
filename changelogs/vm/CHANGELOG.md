@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-08-29
+## [1.4.0] - 2026-09-02
 
 ### Added
 - **Boot-time miner-hotkey proof-of-possession (guest side).** A small, static, pinned-toolchain (musl) sr25519 signer (`src/sr25519`; Schnorr/Ristretto, which openssl cannot do) is built and staged into the guest initramfs (measured into RTMR2). The boot flow now derives the hotkey from the config-volume seed (`/run/tdx-config/miner-seed`) rather than trusting the claimed `miner-ss58`, and signs each chained server nonce — `/boot/attestation`, `/provision`, and `/provision/confirm` — sending the sr25519 proof in `X-Chutes-Signature`. This closes a cross-miner LUKS-brick vector where a peer could assert a victim's `(hotkey, vm_name)` and rotate its passphrase. The seed is stashed to `/run` for the init-bottom calls and shredded before the initramfs `/run` is moved into userspace. Pairs with a matching server-side signature check (chutes-api). Also fixes a migration miss: root-rotation confirm now uses `/provision/confirm` (the legacy `/luks/confirm` is deprecated).
@@ -294,6 +294,11 @@ Version source of truth: `ansible/guest/VERSION`
   journal window, and tenant workload detail in a log the miner can read over the status API. The config
   and unit are now templated, so the existing `opa_decision_logs` and `opa_log_level` variables are live
   rather than dead; debug builds can opt back in with `-e opa_decision_logs=true`.
+- **The `luks` guest-build role is now `prepare-boot-image`.** It always did more than LUKS —
+  encryption/debug-init, mount-config rewrite, boot + attestation initramfs scripts, the RTMR3
+  canonical manifest, and the final measured initramfs — and the RTMR3 manifest generation moved
+  into it (it can't be separated from building the post-encryption initramfs). Operators selecting
+  this stage by tag now use `--tags prepare-boot-image` instead of `--tags luks`.
 
 ### Fixed
 - `nvidia-fabricmanager` is no longer reported as unhealthy when it is intentionally masked (valid on non-NVLink hosts). The services overview now returns `ok` in this configuration instead of incorrectly reporting `degraded`.
@@ -337,6 +342,18 @@ Version source of truth: `ansible/guest/VERSION`
 - The chutes-miner chart registry DaemonSet/Service is intentionally NOT removed
   in this change — that retirement is a later, separate step gated on full fleet
   migration.
+
+### Security
+- **RTMR3 canonical hashes now cover every measured file, including privileged ones.** The
+  boot-time integrity gate (`/etc/tdx-rtmr3-expected-hashes`) is now generated over the fully
+  finalized image root — while assembling the boot image, right before the final initramfs is built
+  — instead
+  of mid-build. Previously it was computed while later build stages could still change files, which
+  forced excluding files that aren't final yet (notably `/root/.ssh`, which gates privileged
+  access) from pre-verification. Those files were measured into RTMR3 but not checked against a
+  build-time constant at boot, so offline tampering wasn't caught by the local power-off gate. The
+  gate now hashes each measured file in its true on-disk state, so nothing is excluded and a
+  tampered `/root/.ssh`, `/etc/fstab`, or verification tool aborts boot before RTMR3 is extended.
 
 ## [1.3.1] - 2026-06-20
 
