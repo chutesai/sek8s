@@ -11,6 +11,22 @@ MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
 # can read its OWN subdirectory. See ansible/guest/group_vars/all/k3s-init-secrets.yml.
 STAGE_ROOT="${STAGE_ROOT:-/run/k3s-init}"
 
+# Set by the 10-debug.conf drop-in (measured with /etc/systemd/system). Unset means false, so a
+# missing drop-in can never disable the poweroff.
+
+# Power off unless this is a debug build. Callers treat this as terminal either way; on debug it
+# returns so the wrapper can exit non-zero, leaving systemd to mark the unit failed while the VM
+# stays reachable.
+fail_terminal() {
+    if [ "${K3S_POST_START_DEBUG:-false}" = "true" ]; then
+        log "DEBUG BUILD: would power off here — staying up so this can be diagnosed over SSH"
+        log "DEBUG BUILD: production would have powered the VM off at this point"
+        return 0
+    fi
+    sleep 5
+    poweroff -f
+}
+
 # Which files behind the /run/chutes deny each cluster-init script may receive, staged read-only
 # into /run/k3s-init/<script>/ for the duration of that script's run.
 #
@@ -71,7 +87,9 @@ stage_script_files() {
     local f
     for f in $files; do
         if [ -r "$f" ]; then
-            cp "$f" "$dir/$(basename "$f")" && chmod 0444 "$dir/$(basename "$f")"
+            # install, not cp: cp is in @{confined_bins}, so exec'ing it would attach
+            # sek8s.deny-sensitive-default and be denied both paths, unconfined wrapper or not.
+            install -m 0444 "$f" "$dir/$(basename "$f")"
         else
             # Not fatal here: each consumer enforces its own safe-failure behaviour, and failing
             # the whole run would take down the steps that do not need this file.
@@ -370,8 +388,7 @@ main() {
             if is_security_critical "$script_name"; then
                 log "FATAL: script $script_name failed — powering off VM"
                 echo "POST-START-FAILURE: $script_name" > /dev/kmsg 2>/dev/null || true
-                sleep 5
-                poweroff -f
+                fail_terminal
             fi
             log "✗ Script $script_name failed (continuing with remaining scripts)"
         fi
@@ -398,8 +415,8 @@ main() {
         log "FATAL: $failed_scripts script(s) failed during post-start — powering off VM"
         notify_systemd "FATAL: $failed_scripts failures"
         echo "POST-START-FAILED: $failed_scripts script(s)" > /dev/kmsg 2>/dev/null || true
-        sleep 5
-        poweroff -f
+        fail_terminal
+        exit 1
     fi
 }
 
