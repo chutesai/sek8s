@@ -131,10 +131,22 @@
     state: present
     type: luks2
     passphrase: "{{ luks_passphrase }}"
-    # Pinned, not random: this UUID lands in cryptroot/crypttab inside the initrd, so a random
-    # one moved RTMR2 on every rebuild. See _boot_image_uuid_seed in defaults/main.yml.
-    uuid: "{{ luks_container_uuid }}"
   no_log: true
+
+# luksFormat assigns a RANDOM container UUID, which lands in cryptroot/crypttab inside the
+# initramfs and so moved RTMR2 on every rebuild. Set it explicitly here.
+#
+# NOT via the module's uuid: parameter — that is a SELECTOR ("identify the LUKS container by
+# UUID", used only when device: and label: are unset), so with device: set it is silently
+# ignored. The module cannot set a UUID at format time at all.
+#
+# Must run before the blkid lookup below, which is what crypttab is built from.
+# --batch-mode is required: luksUUID prompts "Type 'yes' in capital letters" on a tty, and with
+# no stdin under Ansible it aborts or hangs rather than failing cleanly.
+- name: Pin the LUKS container UUID (random per luksFormat; reaches RTMR2 via crypttab)
+  ansible.builtin.command: >-
+    cryptsetup --batch-mode luksUUID --uuid {{ luks_container_uuid }} {{ root_partition }}
+  changed_when: true
 
 # A custom (non-keyring) LUKS2 token is added via `token import` reading JSON from stdin —
 # `token add` is only for built-in keyring tokens (--key-description) and has no --json option.
@@ -205,6 +217,16 @@
 - name: Get UUID of LUKS partition
   ansible.builtin.command: blkid -o value -s UUID {{ root_partition }}
   register: blkid_result
+
+# Guard against a silent regression: the previous attempt used a module parameter that was
+# ignored without error, and the drift only surfaced by diffing two builds' measurements.
+- name: Verify the LUKS UUID pin took effect
+  ansible.builtin.assert:
+    that:
+      - blkid_result.stdout | trim == luks_container_uuid
+    fail_msg: >-
+      LUKS container UUID is {{ blkid_result.stdout | trim }}, expected {{ luks_container_uuid }}.
+      crypttab would carry a random UUID into the initramfs and RTMR2 would drift between builds.
   changed_when: false
 
 - name: Update /etc/crypttab

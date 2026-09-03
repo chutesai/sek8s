@@ -364,7 +364,10 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   defeating the third-party verification `inventory-reproduce.yml` documents. Continues the same
   effort as the earlier admission-controller TLS and pinned-kernel fixes.
   - **LUKS container UUID** — random per `luksFormat`, and written into `cryptroot/crypttab`
-    inside the initramfs. Now derived from version + build type via `to_uuid`.
+    inside the initramfs. Now derived from version + build type via `to_uuid` and applied with
+    `cryptsetup luksUUID`, with an assertion that the pin took. (`community.crypto.luks_device`'s
+    `uuid:` parameter cannot do this — it is a selector for *finding* a container, ignored
+    entirely when `device:` is given, so setting it fails silently.)
   - **ext4 root filesystem UUID** — random per `mkfs.ext4`, and written into the kernel cmdline as
     `root=UUID=` by `stage-boot-artifacts`. Pinned the same way.
   - **`k3s-install.sh`** — fetched unpinned from `get.k3s.io` into `/usr/local/bin`, which is
