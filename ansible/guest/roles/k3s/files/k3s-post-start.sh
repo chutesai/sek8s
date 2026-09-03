@@ -6,6 +6,87 @@ set -e
 # Configuration
 SCRIPT_DIR="${SCRIPT_DIR:-/usr/local/bin/k3s-init-scripts}"
 MARKER_DIR="${MARKER_DIR:-/var/lib/rancher/k3s/init-markers}"
+# Per-script staging root for boot secrets. On tmpfs, so it clears on every boot.
+# sek8s.deny-sensitive-default denies this tree outright; only a sek8s.k3s-init.<script> profile
+# can read its OWN subdirectory. See ansible/guest/group_vars/all/k3s-init-secrets.yml.
+STAGE_ROOT="${STAGE_ROOT:-/run/k3s-init}"
+
+# Which files behind the /run/chutes deny each cluster-init script may receive, staged read-only
+# into /run/k3s-init/<script>/ for the duration of that script's run.
+#
+# NOT all of these are secrets, and the distinction matters when reasoning about a leak vs a
+# tamper. /run/chutes is blanket-denied because it holds the miner seed and mTLS private keys;
+# these files are denied only because they share that directory:
+#   k3s-encryption-config.yaml  SECRET  — contains the secretbox key; confidentiality matters
+#   validator-ss58              public  — an allowlist ADDRESS; only its integrity matters, since
+#                                         altering it would allowlist an attacker's validator
+#   signing-keys/helm-pubkey.gpg public  — the key chart signatures verify AGAINST; likewise
+#                                         integrity-critical, confidentiality irrelevant
+# The staging grant is read-only and the blanket profile denies this tree outright, so integrity
+# holds for all three regardless of which are confidential.
+#
+# Declared here, with a matching profile in /etc/apparmor.d/sek8s.k3s-init and a matching entry in
+# verify-apparmor-profiles.sh. A script absent from this map needs no profile and gets no
+# exception: it stays on sek8s.deny-sensitive-default. Missing one of the three declarations is a
+# loud boot failure, never a silent grant — without a profile the staged file is denied, and
+# without a map entry nothing is staged at all.
+declare -A INIT_SCRIPT_STAGED_FILES=(
+    ["00-reencrypt-secrets.sh"]="/run/chutes/k3s-encryption-config.yaml"
+    ["03-k3s-validator-auth.sh"]="/run/chutes/validator-ss58"
+    ["04-helm-chart-upgrade.sh"]="/run/chutes/signing-keys/helm-pubkey.gpg"
+)
+
+# True if the named AppArmor profile is loaded in the kernel.
+aa_profile_loaded() {
+    grep -qE "^${1}( |\\()" /sys/kernel/security/apparmor/profiles 2>/dev/null
+}
+
+# Stage one script's declared secrets into its own directory, read-only.
+#
+# This wrapper runs UNCONFINED — AppArmor attaches on the execve target, and that is
+# /usr/local/bin/k3s-post-start.sh, which matches no profile — so it can read /run/chutes even
+# though the scripts it launches cannot.
+#
+# THAT IS LOAD-BEARING AND FRAGILE. It holds only because the unit says
+# `ExecStart=/usr/local/bin/k3s-post-start.sh`. Changing it to `ExecStart=/bin/bash /usr/local/...`
+# or moving this script under /usr/bin makes the execve target a name in @{confined_bins}, which
+# confines the wrapper, denies it /run/chutes, and silently breaks staging for EVERY script below.
+# A #! line does not save you: the kernel loads the interpreter afterwards, but AppArmor has
+# already matched on the path passed to execve. The scripts are launched as `bash <script>`, which execs
+# /usr/bin/bash by name and auto-attaches sek8s.deny-sensitive-default.
+#
+# The copy is what crosses the boundary, not the original: /run/chutes stays blanket-denied in
+# every profile, which keeps it fail-CLOSED. Carving per-file exceptions into that deny would make
+# it a denylist and silently expose any secret added later.
+stage_script_files() {
+    local script_name="$1"
+    local files="${INIT_SCRIPT_STAGED_FILES[$script_name]:-}"
+    [ -n "$files" ] || return 0
+
+    local dir="$STAGE_ROOT/$script_name"
+    rm -rf "${dir:?}"
+    mkdir -p "$dir"
+    chmod 0755 "$STAGE_ROOT" "$dir"
+
+    local f
+    for f in $files; do
+        if [ -r "$f" ]; then
+            cp "$f" "$dir/$(basename "$f")" && chmod 0444 "$dir/$(basename "$f")"
+        else
+            # Not fatal here: each consumer enforces its own safe-failure behaviour, and failing
+            # the whole run would take down the steps that do not need this file.
+            log "WARNING: $f not readable; $script_name will fail as designed"
+        fi
+    done
+}
+
+# Remove a script's staged secrets as soon as it exits, so a secret is present only while the one
+# script that needs it is running.
+unstage_script_files() {
+    local script_name="$1"
+    [ -n "${INIT_SCRIPT_STAGED_FILES[$script_name]:-}" ] || return 0
+    rm -rf "${STAGE_ROOT:?}/$script_name"
+}
 LOG_FILE="${LOG_FILE:-/var/log/k3s-post-start.log}"
 MAX_SCRIPT_TIMEOUT="${MAX_SCRIPT_TIMEOUT:-300}"  # 5 minutes per script
 # How often to feed the systemd watchdog while a step script is running. Must stay
@@ -60,39 +141,6 @@ mark_script_failed() {
     log "Marked script $script_name as failed with exit code $exit_code"
 }
 
-# Export the initramfs-provided runtime values that the init scripts cannot read themselves.
-#
-# /run/chutes is denied by sek8s-secrets-deny, and the init scripts are launched below as
-# `bash "$script_path"` — exec'ing /usr/bin/bash by NAME, which is in @{confined_bins}, so each
-# script auto-attaches sek8s.deny-sensitive-default and any read under /run/chutes returns EACCES.
-# In production that surfaced as `cat: /run/chutes/validator-ss58: Permission denied`, which failed
-# 03-k3s-validator-auth.sh and powered the VM off. Debug builds load the profile in complain mode,
-# so it never reproduced there.
-#
-# THIS wrapper, by contrast, runs unconfined: AppArmor attaches on the execve target, and that is
-# /usr/local/bin/k3s-post-start.sh, which matches no profile. So it can read the value and hand it
-# down through the environment, which crosses the profile boundary that the filesystem cannot.
-#
-# Read with bash's `$(<file)` redirection, NOT `$(cat file)`: /usr/bin/cat is itself in
-# @{confined_bins}, so exec'ing it would attach the denying profile and reintroduce the bug.
-#
-# Only the validator SS58 is exported. It is an allowlist identifier whose security property is
-# INTEGRITY (delivered via the RTMR2-measured initramfs and republished as a K8s Secret), not
-# confidentiality — unlike the LUKS key material alongside it in /run/chutes, which is never read
-# here and stays behind the deny.
-export_initramfs_runtime_values() {
-    local ss58_file="/run/chutes/validator-ss58"
-    if [ -r "$ss58_file" ]; then
-        VALIDATOR_SS58="$(<"$ss58_file")"
-        export VALIDATOR_SS58
-        log "Exported VALIDATOR_SS58 to init scripts (${VALIDATOR_SS58:0:12}...)"
-    else
-        # Not fatal here: the one consumer (03-k3s-validator-auth.sh) enforces its own
-        # safe-failure behaviour, and failing early would take down steps that do not need it.
-        log "WARNING: $ss58_file not readable; 03-k3s-validator-auth.sh will fail as designed"
-    fi
-}
-
 # Function to run a single script with timeout and error handling
 run_script() {
     local script_path="$1"
@@ -120,7 +168,32 @@ run_script() {
     # restart replayed the same kill forever. `timeout` still bounds the step; the
     # watchdog's job is to catch a wedged *wrapper*, which the ping loop cannot mask
     # (a wedge outside this loop stops the pings).
-    timeout "$MAX_SCRIPT_TIMEOUT" bash "$script_path" > "$script_log" 2>&1 &
+    # Stage this script's declared boot secrets (no-op for scripts that need none) and run it
+    # under its matching profile. `bash "$script_path"` execs /usr/bin/bash by NAME, which
+    # @{confined_bins} auto-attaches to sek8s.deny-sensitive-default; aa-exec overrides that with
+    # sek8s.k3s-init.<script>, which still denies the model cache and /run/chutes but grants this
+    # script's own staged directory. Scripts with no entry in the table are left on the blanket
+    # profile — no change for them.
+    stage_script_files "$script_name"
+
+    local -a runner=(timeout "$MAX_SCRIPT_TIMEOUT")
+    if [ -n "${INIT_SCRIPT_STAGED_FILES[$script_name]:-}" ]; then
+        local profile="sek8s.k3s-init.${script_name%.sh}"
+        if command -v aa-exec >/dev/null 2>&1 && aa_profile_loaded "$profile"; then
+            runner+=(aa-exec -p "$profile" --)
+            export STAGED_DIR="$STAGE_ROOT/$script_name"
+        else
+            # Run anyway rather than pre-failing: the script's own guard produces the accurate
+            # error. Log loudly, because the symptom downstream is a bare "permission denied".
+            log "WARNING: profile $profile unavailable; $script_name runs confined and will likely be denied"
+            unset STAGED_DIR
+        fi
+    else
+        unset STAGED_DIR
+    fi
+    runner+=(bash "$script_path")
+
+    "${runner[@]}" > "$script_log" 2>&1 &
     local script_pid=$!
     local waited=0
     while kill -0 "$script_pid" 2>/dev/null; do
@@ -131,6 +204,11 @@ run_script() {
         fi
     done
     wait "$script_pid" || exit_code=$?
+
+    # Drop the staged secrets the moment the script exits, on success or failure, so a secret is
+    # readable only while its one script is running.
+    unstage_script_files "$script_name"
+    unset STAGED_DIR
 
     if [ $exit_code -eq 0 ]; then
         local end_time=$(date +%s)
@@ -231,7 +309,6 @@ get_script_list() {
 # Main execution
 main() {
     log "Starting k3s post-start setup"
-    export_initramfs_runtime_values
     log "Script directory: $SCRIPT_DIR"
     log "Marker directory: $MARKER_DIR"
     log "Max script timeout: ${MAX_SCRIPT_TIMEOUT}s"

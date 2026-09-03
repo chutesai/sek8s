@@ -1,15 +1,23 @@
 # vim: ft=apparmor
-# sek8s.deny-sensitive-default — confine common shells, interpreters, and
-# data-transfer tools on the host.  Blocks access to the model cache and
-# high-value runtime secrets while allowing everything else.
+# sek8s.deny-sensitive-default — the blanket profile for common shells, interpreters, and
+# data-transfer tools. This is what an ESCAPED OR STRAY shell gets: a chute pod that breaks out of
+# its container, an exploited service that shells out, an injected command. It must therefore be
+# the most restrictive shell profile in the system.
 #
-# Services that legitimately need cache or secrets access use their own
-# named profiles (applied via systemd AppArmorProfile=), which override
-# this auto-attachment.
+# It denies BOTH protected assets:
+#   * the model cache — private model weights, the highest-value asset on the box
+#   * /run/chutes     — miner seed, hotkey, mTLS keys, k3s secretbox config
+# and additionally hides /run/k3s-init, where the k3s-post-start wrapper stages per-script
+# secrets (see sek8s.k3s-init.* profiles).
 #
-# python3 is intentionally NOT in the attachment list: confining it would
-# require explicit overrides for every Python-based systemd service.
-# Python launched from a confined shell inherits this profile via ix.
+# Services that legitimately need one of those assets do NOT get an exception here — AppArmor
+# gives `deny` precedence over any allow, so an exception is impossible to express in this file.
+# They get their own profile composed from sek8s-shell-base plus whichever denies still apply,
+# applied via systemd AppArmorProfile= or aa-exec, which overrides this auto-attachment.
+#
+# python3 is intentionally NOT in the attachment list: confining it would require explicit
+# overrides for every Python-based systemd service. Python launched from a confined shell inherits
+# this profile via ix.
 
 abi <abi/4.0>,
 
@@ -18,63 +26,20 @@ include <tunables/global>
 @{confined_bins} = /usr/bin/{bash,dash,cat,cp,tar,rsync,scp,curl,wget,perl,dd,socat,nc,ncat} /bin/{sh,dash}
 
 profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
-  include <abstractions/base>
-  include <abstractions/nameservice>
+  include <abstractions/sek8s-shell-base>
   include <abstractions/sek8s-cache-deny>
   include <abstractions/sek8s-secrets-deny>
 
-  # Broad filesystem access (deny abstractions carve out protected paths)
-  / r,
-  /** rwlkm,
-
-  # Execute self and other system binaries — children inherit this profile
   @{confined_bins} mrix,
-  /{,usr/}{bin,sbin}/** mrix,
-  /usr/local/{bin,sbin}/** mrix,
-  # k3s ships its binaries (k3s/kubectl/crictl) under a versioned data dir, not in
-  # the standard bin paths above — allow exec so shells/scripts can run kubectl etc.
-  /var/lib/rancher/k3s/data/*/bin/** mrix,
 
-  # Network (curl, wget, scp, socat, nc need it)
-  network,
-
-  # System D-Bus + the AF_UNIX socket beneath it. `abi <abi/4.0>` mediates AF_UNIX
-  # sockets (the `unix` rule class) AND D-Bus method calls separately from file access,
-  # so `network,` plus `/** rwlkm` is not enough on its own: `network,` does NOT cover
-  # AF_UNIX, so without a `unix` rule the connect() to the bus/systemd socket is denied
-  # at connect time — `systemctl is-active <unit>` fails with
-  # "Failed to connect to bus: Permission denied" (same symptom as sek8s.system-manager).
-  # The `unix` rule allows the socket connect; the `dbus` rules allow the messages that
-  # follow. BOTH are required — the dbus rules alone leave the connect denied. This broke
-  # the k3s cluster-init steps, which the wrapper invokes as `bash <script>` (exec'ing
-  # /usr/bin/bash by name attaches this profile), while the wrapper itself
-  # (/usr/local/bin/k3s-post-start.sh) runs unconfined and so was unaffected.
-  #
-  # Grants no new power: the profile already allows `/** rwlkm` and `capability,`, so a
-  # shell confined here can already stop a service by other means; its job is denying the
-  # model cache and runtime secrets by path, which neither the bus nor these sockets reach.
-  unix (connect, send, receive) type=stream peer=(label=unconfined),
-  dbus (send, receive) bus=system peer=(name=org.freedesktop.systemd1),
-  dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
-
-  # Confines by PATH (cache/secrets), not privilege: allow capabilities broadly so
-  # normal root tooling (dmesg -> CAP_SYS_RESOURCE, chown, mount) keeps working, but
-  # deny the ones that let a confined process drop below AppArmor entirely. sys_module
-  # is the critical one while module signing is not yet enforced — an insmod would
-  # otherwise load a kernel module and bypass this profile's path denies wholesale.
-  capability,
-  deny capability sys_module,
-  deny capability mac_admin,
-  deny capability mac_override,
-  deny capability sys_rawio,
+  # A stray shell must not be able to reboot or power off the box. Measured init scripts DO need
+  # this (their fail-closed handler powers the VM off on a security-critical failure), so the deny
+  # lives here rather than in sek8s-shell-base.
   deny capability sys_boot,
 
-  # Signals and ptrace (debugging tools)
-  signal,
-  ptrace read,
-
-  # Proc and sys
-  @{PROC}/** r,
-  @{sys}/** r,
-  owner @{PROC}/@{pid}/fd/** rw,
+  # The per-script staging area is invisible here. Only the sek8s.k3s-init.<script> profiles omit
+  # this deny, and each grants read to its OWN subdirectory only — so a stray shell cannot read a
+  # secret that the wrapper staged for a measured script, and no init script can read another's.
+  deny /run/k3s-init/ r,
+  deny /run/k3s-init/** rwlk,
 }

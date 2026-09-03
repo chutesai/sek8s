@@ -12,6 +12,7 @@
     group: root
     mode: '0644'
   loop:
+    - sek8s-shell-base
     - sek8s-cache-deny
     - sek8s-secrets-deny
 
@@ -30,7 +31,11 @@
     - sek8s.deny-sensitive-default
     - sek8s.attestation-proxy
     - sek8s.chute-log-shipper
+    - sek8s.k3s-init
 
+# One profile per entry in `k3s_init_secrets` (inventory.yml), all in a single file. Generated
+# rather than hand-written so the table stays the only place per-script secret access is declared —
+# the same table drives the staging loop in k3s-post-start.sh.
 # Debug builds load the profiles in complain mode: denials are logged, not
 # enforced, so a too-strict profile can't power off the VM (setup-cache et al.
 # carry OnFailure=poweroff) — you still get a login and a full denial log to
@@ -49,6 +54,7 @@
     - sek8s.deny-sensitive-default
     - sek8s.attestation-proxy
     - sek8s.chute-log-shipper
+    - sek8s.k3s-init
   when: debug_build | default(false) | bool
 
 # ── Systemd drop-ins: apply named profiles to services ───────────────────
