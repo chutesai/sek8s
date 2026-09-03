@@ -131,6 +131,9 @@
     state: present
     type: luks2
     passphrase: "{{ luks_passphrase }}"
+    # Pinned, not random: this UUID lands in cryptroot/crypttab inside the initrd, so a random
+    # one moved RTMR2 on every rebuild. See _boot_image_uuid_seed in defaults/main.yml.
+    uuid: "{{ luks_container_uuid }}"
   no_log: true
 
 # A custom (non-keyring) LUKS2 token is added via `token import` reading JSON from stdin —
@@ -154,6 +157,9 @@
   ansible.builtin.filesystem:
     dev: /dev/mapper/{{ encrypted_root_name }}
     fstype: ext4
+    # -U pins the filesystem UUID, which stage-boot-artifacts writes into the kernel cmdline as
+    # root=UUID=. A random one moved RTMR2 on every rebuild.
+    opts: "-U {{ root_fs_uuid }}"
 
 - name: Mount encrypted root
   ansible.builtin.mount:
@@ -321,6 +327,9 @@
 # /dev/mapper and /etc/tdx-luks.conf written above, so every measured file is hashed in its final
 # state (nothing excluded). MUST precede the initramfs rebuild below, which embeds the file
 # (covering it under RTMR1). See generate-expected-hashes.yml.
+- name: Normalize per-build variability in initramfs inputs
+  ansible.builtin.include_tasks: normalize-initramfs-inputs.yml
+
 - name: Generate RTMR3 expected-hashes over the finalized encrypted root
   ansible.builtin.include_tasks: generate-expected-hashes.yml
 

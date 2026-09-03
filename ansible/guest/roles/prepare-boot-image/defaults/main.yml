@@ -3,6 +3,18 @@ root_mount: /mnt/root
 newroot_mount: /mnt/newroot
 nbd_device: /dev/nbd0
 encrypted_root_name: encrypted_root
+
+# Pinned filesystem identifiers. Both were random per build and both reached RTMR2: luksFormat's
+# container UUID via cryptroot/crypttab inside the initrd, and mkfs.ext4's filesystem UUID via
+# root=UUID= in the kernel cmdline. That made every rebuild produce different measurements, which
+# breaks the third-party reproduction that inventory-reproduce.yml documents.
+#
+# Derived (UUIDv5, via to_uuid) from version + build type, so they are stable across rebuilds,
+# distinct per version, and never shared between a debug and a production image. Neither value is
+# secret: the LUKS key is rotated on first boot and the base image is copied per VM.
+_boot_image_uuid_seed: "{{ vm_version | default('0.0.0') }}-{{ 'debug' if debug_build | default(false) | bool else 'prod' }}"
+luks_container_uuid: "{{ ('sek8s-luks-' ~ _boot_image_uuid_seed) | to_uuid }}"
+root_fs_uuid: "{{ ('sek8s-rootfs-' ~ _boot_image_uuid_seed) | to_uuid }}"
 # Image output env label (override in inventory); used in final_img_path below.
 # The image SET lives in its own <env>/<version>[-debug]/ directory (qcow2 + direct-boot
 # sidecars + manifest.json) — see playbooks/group_vars/host.yml.

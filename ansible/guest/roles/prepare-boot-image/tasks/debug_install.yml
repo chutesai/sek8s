@@ -199,6 +199,9 @@
 # is excluded. MUST precede the initramfs rebuild below, which embeds the file (RTMR1). The debug
 # root is plaintext, so no /etc/fstab rewrite here — but the same generation keeps prod and debug
 # identical. See generate-expected-hashes.yml.
+- name: Normalize per-build variability in initramfs inputs
+  ansible.builtin.include_tasks: normalize-initramfs-inputs.yml
+
 - name: Generate RTMR3 expected-hashes over the finalized debug root
   ansible.builtin.include_tasks: generate-expected-hashes.yml
 
