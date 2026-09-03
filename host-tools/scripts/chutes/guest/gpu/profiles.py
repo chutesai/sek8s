@@ -260,7 +260,7 @@ class B200Profile(GpuProfile):
         # the default reserve of 4 starves them under heavy NVLink/NCCL I/O,
         # surfacing as cudaErrorNvlinkUncorrectable in the guest. The reserved
         # cores also widen the gap the iothreads pin into (see post_launch.py).
-        # Inherited by B200Xeon6Profile. Even, so vcpus stays socket-divisible.
+        # Inherited by both Xeon 6 siblings. Even, so vcpus stays socket-divisible.
         return 16
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -345,7 +345,7 @@ class B200Xeon6_256Profile(B200Profile):
     """B200 on an Intel Xeon 6 host with 2×64c×2t = 256 CPUs (~3 TB RAM, SNC off).
 
     Third B200 sibling: same GPU and passthrough behavior as B200Profile, same
-    ~3 TB RAM sizing as B200Xeon6Profile, but a 64-core (not 72-core) Xeon 6 SKU,
+    ~3 TB RAM sizing as B200Xeon6_288Profile, but a 64-core (not 72-core) Xeon 6 SKU,
     so the guest -smp — and therefore RTMR0 — differs from both. SNC is off on
     this SKU (2 NUMA nodes), so the guest-NUMA path is used with GPUs 4+4.
 
@@ -588,7 +588,7 @@ class RTXPro6000Profile(GpuProfile):
 
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
-    "B200_XEON6": B200Xeon6Profile(),
+    "B200_XEON6": B200Xeon6_288Profile(),
     "B200_XEON6_256": B200Xeon6_256Profile(),
     "B300": B300Profile(),
     "H200": H200Profile(),
