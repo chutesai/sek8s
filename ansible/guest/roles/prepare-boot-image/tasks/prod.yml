@@ -17,6 +17,24 @@
     fail_msg: "LUKS_PASSPHRASE environment variable must be set and non-empty for disk encryption. Export it before running the playbook."
   no_log: true
 
+# Stray whitespace is baked into the keyslot and produces an image that unlocks ONLY with the
+# contaminated value — the control plane then presents the clean passphrase and the guest fails to
+# unlock at boot, with nothing in the build log to hint at why. An embedded newline is worse still:
+# cryptsetup truncates a stdin passphrase at the first newline, so the key silently becomes a
+# PREFIX of what was exported. Both are easy to introduce (`export LUKS_PASSPHRASE=$(cat key)`,
+# a copy-paste with a trailing space) and cost a full rebuild to discover, so reject them here.
+- name: Validate LUKS passphrase has no surrounding whitespace or newlines
+  ansible.builtin.assert:
+    that:
+      - luks_passphrase == (luks_passphrase | trim)
+      - luks_passphrase.splitlines() | length <= 1
+    fail_msg: >-
+      LUKS_PASSPHRASE contains leading/trailing whitespace or an embedded newline. It would be
+      baked into the LUKS keyslot verbatim, so the image would unlock only with the contaminated
+      value and would fail first-boot unlock against the registered passphrase. Re-export it
+      without the stray characters (e.g. LUKS_PASSPHRASE="$(tr -d '\r\n' < keyfile)").
+  no_log: true
+
 - name: Check if LUKS container is open
   ansible.builtin.stat:
     path: "/dev/mapper/{{ encrypted_root_name }}"
