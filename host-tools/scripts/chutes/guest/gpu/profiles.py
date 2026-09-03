@@ -29,10 +29,10 @@ Map these to the profile properties:
 host_reserved_cpus is the number of logical CPUs kept for the host OS. It
 defaults to HOST_RESERVED_CPUS (4) and is a per-profile property so a GPU type
 with a heavier host workload can reserve more without shifting the vcpu count —
-and therefore RTMR0 — of unrelated profiles. B200/B200_XEON6 override it to 16
-because the host runs FabricManager alongside QEMU's iothreads and, under heavy
-NVLink/NCCL I/O, a thin reserve starves those threads (observed as
-cudaErrorNvlinkUncorrectable in the guest).
+and therefore RTMR0 — of unrelated profiles. The B200 family (B200, B200_XEON6,
+B200_XEON6_256) overrides it to 16 because the host runs FabricManager alongside
+QEMU's iothreads and, under heavy NVLink/NCCL I/O, a thin reserve starves those
+threads (observed as cudaErrorNvlinkUncorrectable in the guest).
 
 Keep any override EVEN: vcpus must divide across host_sockets (2) for a clean
 -smp topology. Changing host_reserved_cpus changes vcpus → smp_topology →
@@ -260,7 +260,7 @@ class B200Profile(GpuProfile):
         # the default reserve of 4 starves them under heavy NVLink/NCCL I/O,
         # surfacing as cudaErrorNvlinkUncorrectable in the guest. The reserved
         # cores also widen the gap the iothreads pin into (see post_launch.py).
-        # Inherited by B200Xeon6Profile. Even, so vcpus stays socket-divisible.
+        # Inherited by both Xeon 6 siblings. Even, so vcpus stays socket-divisible.
         return 16
 
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -298,7 +298,7 @@ class B200Profile(GpuProfile):
         return "CC mode (B200)"
 
 
-class B200Xeon6Profile(B200Profile):
+class B200Xeon6_288Profile(B200Profile):
     """B200 on an Intel Xeon 6 host (2×72c×2t = 288 CPUs, ~3 TB RAM, SNC3).
 
     Same GPU and passthrough behavior as B200Profile but different host CPU
@@ -339,6 +339,53 @@ class B200Xeon6Profile(B200Profile):
 
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B200 Xeon6)"
+
+
+class B200Xeon6_256Profile(B200Profile):
+    """B200 on an Intel Xeon 6 host with 2×64c×2t = 256 CPUs (~3 TB RAM, SNC off).
+
+    Third B200 sibling: same GPU and passthrough behavior as B200Profile, same
+    ~3 TB RAM sizing as B200Xeon6_288Profile, but a 64-core (not 72-core) Xeon 6 SKU,
+    so the guest -smp — and therefore RTMR0 — differs from both. SNC is off on
+    this SKU (2 NUMA nodes), so the guest-NUMA path is used with GPUs 4+4.
+
+    Confirmed from a submitted discover-profile.sh capture: KR9288-X3 board,
+    BIOS 03.04.01, Ubuntu 26.04 / QEMU 10.2.1, 3023 GB RAM, 8× B200 (10de:2901)
+    on NUMA nodes 0,0,0,0,1,1,1,1.
+    """
+
+    pci_device_ids = ["2901"]
+
+    @property
+    def name(self) -> str:
+        return "B200_XEON6_256"
+
+    @property
+    def ram_per_gpu_gb(self) -> int:
+        # Host has ~3 TB RAM (3023 GB observed); leave ~64 GB for host OS.
+        # 8 GPUs → (3023 - 64) / 8 ≈ 369 GB per GPU — same guest RAM (2952G) as
+        # B200_XEON6, which keeps that half of RTMR0 identical between them.
+        return 369
+
+    @property
+    def host_cpus(self) -> int:
+        # 2 sockets × 64 cores × 2 threads = 256.
+        # 256 - 16 reserved = 240 vcpus, sockets=2, cores=120, threads=1.
+        return 256
+
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # Deliberately empty: this host class is new and its RTMR0 (240 vcpus /
+        # 120 cores per socket) is NOT yet registered in chutes-ops
+        # teeMeasurements. An empty map skips the launch-time hard-match (so the
+        # host can launch) while verify-host still reports WARNING rather than
+        # claiming a measurement that does not exist. Add
+        # {"10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))}} once the
+        # measurement for this profile is registered.
+        return {}
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (B200 Xeon6 256c)"
 
 
 class B300Profile(GpuProfile):
@@ -541,7 +588,8 @@ class RTXPro6000Profile(GpuProfile):
 
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
-    "B200_XEON6": B200Xeon6Profile(),
+    "B200_XEON6": B200Xeon6_288Profile(),
+    "B200_XEON6_256": B200Xeon6_256Profile(),
     "B300": B300Profile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
