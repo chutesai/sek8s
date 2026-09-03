@@ -1,62 +1,36 @@
 # vim: ft=apparmor
 # sek8s.k3s-init.* — one profile per k3s cluster-init script that needs a file from /run/chutes.
 #
-# "Needs a file", not "needs a secret": /run/chutes is blanket-denied because it holds the miner
-# seed and mTLS private keys, and the files staged for these scripts are denied only because they
-# share that directory. Two of the three are PUBLIC — validator-ss58 is an allowlist address and
-# helm-pubkey.gpg is what chart signatures are verified against — and for those it is INTEGRITY
-# that matters, not confidentiality: altering them would allowlist an attacker's validator or
-# defeat helm --verify. Only k3s-encryption-config.yaml is confidential (it holds the secretbox
-# key). The grants below are read-only and the blanket profile denies this tree outright, so
-# integrity holds for all three either way.
+# Applied by k3s-post-start.sh via `aa-exec -p sek8s.k3s-init.<script>`. A script with no profile
+# here gets no exception: it stays on sek8s.deny-sensitive-default, the restrictive default.
 #
-# Applied by k3s-post-start.sh via `aa-exec -p sek8s.k3s-init.<script>`. A script with NO profile
-# here needs no change and gets no exception: it stays on sek8s.deny-sensitive-default, which is
-# the restrictive default. Adding a script that needs one of these files means declaring it in
-# THREE places,
-# by design — this file, the staging map in k3s-post-start.sh, and the PROFILES list in
-# verify-apparmor-profiles.sh. Missing any one of them is a loud boot failure, never a silent
-# grant: no profile means the staged file is denied, and no map entry means nothing is staged.
+# Each profile still denies the model cache AND /run/chutes. The wrapper stages the one needed
+# file into /run/k3s-init/<script>/ and removes it when the script exits; these profiles grant
+# read on that directory. /run/chutes is never narrowed — deny beats allow in AppArmor, and
+# carving exceptions into it would make a fail-closed blanket into a denylist.
 #
-# WHY THESE EXIST
-# The init scripts run as `bash <script>`, which execs /usr/bin/bash by name and so auto-attaches
-# sek8s.deny-sensitive-default — a profile that denies /run/chutes outright, making the reads these
-# scripts legitimately need fail with EACCES. The scripts are RTMR3-measured, so their content is
-# integrity-guaranteed; what matters is that each reaches only the secret it needs.
+# Adding a script means declaring it in THREE places: here, the staging map in k3s-post-start.sh,
+# and the PROFILES list in verify-apparmor-profiles.sh. Missing one is a loud boot failure.
 #
-# WHAT THEY STILL CANNOT DO
-# Every profile below includes sek8s-cache-deny, so the model cache — private model weights, the
-# highest-value asset on the box — stays denied to init scripts exactly as it is to a stray shell.
-# They also still include sek8s-secrets-deny, so /run/chutes itself remains fully denied: the
-# wrapper stages the one needed file into /run/k3s-init/<script>/ and only that directory is
-# granted here. That indirection is forced by AppArmor giving `deny` precedence over any allow —
-# an exception cannot be carved out of the /run/chutes deny, and narrowing that deny to make room
-# would turn a fail-closed blanket into a denylist that silently fails OPEN when a secret is added.
-#
-# The grant is read-only, and the wrapper deletes the staged copy when the script exits, so a
-# secret is reachable by exactly one script and only while that script runs.
-#
-# sys_boot is deliberately NOT denied here (the blanket profile does deny it): these scripts power
-# the VM off as their fail-closed response to a security-critical failure, and under the blanket
-# profile that handler silently failed with "Failed to poweroff: Operation not permitted".
+# sys_boot is deliberately not denied here — these scripts power the VM off as their fail-closed
+# response, and the blanket profile's deny made that handler silently fail.
 
 abi <abi/4.0>,
 
 include <tunables/global>
 
-# Staged: /run/chutes/k3s-encryption-config.yaml — the one genuinely CONFIDENTIAL file staged
-# here; it contains the k3s secretbox key.
+# Staged: k3s-encryption-config.yaml — confidential (holds the secretbox key).
 profile sek8s.k3s-init.00-reencrypt-secrets flags=(enforce) {
   include <abstractions/sek8s-shell-base>
   include <abstractions/sek8s-cache-deny>
   include <abstractions/sek8s-secrets-deny>
 
+  # Redundant today (shell-base grants /** rwlkm); kept explicit in case that is narrowed.
   /run/k3s-init/00-reencrypt-secrets.sh/ r,
   /run/k3s-init/00-reencrypt-secrets.sh/** r,
 }
 
-# Staged: /run/chutes/validator-ss58 — a PUBLIC per-boot address, published onward as the
-# allowed-validators K8s Secret. Integrity-critical, not confidential.
+# Staged: validator-ss58 — a public address; integrity-critical, not confidential.
 profile sek8s.k3s-init.03-k3s-validator-auth flags=(enforce) {
   include <abstractions/sek8s-shell-base>
   include <abstractions/sek8s-cache-deny>
@@ -66,9 +40,7 @@ profile sek8s.k3s-init.03-k3s-validator-auth flags=(enforce) {
   /run/k3s-init/03-k3s-validator-auth.sh/** r,
 }
 
-# Staged: /run/chutes/signing-keys/helm-pubkey.gpg — a PUBLIC key, integrity-critical only.
-# helm opens it itself and inherits this profile via ix, so the path it is given must be one this
-# profile grants.
+# Staged: helm-pubkey.gpg — a public key; helm opens it itself and inherits this profile via ix.
 profile sek8s.k3s-init.04-helm-chart-upgrade flags=(enforce) {
   include <abstractions/sek8s-shell-base>
   include <abstractions/sek8s-cache-deny>
