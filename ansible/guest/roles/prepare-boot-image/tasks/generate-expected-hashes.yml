@@ -35,7 +35,10 @@
         if [ -f "$full" ]; then
           printf '%s %s\n' "$path" "$(sha384sum "$full" | awk '{ print $1 }')"
         elif [ -d "$full" ]; then
-          find "$full" -type f | sort | while IFS= read -r f; do
+          # LC_ALL=C: `sort` is locale-sensitive, so collation differences between build hosts (or
+          # a changed locale on the same host) would reorder these lines, changing this file's
+          # bytes, the initramfs that embeds it, and therefore RTMR2 — without any content change.
+          find "$full" -type f | LC_ALL=C sort | while IFS= read -r f; do
             printf '%s %s\n' "${f#"$root"}" "$(sha384sum "$f" | awk '{ print $1 }')"
           done
         fi
