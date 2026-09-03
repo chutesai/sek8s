@@ -15,6 +15,21 @@ encrypted_root_name: encrypted_root
 _boot_image_uuid_seed: "{{ vm_version | default('0.0.0') }}-{{ 'debug' if debug_build | default(false) | bool else 'prod' }}"
 luks_container_uuid: "{{ ('sek8s-luks-' ~ _boot_image_uuid_seed) | to_uuid }}"
 root_fs_uuid: "{{ ('sek8s-rootfs-' ~ _boot_image_uuid_seed) | to_uuid }}"
+
+# Fixed timestamp for reproducible initramfs packing. mkinitramfs stages files with `cp -pP`, so
+# every member carries its source mtime and two builds pack identical content into different
+# archive bytes — verified by extracting two initrds: no differing files, no size differences, yet
+# different hashes, and RTMR2 moved.
+#
+# mkinitramfs itself has no reference to SOURCE_DATE_EPOCH; the tool it shells out to does.
+# It builds a sorted manifest (LC_ALL=C sort | uniq, so ordering is already deterministic) and
+# hands it to `3cpio --create`, and 3cpio reads SOURCE_DATE_EPOCH to fix member mtimes. The
+# amd64_microcode hook uses the same mechanism explicitly.
+#
+# Value is arbitrary; it only has to be constant across rebuilds and inside 3cpio's accepted
+# range (0 to 4294967295).
+initramfs_source_date_epoch: 1700000000
+
 # Image output env label (override in inventory); used in final_img_path below.
 # The image SET lives in its own <env>/<version>[-debug]/ directory (qcow2 + direct-boot
 # sidecars + manifest.json) — see playbooks/group_vars/host.yml.

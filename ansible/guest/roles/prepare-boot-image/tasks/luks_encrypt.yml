@@ -358,6 +358,7 @@
 - name: Update initramfs and grub in chroot
   ansible.builtin.shell: |
     chroot {{ newroot_mount }} /bin/bash -c "
+      export SOURCE_DATE_EPOCH={{ initramfs_source_date_epoch }} &&
       update-initramfs -u -k all &&
       update-grub
     "
