@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-09-03
+## [1.4.0] - 2026-09-04
 
 ### Added
 - **Boot-time miner-hotkey proof-of-possession (guest side).** A small, static, pinned-toolchain (musl) sr25519 signer (`src/sr25519`; Schnorr/Ristretto, which openssl cannot do) is built and staged into the guest initramfs (measured into RTMR2). The boot flow now derives the hotkey from the config-volume seed (`/run/tdx-config/miner-seed`) rather than trusting the claimed `miner-ss58`, and signs each chained server nonce — `/boot/attestation`, `/provision`, and `/provision/confirm` — sending the sr25519 proof in `X-Chutes-Signature`. This closes a cross-miner LUKS-brick vector where a peer could assert a victim's `(hotkey, vm_name)` and rotate its passphrase. The seed is stashed to `/run` for the init-bottom calls and shredded before the initramfs `/run` is moved into userspace. Pairs with a matching server-side signature check (chutes-api). Also fixes a migration miss: root-rotation confirm now uses `/provision/confirm` (the legacy `/luks/confirm` is deprecated).
@@ -392,6 +392,14 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   the variable, which is misleading: it builds a sorted manifest (`LC_ALL=C sort | uniq`, so member
   ordering was already deterministic) and hands it to `3cpio --create`, and `3cpio` is what reads
   `SOURCE_DATE_EPOCH` to fix member mtimes. The `amd64_microcode` hook drives it the same way.
+- The initramfs hook now stages every binary its boot scripts use. `fetch_key` copied `curl`, `jq`,
+  `openssl` and friends but not `head`, `tr`, `cut`, `sed`, `awk` or `wc` — those were present only
+  because an unrelated package hook happened to stage them. Removing the unused `overlayroot` hook
+  took them away, and the guest failed to boot with
+  `fetch_key_and_unlock: line 153: head: not found`, aborting the LUKS unlock. Ubuntu initramfs
+  ships klibc-utils rather than busybox, which provides none of them.
+  A build-time check now lists the produced initramfs and fails the build if any required binary is
+  absent, so this class of breakage surfaces at build time instead of at boot.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
