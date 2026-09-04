@@ -84,6 +84,9 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # System libraries
   /usr/lib/** rm,
   /usr/local/lib/** rm,
+  # sudo 1.9.15+ loads its plugins from /usr/libexec/sudo, not /usr/lib/sudo. Without this every
+  # sudo call dies with "libsudo_util.so.0: cannot open shared object file".
+  /usr/libexec/** rm,
   /etc/ld.so.cache r,
   /etc/ld.so.conf r,
   /etc/ld.so.conf.d/** r,
