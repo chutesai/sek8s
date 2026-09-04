@@ -400,6 +400,15 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   ships klibc-utils rather than busybox, which provides none of them.
   A build-time check now lists the produced initramfs and fails the build if any required binary is
   absent, so this class of breakage surfaces at build time instead of at boot.
+- `chute-log-shipper` can capture chute pod logs in production again. It failed with
+  `[Errno 13] Permission denied: /var/log/pods/chutes_<pod>/<container>`, and the cause was the
+  AppArmor profile, not the unit: the `10-security.conf` drop-in already grants
+  `CAP_DAC_READ_SEARCH` so the unprivileged service can traverse kubelet's root-owned `0750` log
+  dirs, but the profile never permitted the capability's use. Systemd granting a capability does
+  not make AppArmor allow it. Adding `capability dac_read_search` to the profile fixes it.
+  This only ever failed in production: debug images load the profile in complain mode, where the
+  capability is permitted, so shipping worked there and the matching `dac_read_search` entry looked
+  like harmless audit noise.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
