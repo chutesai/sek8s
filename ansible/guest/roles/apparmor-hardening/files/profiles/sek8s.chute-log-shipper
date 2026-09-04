@@ -28,6 +28,10 @@ profile sek8s.chute-log-shipper flags=(enforce, attach_disconnected) {
   # Environment file.
   /etc/chute-log-shipper/** r,
 
+  # The unit drop-in grants CAP_DAC_READ_SEARCH (kubelet pod log dirs are root-owned 0750);
+  # AppArmor must permit its use separately or log capture fails with EACCES.
+  capability dac_read_search,
+
   # Chute pod logs — read-only, scoped to the chutes namespace pod dirs only.
   /var/log/pods/ r,
   /var/log/pods/chutes_*/ r,
