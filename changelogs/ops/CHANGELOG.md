@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.07.4] - 2026-08-26
+## [2026.09.1] - 2026-09-04
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -134,6 +134,9 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   commands (`config`, and the upcoming `preflight`) run with their deps available. The sparse
   checkout now includes `src/chutes-cvm/`. Guest image build keeps `PYTHONPATH` (stdlib commands
   only). Set `CHUTES_CVM_PYPI=1` to install from PyPI instead of the checkout.
+- `host-tools/scripts/prepare-vm-image.sh`: replaced QEMU qcow2 overlay creation with a full `cp` of the base image into a per-VM file; added stale-image cleanup for previous base image versions.
+- `host-tools/scripts/quick-launch.sh`: renamed `--overlay-dir` to `--vm-image-dir`; default directory changed from `/var/lib/chutes/vm-overlays/` to `/var/lib/chutes/vm-images/`.
+- Config key `overlay_directory` renamed to `vm_image_directory` in schemas, templates, example configs, `config.py`, and `CONFIG-GUIDE.md`.
 
 ### Fixed
 - 25.10 → 26.04 host upgrade no longer stalls on `sgx-dcap-pccs`. Intel's
@@ -149,6 +152,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   preserved without manual steps. Adds a target-keyed `init_<version>` hook
   phase to the os_upgrade role (runs on the new OS after reboot, before
   `setup-tdx-host`).
+- Add `xfsprogs` to host prerequisites so `mkfs.xfs` is available when `create-cache.sh` creates the storage volume (regression introduced in #34 when the storage volume format was switched from ext4 to XFS)
 
 ### Removed
 - The bare-qcow2 launch path and `quick-launch --skip-checksum`. Every image — including
@@ -167,6 +171,29 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
     only ever baselined at 10.1.0 — flat-path H200 (>2 NUMA nodes) and SNC3
     B200_XEON6 — since neither has a registered 10.2.1 RTMR0 and so could not
     attest on 26.04 anyway.
+
+## [2026.09.0] - 2026-09-03
+
+### Added
+- **`B200_XEON6_256` GPU profile** — B200 on a 2×64c×2t Xeon 6 host (256 logical
+  CPUs, ~3 TB RAM, SNC off → 2 NUMA nodes, GPUs 4+4). A submitted host profile of
+  this class (KR9288-X3 board, Ubuntu 26.04 / QEMU 10.2.1) matched neither existing
+  B200 sibling — device ID `2901` is disambiguated by exact host CPU count, and the
+  registry only knew 192 (`B200`) and 288 (`B200_XEON6`) — so `_match_gpu_model`
+  raised *"Add a new profile for this CPU topology"* and the host could not launch
+  at all. The new profile is a third `B200Profile` sibling with `host_cpus = 256`:
+  240 vcpus (`240,sockets=2,cores=120,threads=1`), and the same
+  `ram_per_gpu_gb = 369` (guest RAM 2952G) as `B200_XEON6`. All GPU and passthrough
+  policy — CC mode, no NVSwitch/IB passthrough, guest NUMA, post-launch tuning,
+  Fabric Manager requirement — is inherited from `B200Profile` unchanged.
+  `baselined_measurements` is intentionally left empty: the 240-vcpu `-smp` moves
+  RTMR0 and no measurement is registered for this host class yet. An empty map
+  skips the launch-time topology hard-match (so the host launches) while
+  `verify-host` still returns WARNING rather than claiming a baseline that does not
+  exist — which also means `upgrade-host.yml`'s pre-flight will abort on this host
+  until the measurement lands (override with `upgrade_preflight_override=true`).
+  Populate it with `{"10.2.1": {NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1))}}`
+  once the RTMR0 for this profile is registered in chutes-ops `teeMeasurements`.
 
 ## [2026.07.3] - 2026-07-24
 
@@ -304,22 +331,6 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 - VM launch no longer rejects large-RAM profiles whose guest RAM actually fits. The `safe_vm_mem_gb` host-RAM reserve was 12% of host RAM, which on 2-3 TB GPU hosts reserved 240-360 GB — far more than the ~64 GB the `GpuProfile`s are sized against (`ram_per_gpu_gb ~= (host_RAM - 64) / gpus`). This wrongly aborted `B200_XEON6` (8x369=2952G on a 3017G host) and `B200` (8x243=1944G on a ~2 TB host) launches with a misleading "host has only NG" error. The reserve is now a flat 64 GB (`VM_MEM_RESERVE_GB`) matching the profiles' sizing convention, rather than a percentage — real host overhead (TDX PAMT ~0.4% of guest, page tables, host OS, QEMU) is well under 64 GB, which covers PAMT for guests up to ~16 TB. The abort message now reports the actual safe-backable size and the reason, instead of implying the host lacks RAM.
 - Host GPU-driver blacklist now also blocks `nova_core` (and `nvidiafb`). `nova_core` is the in-tree Rust NVIDIA driver shipped on recent kernels (Ubuntu 25.10/26.04); it matches the GPU PCI ID and was not blacklisted, so it could auto-load and re-claim a GPU after the CC/PPCIe-mode reset re-enumerated it — leaving the device on `nova_core` instead of vfio-pci and causing the launch-time bind failure on 26.04 hosts. `setup.py` now blacklists it and unloads it (and `nvidiafb`) immediately alongside `nouveau`.
 - GPU passthrough now verifies each device actually bound to vfio-pci before launching QEMU. `bind_explicit_devices_to_vfio` previously printed success unconditionally and never read back, so a GPU that failed to bind — still re-enumerating after its CC/PPCIe-mode reset, dropped to D3 when power control was restored to auto, or re-claimed by the nvidia driver — sailed through to a cryptic `qemu-system-x86_64: vfio ...: couldn't open .../vfio-dev: No such file or directory` failure. It now polls each device until it exposes a `vfio-dev` cdev (re-probing stragglers, which also re-unbinds a driver that re-grabbed the device), and aborts with a clear, actionable error naming the unbound device(s) and their current driver if any never bind.
-
-## [2026.05.3] - 2026-06-10
-
-### Added
-- `ansible/guest/roles/luks/files/initramfs/luks-helpers`: shared initramfs shell library with `write_key_file`, `shred_key_file`, `luks_add_key`, `luks_remove_key` — sourced by both `fetch_key_and_unlock` (init-premount) and `setup_storage` (init-bottom).
-- Root LUKS passphrase rotation in `fetch_key_and_unlock`: detects first-boot LUKS2 token (id 15), includes `first_boot` flag in boot attestation POST, parses `root_next`/`root_confirm_nonce` from response, removes first-boot token after `luksOpen`, and performs mandatory add-confirm-remove rotation on every boot.
-- First-boot LUKS2 token (`chutes-first-boot`, id 15) added to root partition at image build time in `luks_encrypt.yml`; carries the `vm_version` as local debug metadata. Signals to the API that this VM is booting from its original published state and should receive the build-time default passphrase.
-
-### Changed
-- `ansible/guest/roles/luks/tasks/luks_encrypt.yml`: added `type: luks2` to the "Create LUKS container" task (previously relied on cryptsetup default).
-- `host-tools/scripts/prepare-vm-image.sh`: replaced QEMU qcow2 overlay creation with a full `cp` of the base image into a per-VM file; added stale-image cleanup for previous base image versions.
-- `host-tools/scripts/quick-launch.sh`: renamed `--overlay-dir` to `--vm-image-dir`; default directory changed from `/var/lib/chutes/vm-overlays/` to `/var/lib/chutes/vm-images/`.
-- Config key `overlay_directory` renamed to `vm_image_directory` in schemas, templates, example configs, `config.py`, and `CONFIG-GUIDE.md`.
-
-### Fixed
-- Add `xfsprogs` to host prerequisites so `mkfs.xfs` is available when `create-cache.sh` creates the storage volume (regression introduced in #34 when the storage volume format was switched from ext4 to XFS)
 
 ## [2026.05.2] - 2026-05-29
 
