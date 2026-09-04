@@ -9,11 +9,17 @@ from urllib.parse import urljoin
 import backoff
 import httpx
 from attestation_proxy.config import AttestationProxyConfig
-from attestation_proxy.signing import load_private_key, sign_response_body
+from attestation_proxy.signing import (
+    load_miner_keypair,
+    load_private_key,
+    sign_response,
+    sign_response_body,
+)
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from loguru import logger
 from sek8s_common.auth import authorize
+from sek8s_common.log_config import configure_logging
 from sek8s_common.server import WebServer
 
 SERVICE_NAMESPACE = os.getenv("WORKLOAD_NAMESPACE", "chutes")
@@ -330,10 +336,18 @@ class ExternalProxyServer(BaseProxyServer):
                 f"TLS private key could not be loaded from {config.tls_key_path}; "
                 "cannot start external proxy without signing key"
             )
+        # Optional: miner hotkey for the rc proof-of-possession. None when no seed is
+        # configured (old charts) -> responses go out unsigned, unchanged behaviour.
+        self._miner_keypair = load_miner_keypair(config.miner_seed)
 
     @backoff.on_exception(backoff.expo, httpx.ConnectError, max_tries=2, max_time=5)
     async def proxy_request(self, *args, **kwargs) -> Response:
-        """Proxy request and attach an X-Signature header for key-possession proof."""
+        """Proxy request and attach an X-Signature header for key-possession proof.
+
+        When a miner seed is configured, also stamp EVERY response with a miner-hotkey
+        proof-of-possession (X-Chutes-Hotkey/Nonce/Signature); the validator consumes it where it
+        needs one (e.g. the runtime rc-measurement gate). Absent the seed the headers are omitted.
+        """
         response = await super().proxy_request(*args, **kwargs)
         assert (
             self._private_key is not None
@@ -341,6 +355,11 @@ class ExternalProxyServer(BaseProxyServer):
         response.headers["X-Signature"] = sign_response_body(
             self._private_key, response.body
         )
+        if self._miner_keypair is not None:
+            ss58, nonce, signature = sign_response(self._miner_keypair)
+            response.headers["X-Chutes-Hotkey"] = ss58
+            response.headers["X-Chutes-Nonce"] = nonce
+            response.headers["X-Chutes-Signature"] = signature
         return response
 
     def _setup_routes(self):
@@ -435,36 +454,13 @@ class InternalProxyServer(BaseProxyServer):
         logger.info(f"Internal server routes configured (port {INTERNAL_PORT})")
 
 
-async def run_server_async(
-    server_instance: BaseProxyServer, port: int, config: AttestationProxyConfig
-):
-    """Run a server using uvicorn.Server for async support"""
-    import uvicorn
-
-    server_name = server_instance.server_name
-    logger.info(f"[{server_name}] Preparing to start on {config.bind_address}:{port}")
-
-    uvicorn_config = uvicorn.Config(
-        server_instance.app,
-        host=config.bind_address,
-        port=port,
-        ssl_keyfile=config.tls_key_path,
-        ssl_certfile=config.tls_cert_path,
-        log_level="debug" if config.debug else "info",
-    )
-    server = uvicorn.Server(uvicorn_config)
-
-    logger.info(f"[{server_name}] Starting uvicorn server on port {port}")
-    await server.serve()
-    logger.info(f"[{server_name}] Server stopped on port {port}")
-
-
 def run():
     """Main entry point."""
     try:
         os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
         config = AttestationProxyConfig()
+        configure_logging(config.debug)
 
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -489,9 +485,12 @@ def run():
         async def run_both():
             try:
                 logger.info("Launching both servers concurrently...")
+                # Each server runs via the shared WebServer.serve(), so both
+                # ports honour their own full config (TLS/mTLS/bind) — no
+                # per-call-site uvicorn wiring that could drop a setting.
                 await asyncio.gather(
-                    run_server_async(external_server, EXTERNAL_PORT, external_config),
-                    run_server_async(internal_server, INTERNAL_PORT, internal_config),
+                    external_server.serve(),
+                    internal_server.serve(),
                 )
             except Exception as e:
                 logger.exception(f"Error running servers: {e}")

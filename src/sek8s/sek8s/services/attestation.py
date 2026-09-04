@@ -4,6 +4,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Query, status
 from loguru import logger
+from sek8s_common.log_config import configure_logging
 
 from sek8s.config import AttestationServiceConfig
 from sek8s.exceptions import AttestationException, NvmlException
@@ -164,6 +165,7 @@ def run():
     try:
         # Load configuration using Pydantic
         config = AttestationServiceConfig()
+        configure_logging(config.debug)
 
         # Setup logging level based on config
         if config.debug:

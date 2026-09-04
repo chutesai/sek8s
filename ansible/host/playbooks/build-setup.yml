@@ -9,6 +9,12 @@
 #   - Benchmarks Ubuntu apt mirrors and selects the fastest one
 #   - Installs host script dependencies (git, aria2, python3-yaml, python3-venv)
 #   - Installs Ansible for running the guest image build locally
+#   - Installs Docker (offline RTMR0 generation runs the tdx-measure fork's
+#     patched QEMU in a container; see `chutes-cvm measurements generate`)
+#   - Installs libguestfs-tools (RTMR3 mounts the image root read-only;
+#     see `chutes-cvm measurements generate` / the standalone `rtmr3`)
+#   - Installs rustup for the build user (the guest build compiles the sr25519 initramfs
+#     signer with the pinned toolchain + musl target from src/sr25519/rust-toolchain.toml)
 
 - name: Build host setup
   hosts: td_hosts
@@ -23,3 +29,48 @@
         name: ansible
         state: present
         update_cache: true
+
+    - name: Install Docker (with buildx)
+      # measurements generate's offline ACPI gen runs the tdx-measure fork's `docker build
+      # --progress plain`, which needs BuildKit (the buildx plugin), not docker.io's legacy builder.
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-buildx
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker is running and enabled
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Install libguestfs-tools (guestfish, for stage-boot-artifacts)
+      ansible.builtin.apt:
+        name: libguestfs-tools
+        state: present
+        update_cache: true
+
+    - name: Install rustup for the build user (sr25519 guest-image signer)
+      # The sr25519 initramfs signer (src/sr25519) is built with a pinned toolchain + the musl
+      # target from its rust-toolchain.toml; only rustup honors that, and the guest build runs
+      # cargo as this (non-root) build user — so rustup is installed per-user here. The pinned
+      # toolchain and its musl target are provisioned on first build by the sr25519 role (in the
+      # crate dir, resolving rust-toolchain.toml), so no version is duplicated here. Installed with
+      # --default-toolchain none (the crate pins it) and --no-modify-path (the sr25519 role puts
+      # ~/.cargo/bin on PATH itself). Idempotent via `creates`.
+      ansible.builtin.shell: |
+        set -o pipefail
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+          | sh -s -- -y --no-modify-path --default-toolchain none
+      args:
+        creates: "{{ ansible_facts.env.HOME }}/.rustup"
+        executable: /bin/bash
+      become: false
+
+    # NOTE: chutes-cvm is NOT installed here. The guest build (chutes-miner-vm.yml)
+    # self-installs it from its own checkout (`pip install -e {{ repo_root }}/src/chutes-cvm`)
+    # so the build always runs the code under test — installing here from /opt/sek8s could
+    # be a different checkout. build-setup only ensures the prereq (python3-venv, via
+    # host_prerequisites); the build owns the install.

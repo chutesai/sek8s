@@ -79,7 +79,9 @@ expected_hash_for() {
 # We read them from ${rootmnt}/etc/ssh, etc.
 # Only regular files are measured; symlinks, pipes, and device nodes are skipped.
 
+measure_start=$(date +%s)
 filelist=$(mktemp)
+entry_idx=0
 
 while IFS= read -r cfg_path || [ -n "$cfg_path" ]; do
     # Strip inline comments and leading/trailing whitespace
@@ -89,18 +91,26 @@ while IFS= read -r cfg_path || [ -n "$cfg_path" ]; do
     [ -z "$cfg_path" ] && continue
 
     realpath="${rootmnt}${cfg_path}"
+    entry_idx=$((entry_idx + 1))
 
     if [ -d "$realpath" ]; then
+        dir_start=$(date +%s)
         # Collect all regular files under the directory, record their
         # root-relative paths for deterministic cross-machine sorting.
         find "$realpath" -type f | while IFS= read -r f; do
             # Strip the rootmnt prefix so paths sort consistently
             printf '%s\n' "${f#"${rootmnt}"}"
         done >> "$filelist"
+        dir_count=$(find "$realpath" -type f | wc -l)
+        dir_elapsed=$(($(date +%s) - dir_start))
+        echo "RTMR3: [${entry_idx}] collected ${dir_count} files from ${cfg_path} (${dir_elapsed}s)" > /dev/kmsg
     elif [ -f "$realpath" ]; then
         printf '%s\n' "$cfg_path" >> "$filelist"
     fi
 done < /etc/tdx-measure.conf
+
+collect_elapsed=$(($(date +%s) - measure_start))
+echo "RTMR3: file collection complete in ${collect_elapsed}s" > /dev/kmsg
 
 # Sort lexicographically to guarantee a deterministic extend chain, writing
 # result to a temp file so the extend loop runs in the same shell (not a
@@ -117,6 +127,10 @@ fi
 # ── Hash each file and extend RTMR3 ─────────────────────────────────────────
 
 count=0
+total_files=$(wc -l < "$sorted_list")
+hash_start=$(date +%s)
+
+echo "RTMR3: hashing and extending ${total_files} files..." > /dev/kmsg
 
 while IFS= read -r relpath; do
     [ -z "$relpath" ] && continue
@@ -124,8 +138,12 @@ while IFS= read -r relpath; do
     fullpath="${rootmnt}${relpath}"
     [ -f "$fullpath" ] || continue
 
-    # sha384sum outputs "<hash>  <filename>" — extract just the hash
-    hash=$(sha384sum "$fullpath" 2>/dev/null | awk '{print $1}')
+    # Hash via stdin so sha384sum never prints — and backslash-escapes — the filename.
+    # A path containing a backslash (e.g. systemd's system-systemd\x2dcryptsetup.slice)
+    # otherwise makes sha384sum prefix the line with '\', so awk '{print $1}' would capture
+    # "\<hash>" and tdx-rtmr-extend would reject it. Reading from stdin yields "<hash>  -",
+    # matching the content-only hash the build-time compute-rtmr3.sh (Python) produces.
+    hash=$(sha384sum < "$fullpath" 2>/dev/null | awk '{print $1}')
     if [ -z "$hash" ]; then
         rm -f "$sorted_list"
         handle_failure "could not hash ${relpath}"
@@ -146,10 +164,15 @@ while IFS= read -r relpath; do
     fi
 
     count=$((count + 1))
+    if [ $((count % 200)) -eq 0 ]; then
+        echo "RTMR3: measured ${count}/${total_files} files..." > /dev/kmsg
+    fi
 done < "$sorted_list"
 
 rm -f "$sorted_list"
 
-log_success_msg "RTMR3: extended with ${count} file measurement(s)"
+total_elapsed=$(($(date +%s) - measure_start))
+echo "RTMR3: completed — ${count} files measured in ${total_elapsed}s" > /dev/kmsg
+log_success_msg "RTMR3: extended with ${count} file measurement(s) in ${total_elapsed}s"
 
 exit 0

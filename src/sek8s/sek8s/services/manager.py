@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from loguru import logger
+from sek8s_common.log_config import configure_logging
 
 from sek8s.config import SystemManagerConfig, image_config
 from sek8s.server import WebServer
@@ -27,7 +28,6 @@ async def lifespan(app: FastAPI):
 
     image_mgr = ImageManager(
         allowed_registries=image_config.image_pull_allowed_registries,
-        cosign_key_path=image_config.cosign_public_key_path,
         pull_timeout=image_config.image_pull_timeout_seconds,
         default_org=image_config.image_pull_default_org,
     )
@@ -51,6 +51,7 @@ class SystemManagerServer(WebServer):
 def create_app() -> FastAPI:
     """Create the manager FastAPI app (for testing or programmatic use)."""
     config = SystemManagerConfig()
+    configure_logging(config.debug)
     server = SystemManagerServer(config)
     return server.app
 

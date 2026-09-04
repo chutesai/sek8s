@@ -8,7 +8,9 @@ from loguru import logger
 from sek8s.exceptions import TdxQuoteException
 
 QUOTE_GENERATOR_BINARY = "/usr/bin/tdx-quote-generator"
-SERVER_CERT = "/etc/attestation-service/certs/server.crt"
+# The per-VM proxy cert setup_vm_tls generates in initramfs and the proxy serves; REPORTDATA must
+# hash this exact cert so the validator's expected_cert_hash matches.
+SERVER_CERT = "/run/chutes/proxy-tls/server.crt"
 
 
 class TdxQuoteProvider:

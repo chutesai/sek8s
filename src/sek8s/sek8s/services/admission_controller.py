@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import orjson
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from sek8s_common.log_config import configure_logging
 from starlette.responses import Response
 
 from sek8s.config import AdmissionConfig
@@ -592,6 +593,7 @@ def run():
     """Main entry point."""
     try:
         config = AdmissionConfig()
+        configure_logging(config.debug)
 
         if config.debug:
             logging.getLogger().setLevel(logging.DEBUG)
