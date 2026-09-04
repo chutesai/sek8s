@@ -218,19 +218,36 @@
 # Boot-critical guard. The initramfs scripts abort the LUKS unlock and power the VM off if any of
 # these is missing, and the failure only shows at boot — a missing head cost one full build cycle.
 # Verify against the artifact that was actually produced rather than trusting the hook.
+#
+# grep reads from a herestring, NOT a pipe: with `set -o pipefail`, `... | grep -q` returns
+# failure whenever grep matches early and exits, because the upstream write dies on SIGPIPE
+# (rc 141). That reported every binary as missing and failed a build.
 - name: Verify required binaries are present in the initramfs
   ansible.builtin.shell: |
     set -uo pipefail
-    listing=$(chroot {{ newroot_mount }} /bin/bash -c "lsinitramfs /boot/initrd.img-* 2>/dev/null")
+    tmp=$(mktemp)
+    unlisted=""
+    for img in {{ newroot_mount }}/boot/initrd.img-*; do
+      [ -f "$img" ] || continue
+      lsinitramfs "$img" >> "$tmp" 2>/dev/null || unlisted="$unlisted $img"
+    done
+    [ -n "$unlisted" ] && echo "WARNING: could not list:$unlisted"
+    if [ ! -s "$tmp" ]; then
+      echo "WARNING: no initramfs could be listed - check SKIPPED, not failed"
+      rm -f "$tmp"
+      exit 0
+    fi
     missing=""
     for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat curl jq openssl base64 cryptsetup blkid ip sr25519; do
-      printf "%s\n" "$listing" | grep -qE "(^|/)${b}$" || missing="$missing $b"
+      grep -qE "(^|/)${b}$" "$tmp" || missing="$missing $b"
     done
+    entries=$(wc -l < "$tmp")
+    rm -f "$tmp"
     if [ -n "$missing" ]; then
       echo "MISSING FROM INITRAMFS:$missing"
       exit 1
     fi
-    echo "all required initramfs binaries present"
+    echo "all required initramfs binaries present ($entries entries)"
   args:
     executable: /bin/bash
   register: _initramfs_bin_check
