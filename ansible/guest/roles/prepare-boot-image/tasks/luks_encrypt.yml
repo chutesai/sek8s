@@ -364,3 +364,28 @@
     "
   register: chroot_update_result
   changed_when: chroot_update_result.rc == 0
+
+# Boot-critical guard. The initramfs scripts abort the LUKS unlock and power the VM off if any of
+# these is missing, and the failure only shows at boot — a missing head cost one full build cycle.
+# Verify against the artifact that was actually produced rather than trusting the hook.
+- name: Verify required binaries are present in the initramfs
+  ansible.builtin.shell: |
+    set -uo pipefail
+    listing=$(chroot {{ newroot_mount }} /bin/bash -c "lsinitramfs /boot/initrd.img-* 2>/dev/null")
+    missing=""
+    for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat curl jq openssl base64 cryptsetup blkid ip sr25519; do
+      printf "%s\n" "$listing" | grep -qE "(^|/)${b}$" || missing="$missing $b"
+    done
+    if [ -n "$missing" ]; then
+      echo "MISSING FROM INITRAMFS:$missing"
+      exit 1
+    fi
+    echo "all required initramfs binaries present"
+  args:
+    executable: /bin/bash
+  register: _initramfs_bin_check
+  changed_when: false
+
+- name: Show initramfs binary check result
+  ansible.builtin.debug:
+    var: _initramfs_bin_check.stdout_lines
