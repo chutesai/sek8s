@@ -72,7 +72,11 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # short-lived, read-only subprocesses keeps both goals.
   /usr/bin/du cx -> disk_diag,
   /usr/bin/df cx -> disk_diag,
-  /usr/bin/rm mrix,
+  # Deletion under the cache goes through cache-rm and nowhere else. sudoers already grants
+  # cache-rm INSTEAD of bare rm (see the wrapper's header); this makes the profile agree, so
+  # /usr/bin/rm is reachable only inside the child below. Nothing else execs rm: the images
+  # helper's "rm" is `k3s ctr images rm`, and Python deletes via unlink/rmdir, not a subprocess.
+  /usr/local/bin/cache-rm cx -> cache_rm,
   /sbin/shutdown mrix,
   /usr/bin/sudo mrix,
   /usr/bin/systemctl mrix,
@@ -152,6 +156,34 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # disk_diag child profile for `du`/`df` (see the `cx` rules above). Read-only reach across the
   # whole filesystem so disk diagnostics can size/statfs any path — journals, logs, cache — but it
   # can never write or exec. This deliberately does NOT widen the parent profile's read scope.
+  # cache-rm removes ONE direct child of /var/snap/cache, as root via sudo, for per-chute dirs a
+  # chute pod (uid 1000) left non-group-writable. The wrapper bounds which path (hardcoded base,
+  # realpath'd, direct-child only); this bounds what it can reach if that logic is ever wrong.
+  # Same shape as du -> disk_diag: confine the privileged reach to the short-lived subprocess
+  # rather than the long-running FastAPI parent.
+  profile cache_rm flags=(enforce) {
+    include <abstractions/base>
+
+    # cache-rm is a #! script, so it and its interpreter must both be reachable. $BASH_ENV is
+    # not a concern here as it is for an unconfined caller: sudo's env_reset strips it before
+    # bash starts, which is also why the wrapper can hardcode CACHE_BASE.
+    /usr/local/bin/cache-rm r,
+    /{,usr/}bin/bash mrix,
+    /usr/bin/realpath mrix,
+    /usr/bin/dirname mrix,
+    /usr/bin/rm mrix,
+
+    # rm runs as root over dirs owned by uid 1000 at mode 2775, so the unlink needs a DAC
+    # bypass — and AppArmor mediates capability USE per profile, so the kernel granting root
+    # the capability is not enough on its own. This is the same failure that took setup-cache
+    # down in production. Scoped to this subprocess; the parent still declares no capability.
+    capability dac_override,
+
+    /var/snap/ r,
+    /var/snap/cache/ rw,
+    /var/snap/cache/** rwlk,
+  }
+
   profile disk_diag flags=(enforce) {
     include <abstractions/base>
     /usr/bin/du mr,

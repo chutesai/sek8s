@@ -533,3 +533,67 @@ def test_log_shipper_profile_never_permits_an_unconfined_exec():
         f"NoNewPrivileges is off and the profile permits an unconfined exec: "
         f"{unconfined_exec}. Either keep every exec confined, or restore no_new_privs."
     )
+
+
+def _exec_targets(profile_text: str) -> set[str]:
+    """Every path the profile permits execing, in the parent or any child profile."""
+    return {
+        m.group(1)
+        for m in re.finditer(
+            r"^\s*(/\S+)\s+\w*[icpuIPCU]?x(\s*->\s*\w+)?,\s*$", profile_text, re.M
+        )
+    }
+
+
+def test_every_sudoers_target_is_executable_in_its_profile():
+    """A sudoers grant the profile cannot exec is a privileged path that silently fails.
+
+    sudo is setuid-root, so euid is 0 at exec and no capability check is involved — the
+    escalation itself works. What does NOT work is the exec of the target, which AppArmor
+    mediates as an ordinary path rule against the profile sudo inherited. So a sudoers entry
+    with no matching exec rule produces a grant that looks configured and is dead.
+
+    That is invisible in testing: debug builds load these profiles in complain mode, and the
+    rarely-taken grant (cache-rm fires only on the EACCES fallback for pod-owned files) is the
+    one least likely to be exercised before production.
+    """
+    tasks = (REPO / "ansible/guest/roles/system-manager/tasks/main.yml").read_text()
+    granted = re.findall(
+        r"^\s*system-manager ALL=\(ALL\) NOPASSWD:\s*(\S+)", tasks, re.M
+    )
+    assert granted, "sudoers block moved; re-point this test"
+
+    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    execable = _exec_targets(profile)
+
+    missing = [g for g in granted if g not in execable]
+    assert not missing, (
+        f"sudoers grants {missing} to system-manager but the profile permits no exec of "
+        f"them — the grant is dead and fails only when the path is finally taken"
+    )
+
+
+def test_cache_deletion_is_reachable_only_through_the_wrapper():
+    """`rm` must live in the cache_rm child, never in the parent.
+
+    cache-rm exists so a compromised system-manager cannot delete arbitrary paths: sudoers
+    grants it INSTEAD of bare rm. Permitting /usr/bin/rm in the parent undoes that at the
+    AppArmor layer — the wrapper's path checks are bypassable by just running rm. Deletion is
+    privileged here because the cache holds model weights a chute pod wrote as uid 1000.
+    """
+    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    parent, _, children = profile.partition("  profile ")
+
+    assert (
+        "/usr/local/bin/cache-rm cx -> cache_rm," in parent
+    ), "cache-rm must transition to its child, not inherit the parent profile"
+    assert not re.search(
+        r"^\s*/usr/bin/rm\s", parent, re.M
+    ), "the parent permits bare rm, which defeats the cache-rm wrapper"
+    assert re.search(
+        r"^\s*/usr/bin/rm\s+\w*x,", children, re.M
+    ), "the cache_rm child cannot exec rm, so the wrapper's final exec fails"
+    assert re.search(r"^\s*capability dac_override,", children, re.M), (
+        "cache-rm deletes uid-1000-owned dirs as root; without dac_override in the child "
+        "the unlink is denied even though the kernel granted root the capability"
+    )
