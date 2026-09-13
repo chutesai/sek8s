@@ -93,6 +93,12 @@ profile sek8s.chute-log-shipper flags=(enforce, attach_disconnected) {
     include <abstractions/base>
     include <abstractions/nameservice>
 
+    # crictl's config is root-owned; AppArmor mediates capability use per profile, so the child
+    # needs its own grant even though the parent already carries the same one. The socket needs
+    # no DAC bypass: containerd creates it group-owned by `containerd` (conf.d drop-in) and the
+    # service user is in that group.
+    capability dac_read_search,
+
     # The wrapper is a #! script: both it and its interpreter must be reachable here.
     # dash, not bash — bash would source $BASH_ENV inside this profile before the
     # wrapper's allowlist ran, handing the CRI socket to whoever set it.
@@ -105,6 +111,11 @@ profile sek8s.chute-log-shipper flags=(enforce, attach_disconnected) {
     /usr/local/bin/k3s mrix,
     /var/lib/rancher/k3s/data/*/bin/k3s mrix,
 
+    # The k3s multi-call binary shells out to the iptables backend on invocation, even for
+    # `crictl`. Denied here it fails the CRI validation before it reaches the socket. This
+    # grant lived on the parent before the child profile existed.
+    /usr/sbin/xtables-nft-multi mrix,
+
     # The CRI socket, and the config that tells crictl where to find it.
     /run/k3s/containerd/containerd.sock rw,
     /etc/chute-log-shipper/crictl.yaml r,
@@ -112,10 +123,6 @@ profile sek8s.chute-log-shipper flags=(enforce, attach_disconnected) {
     /var/lib/rancher/k3s/agent/etc/ r,
     /var/lib/rancher/k3s/agent/etc/crictl.yaml r,
     /etc/machine-id r,
-
-    # The k3s multi-call binary shells out to its iptables backend even for `crictl`. It is
-    # not granted: the calls fail, the failures are non-fatal, and a log reader has no
-    # business touching the firewall. Denials from that path are expected noise.
 
     /usr/lib/** rm,
     /usr/local/lib/** rm,

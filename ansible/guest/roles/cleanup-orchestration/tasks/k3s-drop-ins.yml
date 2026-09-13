@@ -42,13 +42,21 @@
         group: root
         mode: '0644'
 
-    - name: Copy AppArmor verification dependency drop-in
+    # Enforcing builds only — see system-manager-drop-ins.yml.
+    - name: Copy AppArmor verification dependency drop-in (enforcing builds only)
       ansible.builtin.copy:
         src: files/k3s.service.d/apparmor-verify.conf
         dest: /etc/systemd/system/k3s.service.d/apparmor-verify.conf
         owner: root
         group: root
         mode: '0644'
+      when: not (debug_build | default(false) | bool)
+
+    - name: Remove AppArmor verification drop-in on debug builds
+      ansible.builtin.file:
+        path: /etc/systemd/system/k3s.service.d/apparmor-verify.conf
+        state: absent
+      when: debug_build | default(false) | bool
 
     - name: Copy chroot restriction drop-in
       ansible.builtin.copy:

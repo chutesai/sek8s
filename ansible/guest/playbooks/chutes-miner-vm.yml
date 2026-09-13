@@ -339,10 +339,14 @@
     - debug-credentials
     - build
   tasks:
+    # Pinned salt: password_hash() draws a random salt per call, so the $6$ hash — and therefore
+    # /etc/shadow, which RTMR3 measures — changed on every build. The password is the literal
+    # string "debug" and is in this file, so a salt protects nothing here; it only broke
+    # reproducibility. Debug builds only; production never sets a root password.
     - name: Set known root password for console access (debug builds only)
       ansible.builtin.user:
         name: root
-        password: "{{ 'debug' | password_hash('sha512') }}"
+        password: "{{ 'debug' | password_hash('sha512', 'sek8sdebugbuild') }}"
       when: debug_build | default(false)
 
     - name: Allow root password SSH login via high-precedence drop-in (debug builds only)

@@ -18,6 +18,29 @@
     password_lock: true
     shell: /usr/sbin/nologin
 
+# Encodes the danger the comment below describes, so a missing preserve entry fails the BUILD
+# instead of the VM. Not "every uid >= 1000 must be preserved" -- the sweep is supposed to delete
+# the build user. The catastrophic case is narrower: deleting an account whose home is the shared
+# application tree. Build accounts live under /home; sek8s service accounts do not.
+- name: Guard - refuse to sweep any account homed outside /home
+  ansible.builtin.shell: |
+    preserve="{{ lock_accounts_preserve | join(' ') }}"
+    bad=""
+    while IFS=: read -r user _ uid _ _ home _; do
+      case "$uid" in ''|*[!0-9]*) continue ;; esac
+      [ "$uid" -ge 1000 ] || continue
+      case " $preserve " in *" $user "*) continue ;; esac
+      case "$home" in /home/*|/nonexistent|'') continue ;; esac
+      bad="$bad $user(uid=$uid home=$home)"
+    done < /etc/passwd
+    if [ -n "$bad" ]; then
+      echo "REFUSING TO SWEEP -$bad"
+      echo "userdel --remove would delete that home recursively. Add it to lock_accounts_preserve"
+      echo "(roles/lock-accounts/defaults/main.yml) or give it a home under /home."
+      exit 1
+    fi
+  changed_when: false
+
 - name: Remove all non-system accounts (uid >= 1000)
   # DANGER: `userdel --remove` deletes the account's HOME DIRECTORY recursively. sek8s service
   # accounts are given uids ABOVE the system range (system-manager 10150, chute-log-shipper 10151)
@@ -32,6 +55,15 @@
       userdel --remove --force "$user" 2>/dev/null || true
     done
   changed_when: true
+
+- name: Guard - application tree survived the sweep
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: lock_accounts_tree
+  failed_when: not lock_accounts_tree.stat.exists
+  loop:
+    - /opt/sek8s/venv/bin/python3
+    - /opt/sek8s/src
 
 - name: Set nologin shell on system accounts with interactive shells
   ansible.builtin.shell: |

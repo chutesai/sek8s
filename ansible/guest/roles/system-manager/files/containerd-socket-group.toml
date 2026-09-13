@@ -1,0 +1,11 @@
+# Imported by k3s's generated containerd config (its `imports` line already lists
+# /etc/containerd/conf.d/*.toml), so this needs no edit to k3s's own config or template.
+#
+# containerd chowns the CRI socket to this gid as it creates it. That is the whole point:
+# ownership is correct from birth on every containerd start, so nothing has to re-apply it
+# afterwards and there is no window where the socket is root:root. gid matches the pinned
+# `containerd` group in the system-manager role.
+version = 3
+
+[grpc]
+  gid = 10153

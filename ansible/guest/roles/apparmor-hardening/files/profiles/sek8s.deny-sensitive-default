@@ -25,7 +25,12 @@ include <tunables/global>
 
 @{confined_bins} = /usr/bin/{bash,dash,cat,cp,tar,rsync,scp,curl,wget,perl,dd,socat,nc,ncat} /bin/{sh,dash}
 
-profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce) {
+# attach_disconnected: @{confined_bins} covers systemctl, which units with PrivateTmp run in a
+# private mount namespace. Without this flag AppArmor cannot resolve /run/systemd/private or
+# /run/dbus/system_bus_socket to a connected path and the lookup fails EACCES -- a path
+# resolution failure, so complain mode does not mask it either. The other sek8s profiles
+# already carry it.
+profile sek8s.deny-sensitive-default @{confined_bins} flags=(enforce, attach_disconnected) {
   include <abstractions/sek8s-shell-base>
   include <abstractions/sek8s-cache-deny>
   include <abstractions/sek8s-secrets-deny>
