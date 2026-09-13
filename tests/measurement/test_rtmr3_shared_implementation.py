@@ -176,7 +176,8 @@ def test_fold_matches_the_single_hardware_extend(fixture_root):
 
 def test_fold_input_is_tdx_measure_output_verbatim(fixture_root):
     """The digest is taken over tdx-measure's stdout, so re-serialising the parsed pairs
-    must reproduce those bytes exactly — the boot path hashes the file, not the pairs."""
+    must reproduce those bytes exactly — the boot path hashes the file, not the pairs.
+    """
     root, conf = fixture_root
     hashes = measured_hashes(root, conf, tdx_measure_script())
 
@@ -186,7 +187,8 @@ def test_fold_input_is_tdx_measure_output_verbatim(fixture_root):
 
 def test_fold_binds_paths_not_just_content(fixture_root):
     """Hashing the list text covers the paths, which the former per-file chain did not:
-    two files swapping names must change RTMR3 even though the content multiset is equal."""
+    two files swapping names must change RTMR3 even though the content multiset is equal.
+    """
     root, conf = fixture_root
     hashes = measured_hashes(root, conf, tdx_measure_script())
     assert len(hashes) >= 2

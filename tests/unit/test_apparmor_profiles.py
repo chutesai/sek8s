@@ -9,6 +9,7 @@ method calls are mediated separately from the socket, so without explicit dbus r
 Permission denied" while the same call in the unconfined wrapper succeeded.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -107,17 +108,34 @@ def test_default_profile_still_denies_the_sensitive_paths(include_dir):
     )
 
 
-def test_setup_cache_grants_no_dac_bypass():
-    """setup-cache must not need a DAC bypass to walk the cache.
+def test_setup_cache_needs_no_dac_bypass_for_the_recursive_walk():
+    """The recursive walk must stay ordering-based, never capability-based.
 
     The walk runs as uid 0 over a tree owned by uid 1000, so root sits in the "other" class and any
-    directory without o+rx stops it. The fix is ordering (see below), not a capability: chmod -R
-    repairs each directory before the walk descends. Granting dac_override or dac_read_search would
-    paper over that and widen the profile for nothing.
+    directory without o+rx stops it. chmod -R repairs each directory's mode on the pre-order visit
+    so the walk can descend; chown -R repairs nothing. If that order ever flips, the fix is to flip
+    it back, NOT to reach for a capability.
+
+    `capability dac_override` IS present, for a different and narrower reason: `.xdg-cache` is
+    created inside the tree AFTER the recursive chown has handed it to uid 1000 at mode 2775, so
+    root has to write into a directory it does not own. Moving that creation earlier would avoid
+    the capability on a fresh volume, but bricks a volume that has the cache tree without
+    `.xdg-cache` — root would need the same bypass and the unit powers the VM off on failure.
+
+    `dac_read_search` stays out: nothing here needs a read bypass.
     """
     profile = (PROFILE_DIR / "sek8s.setup-cache").read_text()
-    assert "capability dac_override," not in profile
     assert "capability dac_read_search," not in profile
+
+    script = (
+        REPO / "ansible/guest/roles/cache-volume/files/setup-cache.sh"
+    ).read_text()
+    chmod_at = script.index('chmod -R 2775 "$SNAP_CACHE"')
+    chown_at = script.index('chown -R "$SNAP_OWNER" "$SNAP_CACHE"')
+    assert chmod_at < chown_at, (
+        "chown -R now runs before chmod -R; an unreadable directory will abort the script "
+        "and OnFailure=poweroff.target bricks the VM"
+    )
 
 
 def test_setup_cache_repairs_modes_before_changing_ownership():
@@ -138,29 +156,37 @@ def test_setup_cache_repairs_modes_before_changing_ownership():
 
 
 def test_verifier_is_anchored_by_a_measured_drop_in():
-    """The enforce check must be reachable without its multi-user.target.wants symlink.
+    """The AppArmor verifier must be a hard dependency of what it guards, on enforcing builds.
 
-    RTMR3 measures regular files only (`find -type f` in the initramfs measurer,
-    `is_file() and not is_symlink()` in rtmr3-verify), so systemd enablement
-    symlinks are unmeasured: deleting one silently disables a measured unit. The
-    verifier therefore needs a hard Requires= from a unit whose drop-in lives
-    under /etc/systemd/system, which is measured — the same anchoring
-    rtmr3-verify.service already has.
+    `Requires=` is what makes a non-enforcing profile fail closed rather than advisory, and it
+    also reaches the verifier through a MEASURED drop-in rather than only its unmeasured
+    multi-user.target.wants symlink.
+
+    The anchors live in their own `apparmor-verify.conf` drop-ins rather than the shared
+    runtime-dependencies.conf, because `Requires=` starts a unit regardless of whether it is
+    enabled — so on a debug build, where the profiles load in complain mode and the verifier
+    would power the VM off, the file has to be absent rather than merely disabled. Hence the
+    install task is gated and paired with an explicit removal.
     """
-    unit = "verify-apparmor-profiles.service"
-    dropins = [
-        CLEANUP / "files/k3s.service.d/apparmor-verify.conf",
-        CLEANUP / "files/system-manager.service.d/runtime-dependencies.conf",
-    ]
+    for unit in ("k3s", "system-manager"):
+        conf = (CLEANUP / f"files/{unit}.service.d/apparmor-verify.conf").read_text()
+        assert (
+            "Requires=verify-apparmor-profiles.service" in conf
+        ), f"{unit}: lost the hard dependency on the AppArmor verifier"
+        assert "After=verify-apparmor-profiles.service" in conf
 
-    for dropin in dropins:
-        text = dropin.read_text()
-        assert f"Requires={unit}" in text, f"{dropin.name} lost the hard dependency"
-        assert f"After={unit}" in text, f"{dropin.name} lost the ordering"
-
-    # Each drop-in is worthless unless the cleanup role actually installs it.
-    installed = (CLEANUP / "tasks/k3s-drop-ins.yml").read_text()
-    assert "files/k3s.service.d/apparmor-verify.conf" in installed
+    tasks = (CLEANUP / "tasks").rglob("*.yml")
+    gated = [t for t in tasks if "apparmor-verify.conf" in t.read_text()]
+    assert gated, "no task installs the apparmor-verify drop-ins"
+    for t in gated:
+        text = t.read_text()
+        assert (
+            "debug_build" in text
+        ), f"{t.name}: drop-in install is not gated on debug_build"
+        assert "state: absent" in text, (
+            f"{t.name}: no removal task — a rebuilt debug image would inherit a stale "
+            f"enforcing drop-in and power itself off"
+        )
 
 
 def test_measured_paths_cover_the_drop_in_directories():
@@ -443,3 +469,67 @@ def test_system_manager_reads_nothing_from_run_chutes():
     assert (
         not grants
     ), f"system-manager grants /run/chutes paths it does not read: {grants}"
+
+
+def test_denied_secrets_are_denied_at_every_path_they_are_reachable_by():
+    """A deny must cover every path a secret is reachable by, not just its canonical one.
+
+    AppArmor mediates the path used to open a file, and `sek8s-shell-base` grants `/** rwlkm`.
+    So for anything the storage volume holds, denying only the canonical path leaves the
+    storage path wide open: setup-storage-bind-mounts.sh syncs a tree into /cache/storage/<sub>
+    and then bind-mounts it back over the original, giving the same inode two names.
+
+    The k3s cluster join token is the live case — it is the cluster bootstrap credential, and
+    `cat /cache/storage/k3s/server/token` reached it while only the /var/lib path was denied.
+    This fails if a new storage-backed tree gains a denied path without its alias.
+    """
+    deny = (ABSTRACTION_DIR / "sek8s-secrets-deny.j2").read_text()
+    script = (
+        REPO / "ansible/guest/roles/cache-volume/files/setup-storage-bind-mounts.sh"
+    ).read_text()
+
+    storage_base = re.search(r'^STORAGE_BASE="([^"]+)"', script, re.M)
+    assert storage_base, "STORAGE_BASE moved; re-point this test"
+    base = storage_base.group(1)
+
+    # (storage subdir, path it is bind-mounted over) for every synced tree
+    mounts = re.findall(r'^\s*"(\S+)\s+(\S+)"', script, re.M)
+    assert mounts, "no bind-mount table found; re-point this test"
+
+    denied = re.findall(r"^\s*\{\{ deny_kw \}\}\s+(\S+)\s", deny, re.M)
+    for canonical in denied:
+        for subdir, mounted_over in mounts:
+            if not canonical.startswith(mounted_over.rstrip("/") + "/"):
+                continue
+            alias = canonical.replace(mounted_over.rstrip("/"), f"{base}/{subdir}", 1)
+            assert alias in denied, (
+                f"{canonical} is denied but its storage alias {alias} is not — "
+                f"{mounted_over} is bind-mounted from {base}/{subdir}, so any confined "
+                f"binary reads it by the other name"
+            )
+
+
+def test_log_shipper_profile_never_permits_an_unconfined_exec():
+    """With NoNewPrivileges=false, this profile is the only barrier left.
+
+    The service runs `NoNewPrivileges=false` because AppArmor refuses a `cx ->` domain
+    transition under no_new_privs, and the crictl child profile depends on that transition.
+    That trade is sound only while every exec the profile permits stays inside AppArmor's
+    control: a `ux`/`Ux` rule would drop the target out of confinement entirely, and without
+    no_new_privs there is nothing underneath to catch a setuid binary reached that way.
+
+    So the two must be decided together. If this assertion ever needs relaxing, the question
+    is whether NoNewPrivileges can go back to true, not whether the rule is convenient.
+    """
+    conf = (
+        REPO / "ansible/guest/roles/chute-log-shipper/files/chute-log-shipper.conf"
+    ).read_text()
+    profile = (PROFILE_DIR / "sek8s.chute-log-shipper").read_text()
+
+    nnp_off = "NoNewPrivileges=false" in conf
+    unconfined_exec = re.findall(r"^\s*\S+\s+\w*[uU]x,\s*$", profile, re.M)
+
+    assert not (nnp_off and unconfined_exec), (
+        f"NoNewPrivileges is off and the profile permits an unconfined exec: "
+        f"{unconfined_exec}. Either keep every exec confined, or restore no_new_privs."
+    )
