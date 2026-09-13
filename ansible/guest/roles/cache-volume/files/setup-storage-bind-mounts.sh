@@ -39,7 +39,25 @@ sync_once() {
 
     log "No sync marker for $name, cleaning and syncing from $root_path"
     find "$storage_path" -mindepth 1 ! -name "lost+found" -delete 2>/dev/null || true
-    if rsync -a --exclude='lost+found' "$root_path/" "$storage_path/"; then
+    # The exclude is anchored (leading /) so it means this tree's own server/token and not any
+    # */server/token deeper in it. It is excluded because rsync is in @{confined_bins} and so auto-attaches to
+    # sek8s.deny-sensitive-default, whose sek8s-secrets-deny denies the k3s cluster token.
+    # That deny is aimed at shells and interpreters, not at this first-boot seed, but AppArmor
+    # attaches by binary so rsync cannot be excepted from it. Denied reads make rsync exit 23
+    # and, on an enforcing (production) build with a fresh storage volume, that failed the unit
+    # and took k3s down with it. Debug builds never saw it: complain mode does not enforce the
+    # deny, and a volume with a sync marker skips this path entirely.
+    if rsync -a --exclude='lost+found' --exclude='/server/token' "$root_path/" "$storage_path/"; then
+        # Placed separately with `install`, which is NOT in @{confined_bins} and so runs
+        # unconfined. The token must reach storage: k3s keys its bootstrap data to it, so a
+        # regenerated token would not match the database this same sync just copied.
+        if [[ -f "$root_path/server/token" ]]; then
+            mkdir -p "$storage_path/server"
+            if ! install -m 0600 -o root -g root "$root_path/server/token" "$storage_path/server/token"; then
+                log "ERROR: Failed to place k3s token into $storage_path/server"
+                exit 1
+            fi
+        fi
         touch "$marker"
         log "Synced $root_path -> $storage_path ($(du -sh "$storage_path" 2>/dev/null | cut -f1)), marker written"
     else

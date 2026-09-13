@@ -14,6 +14,14 @@ profile sek8s.setup-cache flags=(enforce) {
   capability chown,
   capability fowner,
   capability fsetid,
+  # The recursive chown above hands the cache dir to uid 1000 (mode 2775 -- no write for other),
+  # and the script then mkdirs .xdg-cache inside it as root. That needs DAC_OVERRIDE, and
+  # AppArmor mediates capability use per profile, so the kernel granting it to root is not
+  # enough. Only bites on an enforcing build with an empty cache: where .xdg-cache already
+  # exists `mkdir -p` is a no-op and never needs the write. Bounded by this profile's file
+  # rules to the cache tree. sek8s system-manager already carries CAP_DAC_OVERRIDE for the
+  # same reason (unlinking pod-owned files under the same directory).
+  capability dac_override,
 
   # The script and its interpreter
   /usr/local/bin/setup-cache.sh r,

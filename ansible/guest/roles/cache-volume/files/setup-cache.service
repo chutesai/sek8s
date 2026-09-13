@@ -12,6 +12,12 @@ OnFailure=poweroff.target
 Type=oneshot
 ExecStart=/usr/local/bin/setup-cache.sh
 RemainAfterExit=yes
+# This unit powers the VM off when it fails, and its output went to the journal only -- which
+# dies with the VM on a production image (no SSH, and the root LUKS passphrase is rotated at
+# first boot, so the journal cannot be read back offline either). Its siblings
+# verify-cache-volume, setup-storage-bind-mounts and infiniband-config all already do this.
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target

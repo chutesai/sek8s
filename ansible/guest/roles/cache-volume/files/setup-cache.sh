@@ -36,13 +36,26 @@ if ! mountpoint -q /var/snap; then
     exit 1
 fi
 
+# The unit logs to the console, which lands in the host's serial log -- and the host is untrusted.
+# So coreutils stderr must not reach it: an error from the recursive calls below names paths under
+# the cache, i.e. which models are cached, which the encrypted volume otherwise keeps from the
+# host. Detail goes to the journal via logger; the console gets a fixed string naming the step,
+# which is the part that actually identifies the fault.
+run_step() {
+    step_err=$("${@:2}" 2>&1) || {
+        logger -t "$LOG_TAG" -p user.err "$1 failed: $step_err" 2>/dev/null || true
+        log_error "$1 failed (detail in journal)"
+        return 1
+    }
+}
+
 # Create snap cache dir: 1000:1000 (tdx) so pods can use it; 2775 so group (tdx) can write; chutes is in group tdx so system-manager can write
-mkdir -p "$SNAP_CACHE"
+run_step "cache dir create" mkdir -p "$SNAP_CACHE"
 # chmod first: it repairs each directory's mode on the pre-order visit, so the walk can descend
 # into pod-created entries. chown cannot repair anything, so running it first makes an
 # unreadable directory abort the script (set -e) and OnFailure=poweroff.target bricks the VM.
-chmod -R 2775 "$SNAP_CACHE"
-chown -R "$SNAP_OWNER" "$SNAP_CACHE"
+run_step "cache tree chmod" chmod -R 2775 "$SNAP_CACHE"
+run_step "cache tree chown" chown -R "$SNAP_OWNER" "$SNAP_CACHE"
 
 # system-manager's XDG cache. Created HERE, and deliberately not from system-manager's own
 # ExecStartPre: that ran `+/bin/bash -c 'install -d ...'`, and the `+` prefix makes systemd skip
@@ -53,9 +66,9 @@ chown -R "$SNAP_OWNER" "$SNAP_CACHE"
 # and before system-manager. Uses mkdir/chown/chmod rather than `install` because those are the
 # binaries the profile grants. Must stay AFTER the recursive chown above, which would otherwise
 # reset the owner back to $SNAP_OWNER.
-mkdir -p "$SNAP_CACHE/.xdg-cache"
-chown "$XDG_CACHE_OWNER" "$SNAP_CACHE/.xdg-cache"
-chmod 2775 "$SNAP_CACHE/.xdg-cache"
+run_step "xdg-cache create" mkdir -p "$SNAP_CACHE/.xdg-cache"
+run_step "xdg-cache chown" chown "$XDG_CACHE_OWNER" "$SNAP_CACHE/.xdg-cache"
+run_step "xdg-cache chmod" chmod 2775 "$SNAP_CACHE/.xdg-cache"
 
 log "Cache setup complete"
 exit 0

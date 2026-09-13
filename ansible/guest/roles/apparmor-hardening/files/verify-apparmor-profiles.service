@@ -9,8 +9,11 @@ OnFailure=poweroff.target
 Type=oneshot
 ExecStart=/usr/local/bin/verify-apparmor-profiles.sh
 RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
+# Powers the VM off on failure, so the reason must survive the poweroff: a production image has
+# no SSH and rotates the root LUKS passphrase at first boot, which makes the journal unreadable
+# afterwards. Console is the only channel that outlives the VM.
+StandardOutput=journal+console
+StandardError=journal+console
 SyslogIdentifier=verify-apparmor-profiles
 
 [Install]
