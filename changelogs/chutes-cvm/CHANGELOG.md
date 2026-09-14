@@ -93,15 +93,10 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   `host verify --target-os`. Unsupported releases are rejected before anything is signed or sent.
 
 ### Changed
-- **Consolidated the host entrypoint scripts into the `chutes-cvm` CLI.** The thin wrapper
-  scripts `run-td`, `verify-host`, `setup-tdx-host`, `tune-host.sh`, `restore-host.sh` and the
-  `host-tools/bin/chutes-*` PATH delegators are removed; their operations are now `chutes-cvm`
-  subcommands: `guest launch`, `host verify`, `host setup`, `host tune`, `host restore`,
-  `host reset-gpus`.
-  Logic still lives in the `chutes_cvm.guest` / `chutes_cvm.host`
-  modules; the CLI is a thin front door. `discover-profile.sh` is deliberately kept as a
-  standalone script (bundled with the package). Callers invoke the `chutes-cvm` console script
-  installed by the package's `install.sh`, rather than the removed `host-tools/bin/` symlinks.
+- `B300` guest RAM is sized against the host instead of pinned to aggregate VRAM. The
+  host-tools profile always requested `vram_gb * gpus` (2304G for 8), so a ~2 TB sled
+  aborted at launch; it is now capped at what the host can back. Hosts with enough RAM
+  are unaffected, so no in-service B300 is re-baselined.
 - **The guest build's measurement phase is entirely CLI-owned — no measurement roles.** The
   `compute-rtmr0` / `compute-rtmr1-2` / `compute-rtmr3` / `aggregate-measurements` roles and their
   shell scripts are removed; the miner-VM build calls `chutes-cvm measurements generate` once,
@@ -110,15 +105,6 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   pre-LUKS RTMR3 stage. `libguestfs-tools` (guestmount) is now a build-host prereq
   (`build-setup.yml`); `tee-gpu-vm.yml` calls `measurements generate --register rtmr3` inline. The
   generator's firmware paths resolve via `chutes_cvm.paths`.
-- **The package-level CLI dispatcher moved to the package root** — `chutes_cvm/guest/cli.py` →
-  `chutes_cvm/cli.py` (console script `chutes-cvm` → `chutes_cvm.cli:main`), since it routes to the
-  host, guest, and measurement subpackages rather than belonging to `guest/`.
-- **`chutes-cvm` is now a real Python package under `src/chutes-cvm/`** (import
-  `chutes_cvm`, published to PyPI), instead of a loose module tree on `PYTHONPATH` at
-  `host-tools/scripts/chutes/`. The rename from `chutes` to `chutes_cvm` avoids colliding
-  with the Chutes platform SDK once installed. The offline measurement engine
-  (`guest-tools/measurement/*.py`) moved into `chutes_cvm.measurement`, dropping its
-  `sys.path` shims.
 - **Host provisioning installs the package** — `host_tools` stages and runs the package's
   `install.sh`, which fetches + `pip install -e`'s the package into a venv and puts the
   `chutes-cvm` console script on PATH (with its deps: pyyaml/pydantic-settings/substrate-interface). Host
@@ -126,21 +112,6 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   commands (`config`, and the API-backed `host verify`) run with their deps available. The sparse
   checkout now includes `src/chutes-cvm/`. Guest image build keeps `PYTHONPATH` (stdlib commands
   only). Set `CHUTES_CVM_PYPI=1` to install from PyPI instead of the checkout.
-- **The package is self-contained — no repo-layout assumptions.** The built nvidia-gpu-tools
-  wheel moved into the package (`chutes_cvm/scripts/gpu-tools/`, bundled in the wheel; its
-  maintainer build recipe lives at `src/chutes-cvm/tools/gpu-tools/`, run via `make
-  bundle-gpu-tools`, and builds the wheel into the package), and the default launch-config lookup
-  is now `./config.yaml` (where
-  `chutes-cvm config init` writes it) / `$CHUTES_CVM_CONFIG` rather than a checkout path. The only
-  checkout-relative resolution left is the guest firmware (OVMF) — MRTD-measured, so intentionally
-  not shipped in this host-side package. A repo-present (editable) install resolves it from the
-  checkout; a standalone (non-editable) install copies it out of the fetched checkout to a
-  persistent dir and sets `$CHUTES_CVM_FIRMWARE_DIR` in the shim, so no repo or R2 is needed at
-  runtime.
-- **nvidia-gpu-tools is installed at CLI-setup time, not lazily at launch.** `install.sh`
-  `pip install`s the bundled wheel into the chutes-cvm venv and symlinks `nvidia-gpu-tools` on
-  PATH; the runtime lazy self-installing venv machinery is removed (`chutes_cvm.guest.gpu.tools`
-  now only verifies the CLI is present and runs, raising a clear "re-run install.sh" error).
 - **Host lifecycle + attestation live under one `chutes-cvm host` group.** `host setup` / `verify`
   / `submit-profile` / `tune` / `restore` replace the former top-level `setup-host` / `verify-host`
   / `tune-host` / `restore-host`; the standalone `discover-profile` command is dropped (its capture
@@ -157,13 +128,6 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   can't get a verdict. Adds `substrate-interface` to the chutes-cvm package for the signature.
 - **`detect_profile` no longer gates on a local baselined set.** It resolves the GPU profile and the
   live fingerprint (which still drive the launch `-smp`/`-m`); acceptance is the control plane's call.
-- **VM-management scripts now ship inside the `chutes-cvm` package.** The privileged bash helpers
-  (`discover-profile.sh` and the `volumes/`, `network/`, `devices/` scripts)
-  plus the `config/` schemas moved from `host-tools/scripts/` into `chutes_cvm/scripts/`, resolve
-  package-relative, and are bundled in the wheel. `host-tools/scripts/` now holds only config
-  examples and the deprecated `quick-launch.sh` compat shim. Ansible host launch/upgrade invokes
-  `chutes-cvm guest launch`; the install no longer needs a
-  `CHUTES_CVM_SCRIPTS_DIR` env (the scripts are package-relative).
 - **The launch orchestrator is Python, not a bash script.** The former `quick-launch.sh` is ported
   to `chutes_cvm.guest.launch` (`chutes-cvm guest launch`): Python owns arg/config precedence,
   validation, the host gates and the duplicate-VM guard, and calls the bundled bash helpers for the
@@ -240,77 +204,6 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   positionally with the sorted path list and the echoed names are ignored entirely.
 
 ### Fixed
-- Bridge networking now clamps TCP MSS to the egress interface's PMTU (`setup-bridge.sh`),
-  so guest TLS handshakes survive a small-MTU `public_interface` such as a WireGuard tunnel
-  (MTU 1280). Previously the guest advertised an MSS from its own 1500 NIC, and oversized
-  handshake segments were black-holed on the smaller uplink — connections established but
-  stalled during the TLS handshake.
-- `--target-os` now rewrites every OS-derived field of the submitted host profile, not just
-  the QEMU used for the readiness check. A host asking about (or registering for) a release it
-  has not upgraded to yet no longer submits its live QEMU, `-cpu` args and OS release — e.g. a
-  25.10 host targeting 26.04 previously registered "26.04 + QEMU 10.1.0", a pair 26.04 never
-  ships. `host verify --target-os ... --submit` now registers the target class too.
-- `host submit-profile` on an unsupported OS release (or a supported one running a QEMU it does
-  not ship) is now rejected locally, as `host verify` already was. It previously registered the
-  host class anyway, spending a measurement-generation slot on a class that could never attest.
-- Measurement generation now skips a host whose GPUs are not all the same model instead of
-  measuring it as whichever model was listed first. Such a host cannot launch anyway —
-  launching has always rejected mixed hardware — so the entry it produced was unusable
-  rather than wrong in a dangerous way; it is now reported as pending with the reason,
-  alongside the other hosts that cannot yet be generated offline.
-- Each GPU profile now describes exactly one graphics card. The RTX PRO 6000 profile
-  covered both the Workstation and Server editions, so a Workstation host was measured
-  using hardware details read from a Server card. Workstation Edition is not supported and
-  no longer resolves — such a host is reported as pending rather than measured incorrectly.
-  A profile carries reserved CPU counts, guest memory rules, firmware and confidential
-  computing settings as well, so two cards that happen to agree on those today could
-  quietly diverge later.
-- `install.sh` reused an existing venv without checking which Python built it. After an OS
-  release upgrade moved `python3` (3.13 to 3.14 on a TEE host), the new interpreter no longer
-  looked at the venv's `site-packages`, so the install reported success and left a `chutes-cvm`
-  on PATH that died with `ModuleNotFoundError: No module named 'chutes_cvm'`. The venv is now
-  recreated when its recorded version differs from the running interpreter; a venv matching the
-  current version is still reused, and an unparseable `pyvenv.cfg` is left alone.
-- `install.sh` now verifies the package imports from the venv before writing the PATH shim,
-  instead of writing it unconditionally. Any install that leaves `chutes_cvm` unimportable —
-  a version-mismatched venv, an editable install whose source moved — now fails loudly rather
-  than producing a broken command that looks installed.
-- `chutes-cvm host setup` could not complete on Ubuntu 26.04. The profile pinned
-  `linux-image-6.17.0-35-generic`, a noble HWE package that resolute has never carried, so the
-  install aborted before QEMU and the native TDX kernel were installed. That left hosts
-  upgraded from an earlier release running the new QEMU against the kernel carried over from
-  before the upgrade — which presents at VM launch as `kvm run failed Input/output error` on
-  every vCPU, the TD created but never enterable. This broke `setup.yml` and every
-  `upgrade-host.yml` hop, both of which provision through this path. Pinned to
-  `linux-image-7.0.0-31-generic`, resolute's current ABI.
-- `chutes-cvm host setup` now checks the pinned kernel is available before installing
-  anything, and reports it in one line naming the command that finds the current version.
-  Kernel pins expire by design — a pocket carries only the newest ABI — and this previously
-  surfaced as an apt error inside a Python traceback, after the repository setup steps had
-  already run.
-- `chutes-cvm host setup` could not complete on Ubuntu 26.04. The profile pinned
-  `linux-image-6.17.0-35-generic`, a noble HWE package that resolute has never carried, so the
-  install aborted before QEMU and the native TDX kernel were installed. That left hosts
-  upgraded from an earlier release running the new QEMU against the kernel carried over from
-  before the upgrade — which presents at VM launch as `kvm run failed Input/output error` on
-  every vCPU, the TD created but never enterable. This broke `setup.yml` and every
-  `upgrade-host.yml` hop, both of which provision through this path. Pinned to
-  `linux-image-7.0.0-31-generic`, resolute's current ABI.
-- `chutes-cvm host setup` now checks the pinned kernel is available before installing
-  anything, and reports it in one line naming the command that finds the current version.
-  Kernel pins expire by design — a pocket carries only the newest ABI — and this previously
-  surfaced as an apt error inside a Python traceback, after the repository setup steps had
-  already run.
-- `B300` could not launch on a host with less RAM than its aggregate VRAM. Guest RAM was
-  pinned to `vram_gb * gpus` (2304G for 8×288 GB) regardless of the host, so a ~2 TB sled
-  aborted with *"needs 2304G guest RAM, but only 1946G can be safely backed"*. Guest RAM is
-  now clamped to what the host can actually back — `min(vram * gpus, ((host_gb - 64) // gpus)
-  * gpus)` — which yields 1944G on a 2010 GB host. The clamp is deliberate: a host with
-  enough RAM still gets exactly 2304G, so its fingerprint `mem_gb`, and therefore RTMR0, is
-  unchanged and no in-service B300 is re-baselined. Such a host is a second fingerprint of
-  the same profile rather than a sibling class — vcpus and memory are detected from the live
-  host — so a 256-CPU/2 TB sled needs no new profile, only its own RTMR0 baseline registered
-  in chutes-ops `teeMeasurements`.
 
 ### Removed
 - **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm host setup` (above). The

@@ -99,23 +99,6 @@ Version source of truth: `src/sek8s/VERSION`
 - The TDX quote provider now validates the supplied nonce (exactly 64 hex characters) and asserts
   the assembled REPORTDATA is exactly 128 hex characters, instead of truncating it. A malformed
   nonce is rejected with HTTP 400 rather than producing a quote.
-- The log shipper now checks the pod labels it reads before using them. One of them becomes
-  part of the address it sends logs to, and the guest signs that request with the identity
-  proving it is a genuine confidential VM — so a label containing a path separator would have
-  redirected an authenticated request somewhere it was never meant to go. Kubernetes already
-  rejects such labels, which is why this was not reachable; the shipper now rejects them too
-  rather than relying on a component two layers away. Pods with unusable labels are skipped
-  and their siblings keep shipping.
-- The log shipper no longer writes exception messages into its journal. That journal is
-  readable by the miner through the status API, and the service handles chute log output —
-  so an exception that quoted the value that caused it would hand tenant data to the
-  operator it is kept from. Failures now report the error's type and location instead. The
-  parser that turns raw bytes into log lines is also now covered by tests asserting it never
-  raises, since that is what makes the rest of this safe.
-- The system manager now installs the hardened log sink at startup. Its own journal is
-  readable by the miner, and it was the one service still running on the default handler —
-  which renders local variable values inside tracebacks. Nothing was exposing values in
-  practice, but the next error path added to that service would have.
 - Status endpoints answered `200 OK` with empty results when the subprocess behind them
   failed, making a broken privileged path indistinguishable from a healthy-but-empty VM:
   `/status/disk/space` reported `total_size_bytes: 0` when `du` never ran, and
