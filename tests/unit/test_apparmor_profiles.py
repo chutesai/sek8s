@@ -545,8 +545,8 @@ def _exec_targets(profile_text: str) -> set[str]:
     }
 
 
-def test_every_sudoers_target_is_executable_in_its_profile():
-    """A sudoers grant the profile cannot exec is a privileged path that silently fails.
+def test_every_sudoers_target_is_usable_by_the_profile():
+    """A sudo grant the profile cannot reach is a privileged path that silently fails.
 
     sudo is setuid-root, so euid is 0 at exec and no capability check is involved — the
     escalation itself works. What does NOT work is the exec of the target, which AppArmor
@@ -571,6 +571,19 @@ def test_every_sudoers_target_is_executable_in_its_profile():
         f"sudoers grants {missing} to system-manager but the profile permits no exec of "
         f"them — the grant is dead and fails only when the path is finally taken"
     )
+
+    # Exec'ing the target is necessary but not sufficient: sudo has to get that far. A
+    # production guest reported "unable to open /etc/sudo.conf", "unable to change to root
+    # gid" and "error initializing audit plugin sudoers_audit" — the reads were missing, and
+    # so were the capabilities. sudo is setuid-root so euid is already 0 and the kernel holds
+    # these in root's permitted set, but AppArmor mediates capability USE per profile.
+    for rule in ("/etc/sudo.conf r,", "/etc/sudoers r,", "/etc/sudoers.d/** r,"):
+        assert rule in profile, f"sudo cannot read its own policy: missing {rule}"
+    for cap in ("setuid", "setgid", "audit_write"):
+        assert f"capability {cap}," in profile, (
+            f"sudo needs CAP_{cap.upper()}; the kernel grants it to root but AppArmor "
+            f"mediates capability use per profile, so the profile must declare it"
+        )
 
 
 def test_cache_deletion_is_reachable_only_through_the_wrapper():

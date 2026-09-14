@@ -97,6 +97,32 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # sudo reads login policy defaults (umask/env) here; harmless read-only config.
   /etc/login.defs r,
 
+  # The rest of what sudo needs, taken from the denials it reported on a production guest:
+  #   "unable to open /etc/sudo.conf: Permission denied"      -> the config naming its plugins
+  #   "unable to change to root gid: Operation not permitted" -> CAP_SETGID
+  #   "error initializing audit plugin sudoers_audit"         -> CAP_AUDIT_WRITE
+  # The capabilities are the non-obvious half. sudo is setuid-root, so euid is already 0 and
+  # the kernel holds these in root's permitted set — but AppArmor mediates capability USE per
+  # profile, so they still have to be declared here. Same shape as the setup-cache failure.
+  # Without these every sudo path is dead: graceful shutdown, `tee disk`, and cache reclaim.
+  # It does not surface in testing because debug builds load this profile in complain mode,
+  # where each of these is logged and then allowed.
+  /etc/sudo.conf r,
+  /etc/sudoers r,
+  /etc/sudoers.d/ r,
+  /etc/sudoers.d/** r,
+  # PAM session setup; NOPASSWD skips authentication but not the session stack.
+  /etc/pam.d/ r,
+  /etc/pam.d/** r,
+  /etc/security/** r,
+  # sudo's timestamp dir. NOPASSWD does not consult it, but sudo still opens the directory.
+  /run/sudo/ rw,
+  /run/sudo/** rw,
+
+  capability setuid,
+  capability setgid,
+  capability audit_write,
+
   # sudo logs each authorized command to the journal/syslog socket.
   /dev/log w,
   /run/systemd/journal/socket w,
