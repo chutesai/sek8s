@@ -5,6 +5,27 @@
   tags:
     - always
   tasks:
+    # The sr25519 role resolves rustup from the PLAYBOOK PROCESS's $HOME (sr25519/tasks/main.yml:18),
+    # not the target user's. `sudo -E` keeps the invoking user's HOME while running as root, so rustup
+    # is searched for in the wrong home and the build dies -- but only once sr25519 runs, ~30 minutes
+    # in, after the whole GPU/k3s phase has already completed. Checking here fails immediately.
+    # Correct invocation: sudo env HOME=/root LUKS_PASSPHRASE=... ansible-playbook -i <inv> <playbook>
+    - name: Verify rustup is reachable from this playbook's HOME
+      ansible.builtin.stat:
+        path: "{{ lookup('env', 'HOME') }}/.cargo/bin/rustup"
+      register: build_rustup
+      changed_when: false
+
+    - name: Fail early when rustup is not where sr25519 will look
+      ansible.builtin.fail:
+        msg: >-
+          rustup not found at {{ lookup('env', 'HOME') }}/.cargo/bin/rustup, which is where the
+          sr25519 role searches (it uses this process's $HOME). rustup is per-user and
+          build-setup.yml installs it for build_user. Do not invoke the build with `sudo -E` --
+          that preserves the invoking user's HOME. Use:
+          sudo env HOME=/root LUKS_PASSPHRASE=... ansible-playbook -i <inventory> <playbook>
+      when: not build_rustup.stat.exists
+
     - name: Output build configuration
       ansible.builtin.debug:
         msg:

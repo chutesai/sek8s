@@ -7,5 +7,6 @@
       - python3-yaml
       - python3-venv
       - xfsprogs
+      - numactl
     state: present
     update_cache: true

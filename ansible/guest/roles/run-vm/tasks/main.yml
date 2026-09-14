@@ -226,10 +226,14 @@
 # pre-set the disk ownership before virt-install. Without this, libvirt registers
 # the disk's current owner (root:root) at domain-define time, then fails at
 # domain-start time when it tries to relabel to the QEMU user — "already in use".
+# Ubuntu 26.04 (libvirt 12) ships qemu.conf with user/group COMMENTED OUT, so regex_search
+# returns None and `| first` raises "'NoneType' object is not iterable". Commented out means
+# libvirt uses its built-in defaults, which on Debian/Ubuntu are exactly these two values --
+# so defaulting here reproduces what libvirt actually does rather than guessing.
 - name: Set qemu user and group
   ansible.builtin.set_fact:
-    qemu_user: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | first }}"
-    qemu_group: "{{ lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | first }}"
+    qemu_user: "{{ (lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^user = \"(.*)\"', '\\1') | default(['libvirt-qemu'], true)) | first }}"
+    qemu_group: "{{ (lookup('file', '/etc/libvirt/qemu.conf') | regex_search('(?m)^group = \"(.*)\"', '\\1') | default(['kvm'], true)) | first }}"
 
 - name: Ensure libvirt image directory exists
   ansible.builtin.file:

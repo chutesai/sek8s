@@ -112,6 +112,35 @@
         state: present
         update_cache: true
 
+    # The build drives the image inside a throwaway libvirt VM: the run-vm role calls virsh
+    # and virt-install directly, and prepare-boot-image does the LUKS/nbd work. None of this
+    # is pulled in by the packages above, so a genuinely fresh host fails at the first virsh.
+    - name: Install virtualisation tooling the image build drives
+      ansible.builtin.apt:
+        name:
+          - libvirt-daemon-system   # libvirtd
+          - libvirt-clients         # virsh
+          - virtinst                # virt-install
+          - qemu-utils              # qemu-nbd, qemu-img
+          - cryptsetup-bin          # LUKS steps in prepare-boot-image
+        state: present
+        update_cache: true
+
+    - name: Ensure libvirtd is running
+      ansible.builtin.systemd:
+        name: libvirtd
+        state: started
+        enabled: true
+
+    # run-vm seeds the build VM's cloud-init with this public key and it is also how you shell
+    # into a debug guest (root@, not ubuntu@). Without it the build dies early on a file lookup.
+    - name: Ensure the build user has an SSH keypair for the build VM
+      community.crypto.openssh_keypair:
+        path: "{{ build_user_home }}/.ssh/id_ed25519"
+        type: ed25519
+        owner: "{{ build_user }}"
+      become_user: "{{ build_user }}"
+
     # Only rustup honors the pinned toolchain + musl target in src/sr25519/rust-toolchain.toml.
     # --default-toolchain none: the sr25519 role installs the pinned one on first build.
     # --no-modify-path: that role puts ~/.cargo/bin on PATH itself.

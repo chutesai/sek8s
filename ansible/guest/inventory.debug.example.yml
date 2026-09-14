@@ -1,0 +1,41 @@
+---
+# inventory.debug.example.yml
+#
+# Copy to inventory.debug.yml (gitignored) and edit, then:
+#   sudo env HOME=/root LUKS_PASSPHRASE=... \
+#     ansible-playbook -i ansible/guest/inventory.debug.yml \
+#     ansible/guest/playbooks/chutes-miner-vm.yml
+#
+# A debug build differs from prod in two ways that matter:
+#   * debug_build: true  -- AppArmor profiles load in COMPLAIN mode, so they enforce nothing.
+#     Denials are logged (apparmor="ALLOWED") but never applied. To test a profile you must
+#     flip it to enforce on the running guest; a stock debug VM will not reproduce a denial.
+#   * guest_ssh_keys    -- authorises SSH into the guest as ROOT (not ubuntu). Without this
+#     there is no way in: production guests have no remote access.
+#
+# The key below is the BUILD HOST's ~/.ssh/id_ed25519.pub (build-setup.yml creates it).
+all:
+  children:
+    vm:
+      hosts: # Dynamically populated by playbook
+    host:
+      hosts:
+        localhost:
+          ansible_connection: local
+
+  vars:
+    ansible_user: "{{ lookup('env', 'USER') }}"
+    # Root RSA PUBLIC key — baked into the image and measured into RTMR3. Fetched at build time
+    # from R2 (not user-supplied). It is published from KMS out-of-band in chutes-ops
+    # (`make export-signing-keys && make publish-signing-key`) — a manual prerequisite, NOT part of
+    # the build (the build depends on it, so it can never upload it). root_signing_key_path is just
+    # the build-local cache the fetch fills.
+    root_signing_key_url: "https://vm.chutes.ai/root-signing-key.pem"
+    root_signing_key_path: "/tmp/chutes-root-signing-key.pem"
+    luks_passphrase: "{{ lookup('env', 'LUKS_PASSPHRASE') | mandatory }}"
+    tdx_base_url: "https://cvm.chutes.ai"
+    validator_base_url: "https://api.chutes.ai"
+    build_env: "dev"
+    debug_build: true
+    # Optional: Override sek8s image tag for testing (default: "latest")
+    # sek8s_image_tag: "dev-latest"
