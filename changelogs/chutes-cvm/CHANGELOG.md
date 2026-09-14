@@ -3,7 +3,7 @@
 The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installable host CLI
 (`pip`/`install.sh`). Versioned with SemVer via `src/chutes-cvm/VERSION`. Run
 `make promote-changelogs` to aggregate fragments into the current version section.
-## [0.1.0] - 2026-09-12
+## [0.1.0] - 2026-09-14
 
 ### Added
 - **`chutes-cvm measurements`** — TDX measurement generation is now a first-class command
@@ -301,6 +301,16 @@ The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installa
   Kernel pins expire by design — a pocket carries only the newest ABI — and this previously
   surfaced as an apt error inside a Python traceback, after the repository setup steps had
   already run.
+- `B300` could not launch on a host with less RAM than its aggregate VRAM. Guest RAM was
+  pinned to `vram_gb * gpus` (2304G for 8×288 GB) regardless of the host, so a ~2 TB sled
+  aborted with *"needs 2304G guest RAM, but only 1946G can be safely backed"*. Guest RAM is
+  now clamped to what the host can actually back — `min(vram * gpus, ((host_gb - 64) // gpus)
+  * gpus)` — which yields 1944G on a 2010 GB host. The clamp is deliberate: a host with
+  enough RAM still gets exactly 2304G, so its fingerprint `mem_gb`, and therefore RTMR0, is
+  unchanged and no in-service B300 is re-baselined. Such a host is a second fingerprint of
+  the same profile rather than a sibling class — vcpus and memory are detected from the live
+  host — so a 256-CPU/2 TB sled needs no new profile, only its own RTMR0 baseline registered
+  in chutes-ops `teeMeasurements`.
 
 ### Removed
 - **The `ntp` and `chutes_dirs` ansible roles** — folded into `chutes-cvm host setup` (above). The
