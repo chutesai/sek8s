@@ -471,6 +471,50 @@ def test_system_manager_reads_nothing_from_run_chutes():
     ), f"system-manager grants /run/chutes paths it does not read: {grants}"
 
 
+def test_dac_read_search_comment_matches_what_the_profile_actually_grants():
+    """The drop-in's account of CAP_DAC_READ_SEARCH must stay true to the profile.
+
+    This documents a capability, so a wrong description is the whole defect: the comment
+    used to say AppArmor bounded the bypass to the pod logs and the shipper's own files.
+    It does not — the profile also grants read over /proc, /sys, /usr/lib and /opt/sek8s,
+    and CAP_DAC_READ_SEARCH applies to every one of them, so root-only files there are
+    readable too. Someone reading the old comment would have sized the grant wrongly.
+
+    Pinning the prose alone would rot in the other direction: narrow the profile and the
+    comment becomes pessimistic but the test still passes. So this checks BOTH sides —
+    every tree the comment admits to is one the profile really opens.
+    """
+    conf = (
+        REPO / "ansible/guest/roles/chute-log-shipper/files/chute-log-shipper.conf"
+    ).read_text()
+    profile = (PROFILE_DIR / "sek8s.chute-log-shipper").read_text()
+
+    assert "CAP_DAC_READ_SEARCH" in conf, "the capability moved; re-point this test"
+    assert (
+        "wider than the pod logs" in conf
+    ), "the drop-in no longer admits the bypass reaches past the pod logs"
+
+    rules = [
+        line.strip()
+        for line in profile.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    for tree in ("/proc", "/sys", "/usr/lib", "/opt/sek8s"):
+        named = tree in conf
+        granted = any(
+            (
+                r.startswith(("@{PROC}", "@{sys}"))
+                if tree in ("/proc", "/sys")
+                else r.startswith(tree)
+            )
+            for r in rules
+        )
+        assert named and granted, (
+            f"{tree}: comment says {named}, profile grants {granted} — the drop-in's "
+            f"description of the DAC bypass no longer matches the profile"
+        )
+
+
 def test_denied_secrets_are_denied_at_every_path_they_are_reachable_by():
     """A deny must cover every path a secret is reachable by, not just its canonical one.
 
