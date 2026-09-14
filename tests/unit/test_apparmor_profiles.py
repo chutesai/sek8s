@@ -585,6 +585,41 @@ def test_every_sudoers_target_is_usable_by_the_profile():
             f"mediates capability use per profile, so the profile must declare it"
         )
 
+    # Reaching sudoers is still not enough: sudo runs the full PAM stack. pam_unix's ACCOUNT
+    # stage execs the setgid-shadow helper rather than reading /etc/shadow itself, and the
+    # denied execve surfaces as sudo's misleading "account validation failure, is your account
+    # locked?" — an account-state message for a path denial. /etc/pam.d/sudo also carries two
+    # `session required pam_env.so` lines, one per file, and `required` means an unreadable
+    # file fails the session.
+    assert "/{,usr/}{,s}bin/unix_chkpwd Px," in profile, (
+        "pam_unix(sudo:account) execs unix_chkpwd; without this rule sudo dies reporting a "
+        "locked account. Px keeps the shadow read inside the stock unix-chkpwd profile."
+    )
+    for rule in ("/etc/environment r,", "/etc/default/locale r,"):
+        assert (
+            rule in profile
+        ), f"pam_env is `session required` and reads it: missing {rule}"
+
+
+def test_profile_never_reads_shadow_directly():
+    """The shadow read belongs to unix-chkpwd's profile, not to ours.
+
+    Px hands the helper to the stock unix-chkpwd profile, which already carries
+    `/etc/shadow r,`. Granting it here instead would put the password database inside the
+    reach of a long-running network-facing service to save one exec rule.
+    """
+    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    rules = [
+        line.split("#", 1)[0].strip()
+        for line in profile.splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    offenders = [r for r in rules if r.startswith(("/etc/shadow", "/etc/gshadow"))]
+    assert not offenders, (
+        f"profile reads the shadow database directly: {offenders}. pam_unix reaches it "
+        f"through unix_chkpwd Px; there is no reason for this profile to hold it."
+    )
+
 
 def test_cache_deletion_is_reachable_only_through_the_wrapper():
     """`rm` must live in the cache_rm child, never in the parent.
@@ -609,4 +644,59 @@ def test_cache_deletion_is_reachable_only_through_the_wrapper():
     assert re.search(r"^\s*capability dac_override,", children, re.M), (
         "cache-rm deletes uid-1000-owned dirs as root; without dac_override in the child "
         "the unlink is denied even though the kernel granted root the capability"
+    )
+
+
+def test_k3s_binary_is_reachable_only_through_the_images_child():
+    """`k3s` must live in the k3s_images child, never in the parent.
+
+    /usr/local/bin/k3s is a multi-call binary: it is also kubectl, etcd, agent and server.
+    Permitting its exec in the parent would give the long-running, network-facing FastAPI
+    process full cluster admin to save a child profile. The wrapper exists to expose exactly
+    four verbs (list/pull/rm/prune); the child is what makes that bound hold at the AppArmor
+    layer. Same shape as rm living only in cache_rm.
+    """
+    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    parent, _, children = profile.partition("  profile ")
+
+    assert "/usr/local/bin/k3s mrix," not in parent, (
+        "parent profile permits exec of the k3s multi-call binary — that is kubectl and "
+        "etcd too; it belongs in the k3s_images child"
+    )
+    assert (
+        "/usr/local/bin/k3s-images-helper cx -> k3s_images," in parent
+    ), "the images helper must transition into its child, not inherit the parent"
+    assert "/usr/local/bin/k3s mrix," in children
+
+    # The data-dir binary is the one the helper actually ends up running: `ctr` there is a
+    # symlink to k3s and AppArmor mediates the resolved target, so a rule naming ctr is dead.
+    assert "/var/lib/rancher/k3s/data/*/bin/k3s mrix," in children
+    assert "/bin/ctr mrix," not in profile, (
+        "a rule on .../bin/ctr never matches: it is a symlink to k3s and AppArmor mediates "
+        "the resolved exec target"
+    )
+
+    # The join token lives under server/; the child must never reach it.
+    assert "/var/lib/rancher/k3s/server" not in children
+
+
+def test_k3s_images_child_can_reach_the_disconnected_containerd_socket():
+    """The child needs attach_disconnected in its own right — flags are not inherited.
+
+    The service runs in a systemd sandbox mount namespace, so the socket surfaces to a child
+    profile as the disconnected path "run/k3s/containerd/containerd.sock" (no leading slash)
+    and the connect fails with "Failed name lookup - disconnected path". Under abi 4.0 the
+    AF_UNIX connect is also mediated separately from the socket's file rule.
+    """
+    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    child = profile.partition("profile k3s_images")[2].partition("\n  }")[0]
+
+    assert "attach_disconnected" in profile.partition("profile k3s_images")[2][:60], (
+        "k3s_images must declare attach_disconnected; a child does not inherit the "
+        "parent's flags and the containerd socket is a disconnected path"
+    )
+    assert "/run/k3s/containerd/containerd.sock rw," in child
+    assert "unix (connect, send, receive) type=stream," in child, (
+        "abi 4.0 mediates the AF_UNIX connect separately; the file rule alone leaves ctr "
+        "failing with 'connect: permission denied'"
     )

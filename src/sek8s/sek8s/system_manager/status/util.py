@@ -47,12 +47,20 @@ async def run_command(
     limit: int,
     *,
     keep_tail: bool = False,
+    check: bool = True,
 ) -> CommandResult:
     """Run a command and return its output. Raises HTTPException on failure.
 
     When *keep_tail* is True the last *limit* bytes of stdout/stderr are
     kept instead of the first, which is the correct behaviour for log
     output where the most recent entries are at the end.
+
+    *check* fails the request on a non-zero exit, and defaults to True so the
+    failure mode is loud. Tolerating a non-zero exit silently produces a 200
+    built from empty output — "no subdirectories", "no log lines" — which is
+    indistinguishable from a healthy-but-empty result, so a broken privileged
+    path reads as a healthy VM. Pass ``check=False`` only where a non-zero exit
+    carries meaning the caller then reports; each such site says why.
     """
     logger.debug("Executing command: {}", command)
     command_name = command[1] if command[0] == "sudo" else command[0]
@@ -106,6 +114,17 @@ async def run_command(
         logger.warning(
             "Command {} returned exit code {}", command_name, result.exit_code
         )
+        if check:
+            stderr_head = result.stderr.strip().splitlines()
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "command_failed",
+                    "command": command_name,
+                    "exit_code": result.exit_code,
+                    "stderr": stderr_head[0] if stderr_head else "",
+                },
+            )
 
     return result
 
@@ -154,8 +173,13 @@ async def collect_service_status(
     ] + [f"--property={prop}" for prop in properties]
 
     try:
+        # check=False: a non-zero `systemctl show` is a reportable service state, not a
+        # request failure — the overview embeds it per-service and answers "degraded".
         result = await run_command(
-            command, config.command_timeout_seconds, config.max_output_bytes
+            command,
+            config.command_timeout_seconds,
+            config.max_output_bytes,
+            check=False,
         )
     except HTTPException as exc:
         if tolerate_errors:
@@ -317,10 +341,13 @@ async def _get_filesystems(
     else:
         command = ["df", "-k", path_str]
     try:
+        # check=False: the filesystem table is a supplementary field on the disk
+        # response. df failing degrades it to None rather than failing the request.
         result = await run_command(
             command,
             config.command_timeout_seconds,
             config.max_output_bytes,
+            check=False,
         )
     except HTTPException:
         return None
@@ -332,6 +359,33 @@ async def _get_filesystems(
         if info is not None:
             filesystems.append(info)
     return filesystems if filesystems else None
+
+
+def _reject_unusable_du(result: CommandResult) -> None:
+    """Fail the request when `du` produced nothing usable.
+
+    `du` is the one caller that cannot use run_command's default check=True: it returns 1
+    for any subtree it could not read while still reporting every tree it could, and
+    walking `/` there is always something. So the test is output, not exit code —
+    non-zero with nothing on stdout means it never ran (sudo refused, binary died, path
+    vanished), which must not answer 200 with a 0-byte total.
+    """
+    if result.exit_code == 0 or result.stdout.strip():
+        return
+    detail = result.stderr.strip().splitlines()
+    logger.error(
+        "du produced no output (exit={}); failing the request: {}",
+        result.exit_code,
+        detail[:1],
+    )
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "error": "du_failed",
+            "exit_code": result.exit_code,
+            "stderr": detail[0] if detail else "",
+        },
+    )
 
 
 async def get_disk_space_simple(
@@ -351,7 +405,9 @@ async def get_disk_space_simple(
         command,
         timeout,
         config.max_output_bytes,
+        check=False,
     )
+    _reject_unusable_du(result)
 
     directories: List[DirectoryInfo] = []
     parent_size = 0
@@ -423,7 +479,9 @@ async def get_disk_space_diagnostic(
         command,
         timeout,
         config.max_output_bytes * 2,
+        check=False,
     )
+    _reject_unusable_du(result)
 
     all_entries: List[tuple[int, str, int]] = []
     root_size = 0
@@ -507,8 +565,14 @@ async def nvidia_smi_impl(detail: bool, gpu: str, get_config_fn) -> NvidiaSmiRes
             raise HTTPException(status_code=400, detail="gpu must be non-negative")
         command.extend(["-i", str(gpu_index)])
 
+    # check=False: this endpoint reports the command rather than using it — exit_code,
+    # stderr and status="error" are all in the body, so a failed nvidia-smi is a complete
+    # answer, not a failed request.
     result = await run_command(
-        command, config.command_timeout_seconds, config.max_output_bytes
+        command,
+        config.command_timeout_seconds,
+        config.max_output_bytes,
+        check=False,
     )
 
     status_code = 200 if result.exit_code == 0 else 502

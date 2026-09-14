@@ -63,7 +63,12 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # AdmissionConfig, not this service.
 
   # Helper binaries (sudoers-restricted)
-  /usr/local/bin/k3s-images-helper mrix,
+  # The images helper transitions instead of inheriting: it execs /usr/local/bin/k3s, a
+  # multi-call binary that is also kubectl/etcd/agent/server. Granting that exec in the parent
+  # would hand the long-running FastAPI process full cluster admin; confining it to the child
+  # keeps it reachable only through the wrapper's four allowlisted verbs. Same shape as
+  # du -> disk_diag and cache-rm -> cache_rm.
+  /usr/local/bin/k3s-images-helper cx -> k3s_images,
   # `tee disk` runs `sudo du` (directory sizes) and `sudo df` (filesystem usage). Both transition to
   # the read-only disk_diag child profile (defined below) rather than inheriting this one: disk
   # diagnostics need to reach ANY path — du walks arbitrary trees, df statfs's every mountpoint
@@ -115,6 +120,22 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   /etc/pam.d/ r,
   /etc/pam.d/** r,
   /etc/security/** r,
+  # /etc/pam.d/sudo carries two `session required pam_env.so` lines, one per file. Required,
+  # so an unreadable file takes the whole session down.
+  /etc/environment r,
+  /etc/default/locale r,
+  /etc/locale.conf r,
+  # pam_unix's ACCOUNT stage does not read /etc/shadow itself — it execs the setgid-shadow
+  # helper. AppArmor denied that execve on a production guest:
+  #   "pam_unix(sudo:account): helper binary execve failed: Permission denied"
+  # which sudo reports as the misleading "account validation failure, is your account locked?"
+  # — an account-state message for what is actually a denied exec. Px transitions to the stock
+  # unix-chkpwd profile (shipped by the apparmor package; this role only ADDS to /etc/apparmor.d,
+  # never removes), which carries `/etc/shadow r,` itself. So the shadow read is confined there
+  # and this profile never gets /etc/shadow — narrower than including abstractions/authentication,
+  # which would grant shadow here and drag in kerberos/nis/winbind/smbpass for a service that
+  # authenticates against none of them.
+  /{,usr/}{,s}bin/unix_chkpwd Px,
   # sudo's timestamp dir. NOPASSWD does not consult it, but sudo still opens the directory.
   /run/sudo/ rw,
   /run/sudo/** rw,
@@ -187,6 +208,45 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
   # realpath'd, direct-child only); this bounds what it can reach if that logic is ever wrong.
   # Same shape as du -> disk_diag: confine the privileged reach to the short-lived subprocess
   # rather than the long-running FastAPI parent.
+  # k3s_images child for the images helper (see the `cx` rule above). Everything the wrapper's
+  # list/pull/rm/prune verbs touch, and nothing else — notably NOT /var/lib/rancher/k3s/server,
+  # which holds the cluster join token.
+  # attach_disconnected is required, not cosmetic: the service runs in a systemd sandbox mount
+  # namespace, so the containerd socket surfaces to the child as the disconnected path
+  # "run/k3s/containerd/containerd.sock" (no leading slash) and the connect fails
+  # "Failed name lookup - disconnected path" without it. The parent already carries the flag;
+  # a child does not inherit it.
+  profile k3s_images flags=(enforce, attach_disconnected) {
+    include <abstractions/base>
+    include <abstractions/nameservice>
+
+    /usr/local/bin/k3s-images-helper r,
+    /{,usr/}bin/bash mrix,
+    /usr/local/bin/k3s mrix,
+    # k3s is a multi-call binary that re-execs its extracted copy from the versioned data dir.
+    # `ctr` there is a SYMLINK to that k3s, and AppArmor mediates the RESOLVED target — a rule
+    # on .../bin/ctr never matches. Same trap as /sbin/shutdown resolving to systemctl.
+    /var/lib/rancher/k3s/data/*/bin/k3s mrix,
+    /var/lib/rancher/k3s/data/** r,
+    /var/lib/rancher/k3s/agent/etc/** r,
+    /etc/rancher/k3s/config.yaml r,
+    /etc/machine-id r,
+    /etc/ssl/** r,
+
+    /run/k3s/containerd/containerd.sock rw,
+    # Under abi 4.0 the AF_UNIX connect is mediated separately from the socket's file rule;
+    # with the file rule alone ctr fails "connect: permission denied". Same split as the
+    # dbus rules in the parent.
+    network unix stream,
+    unix (connect, send, receive) type=stream,
+
+    @{PROC}/ r,
+    @{PROC}/** r,
+    @{sys}/** r,
+    /tmp/ r,
+    /tmp/** rwlk,
+  }
+
   profile cache_rm flags=(enforce) {
     include <abstractions/base>
 

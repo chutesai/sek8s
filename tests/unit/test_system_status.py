@@ -1,6 +1,7 @@
 import importlib
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from sek8s.system_manager.status.models import SERVICE_ALLOWLIST, CommandResult
@@ -15,13 +16,27 @@ class FakeRunner:
         self.responses[binary] = result
 
     async def __call__(
-        self, command, timeout, limit, *, keep_tail=False
+        self, command, timeout, limit, *, keep_tail=False, check=True
     ):  # pragma: no cover - interface shim
         self.commands.append(command)
         binary = command[0]
         if binary not in self.responses:
             raise AssertionError(f"No response registered for {binary}")
-        return self.responses[binary]
+        result = self.responses[binary]
+        # Mirror run_command's check contract, or tests cannot see it: this shim replaces
+        # run_command wholesale, so the real fail-closed path never executes under test.
+        if check and result.exit_code != 0:
+            stderr_head = result.stderr.strip().splitlines()
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "command_failed",
+                    "command": command[1] if command[0] == "sudo" else command[0],
+                    "exit_code": result.exit_code,
+                    "stderr": stderr_head[0] if stderr_head else "",
+                },
+            )
+        return result
 
 
 @pytest.fixture
@@ -409,3 +424,128 @@ def test_overview_degraded_on_service_failure(status_client, fake_runner):
     data = response.json()
     assert data["status"] == "degraded"
     assert any(entry.get("error") for entry in data["services"])
+
+
+def test_disk_space_fails_when_du_produces_no_output(status_client, fake_runner):
+    """A dead `du` must not read as an empty disk.
+
+    Reproduces the production symptom: sudo was refused, `du` emitted nothing, and the
+    endpoint still answered 200 with `total_size_bytes: 0` — indistinguishable from a
+    genuinely empty tree, so a broken privileged path looked like a healthy VM.
+    """
+    fake_runner.set_response(
+        "sudo",
+        CommandResult(
+            exit_code=1,
+            stdout="",
+            stderr="sudo: account validation failure, is your account locked?",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/disk/space?path=/")
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "du_failed"
+    assert detail["exit_code"] == 1
+    assert "account validation failure" in detail["stderr"]
+
+
+def test_disk_space_diagnostic_fails_when_du_produces_no_output(
+    status_client, fake_runner
+):
+    """Diagnostic mode takes a separate code path and must fail the same way."""
+    fake_runner.set_response(
+        "sudo",
+        CommandResult(
+            exit_code=1,
+            stdout="",
+            stderr="sudo: a password is required",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/disk/space?path=/&diagnostic=true")
+    assert response.status_code == 500
+    assert response.json()["detail"]["error"] == "du_failed"
+
+
+def test_disk_space_tolerates_partial_du_failure(status_client, fake_runner):
+    """`du` exits 1 for any subtree it cannot read while still reporting the rest.
+
+    That is the normal case walking `/` and must stay a 200 — otherwise a single
+    unreadable directory takes out the whole report.
+    """
+    fake_runner.set_response(
+        "sudo",
+        CommandResult(
+            exit_code=1,
+            stdout="4096\t/var\n8192\t/opt\n12288\t/\n",
+            stderr="du: cannot read directory '/proc/1/task': Permission denied",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+    fake_runner.set_response(
+        "df",
+        CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/disk/space?path=/")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_size_bytes"] > 0
+    assert {d["name"] for d in data["directories"]} == {"var", "opt"}
+
+
+def test_logs_endpoint_fails_when_journalctl_fails(status_client, fake_runner):
+    """A failed log fetch must not answer 200 with zero entries.
+
+    Same bug class as the du case: an empty result is indistinguishable from a quiet
+    service, so the endpoint you reach for to diagnose a broken VM reports nothing wrong.
+    """
+    fake_runner.set_response(
+        "journalctl",
+        CommandResult(
+            exit_code=1,
+            stdout="",
+            stderr="Failed to open journal: Permission denied",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/services/k3s/logs")
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "command_failed"
+    assert detail["command"] == "journalctl"
+    assert "Permission denied" in detail["stderr"]
+
+
+def test_nvidia_smi_failure_is_reported_in_body_not_as_500(status_client, fake_runner):
+    """nvidia-smi is reported, not consumed — its failure is a complete answer."""
+    fake_runner.set_response(
+        "nvidia-smi",
+        CommandResult(
+            exit_code=9,
+            stdout="",
+            stderr="NVIDIA-SMI has failed",
+            stdout_truncated=False,
+            stderr_truncated=False,
+        ),
+    )
+
+    response = status_client.get("/status/gpu/nvidia-smi")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "error"
+    assert data["exit_code"] == 9
