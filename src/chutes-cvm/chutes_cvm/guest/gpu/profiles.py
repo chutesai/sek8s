@@ -314,6 +314,18 @@ class B300Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 288  # B300 HBM3e (SXM6 AC)
 
+    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
+        # Aggregate VRAM (2304G for 8), capped at what the host can back: B300 also ships
+        # on ~2 TB sleds, which abort at launch under the plain VRAM rule. ~64 GB is left
+        # for the host OS, TDX PAMT, page tables and VFIO pinning.
+        # The cap, rather than B200's unconditional host-derived sizing, is what keeps
+        # in-service hosts off a re-baseline: anything that can back 2304G still gets
+        # exactly that, so its fingerprint mem_gb — and RTMR0 — does not move.
+        return min(
+            self.vram_gb * gpu_count,
+            ((host_gb - 64) // gpu_count) * gpu_count,
+        )
+
     # Host: 2 sockets x 48 cores x 2 threads = 192 (Intel, from lscpu on am-b300-61)
     # → 188 vcpus. Not yet submitted to the API (uncharacterized): run
     # `chutes-cvm host submit-profile` on a B300 host so its class gets a fingerprint.

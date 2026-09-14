@@ -801,3 +801,42 @@ def test_pci_bars_default_empty_when_uncaptured():
     # Profiles without an lspci capture yet model no GPU endpoint (offline
     # measurement generation is simply unavailable for them, not broken).
     assert "gpu" not in GPU_PROFILES["B300"].passthrough
+
+
+# ---------------------------------------------------------------------------
+# B300 on a host that cannot back aggregate VRAM (2 TB class, e.g. Wistron XD690)
+# ---------------------------------------------------------------------------
+
+
+def test_b300_guest_ram_fits_a_2tb_host():
+    """A B300 host with less RAM than aggregate VRAM must still be launchable.
+
+    B300's 8x288 GB VRAM implies a 2304G guest, which a ~2 TB sled cannot back —
+    run-td aborted with "needs 2304G guest RAM, but only 1946G can be safely
+    backed". Guest RAM is derived from the live host, so this is a second
+    fingerprint of the SAME profile, not a sibling class.
+    """
+    profile = GPU_PROFILES["B300"]
+    assert profile.guest_mem_gb(2010, 8) == 1944
+    # Evenly divisible per GPU, so vcpu/mem stay socket-divisible.
+    assert profile.guest_mem_gb(2010, 8) % 8 == 0
+
+
+def test_b300_ram_is_unchanged_on_hosts_that_can_back_full_vram():
+    """The clamp must not re-baseline B300 hosts already in service.
+
+    A host with enough RAM keeps exactly vram_gb * gpus, so its fingerprint
+    mem_gb — and therefore RTMR0 — does not move. An unclamped host-derived rule
+    would have pushed a 2.4 TB host to 2336G and silently invalidated its
+    registered measurement.
+    """
+    profile = GPU_PROFILES["B300"]
+    full = profile.vram_gb * 8
+    assert profile.guest_mem_gb(2400, 8) == full
+    assert profile.guest_mem_gb(3000, 8) == full
+
+
+def test_b300_vcpus_derive_from_a_256_cpu_host():
+    """256-CPU B300 sleds need no new profile: vcpus come from the live host."""
+    profile = GPU_PROFILES["B300"]
+    assert 256 - profile.host_reserved_cpus == 252
