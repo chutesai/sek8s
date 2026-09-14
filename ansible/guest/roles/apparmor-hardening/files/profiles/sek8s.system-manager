@@ -262,7 +262,8 @@ profile sek8s.system-manager flags=(enforce, attach_disconnected) {
     # rm runs as root over dirs owned by uid 1000 at mode 2775, so the unlink needs a DAC
     # bypass — and AppArmor mediates capability USE per profile, so the kernel granting root
     # the capability is not enough on its own. This is the same failure that took setup-cache
-    # down in production. Scoped to this subprocess; the parent still declares no capability.
+    # down in production. Scoped to this subprocess: the parent declares only what sudo itself
+    # needs (setuid/setgid/audit_write), never a DAC bypass.
     capability dac_override,
 
     /var/snap/ r,
