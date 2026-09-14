@@ -907,3 +907,92 @@ def test_detect_profile_resolves_b200_xeon6_256_by_cpu_count():
         profile = detect_profile()
 
     assert profile is GPU_PROFILES["B200_XEON6_256"]
+
+
+# ---------------------------------------------------------------------------
+# B300_256: B300 sibling on a 2×64c×2t / ~2 TB host
+# ---------------------------------------------------------------------------
+
+
+def test_b300_256_has_correct_cpu_topology():
+    profile = GPU_PROFILES["B300_256"]
+    assert profile.host_cpus == 256
+    assert profile.host_sockets == 2
+    # Inherits B300's default reserve (no post-launch iothread pinning).
+    assert profile.host_reserved_cpus == HOST_RESERVED_CPUS
+    assert profile.vcpus == 252
+    assert profile.smp_topology == "252,sockets=2,cores=126,threads=1"
+
+
+def test_b300_256_guest_ram_fits_a_2tb_host_where_b300_does_not():
+    """The reason this sibling exists: guest RAM is fixed per profile, and the
+    base B300's 2304G guest cannot be backed by a ~2 TB host, so run-td aborts."""
+    from chutes.guest.qemu import safe_vm_mem_gb
+
+    host_gb = 2010  # observed on the submitted XD690 capture
+    gpus = 8
+
+    b300 = GPU_PROFILES["B300"].ram_per_gpu_gb * gpus
+    assert safe_vm_mem_gb(b300, host_gb) < b300
+
+    b300_256 = GPU_PROFILES["B300_256"].ram_per_gpu_gb * gpus
+    assert b300_256 == 1944
+    assert safe_vm_mem_gb(b300_256, host_gb) == b300_256
+
+
+def test_b300_256_inherits_b300_passthrough_policy():
+    profile = GPU_PROFILES["B300_256"]
+    assert any("--set-cc-mode=on" in a for a in profile.get_cc_mode_args(8)[0])
+    assert profile.get_sbr_reset_args() == [
+        "--reset-with-sbr",
+        "--reset-after-cc-mode-switch",
+    ]
+    assert profile.should_passthrough_infiniband is False
+    assert profile.should_passthrough_nvswitches(8) is False
+    assert profile.use_ovmf_mmio_fw_cfg is False
+    assert profile.enable_numa_topology is False
+    assert profile.enable_post_launch_tuning is False
+    assert profile.requires_fabric_manager is True
+    assert profile.bar_size_mb == GPU_PROFILES["B300"].bar_size_mb
+    assert profile.vram_gb == GPU_PROFILES["B300"].vram_gb
+
+
+def test_b300_256_has_no_registered_measurement_yet():
+    """Its guest shape (1944G / 252 vcpus) is new, so no RTMR0 exists for it yet.
+
+    An empty map is what lets the host launch (the hard-match is skipped) while
+    verify-host still reports WARNING instead of claiming a baseline that does
+    not exist. Populate it once the measurement is registered.
+    """
+    profile = GPU_PROFILES["B300_256"]
+    assert profile.baselined_measurements == {}
+    assert profile.baselined_topologies == set()
+
+
+def _make_lspci_b300(bdf: str = "0000:1a:00.0") -> list[str]:
+    return [f"{bdf} 3D controller [0302]: NVIDIA [GB110 B300 SXM6 AC] [10de:3182]"]
+
+
+@pytest.mark.parametrize("host_cpus,expected", [(192, "B300"), (256, "B300_256")])
+def test_match_gpu_model_disambiguates_b300_siblings_by_cpu_count(host_cpus, expected):
+    from chutes.guest.detection import _match_gpu_model
+
+    assert _match_gpu_model(_make_lspci_b300()[0], host_cpus=host_cpus) == expected
+
+
+def test_detect_profile_resolves_b300_256_by_cpu_count():
+    from chutes.guest.detection import detect_profile
+
+    bdfs = [f"0000:{i:02x}:00.0" for i in range(8)]
+    lines = [line for bdf in bdfs for line in _make_lspci_b300(bdf)]
+    with _patch_detection(
+        lspci_lines=lines,
+        host_cpus=256,
+        host_sockets=2,
+        numa_count=4,  # XD690 has 4 NUMA nodes; B300 never uses guest NUMA
+        gpu_bdfs=bdfs,
+        fingerprint=FlatTopology(gpu_count=8),
+    ):
+        profile = detect_profile()
+
+    assert profile is GPU_PROFILES["B300_256"]

@@ -439,6 +439,62 @@ class B300Profile(GpuProfile):
         return True
 
 
+class B300_256Profile(B300Profile):
+    """B300 on a 2×64c×2t host (256 logical CPUs, ~2 TB RAM, 4 NUMA nodes).
+
+    Sibling of B300Profile: same GPU (device ID 3182) and identical passthrough
+    policy, but a different host class. Two things force a separate profile:
+
+      - 256 logical CPUs instead of 192, so the guest -smp differs.
+      - ~2 TB host RAM instead of the ≥2.4 TB the base profile's 2304G guest
+        needs. Guest RAM is fixed per profile for measurement determinism and is
+        never resized to the host, so a 2 TB host aborts at launch under B300
+        ("needs 2304G guest RAM, but only 1946G can be safely backed").
+        ram_per_gpu_gb = 243 sizes the guest to 1944G, which fits.
+
+    Confirmed from a submitted discover-profile.sh capture: Wistron XD690 CPU
+    sled, BIOS 3.1.07, Ubuntu 26.04 / QEMU 10.2.1, 2010 GB RAM, 256 CPUs across
+    2 sockets, 8× B300 SXM6 AC (10de:3182) spread 2-per-node over 4 NUMA nodes.
+    """
+
+    pci_device_ids = ["3182"]
+
+    @property
+    def name(self) -> str:
+        return "B300_256"
+
+    @property
+    def ram_per_gpu_gb(self) -> int:
+        # Host has ~2 TB RAM (2010 GB observed); leave VM_MEM_RESERVE_GB (64 GB)
+        # for the host OS, TDX PAMT, page tables, and VFIO pinning.
+        # 8 GPUs → (2010 - 64) / 8 = 243 GB per GPU → 1944G guest.
+        # Below vram_gb (288): the GPUs' HBM is not host-RAM-backed, so a guest
+        # smaller than aggregate VRAM is fine — it only bounds host-side buffers.
+        return 243
+
+    @property
+    def host_cpus(self) -> int:
+        # 2 sockets × 64 cores × 2 threads = 256.
+        # 256 - 4 reserved = 252 vcpus, sockets=2, cores=126, threads=1.
+        # Inherits B300's default 4-CPU reserve (B300 does no post-launch
+        # iothread pinning, so it has no reason for B200's wider 16-CPU gap).
+        return 256
+
+    @property
+    def baselined_measurements(self) -> dict[str, set[TopologyFingerprint]]:
+        # Deliberately empty: the 1944G / 252-vcpu guest is a new RTMR0 that is
+        # NOT yet registered in chutes-ops teeMeasurements. An empty map skips
+        # the launch-time hard-match (so the host can launch) while verify-host
+        # still reports WARNING rather than claiming a measurement that does not
+        # exist. Add {"10.2.1": {FlatTopology(gpu_count=8)}} once the measurement
+        # is registered — B300 never uses guest NUMA, so the fingerprint is flat
+        # regardless of the host's NUMA node count.
+        return {}
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (B300 256c)"
+
+
 class H200Profile(GpuProfile):
     pci_device_ids = ["2335"]  # H200 SXM (GH100)
 
@@ -591,6 +647,7 @@ GPU_PROFILES: dict[str, GpuProfile] = {
     "B200_XEON6": B200Xeon6_288Profile(),
     "B200_XEON6_256": B200Xeon6_256Profile(),
     "B300": B300Profile(),
+    "B300_256": B300_256Profile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
 }
