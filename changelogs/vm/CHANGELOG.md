@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-09-13
+## [1.4.0] - 2026-09-14
 
 ### Added
 - **Boot-time miner-hotkey proof-of-possession (guest side).** A small, static, pinned-toolchain (musl) sr25519 signer (`src/sr25519`; Schnorr/Ristretto, which openssl cannot do) is built and staged into the guest initramfs (measured into RTMR2). The boot flow now derives the hotkey from the config-volume seed (`/run/tdx-config/miner-seed`) rather than trusting the claimed `miner-ss58`, and signs each chained server nonce — `/boot/attestation`, `/provision`, and `/provision/confirm` — sending the sr25519 proof in `X-Chutes-Signature`. This closes a cross-miner LUKS-brick vector where a peer could assert a victim's `(hotkey, vm_name)` and rotate its passphrase. The seed is stashed to `/run` for the init-bottom calls and shredded before the initramfs `/run` is moved into userspace. Pairs with a matching server-side signature check (chutes-api). Also fixes a migration miss: root-rotation confirm now uses `/provision/confirm` (the legacy `/luks/confirm` is deprecated).
@@ -600,6 +600,15 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   the venv at build time and surfaced only as `203/EXEC` on every service at boot. A pre-sweep
   check refuses to delete any `uid >= 1000` account homed outside `/home`, naming it, and a
   post-sweep check asserts the application tree still exists.
+- `sudo` could not run at all from system-manager under enforce, so every privileged path it
+  fronts was dead: graceful shutdown, disk usage, and cache reclaim. A production guest reported
+  `unable to open /etc/sudo.conf`, `unable to change to root gid` and `error initializing audit
+  plugin sudoers_audit` — the config reads were missing from the profile, and so were the
+  capabilities. sudo is setuid-root, so the kernel already holds those in root's permitted set,
+  but AppArmor mediates capability use per profile and they still have to be declared. Debug
+  builds load the profile in complain mode, which allows all of it, so this only ever showed up
+  in production. The partial sudo support already present got it as far as loading its plugins,
+  which is why it looked configured.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
