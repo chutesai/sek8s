@@ -10,7 +10,7 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
-## [0.4.0] - 2026-09-10
+## [0.4.0] - 2026-09-14
 
 ### Added
 - `WebServer.serve()` (async) in `sek8s-common`, alongside `run()` (blocking).
@@ -80,6 +80,20 @@ Version source of truth: `src/sek8s/VERSION`
 - **Config**: `BUFFER_BYTES` is retired. `BATCH_MAX_BYTES` now bounds both the batch and the
   per-pod memory ceiling, because only one batch is held at a time. Existing images are
   unaffected — unknown settings are ignored — but the setting no longer does anything.
+- `run_command` now fails closed: a non-zero exit raises `500 command_failed` carrying the
+  command, exit code and first line of stderr. Callers where a non-zero exit is meaningful
+  opt out with `check=False` and say why — `systemctl show` (a reportable service state
+  that the overview renders as degraded), `df` (a supplementary field that degrades to
+  null), `nvidia-smi` (reported rather than consumed, with `status`/`exit_code` in the
+  body), and `du` (which exits 1 for any unreadable subtree while still reporting the
+  rest, so it is gated on having produced output at all).
+- Cache size accounting dropped partial downloads. `scan_cache_dir` counts only blobs that
+  already have a snapshot symlink — which HuggingFace creates when a file finishes — so
+  `.incomplete` blobs were invisible to it, and `du` was consulted only while a download was
+  actively running. A cancelled or crashed download therefore reported megabytes while holding
+  tens of gigabytes (measured: 18 MB reported against 14.9 GiB on disk), and `cleanup()`'s
+  max-size eviction cannot reclaim space it cannot see. Every state except `PRESENT` — the one
+  state with no partials, since the complete marker is written last — is now sized with `du`.
 
 ### Fixed
 - The TDX quote provider now validates the supplied nonce (exactly 64 hex characters) and asserts
@@ -102,6 +116,10 @@ Version source of truth: `src/sek8s/VERSION`
   readable by the miner, and it was the one service still running on the default handler —
   which renders local variable values inside tracebacks. Nothing was exposing values in
   practice, but the next error path added to that service would have.
+- Status endpoints answered `200 OK` with empty results when the subprocess behind them
+  failed, making a broken privileged path indistinguishable from a healthy-but-empty VM:
+  `/status/disk/space` reported `total_size_bytes: 0` when `du` never ran, and
+  `/status/services/{id}/logs` reported zero entries when `journalctl` failed.
 
 ### Removed
 - system-manager's `ImageManager` no longer pulls images. Removed the cosign-verified pull
