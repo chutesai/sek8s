@@ -123,12 +123,17 @@
 # Editable installs cannot be hash-checked, so they run separately with --no-deps; everything
 # they need is already installed above. --no-build-isolation uses the poetry-core pinned above
 # instead of downloading an unpinned copy at build time.
+#
+# `editable: yes` rather than `-e` in extra_args: the module appends extra_args before the
+# package path, so an `-e` written there lands first and consumes the next flag as its argument
+# ("--no-deps is not a valid editable requirement"). The flag appends -e last, next to the path.
 - name: Install sek8s packages (editable, no deps)
   ansible.builtin.pip:
     name: "{{ item }}"
     virtualenv: /opt/sek8s/venv
     state: present
-    extra_args: "-e --no-deps --no-build-isolation --no-compile"
+    editable: yes
+    extra_args: "--no-deps --no-build-isolation --no-compile"
   loop:
     - /opt/sek8s/src/sek8s-common/
     - /opt/sek8s/src/sek8s/

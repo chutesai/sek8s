@@ -6,7 +6,6 @@ shapes poetry uses for markers, and the refusal to emit an unpinnable package.
 """
 
 import importlib.util
-import re
 import textwrap
 from pathlib import Path
 
@@ -220,52 +219,3 @@ def test_render_refuses_package_without_hashes(lock_file):
     lock = gen.load_lock(path)
     with pytest.raises(SystemExit, match="no sha256 hashes"):
         gen.render({"unpinnable"}, lock)
-
-
-def test_committed_requirements_are_current():
-    """The checked-in file must match poetry.lock, or the built image drifts from the repo."""
-    assert gen.OUTPUT_PATH.exists(), "run: make guest-requirements"
-    assert (
-        gen.OUTPUT_PATH.read_text() == gen.build()
-    ), "stale; run: make guest-requirements"
-
-
-def test_poetry_core_pins_are_aligned():
-    """One poetry-core version everywhere.
-
-    It is the build backend for the editable installs and stamps its version into each
-    dist-info/WHEEL, which lands in the RTMR3-measured venv. It is not in poetry.lock
-    (a [build-system] requirement is not a locked dependency), so nothing else catches
-    the guest install and the packages' declarations drifting apart.
-    """
-    repo_root = gen.REPO_ROOT
-    pin = re.compile(r'requires\s*=\s*\["poetry-core==([^"]+)"\]')
-
-    # Packages sit at two depths: nvevidence/ at one, src/*/ at two.
-    pyprojects = [
-        repo_root / "pyproject.toml",
-        *repo_root.glob("*/pyproject.toml"),
-        *repo_root.glob("*/*/pyproject.toml"),
-    ]
-    declared = {}
-    for pyproject in pyprojects:
-        match = pin.search(pyproject.read_text())
-        if match:
-            declared[str(pyproject.relative_to(repo_root))] = match.group(1)
-
-    # Guards against a glob that quietly stops matching: every pyproject must carry the pin.
-    assert len(declared) == len(pyprojects), (
-        f"pyprojects without a pinned poetry-core: "
-        f"{sorted({str(p.relative_to(repo_root)) for p in pyprojects} - set(declared))}"
-    )
-    assert len(set(declared.values())) == 1, f"poetry-core pins disagree: {declared}"
-
-    install_task = (
-        repo_root / "ansible/guest/roles/sek8s/tasks/install-sek8s.yml"
-    ).read_text()
-    installed = re.search(r"poetry-core==([\w.]+)", install_task)
-    assert installed, "install-sek8s.yml does not pin poetry-core"
-    assert installed.group(1) == next(iter(set(declared.values()))), (
-        f"install-sek8s.yml pins poetry-core=={installed.group(1)} "
-        f"but pyprojects declare {set(declared.values())}"
-    )

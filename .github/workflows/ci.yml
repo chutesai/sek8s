@@ -111,6 +111,29 @@ jobs:
       - name: Verify guest requirements match poetry.lock
         run: make check-guest-requirements
 
+      # poetry-core is a [build-system] requirement, not a locked dependency, so nothing else
+      # notices the packages and the guest install drifting apart -- and it stamps its version
+      # into each dist-info/WHEEL, which lands in the measured venv.
+      - name: Verify poetry-core is pinned consistently
+        run: |
+          files=$(ls pyproject.toml nvevidence/pyproject.toml src/*/pyproject.toml \
+                     ansible/guest/roles/sek8s/tasks/install-sek8s.yml)
+          missing=""
+          for f in $files; do
+            grep -qE 'poetry-core==[0-9.]+' "$f" || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "poetry-core not pinned in:$missing"
+            exit 1
+          fi
+          pins=$(grep -hoE 'poetry-core==[0-9.]+' $files | sort -u)
+          if [ "$(printf '%s\n' "$pins" | wc -l)" -ne 1 ]; then
+            echo "poetry-core pins disagree:"
+            printf '%s\n' "$pins"
+            exit 1
+          fi
+          echo "consistent: $pins"
+
   opa:
     runs-on: ubuntu-latest
     steps:
