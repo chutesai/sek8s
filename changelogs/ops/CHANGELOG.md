@@ -3,7 +3,7 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
-## [2026.09.2] - 2026-09-14
+## [2026.09.2] - 2026-09-15
 
 ### Added
 - `make publish-guest` / `make publish-guest-debug` — upload a built guest image **and
@@ -67,6 +67,14 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   hand. The clone does not update an existing checkout — once it is there the operator owns
   the branch — and it runs as the login user so that user's git credentials authenticate the
   private repo.
+- CI installs `apparmor-utils` and generates `en_US.UTF-8` before the unit tests. Both
+  close a silent gap rather than adding new checks: without `apparmor_parser` the five
+  AppArmor profile-compile cases `pytest.skip`, so a profile that will not load ships
+  green — and a profile that will not load is boot-fatal, since
+  `verify-apparmor-profiles.service` powers the guest off when a sek8s profile is missing
+  from the loaded set. Without a non-C locale the RTMR3 collation test cannot detect its
+  own regression: runners default to `C.UTF-8`, which collates in byte order, so the
+  expected ordering holds whether or not `tdx-measure` still pins `LC_ALL=C`.
 
 ### Changed
 - Pin host kernel to `linux-image-6.17.0-35-generic` in both Ubuntu 25.10 and
@@ -162,6 +170,7 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
   phase to the os_upgrade role (runs on the new OS after reboot, before
   `setup-tdx-host`).
 - Add `xfsprogs` to host prerequisites so `mkfs.xfs` is available when `create-cache.sh` creates the storage volume (regression introduced in #34 when the storage volume format was switched from ext4 to XFS)
+
 ### Removed
 - The bare-qcow2 launch path and `quick-launch --skip-checksum`. Every image — including
   benchmark and custom images — is consumed as a verified image set.

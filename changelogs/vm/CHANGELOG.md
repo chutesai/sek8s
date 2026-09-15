@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-09-14
+## [1.4.0] - 2026-09-15
 
 ### Added
 - **Boot-time miner-hotkey proof-of-possession (guest side).** A small, static, pinned-toolchain (musl) sr25519 signer (`src/sr25519`; Schnorr/Ristretto, which openssl cannot do) is built and staged into the guest initramfs (measured into RTMR2). The boot flow now derives the hotkey from the config-volume seed (`/run/tdx-config/miner-seed`) rather than trusting the claimed `miner-ss58`, and signs each chained server nonce — `/boot/attestation`, `/provision`, and `/provision/confirm` — sending the sr25519 proof in `X-Chutes-Signature`. This closes a cross-miner LUKS-brick vector where a peer could assert a victim's `(hotkey, vm_name)` and rotate its passphrase. The seed is stashed to `/run` for the init-bottom calls and shredded before the initramfs `/run` is moved into userspace. Pairs with a matching server-side signature check (chutes-api). Also fixes a migration miss: root-rotation confirm now uses `/provision/confirm` (the legacy `/luks/confirm` is deprecated).
@@ -349,6 +349,17 @@ Version source of truth: `ansible/guest/VERSION`
 - The boot-time RTMR3 phase extends the register **once** instead of once per measured file,
   matching the new `SHA384(0^48 || SHA384(hash-list))` definition. **Published RTMR3
   measurements must be regenerated.**
+- `chutes.rego` now documents why its rules are namespace-scoped. Admission policy is two
+  tier: container-escape primitives (`pods.rego`, `volumes.rego` — privileged, host
+  namespaces, dangerous capabilities, hostPath, forbidden env) are enforced in **every**
+  namespace, while the chute workload-shape rules in `chutes.rego` (non-root, registry
+  allowlist, `chutes/config-id` label, container named `chute`, `chutes run` command) are
+  gated on `namespace == "chutes"` by design. Outside that namespace the boundary is RBAC,
+  not admission — the miner's ClusterRole is get/list/watch only. Without this stated, a
+  reviewer noticing that `runAsUser: 0` is admitted in e.g. `monitoring` could "fix" it by
+  dropping the namespace guard and reject our own system workloads.
+  **No rule changed, but `/etc/opa/policies` is measured into RTMR3, so this comment moves
+  the measurement.** Regenerate expected-measurement baselines before rollout.
 
 ### Fixed
 Both failures were invisible on debug images, which load the sek8s profiles in complain mode.
@@ -449,6 +460,7 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   the venv at build time and surfaced only as `203/EXEC` on every service at boot. A pre-sweep
   check refuses to delete any `uid >= 1000` account homed outside `/home`, naming it, and a
   post-sweep check asserts the application tree still exists.
+
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
 - `cosign_chutes_public_key_path`, `cosign_dockerhub_public_key_path`, and `helm_chart_public_key_path` inventory variables removed. Build machines now only require the root PGP public key (`root_signing_key_path`).
