@@ -17,19 +17,47 @@ from pathlib import Path
 import pytest
 from jinja2 import Template
 
+from . import apparmor_rules as ar
+
 REPO = Path(__file__).resolve().parents[2]
 ROLE = REPO / "ansible/guest/roles/apparmor-hardening"
 PROFILE_DIR = ROLE / "files/profiles"
 ABSTRACTION_DIR = ROLE / "templates/abstractions"
 CLEANUP = REPO / "ansible/guest/roles/cleanup-orchestration"
 
-PROFILES = [
-    "sek8s.system-manager",
-    "sek8s.setup-cache",
-    "sek8s.deny-sensitive-default",
-    "sek8s.attestation-proxy",
-    "sek8s.chute-log-shipper",
-]
+
+def _installed_profiles() -> list[str]:
+    """Profile FILES the apparmor-hardening role actually installs.
+
+    Derived from the role's install loop, not hardcoded: a hardcoded list silently
+    stops compile-checking a profile someone adds. sek8s.k3s-init was missing from the
+    old constant for exactly that reason. Everything here is repo source -- no guest
+    needed.
+    """
+    tasks = (ROLE / "tasks/main.yml").read_text()
+    block = tasks.split("Install sek8s AppArmor profiles", 1)[1]
+    block = block.split("loop:", 1)[1]
+    names = []
+    for line in block.splitlines():
+        m = re.match(r"\s*-\s+(sek8s\.[\w.-]+)\s*$", line)
+        if not m:
+            if names:  # loop ended
+                break
+            continue
+        names.append(m.group(1))
+    assert names, "could not parse the profile install loop; re-point this helper"
+    return names
+
+
+def _declared_profile_names(profile_file: str) -> list[str]:
+    """Every profile NAME a file declares. One file may declare several: sek8s.k3s-init
+    carries one per measured init script, and it is those names -- not the filename --
+    that must appear in the boot verifier's loaded-profile check."""
+    text = (PROFILE_DIR / profile_file).read_text()
+    return re.findall(r"^profile\s+([\w.-]+)", text, re.M)
+
+
+PROFILES = _installed_profiles()
 
 
 @pytest.fixture(scope="module")
@@ -60,10 +88,32 @@ def test_profile_parses(profile, include_dir):
 
 
 def test_verifier_covers_every_installed_profile():
-    """The boot verifier powers off on a missing profile — keep its list in sync."""
+    """The boot verifier powers off on a missing profile — keep its list in sync.
+
+    Compared as SETS of declared profile names, not filenames: sek8s.k3s-init ships one
+    profile per measured init script, and it is those names the kernel loads and the
+    verifier greps for. Matching on the filename would pass while all three children
+    went unverified.
+
+    Both sides are parsed, so a name appearing only in the verifier's comment block no
+    longer satisfies it -- the previous whole-file substring check accepted that.
+    """
     verifier = (ROLE / "files/verify-apparmor-profiles.sh").read_text()
-    for profile in PROFILES:
-        assert profile in verifier
+    listed = set()
+    for line in verifier.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line.startswith("sek8s."):
+            listed.add(line)
+
+    declared = {n for f in PROFILES for n in _declared_profile_names(f)}
+
+    assert declared == listed, (
+        f"verifier list is out of sync with the installed profiles.\n"
+        f"  installed but unverified: {sorted(declared - listed)}\n"
+        f"  verified but not installed: {sorted(listed - declared)}\n"
+        f"An unverified profile can fail to load with no boot-time signal; a verified "
+        f"profile that is not installed powers the guest off on every boot."
+    )
 
 
 def effective_policy(profile_name, include_dir):
@@ -621,12 +671,17 @@ def test_every_sudoers_target_is_usable_by_the_profile():
     # gid" and "error initializing audit plugin sudoers_audit" — the reads were missing, and
     # so were the capabilities. sudo is setuid-root so euid is already 0 and the kernel holds
     # these in root's permitted set, but AppArmor mediates capability USE per profile.
-    for rule in ("/etc/sudo.conf r,", "/etc/sudoers r,", "/etc/sudoers.d/** r,"):
-        assert rule in profile, f"sudo cannot read its own policy: missing {rule}"
+    rules = ar.parse(profile)
+    for path in ("/etc/sudo.conf", "/etc/sudoers", "/etc/sudoers.d/system-manager"):
+        assert ar.grants(rules, path, "r"), f"sudo cannot read its own policy: {path}"
+    # Granted, not merely mentioned: `deny capability setuid,` contains the substring
+    # `capability setuid,`, so the old check passed on an INVERTED rule.
+    granted = ar.capabilities(rules)
     for cap in ("setuid", "setgid", "audit_write"):
-        assert f"capability {cap}," in profile, (
+        assert cap in granted, (
             f"sudo needs CAP_{cap.upper()}; the kernel grants it to root but AppArmor "
-            f"mediates capability use per profile, so the profile must declare it"
+            f"mediates capability use per profile, so the profile must declare it "
+            f"(granted here: {sorted(granted)})"
         )
 
     # Reaching sudoers is still not enough: sudo runs the full PAM stack. pam_unix's ACCOUNT
@@ -635,10 +690,21 @@ def test_every_sudoers_target_is_usable_by_the_profile():
     # locked?" — an account-state message for a path denial. /etc/pam.d/sudo also carries two
     # `session required pam_env.so` lines, one per file, and `required` means an unreadable
     # file fails the session.
-    assert "/{,usr/}{,s}bin/unix_chkpwd Px," in profile, (
-        "pam_unix(sudo:account) execs unix_chkpwd; without this rule sudo dies reporting a "
-        "locked account. Px keeps the shadow read inside the stock unix-chkpwd profile."
+    chkpwd = [
+        r
+        for r in ar.exec_rules(rules)
+        if ar._matches(r.target, "/usr/sbin/unix_chkpwd")
+    ]
+    assert chkpwd, (
+        "pam_unix(sudo:account) execs unix_chkpwd; without an exec rule sudo dies reporting "
+        "a locked account. Checked by resolved path, so /{,usr/}{,s}bin/... counts."
     )
+    # Px, not ix: inheriting would need /etc/shadow in THIS profile. The stock unix-chkpwd
+    # profile carries that read, so the password database stays out of a network-facing
+    # service. A drop to ix would silently require widening us instead.
+    assert any(
+        "P" in r.perms for r in chkpwd
+    ), f"unix_chkpwd must transition (Px), not inherit: {[r.raw for r in chkpwd]}"
     for rule in ("/etc/environment r,", "/etc/default/locale r,"):
         assert (
             rule in profile
@@ -697,31 +763,52 @@ def test_k3s_binary_is_reachable_only_through_the_images_child():
     /usr/local/bin/k3s is a multi-call binary: it is also kubectl, etcd, agent and server.
     Permitting its exec in the parent would give the long-running, network-facing FastAPI
     process full cluster admin to save a child profile. The wrapper exists to expose exactly
-    four verbs (list/pull/rm/prune); the child is what makes that bound hold at the AppArmor
-    layer. Same shape as rm living only in cache_rm.
+    four verbs (list/pull/rm/prune); the child is what makes that bound hold.
+
+    Asserted through the rule reader, not substrings. The earlier version checked for the
+    literal `/usr/local/bin/k3s mrix,` in the parent, which `rix`, a `/usr/local/bin/*`
+    glob, or a brace alternation all walked straight past.
     """
-    profile = (PROFILE_DIR / "sek8s.system-manager").read_text()
-    parent, _, children = profile.partition("  profile ")
+    text = (PROFILE_DIR / "sek8s.system-manager").read_text()
+    rules = ar.parse(text)
 
-    assert "/usr/local/bin/k3s mrix," not in parent, (
-        "parent profile permits exec of the k3s multi-call binary — that is kubectl and "
-        "etcd too; it belongs in the k3s_images child"
+    assert not ar.can_exec(rules, "/usr/local/bin/k3s"), (
+        "the PARENT profile permits exec of the k3s multi-call binary — that is kubectl "
+        "and etcd too; it belongs in the k3s_images child"
     )
-    assert (
-        "/usr/local/bin/k3s-images-helper cx -> k3s_images," in parent
-    ), "the images helper must transition into its child, not inherit the parent"
-    assert "/usr/local/bin/k3s mrix," in children
-
-    # The data-dir binary is the one the helper actually ends up running: `ctr` there is a
-    # symlink to k3s and AppArmor mediates the resolved target, so a rule naming ctr is dead.
-    assert "/var/lib/rancher/k3s/data/*/bin/k3s mrix," in children
-    assert "/bin/ctr mrix," not in profile, (
-        "a rule on .../bin/ctr never matches: it is a symlink to k3s and AppArmor mediates "
-        "the resolved exec target"
+    helper = [
+        r
+        for r in ar.exec_rules(rules)
+        if ar._matches(r.target, "/usr/local/bin/k3s-images-helper")
+    ]
+    assert helper and helper[0].exec_target == "k3s_images", (
+        f"the images helper must TRANSITION into k3s_images, not inherit the parent: "
+        f"{[r.raw for r in helper] or 'no exec rule at all'}"
     )
 
-    # The join token lives under server/; the child must never reach it.
-    assert "/var/lib/rancher/k3s/server" not in children
+    # Reachable from the child, and only from it.
+    assert ar.can_exec(rules, "/usr/local/bin/k3s", profile="k3s_images")
+    # `ctr` in the data dir is a SYMLINK to k3s and AppArmor mediates the resolved target,
+    # so the rule that matters names k3s. Pin the resolved path, not the symlink.
+    assert ar.can_exec(
+        rules, "/var/lib/rancher/k3s/data/abc123/bin/k3s", profile="k3s_images"
+    ), "the child cannot exec the data-dir k3s that `ctr` resolves to"
+
+    # The join token lives under server/. The long-running, network-facing parent and the
+    # write-capable children must not reach it -- but disk_diag deliberately may: it holds
+    # `/** r` so du/df can size ANY path the operator asks about, and a size is all they can
+    # emit. That diagnostic reach is the reason the child exists, and is an accepted
+    # exposure, not an oversight. Both spellings are checked because
+    # setup-storage-bind-mounts.sh makes /cache/storage/k3s/server/token the same file.
+    for prof in ({""} | ar.profiles_in(text)) - {"disk_diag"}:
+        for alias in (
+            "/var/lib/rancher/k3s/server/token",
+            "/cache/storage/k3s/server/token",
+        ):
+            assert not ar.grants(rules, alias, "r", profile=prof), (
+                f"profile {prof or '<parent>'} can read the k3s join token at {alias}; "
+                f"only disk_diag may, and only to size it"
+            )
 
 
 def test_k3s_images_child_can_reach_the_disconnected_containerd_socket():

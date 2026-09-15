@@ -349,3 +349,63 @@ async def test_offsets_for_deleted_files_are_purged(tmp_path):
 async def test_missing_pod_directory_yields_nothing(tmp_path):
     reader = await make_reader(tmp_path)
     assert reader._read_next() == []
+
+
+@pytest.mark.asyncio
+async def test_draining_a_backlog_is_rate_bounded(tmp_path, monkeypatch):
+    """A chute writing faster than we ship must not turn into a request flood.
+
+    `drain_interval_seconds` is the only thing bounding how fast `stream()` hands
+    batches to the shipper, and it is also what guarantees the loop yields at all — a
+    pod writing faster than we drain would otherwise spin without ever awaiting. The
+    value ships as the 0.1s default (it is not set in chute-log-shipper.env.j2), so
+    nothing outside this test pins it.
+
+    Asserted as observed cadence rather than by reading the config back, so deleting
+    the sleep fails here even though the setting still exists.
+    """
+    reader = await make_reader(
+        tmp_path, BATCH_MAX_LINES=100, DRAIN_INTERVAL_SECONDS=0.1
+    )
+    # A backlog far larger than one batch: 3000 lines at 100/batch.
+    write(
+        tmp_path,
+        "0.log",
+        "".join(
+            cri(f"2026-01-01T00:00:{i % 60:02d}Z", f"line-{i}") for i in range(3000)
+        ),
+    )
+
+    real_sleep = asyncio.sleep
+    slept: list[float] = []
+
+    async def recording_sleep(duration):
+        slept.append(duration)
+        await real_sleep(0)  # yield control without burning wall-clock time
+
+    monkeypatch.setattr(asyncio, "sleep", recording_sleep)
+
+    wanted = 5
+    batches = []
+    stream = reader.stream()
+    try:
+        async for batch in stream:
+            batches.append(batch)
+            if len(batches) == wanted:
+                break
+    finally:
+        with contextlib.suppress(Exception):
+            await stream.aclose()
+
+    assert len(batches) == wanted
+    # Each batch is bounded, so a backlog cannot be shipped in one giant request.
+    assert all(len(b) <= 100 for b in batches), [len(b) for b in batches]
+
+    # N batches means N-1 completed drain gaps: the sleep sits after the yield, so it
+    # runs only when the consumer comes back for the next batch.
+    drains = [d for d in slept if d == pytest.approx(0.1)]
+    assert len(drains) >= wanted - 1, (
+        f"drained {wanted} batches with only {len(drains)} rate-limit gaps "
+        f"(slept={slept}); the backlog path is unbounded and a chute writing "
+        f"faster than we ship becomes a request flood against the validator"
+    )

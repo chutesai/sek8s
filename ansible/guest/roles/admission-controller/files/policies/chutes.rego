@@ -7,6 +7,31 @@ import future.keywords.in
 import data.helpers
 
 # =============================================================================
+# SCOPE: this file is deliberately namespace-scoped. Do not widen it.
+# =============================================================================
+# Admission policy here is two-tier, and the split is intentional:
+#
+#   pods.rego / volumes.rego  — container-escape primitives (privileged, host
+#       namespaces, dangerous capabilities, hostPath, forbidden env). These apply in
+#       EVERY namespace, because they are dangerous regardless of who asked.
+#
+#   chutes.rego (this file)   — what a *chute workload* must look like: non-root,
+#       image from an allowed registry, a `chutes/config-id` label, a container named
+#       `chute`, a `chutes run` command. These are shape rules for one workload type,
+#       so they are gated on namespace == "chutes".
+#
+# A reviewer who notices that e.g. `runAsUser: 0` is admitted in `monitoring` may be
+# tempted to "fix" that by dropping the namespace guard. Don't: these rules would then
+# reject our own system workloads, which legitimately run as root and come from other
+# registries. Outside `chutes` the boundary is RBAC, not admission — the miner's
+# ClusterRole is get/list/watch only, and create/update/delete exists solely in the
+# `chutes` Role (chutes-miner: charts/chutes-miner-gpu/templates/miner.rbac.yml), so
+# an untrusted caller cannot create a pod outside `chutes` to begin with.
+#
+# Consequence for tests: a tier-2 rule can only be exercised in the `chutes` namespace.
+# Asserting one from a `default`-namespace fixture tests nothing.
+
+# =============================================================================
 # CHUTES NAMESPACE: NO ROOT / NO SUDO
 # =============================================================================
 # Pod-spec rules (root, runAsUser, runAsNonRoot, command) apply on CREATE for all

@@ -1,13 +1,35 @@
 import importlib
 
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from sek8s.system_manager.status.models import SERVICE_ALLOWLIST, CommandResult
 
 
+class FakeProcess:
+    """Stands in for the object asyncio.create_subprocess_exec returns."""
+
+    def __init__(self, result: CommandResult):
+        self._result = result
+        self.returncode = result.exit_code
+
+    async def communicate(self):
+        return self._result.stdout.encode(), self._result.stderr.encode()
+
+
 class FakeRunner:
+    """Fakes the SUBPROCESS, not run_command.
+
+    It used to replace `run_command` wholesale, which meant the function under test never
+    ran: the shim had to re-implement the `check` contract itself, so every test asserting
+    "a failed command produces a 500" was asserting the shim. Deleting the raise from
+    util.run_command left all of them green -- verified by mutation.
+
+    Faking one layer down runs the real `run_command`: its exit-code check, output
+    truncation, timeout handling and error detail are all exercised, and only the process
+    is synthetic.
+    """
+
     def __init__(self):
         self.commands = []
         self.responses: dict[str, CommandResult] = {}
@@ -15,37 +37,19 @@ class FakeRunner:
     def set_response(self, binary: str, result: CommandResult) -> None:
         self.responses[binary] = result
 
-    async def __call__(
-        self, command, timeout, limit, *, keep_tail=False, check=True
-    ):  # pragma: no cover - interface shim
-        self.commands.append(command)
+    async def __call__(self, *command, **_kwargs):
+        self.commands.append(list(command))
         binary = command[0]
         if binary not in self.responses:
             raise AssertionError(f"No response registered for {binary}")
-        result = self.responses[binary]
-        # Mirror run_command's check contract, or tests cannot see it: this shim replaces
-        # run_command wholesale, so the real fail-closed path never executes under test.
-        if check and result.exit_code != 0:
-            stderr_head = result.stderr.strip().splitlines()
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "command_failed",
-                    "command": command[1] if command[0] == "sudo" else command[0],
-                    "exit_code": result.exit_code,
-                    "stderr": stderr_head[0] if stderr_head else "",
-                },
-            )
-        return result
+        return FakeProcess(self.responses[binary])
 
 
 @pytest.fixture
 def fake_runner(monkeypatch):
     runner = FakeRunner()
     util_mod = importlib.import_module("sek8s.system_manager.status.util")
-    router_mod = importlib.import_module("sek8s.system_manager.status.router")
-    monkeypatch.setattr(util_mod, "run_command", runner)
-    monkeypatch.setattr(router_mod, "run_command", runner)
+    monkeypatch.setattr(util_mod.asyncio, "create_subprocess_exec", runner)
     return runner
 
 

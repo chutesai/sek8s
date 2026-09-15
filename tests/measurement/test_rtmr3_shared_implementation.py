@@ -10,6 +10,7 @@ the walk in test code, because that is precisely the mistake being guarded again
 """
 
 import hashlib
+import os
 import subprocess
 
 import pytest
@@ -110,9 +111,48 @@ def test_symlink_inside_a_measured_directory_is_skipped(tmp_path):
     assert rels == ["/etc/d/real"]
 
 
-def test_ordering_is_c_collation_not_locale(tmp_path):
+def _reordering_locale() -> str | None:
+    """A locale whose collation differs from C, or None if the box has none.
+
+    C and C.UTF-8 both sort in byte order, so running under either proves nothing:
+    the expected order happens with or without the script's pin. Only a locale that
+    actually interleaves can detect the pin being dropped.
+    """
+    probe = "Zeta\nalpha\nBeta\n"
+    for candidate in ("en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "fr_FR.UTF-8"):
+        try:
+            out = subprocess.run(
+                ["sort"],
+                input=probe,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "LC_ALL": candidate, "LANG": candidate},
+            )
+        except OSError:
+            continue
+        if out.returncode == 0 and out.stdout.split() != ["Beta", "Zeta", "alpha"]:
+            return candidate
+    return None
+
+
+def test_ordering_is_c_collation_not_locale(tmp_path, monkeypatch):
     """The boot measurer's `sort` was not pinned to LC_ALL=C, so a locale could
-    reorder the extend chain and change RTMR3 with no content change."""
+    reorder the extend chain and change RTMR3 with no content change.
+
+    Run under a locale that DOES reorder, so the assertion depends on the script's pin
+    rather than on the ambient environment. Previously this inherited the caller's
+    locale: green on a C.UTF-8 runner whether or not the pin existed, which is the one
+    place it needed to hold -- builds run on hosts with a real locale set.
+    """
+    locale_name = _reordering_locale()
+    assert locale_name, (
+        "no collation-reordering locale available, so this test cannot detect the "
+        "regression. Install/generate one (e.g. locale-gen en_US.UTF-8) -- do not skip: "
+        "a silent skip is how this finding went untested."
+    )
+    monkeypatch.setenv("LC_ALL", locale_name)
+    monkeypatch.setenv("LANG", locale_name)
+
     root = tmp_path / "root"
     (root / "etc").mkdir(parents=True)
     for name in ("Zeta", "alpha", "Beta"):
@@ -121,8 +161,11 @@ def test_ordering_is_c_collation_not_locale(tmp_path):
     conf.write_text("/etc\n")
 
     rels = [rel for _, rel in measured_hashes(root, conf, tdx_measure_script())]
-    # C collation is byte order: uppercase before lowercase. en_US.UTF-8 would interleave.
-    assert rels == ["/etc/Beta", "/etc/Zeta", "/etc/alpha"]
+    # C collation is byte order: uppercase before lowercase. The forced locale interleaves.
+    assert rels == ["/etc/Beta", "/etc/Zeta", "/etc/alpha"], (
+        f"under LC_ALL={locale_name} the measured order is {rels}; the boot measurer's "
+        f"sort is not pinned to LC_ALL=C, so RTMR3 shifts with the builder's locale"
+    )
 
 
 def test_backslash_filename_hashes_identically_in_both_paths(tmp_path):

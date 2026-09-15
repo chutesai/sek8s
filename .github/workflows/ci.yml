@@ -43,6 +43,21 @@ jobs:
       - name: Install dependencies
         run: poetry install
 
+      # Without this, the five profile-parse cases in test_apparmor_profiles.py
+      # pytest.skip silently, so a profile that fails to compile ships green. A profile
+      # that will not load is boot-fatal: verify-apparmor-profiles.service powers the
+      # guest off when a sek8s profile is missing from the loaded set.
+      # apparmor-utils: without apparmor_parser the profile compile checks skip silently,
+      #   so a profile that will not load ships green -- and that is boot-fatal.
+      # en_US.UTF-8: the RTMR3 collation test must run under a locale whose sort order
+      #   differs from C, or it cannot detect the LC_ALL=C pin being dropped. Runners
+      #   default to C.UTF-8, which collates in byte order and proves nothing.
+      - name: Install test prerequisites (AppArmor parser, non-C locale)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-utils locales
+          sudo locale-gen en_US.UTF-8
+
       - name: Run unit tests
         run: make test-local
 
