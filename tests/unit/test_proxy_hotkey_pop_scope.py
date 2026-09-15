@@ -232,3 +232,58 @@ def test_external_port_still_serves_the_attestation_flow():
     """The authenticated copy backs client -> validator -> proxy -> chute; keep it."""
     paths = _registered_paths(ExternalProxyServer)
     assert "/service/{service_name}/{path:path}" in paths
+
+
+def test_every_pop_stamping_route_is_authenticated():
+    """A route may stamp the hotkey PoP only if it also demands authentication.
+
+    The proof reuses `purpose="tee"`, the same purpose the login-capable routes accept,
+    and that shared purpose is a deliberate choice. With a distinct purpose declined,
+    protection rests ENTIRELY on the stamping scope -- an unauthenticated route that
+    stamps hands any caller a replayable login token for those routes.
+
+    The route-set guard above catches a new UNAUTHENTICATED route; it does not catch
+    `@attach_hotkey_headers` being added to one that already exists. This pins the
+    invariant directly: decorated implies authenticated.
+
+    Checked on the AST, like test_error_detail_is_exposed_only_on_validator_only_routes,
+    so renaming a handler cannot quietly drop it out of the check.
+    """
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src/attestation-proxy/attestation_proxy/service.py"
+    ).read_text()
+    tree = ast.parse(source)
+
+    def _is_stamped(fn):
+        return any(
+            getattr(d, "id", getattr(d, "attr", None)) == "attach_hotkey_headers"
+            for d in fn.decorator_list
+        )
+
+    def _demands_auth(fn):
+        # any parameter defaulting to Depends(authorize(...))
+        for default in list(fn.args.defaults) + list(fn.args.kw_defaults):
+            for node in ast.walk(default) if default else []:
+                if isinstance(node, ast.Call):
+                    name = getattr(node.func, "id", getattr(node.func, "attr", None))
+                    if name == "authorize":
+                        return True
+        return False
+
+    stamped = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_stamped(n)
+    ]
+    assert stamped, "no @attach_hotkey_headers routes found — re-point this test"
+
+    unauthenticated = [fn.name for fn in stamped if not _demands_auth(fn)]
+    assert not unauthenticated, (
+        f"these routes stamp the hotkey PoP without an authorize(...) dependency: "
+        f"{unauthenticated}. Because the proof reuses purpose='tee', any caller that "
+        f"can reach them obtains a replayable login token for the purpose='tee' routes."
+    )
