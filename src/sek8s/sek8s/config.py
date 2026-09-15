@@ -28,6 +28,11 @@ class AttestationServiceConfig(ServerConfig):
 
     hostname: Optional[str] = os.getenv("HOSTNAME")
 
+    # Left unset in normal operation: the TEE is detected from the guest device
+    # node at request time. Set only to force a platform on a host whose kernel
+    # exposes neither /dev/tdx_guest nor /dev/sev-guest.
+    tee_type: Optional[str] = Field(default=None, alias="TEE_TYPE")
+
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )

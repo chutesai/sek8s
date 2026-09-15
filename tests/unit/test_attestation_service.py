@@ -54,6 +54,9 @@ def attestation_client(monkeypatch, sample_devices):
 
     tdx_provider = MagicMock()
     tdx_provider.get_quote = AsyncMock(return_value=b"fake-quote")
+    # Real value, not a MagicMock: the response field is named from it
+    # (f"{tee_type}_quote"), so a bare mock yields a field no client can read.
+    tdx_provider.tee_type = "tdx"
 
     nvtrust_provider = MagicMock()
     nvtrust_provider.__enter__.return_value = nvtrust_provider
@@ -64,9 +67,11 @@ def attestation_client(monkeypatch, sample_devices):
         "sek8s.services.attestation.GpuDeviceProvider",
         lambda: provider,
     )
+    # The service resolves its provider at request time via get_quote_provider(), so the
+    # TEE is chosen by the guest it is running in rather than fixed at import.
     monkeypatch.setattr(
-        "sek8s.services.attestation.TdxQuoteProvider",
-        lambda: tdx_provider,
+        "sek8s.services.attestation.get_quote_provider",
+        lambda tee_type=None: tdx_provider,
     )
     monkeypatch.setattr(
         "sek8s.services.attestation.NvEvidenceProvider",

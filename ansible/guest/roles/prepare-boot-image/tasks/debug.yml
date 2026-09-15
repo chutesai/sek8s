@@ -10,7 +10,7 @@
 #
 # Installed scripts (debug set — all-or-nothing):
 #   hooks/fetch_key                 shared  (stages binaries + shell libs)
-#   scripts/init-top/load-tdx       shared
+#   scripts/init-top/load-tee       shared
 #   scripts/attest-common           shared  (boot-attestation lib)
 #   scripts/provision-common        shared  (/provision + k3s-encryption lib)
 #   scripts/hotkey-sign             shared  (sr25519 miner-hotkey signing lib)

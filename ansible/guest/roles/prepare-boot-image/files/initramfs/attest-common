@@ -237,6 +237,32 @@ read_hotkey() {
     return 0
 }
 
+# ── TEE detection ─────────────────────────────────────────────────────────────
+# One guest image boots on both Intel TDX and AMD SEV-SNP hosts, so which TEE this
+# is gets discovered from the device node the guest driver created rather than baked
+# in at build time. TEE_TYPE is sent to the validator so it can pick a verifier.
+TEE_TYPE=""
+
+detect_tee() {
+    if [ -c "/dev/tdx_guest" ]; then
+        TEE_TYPE="tdx"
+        log_success_msg "TEE: Intel TDX"
+        return 0
+    fi
+    if [ -c "/dev/sev-guest" ]; then
+        TEE_TYPE="snp"
+        log_success_msg "TEE: AMD SEV-SNP"
+        return 0
+    fi
+    return 1
+}
+
+# Hex string -> raw bytes. The initramfs has no xxd and no python; GNU printf is
+# present and understands \\xHH, which is enough.
+hex2bin() {
+    /usr/bin/printf "$(printf '%s' "$1" | sed 's/../\\x&/g')"
+}
+
 # ── Nonce + quote ─────────────────────────────────────────────────────────────
 fetch_nonce() {
     local response_file="/tmp/nonce_response"
@@ -278,22 +304,66 @@ fetch_nonce() {
     return $result
 }
 
-generate_quote() {
+generate_tdx_quote() {
     local quote_file="/tmp/tdx_quote.bin"
-    log_begin_msg "Generating TDX quote"
-    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)
     if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
-        log_end_msg 1
         return 1
     fi
     if [ ! -f "$quote_file" ]; then
-        log_end_msg 1
         return 1
     fi
     QUOTE_B64=$(base64 -w 0 < "$quote_file")
     rm -f "$quote_file"
-    log_end_msg 0
     return 0
+}
+
+# SEV-SNP evidence comes straight from the PSP through configfs-TSM — there is no
+# external generator to call, because unlike a TDX quote the report is produced and
+# signed inside the guest request itself.
+generate_snp_report() {
+    local tsm="/sys/kernel/config/tsm/report"
+    local entry="$tsm/chutes-boot"
+
+    if [ ! -d "$tsm" ]; then
+        log_failure_msg "configfs-TSM not available at $tsm"
+        return 1
+    fi
+
+    rmdir "$entry" 2>/dev/null || true
+    if ! mkdir "$entry" 2>/dev/null; then
+        log_failure_msg "Failed to create $entry"
+        return 1
+    fi
+
+    # report_data is the 64-byte field; write it as raw bytes, not hex.
+    if ! hex2bin "$REPORTDATA" > "$entry/inblob" 2>/dev/null; then
+        rmdir "$entry" 2>/dev/null || true
+        log_failure_msg "Failed to write report inblob"
+        return 1
+    fi
+
+    QUOTE_B64=$(base64 -w 0 < "$entry/outblob" 2>/dev/null)
+    # configfs entries persist until removed; leaking one would break the next boot.
+    rmdir "$entry" 2>/dev/null || true
+
+    if [ -z "$QUOTE_B64" ]; then
+        log_failure_msg "Empty SEV-SNP attestation report"
+        return 1
+    fi
+    return 0
+}
+
+generate_quote() {
+    local rc=1
+    log_begin_msg "Generating ${TEE_TYPE} attestation evidence"
+    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)
+    case "$TEE_TYPE" in
+        tdx) generate_tdx_quote && rc=0 ;;
+        snp) generate_snp_report && rc=0 ;;
+        *)   log_failure_msg "Unknown TEE type: ${TEE_TYPE:-unset}" ;;
+    esac
+    log_end_msg $rc
+    return $rc
 }
 
 # ── Boot attestation POST (fresh nonce + quote per attempt) ───────────────────
@@ -319,7 +389,10 @@ fetch_luks_key() {
         # The exact request body — built once so the hotkey signature hashes the same bytes curl
         # sends (the API hashes the received body; the two must be byte-identical).
         local body
-        body="{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}"
+        # Evidence is sent under a field named for the TEE that produced it
+        # (tdx_quote / snp_quote) rather than a generic blob plus a tee_type
+        # discriminator: the field is the type, so evidence cannot be mislabelled.
+        body="{\"${TEE_TYPE}_quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}"
 
         # Miner-hotkey proof-of-possession: sr25519 over {ss58}:{NONCE}:{sha256(body)}. The
         # X-Chutes-Hotkey and X-Chutes-Nonce headers below carry the other two fields, so the API
@@ -423,10 +496,6 @@ write_boot_state() {
 # (prod: after LUKS rotation, preserving the original ordering; debug: right after
 # this returns). The prod entry unlocks + rotates LUKS; the debug entry stops.
 run_boot_attestation() {
-    if [ ! -c "/dev/tdx_guest" ]; then
-        handle_failure "TDX device not found - not running in TDX environment"
-        return 1
-    fi
     if ! generate_vm_root_ca; then
         handle_failure "VM root CA generation failed"
         return 1
@@ -452,6 +521,16 @@ run_boot_attestation() {
     fi
 
     unmount_config_volume
+
+    # Deliberately after setup_network, not at function entry. The network is brought
+    # up as part of this flow, and init-bottom's fail-CLOSED fetch-signing-keys depends
+    # on it. Bailing before setup_network would leave a fail-OPEN attestation behind a
+    # guest with no route out, which then powers the VM off for an unrelated-looking
+    # reason several steps later.
+    if ! detect_tee; then
+        handle_failure "No TEE guest device found (neither /dev/tdx_guest nor /dev/sev-guest)"
+        return 1
+    fi
 
     # Entry hook: prod inspects the LUKS2 first-boot token; debug leaves FIRST_BOOT=false.
     detect_first_boot

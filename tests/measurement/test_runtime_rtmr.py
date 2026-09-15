@@ -287,44 +287,97 @@ def _gen_args(**over):
     return argparse.Namespace(**args)
 
 
-def test_compute_measurements_assembles_entry(monkeypatch):
-    """The pure compute step returns the teeMeasurements entry (no file I/O)."""
-    monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
-    block = {
-        "version": "1.4.0",
-        "mrtd": "MRTDHEX",
-        "hardware": [{"name": "h", "rtmr0": "R0"}],
-    }
-    seen = {}
+def _blocks(tdx=(), snp=(), mrtd="MRTDHEX"):
+    return {"mrtd": mrtd, "tdx_hardware": list(tdx), "snp_hardware": list(snp)}
 
+
+def _patch_tdx_registers(seen):
     def _fake_r3(image, root_part=None, luks_passphrase=None):
         seen["passphrase"] = luks_passphrase
         return "R3HEX", [("hash", "/etc/x")]
 
-    with patch.object(gm, "_rtmr0_block", return_value=block), patch(
-        "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2",
-        return_value=("R1HEX", "R2HEX"),
-    ), patch(
-        "chutes_cvm.measurement.generate_measurements.compute_rtmr3",
-        side_effect=_fake_r3,
-    ):
+    return (
+        patch(
+            "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2",
+            return_value=("R1HEX", "R2HEX"),
+        ),
+        patch(
+            "chutes_cvm.measurement.generate_measurements.compute_rtmr3",
+            side_effect=_fake_r3,
+        ),
+    )
+
+
+def test_compute_measurements_assembles_entry(monkeypatch):
+    """The pure compute step returns the teeMeasurements entry (no file I/O)."""
+    monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
+    seen = {}
+    r12, r3 = _patch_tdx_registers(seen)
+
+    with patch.object(
+        gm, "_hardware_blocks", return_value=_blocks(tdx=[{"name": "h", "rtmr0": "R0"}])
+    ), r12, r3:
         entry = gm._compute_measurements(_gen_args())
 
     assert seen["passphrase"] == "s3cret"  # LUKS_PASSPHRASE threaded through to rtmr3
-    assert entry["mrtd"] == "MRTDHEX"
-    assert entry["rtmr1"] == "R1HEX"
-    assert entry["rtmr2"] == "R2HEX"
-    assert entry["runtime_rtmr3"] == "R3HEX"
-    assert entry["hardware"][0]["rtmr0"] == "R0"
+    tdx = entry["tdx"]
+    assert tdx["mrtd"] == "MRTDHEX"
+    assert tdx["rtmr1"] == "R1HEX"
+    assert tdx["rtmr2"] == "R2HEX"
+    assert tdx["runtime_rtmr3"] == "R3HEX"
+    assert tdx["hardware"][0]["rtmr0"] == "R0"
+    assert "snp" not in entry  # no AMD classes, so no SNP section
     # Key order matches the chutes-ops values.yaml layout it merges into.
-    assert list(entry.keys()) == [
-        "version",
-        "mrtd",
-        "rtmr1",
-        "rtmr2",
-        "runtime_rtmr3",
-        "hardware",
-    ]
+    assert list(entry.keys()) == ["version", "tdx"]
+    assert list(tdx.keys()) == ["mrtd", "rtmr1", "rtmr2", "runtime_rtmr3", "hardware"]
+
+
+def test_compute_measurements_emits_both_sections(monkeypatch):
+    """One image, one pass, both platforms — the same guest boots on Intel and AMD, so a
+    release generates every measurement it needs in one go."""
+    monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
+    seen = {}
+    r12, r3 = _patch_tdx_registers(seen)
+    blocks = _blocks(
+        tdx=[{"name": "intel-8xh200", "rtmr0": "R0"}],
+        snp=[{"name": "amd-8xh100", "measurement": "M0"}],
+    )
+
+    with patch.object(gm, "_hardware_blocks", return_value=blocks), r12, r3:
+        entry = gm._compute_measurements(_gen_args())
+
+    assert list(entry.keys()) == ["version", "tdx", "snp"]
+    assert entry["tdx"]["hardware"][0]["rtmr0"] == "R0"
+    # SEV-SNP has no version-level registers: firmware and kernel/initrd/cmdline are
+    # already folded into each hardware entry's launch digest.
+    assert entry["snp"] == {"hardware": [{"name": "amd-8xh100", "measurement": "M0"}]}
+
+
+def test_compute_measurements_skips_tdx_registers_for_an_amd_only_release(monkeypatch):
+    """RTMR1/2/3 are Intel-only, so an AMD-only version must not require the
+    tdx-measure fork at all."""
+    monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
+    blocks = _blocks(snp=[{"name": "amd-8xh100", "measurement": "M0"}], mrtd="")
+
+    def _explode(*a, **k):
+        raise AssertionError("TDX register computation must not run for an AMD-only release")
+
+    with patch.object(gm, "_hardware_blocks", return_value=blocks), patch(
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2", side_effect=_explode
+    ), patch(
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr3", side_effect=_explode
+    ):
+        entry = gm._compute_measurements(_gen_args())
+
+    assert list(entry.keys()) == ["version", "snp"]
+
+
+def test_compute_measurements_refuses_an_empty_result(monkeypatch):
+    """Writing a version block with no measurements would publish a release nothing can
+    attest against."""
+    with patch.object(gm, "_hardware_blocks", return_value=_blocks()):
+        with pytest.raises(ValueError, match="no measurements generated"):
+            gm._compute_measurements(_gen_args())
 
 
 def test_generate_full_writes_measurements_yaml(tmp_path):

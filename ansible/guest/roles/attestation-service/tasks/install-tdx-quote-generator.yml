@@ -74,6 +74,19 @@
     create: yes
     mode: '0644'
 
+# The AMD guest device needs the same access as the Intel one: the attestation
+# service runs as tdx-attest, not root, and /dev/sev-guest is root-only by default.
+# configfs-TSM is not an alternative here — its report directory is root-owned too,
+# so the service cannot mkdir an entry and falls back to this ioctl path.
+# NB: the group keeps its tdx-attest name; it identifies the attestation service,
+# not the platform, and renaming it would churn every unit and path that references it.
+- name: Add udev rule for sev-guest device (AMD SEV-SNP)
+  ansible.builtin.lineinfile:
+    path: /etc/udev/rules.d/99-sev-guest.rules
+    line: KERNEL==sev-guest, GROUP=tdx-attest, MODE=0660
+    create: yes
+    mode: 0644
+
 - name: Reload udev rules (will only apply at runtime when device exists)
   ansible.builtin.command: udevadm control --reload-rules
   changed_when: false

@@ -60,27 +60,42 @@ def _chutes_td_running() -> bool:
     return False
 
 
-def _tdx_active() -> "tuple[bool, str]":
-    """Return (active, source). Check sysfs first (survives dmesg rollover), then /proc/cpuinfo,
-    then dmesg as a last resort — matching the former quick-launch Step 0."""
+def _tee_active() -> "tuple[bool, str, str]":
+    """Return (active, tee, source) for whichever TEE this host provides.
+
+    Checks sysfs first (survives dmesg rollover), then /proc/cpuinfo, then dmesg
+    as a last resort — matching the former quick-launch Step 0. Intel first, then
+    AMD; a host is one or the other, so order only decides which check runs first.
+    """
     try:
         with open("/sys/module/kvm_intel/parameters/tdx") as f:
             if f.read().strip() == "Y":
-                return True, "sysfs (/sys/module/kvm_intel/parameters/tdx=Y)"
+                return True, "tdx", "sysfs (/sys/module/kvm_intel/parameters/tdx=Y)"
+    except OSError:
+        pass
+    try:
+        with open("/sys/module/kvm_amd/parameters/sev_snp") as f:
+            if f.read().strip() in ("Y", "1"):
+                return True, "snp", "sysfs (/sys/module/kvm_amd/parameters/sev_snp=Y)"
     except OSError:
         pass
     try:
         with open("/proc/cpuinfo") as f:
-            if "tdx" in f.read():
-                return True, "/proc/cpuinfo"
+            cpuinfo = f.read()
+        if "tdx" in cpuinfo:
+            return True, "tdx", "/proc/cpuinfo"
+        if "sev_snp" in cpuinfo:
+            return True, "snp", "/proc/cpuinfo"
     except OSError:
         pass
     dmesg = proc.run(["sudo", "dmesg"], capture_output=True, text=True).stdout
-    if any(
-        "module initialized" in ln for ln in dmesg.splitlines() if "tdx" in ln.lower()
-    ):
-        return True, "dmesg"
-    return False, ""
+    lines = dmesg.splitlines()
+    if any("module initialized" in ln for ln in lines if "tdx" in ln.lower()):
+        return True, "tdx", "dmesg"
+    # kvm_amd prints "SEV-SNP enabled (ASIDs N - M)" once the PSP is up.
+    if any("SEV-SNP" in ln and "enabled" in ln for ln in lines):
+        return True, "snp", "dmesg"
+    return False, "", ""
 
 
 def _ensure_numa_zone_reclaim() -> None:
@@ -613,22 +628,26 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if not args.force and _chutes_td_running():
         print(
-            f"Error: a TDX VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
+            f"Error: a confidential VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
             "  Stop it first: chutes-cvm guest down  (or pass --force to override — not recommended).",
             file=sys.stderr,
         )
         return 1
 
     print("Step 0: Verifying host configuration...")
-    active, source = _tdx_active()
+    active, tee, source = _tee_active()
     if not active:
         print(
-            "✗ TDX does not appear active (checked sysfs, /proc/cpuinfo, dmesg). Enable TDX in "
-            "BIOS + kernel and reboot; verify with `cat /sys/module/kvm_intel/parameters/tdx`.",
+            "✗ No TEE appears active (checked sysfs, /proc/cpuinfo, dmesg). Enable Intel TDX or "
+            "AMD SEV-SNP in BIOS + kernel and reboot; verify with "
+            "`cat /sys/module/kvm_intel/parameters/tdx` or "
+            "`cat /sys/module/kvm_amd/parameters/sev_snp`. On AMD, check that SEV-SNP Support and "
+            "SMEE are enabled, TSME is disabled, and the SEV-ES ASID Space Limit is not 1 "
+            "(1 leaves zero usable SNP ASIDs).",
             file=sys.stderr,
         )
         return 1
-    print(f"✓ TDX active (via {source})")
+    print(f"✓ {tee.upper()} active (via {source})")
     _ensure_numa_zone_reclaim()
 
     # The gate is a launch-readiness check: does a published measurement for THIS image's

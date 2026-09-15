@@ -42,7 +42,22 @@ handle_failure() {
 
 log_begin_msg "RTMR3: measuring configured paths"
 
-# ── Ensure TDX device is available ──────────────────────────────────────────
+# ── TEE gate ────────────────────────────────────────────────────────────────
+#
+# RTMR3 is an Intel TDX runtime measurement register. AMD SEV-SNP has no
+# equivalent: its single launch digest is fixed when the VM starts and cannot be
+# extended afterwards, so there is nothing for this script to do on SNP.
+#
+# The skip is a real reduction in what a SEV-SNP guest attests — the runtime file
+# measurements produced here have no SNP counterpart. Closing that gap needs
+# either dm-verity (putting root-filesystem integrity in the launch digest) or a
+# vTPM at VMPL0; both are deliberate design decisions, not something to paper
+# over at boot.
+#
+# Order matters. TDX is checked first and keeps its original fail-closed
+# behaviour. Only an explicitly detected SNP guest skips; a guest with NEITHER
+# device still fails closed, so a TDX guest whose module failed to load can never
+# be silently mistaken for SNP and let through unmeasured.
 
 if [ ! -c /dev/tdx_guest ]; then
     modprobe tdx_guest 2>/dev/null || true
@@ -50,6 +65,11 @@ if [ ! -c /dev/tdx_guest ]; then
 fi
 
 if [ ! -c /dev/tdx_guest ]; then
+    if [ -c /dev/sev-guest ]; then
+        log_success_msg "RTMR3: skipped — AMD SEV-SNP has no runtime measurement register"
+        echo "RTMR3-MEASURE-SKIPPED: SEV-SNP guest, no RTMR equivalent" > /dev/kmsg
+        exit 0
+    fi
     handle_failure "TDX device (/dev/tdx_guest) not available — not running in a TDX guest"
 fi
 

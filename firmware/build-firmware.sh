@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build TDVF firmware from edk2 source for TDX VMs.
+# Build guest firmware from edk2 source.
 #
-# Outputs directly to firmware/ so the result can be committed.
+# Outputs directly to firmware/ so the result can be committed. Both platforms measure
+# their firmware -- TDX through MRTD, SEV-SNP through the launch digest -- so the bytes
+# that ship here are the bytes every published measurement is computed against.
 #
 # Usage:
 #   ./build-firmware.sh                  # Config-B → firmware/OVMF.inteltdx.fd
 #   ./build-firmware.sh --secure-boot    # Config-A → firmware/OVMF.inteltdx.ms.fd
+#   ./build-firmware.sh --amd-sev        # AmdSevX64 → firmware/OVMF.amdsev.fd
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDK2_TAG="edk2-stable202605"
 EDK2_DIR="${EDK2_DIR:-/tmp/edk2-tdvf-build}"
 SECURE_BOOT=0
+AMD_SEV=0
 
 for arg in "$@"; do
     case "$arg" in
         --secure-boot) SECURE_BOOT=1 ;;
+        --amd-sev) AMD_SEV=1 ;;
         --help|-h)
             echo "Usage: $0 [--secure-boot]"
             echo ""
@@ -66,7 +71,24 @@ set +u
 source ./edksetup.sh
 set -u
 
-if [[ $SECURE_BOOT -eq 0 ]]; then
+if [[ $AMD_SEV -eq 1 ]]; then
+    # AmdSevX64.dsc embeds a GRUB built by edk2's own helper; it must run before the
+    # firmware build or the .dsc fails resolving the Grub FV.
+    echo "--- Building embedded GRUB for AmdSev ---"
+    OvmfPkg/AmdSev/Grub/GrubFirmwareBuild.sh
+
+    echo "--- Building AmdSevX64.dsc ---"
+    build -p OvmfPkg/AmdSev/AmdSevX64.dsc -a X64 -t GCC -b RELEASE
+
+    DEST="${SCRIPT_DIR}/OVMF.amdsev.fd"
+    cp "${EDK2_DIR}/Build/AmdSev/RELEASE_GCC/FV/OVMF.fd" "${DEST}"
+
+    # A byte difference here is a DIFFERENT launch measurement, so the digest is the
+    # thing to check -- not whether the guest happens to boot.
+    echo ""
+    echo "!!! Compare against firmware/PROVENANCE.md before replacing the committed file:"
+    echo "    built   $(sha256sum "${DEST}" | awk '{print $1}')"
+elif [[ $SECURE_BOOT -eq 0 ]]; then
     echo "--- Building Config-B (IntelTdxX64.dsc, no Secure Boot) ---"
     build -p OvmfPkg/IntelTdx/IntelTdxX64.dsc -a X64 -t GCC -b RELEASE
 

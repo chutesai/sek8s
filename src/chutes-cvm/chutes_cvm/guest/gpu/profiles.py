@@ -324,10 +324,62 @@ class RTXPro6000Profile(GpuProfile):
         return "CC mode (RTX Pro 6000)"
 
 
+class H100PcieProfile(GpuProfile):
+    """H100 PCIe (GH100), single-GPU CC.
+
+    The PCIe card, not the SXM part: no NVLink and no NVSwitch, so CC mode is the
+    only mode — PPCIe exists to protect an NVLink fabric this card does not have.
+    """
+
+    pci_device_id = "2331"  # GH100 [H100 PCIe]
+    display_name = "1xh100"
+    expected_gpus = ["h100"]
+    # lspci -vvvnn on dev-snp-1 (10de:2331): BAR0 16M, BAR2 resizable at 128G, BAR4 32M.
+    passthrough = {
+        "gpu": PassthroughDevice(
+            0x10DE,
+            "2331",
+            0x0302,
+            [PciBar(0, 16, "p64"), PciBar(2, 131072, "p64"), PciBar(4, 32, "p64")],
+        ),
+    }
+
+    @property
+    def name(self) -> str:
+        return "H100_PCIE"
+
+    @property
+    def bar_size_mb(self) -> int:
+        return 131072  # 128 GiB, matching BAR2's current resizable size
+
+    @property
+    def vram_gb(self) -> int:
+        return 80  # HBM3
+
+    @property
+    def enable_numa_topology(self) -> bool:
+        # Single-socket EPYC host with one GPU; no cross-socket split to model.
+        return False
+
+    @property
+    def enable_post_launch_tuning(self) -> bool:
+        return False
+
+    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
+
+    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
+        return False
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (H100 PCIe)"
+
+
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
     "B300": B300Profile(),
     "H200": H200Profile(),
+    "H100_PCIE": H100PcieProfile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
 }
 

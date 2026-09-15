@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import chutes_cvm.guest.__main__ as guest_main
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
+from chutes_cvm.guest.tee import TdxTeeProvider
 from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.paths import SCRIPTS_DIR
 
@@ -21,6 +22,10 @@ _FAKE_CMD = QemuCommand(
 )
 
 
+# get_tee_provider reads the host's kvm module parameters and raises when no TEE is
+# enabled, so without this the test only passes on a machine that happens to have TDX
+# or SEV-SNP turned on — it is not a property of the code under test.
+@patch("chutes_cvm.guest.__main__.get_tee_provider", return_value=TdxTeeProvider())
 @patch(
     "chutes_cvm.guest.__main__.direct_boot_artifacts",
     return_value=("/k", "/i", "root=UUID=x ro"),
@@ -43,6 +48,7 @@ def test_launch_vm_returns_qemu_nonzero(
     mock_run,
     _mock_qemu_check,
     _mock_stage,
+    _mock_tee,
 ):
     from argparse import Namespace
 

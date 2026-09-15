@@ -191,7 +191,7 @@ def _happy(**over):
     defaults = {
         "_resolve_public_iface": "eth0",
         "_chutes_td_running": False,
-        "_tdx_active": (True, "sysfs"),
+        "_tee_active": (True, "tdx", "sysfs"),
         "_launchable": True,
         "_prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
@@ -315,11 +315,19 @@ def test_launchable_blocks_on_unreadable_manifest(capsys):
     assert "image version" in capsys.readouterr().err
 
 
-def test_main_blocks_when_tdx_inactive(capsys):
-    with _happy(_tdx_active=(False, "")):
+def test_main_blocks_when_no_tee_is_active(capsys):
+    """A host with neither TDX nor SEV-SNP enabled cannot launch a confidential guest."""
+    with _happy(_tee_active=(False, "", "")):
         rc = launch.main(_STD_ARGV)
     assert rc == 1
-    assert "TDX" in capsys.readouterr().err
+    assert "TEE" in capsys.readouterr().err
+
+
+def test_main_launches_on_an_amd_host(capsys):
+    """The gate is which TEE is active, not whether it is Intel."""
+    with _happy(_tee_active=(True, "snp", "sysfs")), patch(f"{P}._boot", return_value=0):
+        rc = launch.main(_STD_ARGV)
+    assert rc == 0
 
 
 def test_main_missing_creds_is_error(capsys):

@@ -18,6 +18,9 @@ pyyaml = "^6.0.2"
 pydantic-settings = "^2.10.0"
 # Attestation preflight signs the submission with the miner hotkey (sr25519).
 substrate-interface = "^1.7.11"
+# Offline SEV-SNP launch-measurement generation. Pure computation over the firmware and
+# boot artifacts -- needs no SEV-SNP hardware, so one build host covers both platforms.
+sev-snp-measure = "^0.0.13"
 
 [tool.poetry.scripts]
 chutes-cvm = "chutes_cvm.cli:main"

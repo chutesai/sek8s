@@ -1,0 +1,213 @@
+import pytest
+
+from chutes_cvm.guest import tee as tee_module
+from chutes_cvm.guest.qemu import build_base_cmd
+from chutes_cvm.guest.tee import (
+    DEFAULT_CBITPOS,
+    DEFAULT_REDUCED_PHYS_BITS,
+    HostTee,
+    SnpTeeProvider,
+    TdxTeeProvider,
+    detect_host_tee,
+    get_tee_provider,
+    sev_cbit_parameters,
+)
+
+
+def _params(**enabled):
+    """Fake the kvm module parameter files."""
+
+    def _reader(path):
+        return enabled.get(path, False)
+
+    return _reader
+
+
+def test_detect_host_tee_finds_tdx(monkeypatch):
+    monkeypatch.setattr(
+        tee_module, "_module_param_enabled", _params(**{tee_module.KVM_INTEL_TDX: True})
+    )
+    assert detect_host_tee() is HostTee.TDX
+
+
+def test_detect_host_tee_finds_snp(monkeypatch):
+    monkeypatch.setattr(
+        tee_module,
+        "_module_param_enabled",
+        _params(**{tee_module.KVM_AMD_SEV_SNP: True}),
+    )
+    assert detect_host_tee() is HostTee.SNP
+
+
+def test_detect_host_tee_raises_when_neither_enabled(monkeypatch):
+    # An AMD host with SEV-SNP disabled in BIOS still reports AMD, so detection
+    # keys off the kvm parameter rather than the CPU vendor.
+    monkeypatch.setattr(tee_module, "_module_param_enabled", _params())
+    with pytest.raises(RuntimeError, match="No confidential-computing platform"):
+        detect_host_tee()
+
+
+def test_detect_host_tee_override(monkeypatch):
+    monkeypatch.setattr(tee_module, "_module_param_enabled", _params())
+    assert detect_host_tee("snp") is HostTee.SNP
+
+
+def test_get_tee_provider_returns_platform_provider(monkeypatch):
+    monkeypatch.setattr(tee_module, "_module_param_enabled", _params())
+    assert isinstance(get_tee_provider("tdx"), TdxTeeProvider)
+    assert isinstance(get_tee_provider("snp"), SnpTeeProvider)
+
+
+def test_module_param_enabled_reads_y(tmp_path):
+    param = tmp_path / "sev_snp"
+    param.write_text("Y\n")
+    assert tee_module._module_param_enabled(str(param)) is True
+    param.write_text("N\n")
+    assert tee_module._module_param_enabled(str(param)) is False
+
+
+def test_module_param_enabled_missing_file_is_false():
+    assert tee_module._module_param_enabled("/nonexistent/param") is False
+
+
+def test_tdx_provider_emits_quote_socket():
+    tdx = TdxTeeProvider()
+    obj = tdx.guest_object()
+    assert '"qom-type":"tdx-guest"' in obj
+    # TDX quotes come from qgsd on the host over vsock; SNP has no equivalent.
+    assert "quote-generation-socket" in obj
+
+
+def test_tdx_machine_and_backend_are_unchanged():
+    tdx = TdxTeeProvider()
+    assert tdx.machine("mem0") == (
+        "q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+    )
+    assert tdx.machine(None) == (
+        "q35,kernel_irqchip=split,confidential-guest-support=tdx"
+    )
+    assert tdx.memory_backend("mem0", "8G") == "memory-backend-ram,id=mem0,size=8G"
+    assert tdx.memory_backend("mem-node1", "4096M", host_node=1) == (
+        "memory-backend-ram,id=mem-node1,size=4096M,host-nodes=1,policy=bind"
+    )
+
+
+def test_snp_guest_object_carries_cbit_policy_and_kernel_hashes():
+    snp = SnpTeeProvider(cbitpos=51, reduced_phys_bits=1)
+    obj = snp.guest_object()
+    assert obj.startswith("sev-snp-guest,id=snp0")
+    assert "cbitpos=51" in obj
+    assert "reduced-phys-bits=1" in obj
+    # kernel-hashes is what puts the initrd in the launch measurement, which is
+    # what the measured-initrd key-release gate depends on.
+    assert "kernel-hashes=on" in obj
+
+
+def test_snp_policy_leaves_debug_bit_clear():
+    snp = SnpTeeProvider()
+    # Bit 19 set would let the host decrypt guest memory while the report still
+    # carried a valid signature.
+    assert not snp.policy & (1 << 19)
+    assert snp.policy & (1 << 16)  # SMT allowed
+    assert snp.policy & (1 << 17)  # reserved, must be 1
+
+
+def test_snp_machine_disables_vmport():
+    snp = SnpTeeProvider()
+    machine = snp.machine("mem0")
+    assert "confidential-guest-support=snp0" in machine
+    assert "vmport=off" in machine
+    assert "memory-backend=mem0" in machine
+
+
+def test_snp_memory_backend_is_shared_memfd():
+    snp = SnpTeeProvider()
+    # SNP private memory is served from guest_memfd; memory-backend-ram fails.
+    assert snp.memory_backend("mem0", "8G") == (
+        "memory-backend-memfd,id=mem0,size=8G,share=on"
+    )
+    assert snp.memory_backend("mem-node0", "4096M", host_node=0) == (
+        "memory-backend-memfd,id=mem-node0,size=4096M,share=on,host-nodes=0,policy=bind"
+    )
+
+
+def test_sev_cbit_parameters_falls_back_when_cpuid_unavailable(monkeypatch):
+    monkeypatch.setattr(tee_module, "CPUID_DEVICE", "/nonexistent/cpuid")
+    assert sev_cbit_parameters() == (DEFAULT_CBITPOS, DEFAULT_REDUCED_PHYS_BITS)
+
+
+def test_sev_cbit_parameters_reads_cpuid(monkeypatch, tmp_path):
+    import struct
+
+    cpuid = tmp_path / "cpuid"
+    # EBX[5:0] = 51 (C-bit), EBX[11:6] = 1 (phys addr bits lost)
+    ebx = 51 | (1 << 6)
+    # /dev/cpu/N/cpuid is seek-addressed: leaf N lives at offset N*16. Seek and write
+    # the one 16-byte entry, leaving a SPARSE file — materialising the offset would be
+    # a 34 GB allocation (SEV_CPUID_LEAF is 0x8000001F).
+    with open(cpuid, "wb") as f:
+        f.seek(tee_module.SEV_CPUID_LEAF * 16)
+        f.write(struct.pack("<IIII", 0, ebx, 0, 0))
+    monkeypatch.setattr(tee_module, "CPUID_DEVICE", str(cpuid))
+
+    assert sev_cbit_parameters() == (51, 1)
+
+
+def _base_cmd(tee, tmp_path):
+    return build_base_cmd(
+        mem="8G",
+        smp_topology="cpus=4,sockets=1,cores=2,threads=2",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware=str(tmp_path / "OVMF.fd"),
+        img_path=str(tmp_path / "root.qcow2"),
+        foreground=False,
+        pidfile="/dev/null",
+        logfile="/dev/null",
+        host_nodes=[],
+        kernel_path="/dev/null",
+        initrd_path="/dev/null",
+        cmdline="",
+        tee=tee,
+    )
+
+
+def test_build_base_cmd_defaults_to_tdx(tmp_path):
+    """The offline measurement path calls this on hosts with no TEE at all."""
+    args = " ".join(_base_cmd(None, tmp_path).to_args())
+    assert "tdx-guest" in args
+    assert "memory-backend-ram,id=mem0" in args
+    assert "product=TDX-VM" in args
+
+
+def test_build_base_cmd_with_snp_provider(tmp_path):
+    args = " ".join(_base_cmd(SnpTeeProvider(cbitpos=51), tmp_path).to_args())
+    assert "sev-snp-guest,id=snp0" in args
+    assert "memory-backend-memfd,id=mem0,size=8G,share=on" in args
+    assert "confidential-guest-support=snp0" in args
+    assert "vmport=off" in args
+    assert "product=SNP-VM" in args
+    assert "tdx-guest" not in args
+
+
+def test_build_base_cmd_snp_numa_backends_are_memfd(tmp_path):
+    cmd = build_base_cmd(
+        mem="8G",
+        smp_topology="cpus=4,sockets=2,cores=1,threads=2",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware=str(tmp_path / "OVMF.fd"),
+        img_path=str(tmp_path / "root.qcow2"),
+        foreground=False,
+        pidfile="/dev/null",
+        logfile="/dev/null",
+        host_nodes=[0, 1],
+        kernel_path="/dev/null",
+        initrd_path="/dev/null",
+        cmdline="",
+        tee=SnpTeeProvider(),
+    )
+    backends = [o for o in cmd.objects if o.startswith("memory-backend")]
+    assert len(backends) == 2
+    assert all("memory-backend-memfd" in b and "share=on" in b for b in backends)
+    assert all("policy=bind" in b for b in backends)

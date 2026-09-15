@@ -1,0 +1,51 @@
+#!/bin/sh
+# /etc/initramfs-tools/scripts/init-top/load-tee
+#
+# Loads the guest-side TEE driver for whichever platform this VM is running on and
+# makes configfs available, so the boot-attestation flow in attest-common can find a
+# device and produce evidence.
+#
+# Intel and AMD are tried in turn: a guest is one or the other, so order only decides
+# which modprobe runs first. Neither failure is fatal here — attest-common decides what
+# to do when no device appears, and on a debug image that path is fail-open.
+PREREQ="udev"
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /scripts/functions
+
+log_begin_msg "Loading TEE guest module"
+
+loaded=""
+
+if modprobe tdx_guest 2>/dev/null; then
+    sleep 1
+    if [ -c "/dev/tdx_guest" ]; then
+        loaded="Intel TDX (/dev/tdx_guest)"
+    fi
+fi
+
+if [ -z "$loaded" ] && modprobe sev-guest 2>/dev/null; then
+    sleep 1
+    if [ -c "/dev/sev-guest" ]; then
+        loaded="AMD SEV-SNP (/dev/sev-guest)"
+    fi
+fi
+
+# configfs-TSM is the generic evidence interface and backs the SEV-SNP path; the
+# module is bundled for both platforms, so mount it whenever it is available.
+modprobe tsm_report 2>/dev/null || true
+if [ ! -d /sys/kernel/config/tsm ]; then
+    mkdir -p /sys/kernel/config 2>/dev/null || true
+    mount -t configfs none /sys/kernel/config 2>/dev/null || true
+fi
+
+if [ -n "$loaded" ]; then
+    log_success_msg "TEE guest module loaded: $loaded"
+else
+    # Not fatal: attest-common reports the absence with the context to act on, and a
+    # debug image continues booting without attestation.
+    log_failure_msg "No TEE guest device (tried tdx_guest, sev-guest)"
+fi
+
+exit 0

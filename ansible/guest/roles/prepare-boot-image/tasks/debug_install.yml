@@ -117,10 +117,10 @@
     owner: root
     group: root
 
-- name: Copy TDX module loader script (init-top)
+- name: Copy TEE module loader script (init-top)
   ansible.builtin.copy:
-    src: files/initramfs/load-tdx
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tdx"
+    src: files/initramfs/load-tee
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tee"
     mode: '0755'
     owner: root
     group: root

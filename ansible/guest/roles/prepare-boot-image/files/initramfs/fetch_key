@@ -86,6 +86,8 @@ done
 # Add TDX kernel module
 manual_add_modules tdx_guest
 force_load tdx_guest
+manual_add_modules sev_guest
+manual_add_modules tsm_report
 
 # Add block device and filesystem modules for cloud-init ISO
 manual_add_modules virtio_blk
