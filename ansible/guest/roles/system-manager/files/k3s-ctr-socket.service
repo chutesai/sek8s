@@ -2,6 +2,12 @@
 Description=Set containerd socket group for k3s ctr access
 After=k3s.service
 Requires=k3s-ctr-socket.path
+# A .path unit triggers only an INACTIVE unit and re-arms when that unit deactivates.
+# RemainAfterExit=yes below keeps this one active forever after its first run, so the watch
+# is spent: a k3s restart recreates the socket root:root and nothing ever re-runs the chgrp,
+# locking system-manager and chute-log-shipper out of the CRI socket until the next reboot.
+# PartOf makes a k3s restart stop this unit too, which both re-arms the watch and re-runs it.
+PartOf=k3s.service
 
 [Service]
 Type=oneshot

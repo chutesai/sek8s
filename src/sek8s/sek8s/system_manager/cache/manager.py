@@ -177,11 +177,13 @@ class HuggingFaceSnapshot:
         return 30.0 if self.is_in_progress else 60.0
 
     async def _du_size(self, path: Path) -> Optional[int]:
-        """Get directory size in bytes via du -sb. Used for in-progress rate/ETA only.
+        """Get directory size in bytes via du -sb: bytes actually on disk.
 
         scan_cache_dir only sees files that have symlinks in the snapshot tree;
-        HF creates symlinks when a file finishes downloading, so in-progress blobs
-        are invisible to scan_cache_dir until each file completes.
+        HF creates symlinks when a file finishes downloading, so partial blobs are
+        invisible to scan_cache_dir until each file completes. Used for any chute
+        that is not PRESENT — in-progress rate/ETA, and the residue a cancelled or
+        crashed download leaves behind, which cleanup() has to be able to see.
 
         Runs du without sudo; cache dir is 2775 and system-manager is in group tdx.
         """
@@ -234,10 +236,21 @@ class HuggingFaceSnapshot:
                 if revisions:
                     revision = revisions[0].commit_hash
                 last_acc = max((r.last_accessed for r in repos), default=None)
-            if self.is_in_progress:
+            # scan_cache_dir counts only blobs that already have a symlink in the snapshot
+            # tree, and HF creates that symlink when a file finishes. Partial ".incomplete"
+            # blobs are therefore invisible to it, so every state that can hold them must be
+            # sized with du instead — not just a running download. A cancelled or crashed
+            # one otherwise reports megabytes while holding tens of gigabytes, and the
+            # max-size eviction in cleanup() can never reclaim space it cannot see.
+            # PRESENT is the one state with no partials by construction: the complete marker
+            # is written only after every blob has been materialised.
+            if self.status is not CacheChuteStatusEnum.PRESENT:
                 du_size = await self._du_size(self.hub_path)
+                # max(), not replace: du is ground truth for bytes on disk and should never
+                # be the smaller of the two, but a failed/partial du must not shrink the
+                # reported size below what scan_cache_dir could already account for.
                 if du_size is not None:
-                    size = du_size
+                    size = max(size, du_size)
             result = (size, repo_id, revision, last_acc)
             self._scan_cache = result
             self._scan_cache_at = time.monotonic()

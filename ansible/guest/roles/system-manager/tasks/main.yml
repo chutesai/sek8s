@@ -40,20 +40,28 @@
 - name: Create system-manager group (for config dir ownership)
   ansible.builtin.group:
     name: system-manager
-    gid: "{{ system_manager_gid | default(10150) }}"
+    gid: 10150
     state: present
     system: yes
 
+# gid is pinned, not auto-allocated: the containerd drop-in below embeds it literally, so an
+# allocation-order change would drift the file and therefore RTMR3. 10153 is the next free slot
+# after system-manager 10150, chute-log-shipper 10151, vm-tls 10152 — keep them distinct.
+# Safe from lock-accounts despite being >= 1000: that sweep is userdel over /etc/passwd, and this
+# is a group with no matching user. Nothing in the tree ever runs groupdel. A system-range gid
+# would risk colliding with a package's groupadd later in the build, which is what the pin exists
+# to prevent.
 - name: Ensure containerd group exists (for k3s ctr socket access without sudo)
   ansible.builtin.group:
     name: containerd
+    gid: 10153
     state: present
     system: yes
 
 - name: Create system-manager user (primary group tdx so cache files are group 1000; in group system-manager for config; admission for cosign key read; containerd for k3s ctr)
   ansible.builtin.user:
     name: system-manager
-    uid: "{{ system_manager_uid | default(10150) }}"
+    uid: 10150
     group: tdx
     groups: "system-manager,systemd-journal,video,admission,containerd"
     append: yes
@@ -169,6 +177,24 @@
     state: started
     daemon_reload: yes
 
+- name: Ensure containerd drop-in dir exists
+  ansible.builtin.file:
+    path: /etc/containerd/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Makes containerd own the socket group itself; the path unit + chgrp above stay only as a
+# fallback for a containerd that ignores the drop-in, and can be dropped once this is proven.
+- name: Deploy containerd CRI socket group drop-in
+  ansible.builtin.copy:
+    src: containerd-socket-group.toml
+    dest: /etc/containerd/conf.d/10-sek8s-socket-group.toml
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Deploy dummy miner.env for build time (config volume not mounted; replaced by config-manager at runtime)
   ansible.builtin.copy:
     content: |
@@ -176,6 +202,30 @@
       MINER_SS58=5DummyBuildTimeSS58Address0000000000000000000000
       MINER_SEED=0000000000000000000000000000000000000000000000000000000000000000
     dest: /etc/system-manager/miner.env
+    owner: root
+    group: system-manager
+    mode: '0640'
+
+# validator-auth.env normally lives on /run (tmpfs) and is written by the initramfs
+# write-validator-auth script before pivot_root. There is no initramfs at build time, so
+# without a placeholder system-manager's required EnvironmentFile fails and the service
+# restart-loops. Deploy a dummy here (removed by cleanup-build-vm); /run is tmpfs, so the
+# real per-VM auth replaces it on every boot regardless.
+- name: Ensure /run/chutes exists for the build-time validator-auth placeholder
+  ansible.builtin.file:
+    path: /run/chutes
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Deploy dummy validator-auth.env for build time (config volume not mounted; replaced by initramfs at runtime)
+  ansible.builtin.copy:
+    content: |
+      # Build-time placeholder; replaced by the initramfs write-validator-auth script
+      # (real per-VM ALLOWED_VALIDATORS on /run tmpfs) at first boot.
+      ALLOWED_VALIDATORS=
+    dest: /run/chutes/validator-auth.env
     owner: root
     group: system-manager
     mode: '0640'
