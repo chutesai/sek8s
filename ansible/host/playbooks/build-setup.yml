@@ -18,6 +18,7 @@
 #     patched QEMU in a container; see `chutes-cvm measurements generate`)
 #   - Installs libguestfs-tools (RTMR3 mounts the image root read-only;
 #     see `chutes-cvm measurements generate` / the standalone `rtmr3`)
+#   - Installs rclone (publishing the built image set to R2 via `make publish-guest`)
 #   - Installs rustup for build_user (the guest build compiles the sr25519 initramfs
 #     signer with the pinned toolchain + musl target from src/sr25519/rust-toolchain.toml)
 
@@ -109,6 +110,16 @@
     - name: Install libguestfs-tools (guestfish, for stage-boot-artifacts)
       ansible.builtin.apt:
         name: libguestfs-tools
+        state: present
+        update_cache: true
+
+    # guest-tools/scripts/publish-image.sh (`make publish-guest`) uploads the finished image
+    # set to R2 with rclone. It only `command -v`s it, so a missing rclone surfaces after the
+    # build, not before it. The "r2" remote itself holds credentials and is NOT provisioned
+    # here — configure it with `rclone config` (see publish-image.sh) before publishing.
+    - name: Install rclone (publishing the built image set to R2)
+      ansible.builtin.apt:
+        name: rclone
         state: present
         update_cache: true
 

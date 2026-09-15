@@ -74,12 +74,18 @@ DEBUG_FLAG=()
 PYTHONPATH="$REPO_ROOT/src/chutes-cvm" python3 -m chutes_cvm.guest.image_set manifest \
     "$LOCAL_BASE.qcow2" -o "$MANIFEST" --version "$VERSION" "${DEBUG_FLAG[@]}"
 
+# --transfers is per-file and all but the qcow2 are tiny; the multi-GB qcow2 is one file, so
+# its speed is set by how many 64M parts upload in parallel. rclone's default is 4. Buffers are
+# CONCURRENCY x chunk-size in RAM (16 x 64M = 1G), so raise this only on a host that has it.
+UPLOAD_CONCURRENCY="${RCLONE_UPLOAD_CONCURRENCY:-16}"
+
 echo "Publishing ${VERSION}${SUFFIX} ($ENV) -> $BUCKET/$REMOTE.*"
 for ext in "${ARTIFACTS[@]}"; do
     src="$LOCAL_BASE.$ext"
     dst="$BUCKET/$REMOTE.$ext"
     echo "==> $src -> $dst"
-    rclone copyto --progress --s3-chunk-size 64M --transfers 4 "$src" "$dst"
+    rclone copyto --progress --s3-chunk-size 64M --transfers 4 \
+        --s3-upload-concurrency "$UPLOAD_CONCURRENCY" "$src" "$dst"
 done
 
 # Publish the manifest last, so it never advertises a set that isn't fully uploaded yet.
