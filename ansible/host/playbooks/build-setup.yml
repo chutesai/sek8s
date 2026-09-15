@@ -145,11 +145,28 @@
 
     # run-vm seeds the build VM's cloud-init with this public key and it is also how you shell
     # into a debug guest (root@, not ubuntu@). Without it the build dies early on a file lookup.
-    - name: Ensure the build user has an SSH keypair for the build VM
-      community.crypto.openssh_keypair:
-        path: "{{ build_user_home }}/.ssh/id_ed25519"
-        type: ed25519
+    # ssh-keygen rather than community.crypto.openssh_keypair: that was the host tree's ONLY
+    # use of community.crypto, and it was never declared in requirements.yml, so a controller
+    # that had not installed it out-of-band failed here. Not worth a collection dependency for
+    # one keypair. `creates` keeps it idempotent.
+    - name: Ensure the build user's .ssh directory exists
+      ansible.builtin.file:
+        path: "{{ build_user_home }}/.ssh"
+        state: directory
         owner: "{{ build_user }}"
+        mode: "0700"
+
+    - name: Ensure the build user has an SSH keypair for the build VM
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -t
+          - ed25519
+          - -N
+          - ""
+          - -f
+          - "{{ build_user_home }}/.ssh/id_ed25519"
+        creates: "{{ build_user_home }}/.ssh/id_ed25519"
       become_user: "{{ build_user }}"
 
     # Only rustup honors the pinned toolchain + musl target in src/sr25519/rust-toolchain.toml.

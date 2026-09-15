@@ -46,8 +46,25 @@ class APTRepo:
     uri: str
     suite: str
     components: str
-    signing_key_url: str
+    # Exactly one key source. ``signing_key_url`` is a bare key fetched to
+    # /etc/apt/keyrings/<name>.asc. ``signing_key_deb`` is a vendor keyring package that
+    # installs its own key (NVIDIA no longer publishes a bare .pub — the key ships only in
+    # cuda-keyring_*.deb); ``signing_key_path`` then names the file it installs.
+    signing_key_url: str = ""
+    signing_key_deb: str = ""
+    signing_key_path: str = ""
     pin_priority: int = 4000
+
+    def __post_init__(self):
+        if bool(self.signing_key_url) == bool(self.signing_key_deb):
+            raise ValueError(
+                f"{self.name}: set exactly one of signing_key_url / signing_key_deb"
+            )
+        if self.signing_key_deb and not self.signing_key_path:
+            raise ValueError(
+                f"{self.name}: signing_key_deb requires signing_key_path (the keyring "
+                f"file the package installs)"
+            )
 
 
 class HostProfile(ABC):
@@ -138,6 +155,32 @@ class Ubuntu2604Profile(HostProfile):
                 suite="resolute",
                 components="main",
                 signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
+            ),
+            # NVIDIA CUDA repo — the ONLY source of a Fabric Manager matching the guest
+            # driver. FM must be the same x.y.z as the guest's NVIDIA driver, and the guest
+            # pins 595.71.05 from this same repo family; Ubuntu multiverse ships only
+            # 595.91.07 / 595.58.03, neither of which matches. The setup code assumed this
+            # repo was "configured already" but nothing ever added it, so the Fabric Manager
+            # step could not succeed on any host.
+            #
+            # Flat repo: the packages live directly under .../x86_64/, so Suites is "/" and
+            # there are no components.
+            #
+            # Pin-Priority 100, deliberately BELOW the archive's 500: this repo exists only so
+            # that explicitly pinned NVIDIA versions resolve. Nothing here should ever be
+            # preferred automatically — it also carries the 610 line, which breaks the H200
+            # PPCIe fabric. An exact `pkg=version` request still installs at priority 100.
+            APTRepo(
+                name="nvidia-cuda",
+                uri="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/",
+                suite="/",
+                components="",
+                signing_key_deb=(
+                    "https://developer.download.nvidia.com/compute/cuda/repos/"
+                    "ubuntu2604/x86_64/cuda-keyring_1.1-1_all.deb"
+                ),
+                signing_key_path="/usr/share/keyrings/cuda-archive-keyring.gpg",
+                pin_priority=100,
             ),
         ]
 

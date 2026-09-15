@@ -11,6 +11,7 @@ import glob
 import os
 import re
 import sys
+from urllib.parse import urlparse
 
 from chutes_cvm import proc
 from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile, resolve_profile
@@ -19,9 +20,11 @@ from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile, resolve_profile
 # image.  FM communicates with GPU firmware shared between host and guest;
 # version mismatches cause NVLink initialization failures and Xid errors.
 # Keep in sync with nvidia_version / nvidia_pkg_version in
-# ansible/guest/playbooks/group_vars/all.yml.
-FM_DRIVER_BRANCH = "595"
-FM_PKG_VERSION = "595.71.05-0ubuntu0.26.04.1"
+# ansible/guest/playbooks/group_vars/all.yml — that value is authoritative, since the guest
+# build verifies it against real packages on every image build. This constant drifted to a
+# 0ubuntu0.26.04.1 revision that was never published, which made host setup fail on
+# B200/B300 (the only hosts that reach the FM step) with an apt "no installation candidate".
+FM_PKG_VERSION = "595.71.05-1ubuntu1"
 
 
 def _run(cmd: list[str], **kwargs):
@@ -46,34 +49,80 @@ def _assert_kernel_available(kernel_package: str) -> None:
         )
 
 
+# Vendor key/keyring fetches are the one step here that depends on a third-party host being
+# reachable at that exact moment, and the keys are re-fetched on every run. A single dropped
+# connection used to abort the whole setup — which matters more now that upgrade-guest.yml
+# converges host config on every upgrade, giving a fleet-wide run one chance per host to hit
+# a blip. Retry rather than fail the run on a two-second hiccup.
+_CURL_RETRY = [
+    "--retry",
+    "5",
+    "--retry-delay",
+    "3",
+    "--retry-connrefused",
+    "--retry-all-errors",
+    "--connect-timeout",
+    "15",
+]
+
+
 def _add_repo(repo: APTRepo):
     """Add a generic APT repository with DEB822 sources and pinning.
 
-    Downloads the signing key from repo.signing_key_url, writes a
+    Downloads the signing key (bare key or vendor keyring package), writes a
     sources entry to /etc/apt/sources.list.d/, and creates a pin file.
     """
     print(f"  Adding repo: {repo.name} ({repo.uri})")
-    keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
     sources_file = f"/etc/apt/sources.list.d/{repo.name}.sources"
 
-    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
-    _run(["sudo", "curl", "-fsSL", "-o", keyring_path, repo.signing_key_url])
+    if repo.signing_key_deb:
+        # Vendor keyring package. NVIDIA stopped publishing a bare .pub key; it ships only
+        # inside cuda-keyring_*.deb, which is also how the guest role installs it. Going
+        # through the package means apt updates the key if NVIDIA rotates it.
+        keyring_path = repo.signing_key_path
+        deb_path = f"/tmp/{repo.name}-keyring.deb"  # nosec B108
+        _run(
+            [
+                "sudo",
+                "curl",
+                "-fsSL",
+                *_CURL_RETRY,
+                "-o",
+                deb_path,
+                repo.signing_key_deb,
+            ]
+        )
+        _run(["sudo", "dpkg", "-i", deb_path])
+    else:
+        keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
+        _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+        _run(
+            [
+                "sudo",
+                "curl",
+                "-fsSL",
+                *_CURL_RETRY,
+                "-o",
+                keyring_path,
+                repo.signing_key_url,
+            ]
+        )
 
-    sources_content = (
-        f"Types: deb\n"
-        f"URIs: {repo.uri}\n"
-        f"Suites: {repo.suite}\n"
-        f"Components: {repo.components}\n"
-        f"Signed-By: {keyring_path}\n"
-    )
+    sources_content = f"Types: deb\n" f"URIs: {repo.uri}\n" f"Suites: {repo.suite}\n"
+    # A flat repo (Suites: /) has no components, and an empty Components line is a parse
+    # error — emit the field only when there is one.
+    if repo.components:
+        sources_content += f"Components: {repo.components}\n"
+    sources_content += f"Signed-By: {keyring_path}\n"
     _write_system_file(sources_file, sources_content)
 
-    # Pin the repo so its packages take priority over Ubuntu archive
+    # Pin by the repo's OWN host. This was hardcoded to download.01.org, so every repo added
+    # here wrote a pin naming Intel's origin — harmless while Intel was the only repo, and
+    # silently a no-op pin for any other.
+    origin = urlparse(repo.uri).hostname or ""
     pin_file = f"/etc/apt/preferences.d/{repo.name}-pin-{repo.pin_priority}"
     pin_content = (
-        f"Package: *\n"
-        f"Pin: origin download.01.org\n"
-        f"Pin-Priority: {repo.pin_priority}\n"
+        f"Package: *\n" f"Pin: origin {origin}\n" f"Pin-Priority: {repo.pin_priority}\n"
     )
     _write_system_file(pin_file, pin_content)
 
@@ -149,7 +198,7 @@ def _fetch_signing_key(fingerprint: str, dest: str):
     url = f"https://keyserver.ubuntu.com/pks/lookup" f"?op=get&search=0x{fingerprint}"
     print(f"  Fetching signing key {fingerprint[:16]}...")
     proc.run(
-        ["sudo", "curl", "-fsSL", "-o", dest, url],
+        ["sudo", "curl", "-fsSL", *_CURL_RETRY, "-o", dest, url],
         check=True,
     )
 
@@ -361,7 +410,11 @@ def _setup_host_fabric_manager():
     # The unversioned nvidia-fabricmanager metapackage pulls the latest version
     # which can conflict with an already-installed pinned version and may not
     # match the guest driver.
-    fm_pkg = f"nvidia-fabricmanager-{FM_DRIVER_BRANCH}"
+    # Unversioned name: the CUDA repo publishes `nvidia-fabricmanager` (the branch-suffixed
+    # `nvidia-fabricmanager-<branch>` is the Ubuntu multiverse name, and multiverse carries no
+    # build matching the guest driver). The exact version pin below — not the package name —
+    # is what stops apt taking the newest build, so nothing is lost by dropping the suffix.
+    fm_pkg = "nvidia-fabricmanager"
     fm_pkg_pinned = f"{fm_pkg}={FM_PKG_VERSION}"
 
     # Abort if a mismatched FM version is installed — apt will fail with a
