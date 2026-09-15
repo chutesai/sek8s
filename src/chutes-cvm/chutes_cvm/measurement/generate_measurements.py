@@ -353,6 +353,45 @@ def topology_from_profile(doc: dict) -> "tuple[GpuProfile, TopologyFingerprint, 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
+def resolve_hardware_names(hardware: list[dict]) -> None:
+    """Validate hardware-entry identity and disambiguate colliding labels, in place.
+
+    A host class is identified by its FINGERPRINT, not its name. Whenever the fingerprint's
+    inputs change, every class re-registers under a new fingerprint while the old record stays
+    live -- hosts upgrade at different times, so both must remain until the fleet has moved.
+    Those entries resolve to the same display_name + variant_label by construction, so one
+    topology legitimately appears under several fingerprints.
+
+    This used to assert name uniqueness, which turned that expected churn into a hard build
+    failure and stalled releases behind any fingerprint schema change.
+
+    Nothing about the NAME is an invariant, so nothing about it is enforced. It is built from
+    display_name + qemu + variant_label, a strict subset of what feeds rtmr0 (per-profile
+    cpu_vendor / phys_bits / cpu_processor_id all move rtmr0 and appear in none of them), so
+    entries may share a name while differing in rtmr0 without anything being wrong -- the label
+    is simply coarser than the measurement. It is safe to leave unconstrained because the API
+    never keys on it: quotes match by MRTD + RTMRs (configs may share an RTMR0) and name reaches
+    the API only as a log label. Colliding labels are suffixed so logs stay readable.
+
+    Raises ValueError only on a duplicate fingerprint -- the key repeated, i.e. corrupt input.
+    """
+    fp_counts: dict[str, int] = {}
+    for e in hardware:
+        fp_counts[e["fingerprint"]] = fp_counts.get(e["fingerprint"], 0) + 1
+    dupe_fps = sorted(f for f, c in fp_counts.items() if c > 1)
+    if dupe_fps:
+        raise ValueError(f"duplicate host-profile fingerprints: {dupe_fps}")
+
+    by_name: dict[str, list[dict]] = {}
+    for e in hardware:
+        by_name.setdefault(e["name"], []).append(e)
+
+    for name, entries in by_name.items():
+        if len(entries) > 1:
+            for e in entries:
+                e["name"] = f"{name} ({e['fingerprint'][:12]})"
+
+
 def _rtmr0_block(args: argparse.Namespace) -> dict:
     """Generate the version-level RTMR0 block: {version, mrtd, hardware[], pending_profiles?}.
 
@@ -424,15 +463,7 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             )
             continue
 
-    # Every hardware entry must have a globally-unique name — the computed
-    # display_name + variant_label guarantee this today; assert it so a future
-    # profile/topology collision fails the build loudly instead of silently merging.
-    counts: dict[str, int] = {}
-    for e in hardware:
-        counts[e["name"]] = counts.get(e["name"], 0) + 1
-    dupes = sorted(n for n, c in counts.items() if c > 1)
-    if dupes:
-        raise ValueError(f"duplicate hardware names: {dupes}")
+    resolve_hardware_names(hardware)
     # MRTD is version-level (same OVMF/TDVF across every topology of a build).
     if len(mrtds) > 1:
         raise ValueError(f"MRTD differs across topologies: {sorted(mrtds)}")
