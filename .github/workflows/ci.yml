@@ -85,6 +85,32 @@ jobs:
         if: github.base_ref == 'main'
         run: python scripts/promote_changelogs.py --check --strict
 
+  # The guest venv is measured into RTMR3, and guest-requirements.txt decides what goes into it.
+  # If it drifts from poetry.lock the published image installs packages the repo does not
+  # describe, and a third party rebuilding from source cannot reproduce our measurements --
+  # which is not detectable after the fact. Both directions are checked: the lock must match
+  # pyproject (a dep edited without re-locking), and the requirements must match the lock.
+  guest-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Verify poetry.lock matches pyproject
+        run: poetry check --lock
+
+      # Stdlib only, so no poetry install is needed here.
+      - name: Verify guest requirements match poetry.lock
+        run: make check-guest-requirements
+
   opa:
     runs-on: ubuntu-latest
     steps:

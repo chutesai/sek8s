@@ -29,6 +29,14 @@ venv:
 list-packages: ##@development Show packages under src/
 	@echo $(PACKAGES)
 
+.PHONY: guest-requirements
+guest-requirements: ##@development Regenerate the hash-pinned guest venv requirements from poetry.lock
+	python3 scripts/generate_guest_requirements.py
+
+.PHONY: check-guest-requirements
+check-guest-requirements: ##@development Fail if the committed guest requirements are stale vs poetry.lock
+	python3 scripts/generate_guest_requirements.py --check
+
 .PHONY: bundle-gpu-tools
 bundle-gpu-tools: ##@development Rebuild the vendored nvidia-gpu-tools wheel into the chutes-cvm package (maintainer; needs git + network)
 	src/chutes-cvm/tools/gpu-tools/bundle-tools.sh

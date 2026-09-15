@@ -1,3 +1,15 @@
+### Added
+
+- `make guest-requirements` regenerates the hash-pinned requirements for the guest venv from
+  `poetry.lock`, and `make check-guest-requirements` fails if the committed file is stale.
+  Run the former after any dependency change to `sek8s` or `sek8s-common`, or the built image
+  installs different packages than the lock describes.
+- A `guest-requirements` CI job gates both directions of that drift: `poetry check --lock` for a
+  dependency edited without re-locking, and `make check-guest-requirements` for a lock change
+  without regenerating. Without it a stale file could reach `main` and publish an image whose
+  contents the repo does not describe — which nobody can detect afterwards, and which leaves a
+  third party unable to reproduce our measurements.
+
 ### Changed
 
 - `upgrade-guest.yml` now runs `chutes-cvm host setup --noninteractive` on every upgrade,

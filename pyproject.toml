@@ -24,7 +24,7 @@ isort = "^5.13.2"
 mypy = "^1.9.0"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core==2.4.1"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
