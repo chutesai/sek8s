@@ -30,6 +30,10 @@ root_fs_uuid: "{{ ('sek8s-rootfs-' ~ _boot_image_uuid_seed) | to_uuid }}"
 # range (0 to 4294967295).
 initramfs_source_date_epoch: 1700000000
 
+# Fixed /etc/shadow last-change date (days since epoch). Any constant works; it only has
+# to be stable across rebuilds. See normalize-account-dates.yml.
+shadow_lastchg_days: 20000
+
 # Image output env label (override in inventory); used in final_img_path below.
 # The image SET lives in its own <env>/<version>[-debug]/ directory (qcow2 + direct-boot
 # sidecars + manifest.json) — see playbooks/group_vars/host.yml.

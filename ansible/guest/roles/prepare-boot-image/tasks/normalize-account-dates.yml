@@ -1,0 +1,42 @@
+---
+# Pin the /etc/shadow last-change date so the file is byte-identical across rebuilds.
+#
+# Field 3 of each shadow entry is "days since epoch when the password was last changed", which
+# useradd stamps with the current date. Every system account a package install creates (usbmux,
+# dnsmasq, redis, nvidia-persistenced, ...) therefore carries the build date, and two builds on
+# different days differ:
+#
+#   -usbmux:!:20711::::::
+#   +usbmux:!:20712::::::
+#
+# /etc/shadow is RTMR3-measured, so that moves RTMR3 and — because the expected-hashes manifest
+# is baked into the initramfs — RTMR2 with it. Distinct from the root password hash, whose salt
+# is already pinned in chutes-miner-vm.yml; this is the date column, not the hash.
+#
+# Every affected account is locked (`!`), so the date is inert: nothing reads it for a login that
+# cannot happen, and shadow(5) treats an empty field as "not tracked". Runs immediately before
+# generate-expected-hashes.yml so the manifest hashes the normalized file.
+- name: Pin /etc/shadow last-change dates (per-build variability in a measured file)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    root="{{ newroot_mount }}"
+    root="${root%/}"
+    shadow="$root/etc/shadow"
+    [ -f "$shadow" ] || { echo "no shadow file"; exit 0; }
+    before=$(sha384sum < "$shadow" | cut -d' ' -f1)
+    # Field 3 -> {{ shadow_lastchg_days }} for every entry, leaving all other fields untouched.
+    awk -F: 'BEGIN{OFS=":"} NF>=3 { $3="{{ shadow_lastchg_days }}" } { print }' \
+        "$shadow" > "$shadow.normalized"
+    chmod --reference="$shadow" "$shadow.normalized"
+    chown --reference="$shadow" "$shadow.normalized"
+    mv "$shadow.normalized" "$shadow"
+    after=$(sha384sum < "$shadow" | cut -d' ' -f1)
+    echo "shadow ${before:0:16} -> ${after:0:16}"
+  args:
+    executable: /bin/bash
+  register: _shadow_normalize
+  changed_when: true
+
+- name: Show shadow normalization result
+  ansible.builtin.debug:
+    var: _shadow_normalize.stdout

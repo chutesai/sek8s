@@ -185,6 +185,31 @@
     group: root
     mode: '0644'
 
+# DEBUG ONLY — the one place the measured set differs from production.
+#
+# /etc/ssh/ssh_host_* are generated randomly per build. Production deletes them during cleanup
+# (sshd is removed there), so measuring the whole directory is stable AND catches anything
+# unexpected appearing in it. Debug keeps sshd, so the keys stay and would move RTMR3 on every
+# rebuild — which breaks more than the boot gate: RTMR3_VERIFY_DEBUG_MODE downgrades the local
+# poweroff to a warning, but the validator still rejects a VM whose RTMR3 does not match its
+# registered value.
+#
+# Narrowing to the policy files leaves the keys in place (sshd starts, the build key still works)
+# and simply does not measure them. Deleting them instead would need boot-time regeneration, which
+# drifts RTMR3 on the SECOND boot — the same attestation failure, one boot later.
+- name: Narrow /etc/ssh for debug builds (host keys are random per build)
+  ansible.builtin.replace:
+    path: /etc/tdx-measure.conf
+    regexp: '^/etc/ssh$'
+    replace: |-
+      /etc/ssh/moduli
+      /etc/ssh/ssh_config
+      /etc/ssh/ssh_config.d
+      /etc/ssh/ssh_import_id
+      /etc/ssh/sshd_config
+      /etc/ssh/sshd_config.d
+  when: debug_build | default(false)
+
 # ── Expected hashes for canonical files: NOT generated here ──────────────────
 # This role owns only the BOOT-TIME side of RTMR3: the path list (/etc/tdx-measure.conf), the
 # initramfs hook, and the init-bottom verifier below. The canonical MANIFEST

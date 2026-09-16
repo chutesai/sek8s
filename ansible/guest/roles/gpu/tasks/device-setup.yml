@@ -123,6 +123,32 @@
         - not skip_cuda | bool
         - target_driver_installed.stdout == 'missing'
       block:
+        # DKMS signs each module with a Machine Owner Key that shim-signed generates randomly on
+        # first use, so every build produced different nvidia*.ko.zst bytes -- 20 modules across
+        # two kernels, all measured under /usr/lib/modules, drifting RTMR3 on every rebuild.
+        #
+        # MUST precede the CUDA toolkit install below -- that pulls the driver and triggers the
+        # DKMS build, so a drop-in written after it arrives too late. The directory is created
+        # explicitly because dkms is not installed yet at this point.
+        - name: Ensure dkms drop-in directory exists
+          ansible.builtin.file:
+            path: /etc/dkms/framework.conf.d
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Disable DKMS module signing (random per-build MOK; measured into RTMR3)
+          ansible.builtin.copy:
+            dest: /etc/dkms/framework.conf.d/00-no-module-signing.conf
+            owner: root
+            group: root
+            mode: '0644'
+            content: |
+              # See gpu/tasks/device-setup.yml: the signing key is random per build and the guest
+              # never verifies it; RTMR3 measures the built modules instead.
+              try_sign_modules="false"
+
         - name: Stop NVIDIA services before upgrade (if present)
           ansible.builtin.systemd:
             name: "{{ item }}"
@@ -443,24 +469,21 @@
   register: nvidia_drm_blacklist
   when: blacklist_nvidia_drm | default(false) | bool
 
+# Unconditional: the guard here was `when: not stat.exists`, which tests existence rather than
+# content, so a zero-byte file left by earlier build state satisfied it and the real content was
+# never written — ECDSA/ECDH then do not preload before nvidia.ko. A cached build shipped exactly
+# that (empty file, sha384 of ""), while a NO_CACHE build wrote it properly, which also drifted
+# RTMR3. `copy` with inline content is already idempotent, so the guard only suppressed repair.
 - name: Add NVIDIA LKCA preload drop-in
-  block:
-    - name: Check for existing nvidia-lkca.conf
-      ansible.builtin.stat:
-        path: /etc/modprobe.d/nvidia-lkca.conf
-      register: nvidia_lkca_stat
-
-    - name: Add NVIDIA LKCA preload drop-in (only if missing)
-      copy:
-        dest: /etc/modprobe.d/nvidia-lkca.conf
-        owner: root
-        group: root
-        mode: '0644'
-        content: |
-          # Ensures ECDSA/ECDH crypto modules load before nvidia.ko
-          install nvidia /sbin/modprobe ecdsa_generic; /sbin/modprobe ecdh; /sbin/modprobe --ignore-install nvidia
-      notify: update initramfs
-      when: not nvidia_lkca_stat.stat.exists
+  copy:
+    dest: /etc/modprobe.d/nvidia-lkca.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Ensures ECDSA/ECDH crypto modules load before nvidia.ko
+      install nvidia /sbin/modprobe ecdsa_generic; /sbin/modprobe ecdh; /sbin/modprobe --ignore-install nvidia
+  notify: update initramfs
   
 - name: Add nvidia-tdx systemd unit
   block:
