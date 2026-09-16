@@ -134,6 +134,69 @@ jobs:
           fi
           echo "consistent: $pins"
 
+  # Two invariants around the pinned base image:
+  #
+  #   1. The version and its hash must move together. The version selects the published artifact,
+  #      the hash validates it — changing one alone is a broken pin that either fails the download
+  #      or, worse, validates the wrong artifact.
+  #   2. Changing what the layer CONTAINS requires a new layer. The guest build no longer runs the
+  #      `common` role, so a package added there without rebuilding is simply absent from the image,
+  #      and nothing at build time notices: the layer's hash still matches and the build succeeds.
+  #      This is the one drift hash-pinning cannot catch by itself.
+  guest-base-image:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Base image version and hash must change together
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          ver=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_VERSION' || true)
+          sha=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_SHA256' || true)
+          if [ -n "$ver" ] && [ -z "$sha" ]; then
+            echo "BASE_IMAGE_VERSION changed but BASE_IMAGE_SHA256 did not."
+            echo "The hash validates the artifact the version selects — a new version needs its hash."
+            exit 1
+          fi
+          if [ -z "$ver" ] && [ -n "$sha" ]; then
+            echo "BASE_IMAGE_SHA256 changed but BASE_IMAGE_VERSION did not."
+            echo "Republishing a different artifact under the same version is not allowed: consumers"
+            echo "that already pinned that version would silently get different bytes. Cut a new version."
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Require a base image bump when the common package set changes
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          touches_packages=$(printf '%s\n' "$changed" \
+            | grep -E '^ansible/guest/roles/common/' || true)
+          # The pins the base image is built FROM live in all.yml, which also holds unrelated
+          # vars — so match on the changed LINES, not the file.
+          if printf '%s\n' "$changed" | grep -qFx 'ansible/guest/playbooks/group_vars/all.yml'; then
+            if git diff origin/${{ github.base_ref }}...HEAD -- ansible/guest/playbooks/group_vars/all.yml \
+                 | grep -qE '^[+-](canonical_image_|apt_snapshot)'; then
+              touches_packages="$touches_packages ansible/guest/playbooks/group_vars/all.yml (base image pins)"
+            fi
+          fi
+          bumped=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_VERSION' || true)
+          if [ -n "$touches_packages" ] && [ -z "$bumped" ]; then
+            echo "These change what the base image contains:"
+            printf '  %s\n' $touches_packages
+            echo
+            echo "but ansible/guest/BASE_IMAGE_VERSION was not updated."
+            echo "The guest build does not run the common role, so these packages would be missing"
+            echo "from the image. Rebuild and publish the layer:"
+            echo "  ansible-playbook -i <inventory> playbooks/base-image.yml -e base_image_version=YYYY.MM.P"
+            echo "then update BASE_IMAGE_VERSION and BASE_IMAGE_SHA256."
+            exit 1
+          fi
+          echo "ok"
+
   opa:
     runs-on: ubuntu-latest
     steps:

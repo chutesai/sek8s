@@ -258,6 +258,33 @@ define _rclone_pass_prompt
 	export RCLONE_CONFIG_PASS
 endef
 
+# Publishing is deliberately NOT part of base-image.yml. Keeping it a separate target means a
+# build cannot accidentally publish, credentials stay out of the build path, and a layer can be
+# inspected (dpkg -V, boot it) before anyone can consume it. Same split as the guest image.
+.PHONY: publish-base-image
+publish-base-image: ##@images Publish the built base image + sha256/provenance sidecars to R2
+publish-base-image: BASE_VER := $(shell cat ansible/guest/BASE_IMAGE_VERSION 2>/dev/null | tr -d '[:space:]')
+publish-base-image: BASE_DIR := guest-tools/image/base/$(BASE_VER)
+publish-base-image:
+	@if [ -z "$(BASE_VER)" ]; then \
+		echo "ansible/guest/BASE_IMAGE_VERSION is empty — nothing to publish"; exit 1; \
+	fi; \
+	if [ ! -f "$(BASE_DIR)/base-$(BASE_VER).qcow2" ]; then \
+		echo "No built base image at $(BASE_DIR) — run playbooks/base-image.yml first"; exit 1; \
+	fi; \
+	pinned=$$(cat ansible/guest/BASE_IMAGE_SHA256 2>/dev/null | tr -d '[:space:]'); \
+	actual=$$(sha256sum "$(BASE_DIR)/base-$(BASE_VER).qcow2" | cut -d' ' -f1); \
+	if [ "$$pinned" != "$$actual" ]; then \
+		echo "BASE_IMAGE_SHA256 does not match the built image:"; \
+		echo "  pinned: $$pinned"; \
+		echo "  actual: $$actual"; \
+		echo "Publishing bytes nobody has pinned would let a guest build fetch an image its"; \
+		echo "checksum rejects. Update BASE_IMAGE_SHA256 first."; \
+		exit 1; \
+	fi; \
+	$(_rclone_pass_prompt); \
+	guest-tools/scripts/publish-base-image.sh --version "$(BASE_VER)"
+
 .PHONY: publish-guest
 publish-guest: ##@images Publish built prod guest image + direct-boot artifacts to R2 (ENV=prod)
 publish-guest:

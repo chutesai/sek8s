@@ -14,26 +14,6 @@ ansible_ssh_common_args: -o StrictHostKeyChecking=no
 timezone: UTC
 swap_disable: true
 
-# System packages to install
-system_packages:
-  - curl
-  - wget
-  - vim
-  - iproute2
-  - socat
-  - conntrack
-  - ipset
-  - jq
-  - apt-transport-https
-  - ca-certificates
-  - gnupg-agent
-  - software-properties-common
-  - cryptsetup
-  - dhcpcd-base
-  - openssl
-  - xfsprogs
-  - e2fsprogs
-
 # Networking configuration (used by all)
 k3s_api_port: "6443"
 cluster_cidr: 10.42.0.0/16
@@ -45,15 +25,6 @@ k3s_version: v1.35.4+k3s1
 # Ubuntu major/minor version.
 ubuntu_major: "24"
 ubuntu_minor: "04"
-# Guest HWE kernel pin (Ubuntu <= 24 only). The build installs the rolling meta
-# linux-image-generic-hwe-<major>.<minor>, which tracks the latest HWE kernel and
-# would silently advance on every rebuild — changing the guest RTMR/measurement
-# baseline. Pinning it to an exact version makes the guest kernel reproducible and
-# bumps deliberate. Trade-off: opts out of automatic HWE kernel security updates.
-# MUST stay >= 6.16 (RTMR3 depends on the tsm-mr sysfs interface merged in 6.16).
-# Expires: the pocket keeps only the newest HWE ABI, so a superseded pin stops resolving. Current
-# version: people.canonical.com/~ubuntu-archive/madison.cgi?package=linux-image-generic-hwe-24.04
-guest_hwe_kernel_version: "7.0.0-31.31~24.04.1"
 # CUDA version - leave as-is unless skipping CUDA entirely (skip_cuda: true) for providers with pre-installed drivers
 cuda_version: "13-2"
 # NVIDIA driver branch
@@ -96,3 +67,32 @@ critical_kernel_modules:
   - iptable_nat
   - iptable_filter
   - ip_tables
+
+# ── Base image ───────────────────────────────────────────────────────────────
+# In `all` scope, not `host`: the vm plays need these too (base-image.yml stamps the version and
+# ubuntu_version into the image), and group_vars/host.yml does not apply to the vm group.
+ubuntu_version: "24.04"
+
+# The pin of the PUBLISHED base image the guest build consumes. Two plain files matching the
+# VERSION convention: the version selects the artifact, the sha256 validates it. The hash must
+# live in the repo — fetching it from R2 alongside the image would mean trusting R2 to say what
+# the image should hash to, which defeats the pin. CI enforces that both move together.
+base_image_version: "{{ lookup('file', playbook_dir + '/../BASE_IMAGE_VERSION') | trim }}"
+base_image_sha256: "{{ lookup('file', playbook_dir + '/../BASE_IMAGE_SHA256') | trim }}"
+
+# What base-image.yml builds FROM. Defaults rather than -e arguments so the repo records which
+# upstream image each published base image came from, and `git log` on this file is the history
+# of that. MUST be a DATED respin: releases/24.04/release/ is rolling and Canonical repoints it
+# (observed moving within a day), which is what made the guest build unreproducible.
+# Hash comes from that respin's own SHA256SUMS, never the rolling one.
+canonical_image_url: "https://cloud-images.ubuntu.com/releases/24.04/release-20260911/ubuntu-24.04-server-cloudimg-amd64.img"
+canonical_image_sha256: "612b2c0cc1bc413a6cb8c38fd611794caf0f2b436c50013d8b3794db12ad7354"
+
+# Point-in-time Ubuntu archive for the base image build. Pinned here rather than passed on the
+# command line so the repo records which archive state each published base image came from —
+# together with canonical_image_* above, that is what makes the layer rebuildable by a third
+# party rather than merely verifiable by inspection. Matches the dated respin above so both
+# halves of the image come from the same moment.
+# Empty = live mirror; package versions then float and the layer is not rebuildable.
+apt_snapshot: "20260911T000000Z"
+apt_snapshot_base_url: "https://snapshot.ubuntu.com/ubuntu"

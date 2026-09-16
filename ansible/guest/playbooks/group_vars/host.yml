@@ -1,4 +1,3 @@
-ubuntu_version: "24.04"
 img_dir: "{{ repo_root }}/guest-tools/image"
 # VM image release version from repo root (distinct from Python package version)
 vm_version: "{{ lookup('file', playbook_dir + '/../VERSION') | trim }}"
@@ -13,8 +12,9 @@ image_set_name: "{{ vm_version }}{{ '-debug' if debug_build | default(false) els
 image_set_dir: "{{ img_dir }}/{{ build_env }}/{{ image_set_name }}"
 final_img_path: "{{ image_set_dir }}/{{ image_set_name }}.qcow2"
 base_img_path: "{{ img_dir }}/tdx-guest-ubuntu-{{ ubuntu_version }}.qcow2"
-prepared_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-prepared.qcow2"
-gpu_img_path: "{{ img_dir }}/{{ build_env }}/{{ vm_version }}-gpu.qcow2"
+checkpoint_dir: "{{ img_dir }}/checkpoints"
+prepared_img_path: "{{ checkpoint_dir }}/{{ vm_version }}-base{{ base_image_version | default('none') }}-prepared.qcow2"
+gpu_img_path: "{{ checkpoint_dir }}/{{ vm_version }}-base{{ base_image_version | default('none') }}-gpu.qcow2"
 libvirt_image_dir: "/var/lib/libvirt/images"
 build_img_path: "{{ libvirt_image_dir }}/tdx-guest.qcow2"
 vm_name: "tdx-build"
@@ -24,3 +24,24 @@ vm_name: "tdx-build"
 # skip). To build the image WITHOUT them, run `--tags build` or `--skip-tags
 # compute-measurements` (the whole measurement + manifest chain shares that tag). The
 # `capture-ccel` role is retained standalone for ad-hoc debugging only, not in the build.
+
+# ── Base image (built by base-image.yml, consumed by chutes-miner-vm.yml) ─────
+# Ubuntu cloud image + the `common` package set, published and pinned by hash. This is what
+# makes the guest build reproducible without every upstream staying still: the Ubuntu archive
+# and the Intel SGX repo have no version pins, and those packages are most of what RTMR3
+# measures. Versioned independently of vm_version — it changes on a different clock (deliberate
+# package-set bumps, not code changes) and old versions are retained so a measurement published
+# months ago stays verifiable.
+base_image_dir: "{{ img_dir }}/base/{{ base_image_version | default('unset') }}"
+base_image_path: "{{ base_image_dir }}/base-{{ base_image_version | default('unset') }}.qcow2"
+
+# Where published base images are fetched from. The hash is the contract, so this is only
+# transport — R2, a local file:// path for testing, anything that serves the same bytes.
+base_image_base_url: "https://vm.chutes.ai/base-images"
+base_image_url: "{{ base_image_base_url }}/{{ base_image_version | default('unset') }}/base-{{ base_image_version | default('unset') }}.qcow2"
+
+# Build VM identity. In group_vars because two roles need it: virt-host-prereqs pins the DHCP
+# reservation to this MAC, and run-vm waits for SSH on the resulting IP. Role defaults are scoped
+# to their own role, so neither could see the other's copy.
+build_vm_mac: "52:54:00:60:a6:0a"
+build_vm_ip: "192.168.122.176"

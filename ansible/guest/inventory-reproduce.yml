@@ -29,7 +29,5 @@ all:
     tdx_base_url: "https://cvm.chutes.ai"
     validator_base_url: "https://api.chutes.ai"
     build_env: "prod"
-    prime_wait_timeout: 300
 
     debug_build: false
-    guest_ssh_keys: []

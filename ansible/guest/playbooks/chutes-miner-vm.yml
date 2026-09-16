@@ -26,6 +26,26 @@
           sudo env HOME=/root LUKS_PASSPHRASE=... ansible-playbook -i <inventory> <playbook>
       when: not build_rustup.stat.exists
 
+    # The base image (Ubuntu + the common package set) is a published, hash-pinned artifact built
+    # by base-image.yml. It is what keeps this build reproducible: the Ubuntu archive and the
+    # Intel SGX repo have no version pins, and those packages are most of what RTMR3 measures.
+    #
+    # FAIL, never rebuild silently. A missing layer that quietly falls back to an unpinned
+    # upstream fetch produces a DIFFERENT image with DIFFERENT measurements while looking like a
+    # normal success — which is exactly the class of drift this whole mechanism exists to stop.
+    # To build one deliberately, run base-image.yml.
+    - name: Require a pinned base image
+      ansible.builtin.assert:
+        that:
+          - base_image_version | default('') | length > 0
+          - base_image_sha256 | default('') | length > 0
+        fail_msg: >-
+          base_image_version and base_image_sha256 must both be set (normally in group_vars).
+          Build and publish a layer with:
+            ansible-playbook -i <inventory> playbooks/base-image.yml -e base_image_version=YYYY.MM.P
+          then pin the version and the sha256 it reports. This build will NOT fall back to an
+          unpinned upstream image.
+
     - name: Output build configuration
       ansible.builtin.debug:
         msg:
@@ -33,6 +53,7 @@
           - "VM version: {{ vm_version }}"
           - "Debug build: {{ debug_build | default(false) }}"
           - "Final image: {{ final_img_path }}"
+          - "Base image: {{ base_image_version }} ({{ base_image_sha256[:16] }}...)"
 
     - name: Confirm intended build before starting VM
       ansible.builtin.pause:
@@ -76,23 +97,25 @@
       register: _cvm_install
       changed_when: "'Installed chutes-cvm' in _cvm_install.stdout"
 
-    - name: Include run TDX vm role
+    # Starts from the published base image, not the Ubuntu cloud image — the layer already
+    # contains the common package set, so this build never resolves those packages against a
+    # moving archive. base_image_sha256 is the contract; base_image_url is only transport.
+    - name: Host virtualisation prerequisites
+      ansible.builtin.include_role:
+        name: virt-host-prereqs
+
+    # Fetches the published base image, which already contains the common package set, the
+    # resized disk and the kernel. prepare-image is deliberately NOT included here.
+    - name: Fetch the pinned base image
+      ansible.builtin.include_role:
+        name: fetch-image
+      vars:
+        source_image_url: "{{ base_image_url }}"
+        source_image_sha256: "{{ base_image_sha256 }}"
+
+    - name: Boot the build VM
       ansible.builtin.include_role:
         name: run-vm
-
-- name: Common Setup
-  hosts: vm
-  become: true
-  tags:
-    - common
-    - build
-  handlers:
-    - name: Global handlers
-      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
-  tasks:
-    - name: Include common role
-      ansible.builtin.include_role:
-        name: common
 
 - name: GPU Setup
   hosts: vm

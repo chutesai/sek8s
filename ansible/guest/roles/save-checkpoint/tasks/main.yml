@@ -18,9 +18,28 @@
       become: true
       changed_when: true
 
+    # virsh suspend pauses vCPUs but does not flush the guest page cache, so anything written in
+    # the seconds before it never reaches the virtual disk and is absent from the copy. Observed:
+    # a file written 0.9s before the suspend was missing from the captured image, and the
+    # cloud-init logs deleted just above were still present in it.
+    - name: Flush guest writes to disk before capture
+      ansible.builtin.command: sync
+      delegate_to: build-node
+      become: true
+      changed_when: false
+
     - name: Suspend build VM
       ansible.builtin.command: virsh suspend "{{ vm_name }}"
       changed_when: true
+
+    # copy does not create parent directories, and a fresh checkout has guest-tools/image/ (from
+    # its .gitkeep) but not the per-env subdirectory. Only a host with prior builds already has it,
+    # so without this the first build on a clean clone fails here — after the VM is suspended.
+    - name: Ensure the checkpoint directory exists
+      ansible.builtin.file:
+        path: "{{ checkpoint_img_path | dirname }}"
+        state: directory
+        mode: '0755'
 
     - name: Copy build disk to checkpoint image
       ansible.builtin.copy:

@@ -1,0 +1,17 @@
+---
+# ── Pinned starting image ────────────────────────────────────────────────────
+# The image this build starts from, pinned by hash. Deliberately has NO default: both
+# playbooks must state what they are starting from, and an unset value fails loudly rather
+# than silently falling back to an unpinned upstream fetch.
+#
+#   base-image.yml       -> the Ubuntu cloud image (a dated Canonical respin)
+#   chutes-miner-vm.yml  -> our published base image (Ubuntu + the common package set)
+#
+# source_image_sha256 is the source of truth; source_image_url is only transport, so R2, a
+# dated Canonical URL and a local file:// path are interchangeable as long as the hash matches.
+source_image_url: ""
+source_image_sha256: ""
+
+# Whether to turn the source image into a prepared checkpoint (resize, rootfs expand,
+# kernel/grub install). Only base-image.yml does this, starting from a raw cloud image; the
+# guest build boots our published base image, which already has all of it.
