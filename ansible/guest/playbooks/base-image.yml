@@ -137,6 +137,37 @@
       ansible.builtin.command: cloud-init clean --logs
       changed_when: true
 
+    # `cloud-init clean` resets the state but leaves what cloud-init INSTALLED: run-vm seeds
+    # `users: - name: root, ssh-authorized-keys`, so the build host's key stays in
+    # /root/.ssh/authorized_keys and ships in the published layer. Same class as the cloud-config
+    # above — host-specific bytes in an artifact that is supposed to be host-independent.
+    #
+    # Safe to delete: it is not what grants access on the next boot. run-vm writes fresh user-data
+    # and mints a new seed ISO on EVERY boot (cloud-localds -> attached as cdrom), and the clean
+    # above means cloud-init re-runs and re-provisions from that seed. So the consumer's own key
+    # is installed at boot; this copy is a stale leftover cloud-init would overwrite anyway.
+    #
+    # Last task in the VM play: nothing needs SSH after it, and the capture play shuts the VM down
+    # via virsh from the host.
+    - name: Purge SSH authorized_keys from the captured layer
+      ansible.builtin.shell: |
+        set -u
+        while IFS=: read -r _ _ _ _ _ home _; do
+          [ -n "$home" ] && [ -d "$home/.ssh" ] || continue
+          rm -f "$home/.ssh/authorized_keys" "$home/.ssh/authorized_keys2"
+          rmdir "$home/.ssh" 2>/dev/null || true
+        done < /etc/passwd
+        find / -xdev -type f -name 'authorized_keys*' -delete 2>/dev/null || true
+      changed_when: true
+
+    # Prove it rather than assume it: a survivor would otherwise surface only as a base layer
+    # nobody else can reproduce, long after it was published and pinned.
+    - name: Verify no authorized_keys survive in the captured layer
+      ansible.builtin.command: find / -xdev -type f -name 'authorized_keys*'
+      register: _base_authorized_keys
+      changed_when: false
+      failed_when: _base_authorized_keys.stdout | length > 0
+
 # Nothing stamps the layer's identity into the image on purpose: base_image_sha256 pins it and
 # fetch-image validates the download against that hash, and the base image is an input to a
 # deterministic build — reproducing the measurements already implies the same layer. A file
