@@ -1,0 +1,73 @@
+---
+# Acquire the image this build starts from, verified against a pinned hash.
+#
+# source_image_sha256 is the contract; source_image_url is only transport, so a dated Canonical
+# respin, an R2 URL or a local file:// path are interchangeable. get_url re-downloads when the
+# on-disk file does not match the hash, so a changed pin self-heals and a corrupted cache is
+# replaced rather than silently used.
+#
+#   base-image.yml       the Ubuntu cloud image (a DATED respin)
+#   chutes-miner-vm.yml  our published base image
+- name: Invalidate all image caches
+  when: no_cache == 'true'
+  block:
+    - name: Remove stale base image
+      ansible.builtin.file:
+        path: "{{ base_img_path }}"
+        state: absent
+
+    - name: Remove stale prepared image
+      ansible.builtin.file:
+        path: "{{ prepared_img_path }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove stale GPU image
+      ansible.builtin.file:
+        path: "{{ gpu_img_path }}"
+        state: absent
+      failed_when: false
+
+- name: Check if prepared image cache exists
+  ansible.builtin.stat:
+    path: "{{ prepared_img_path }}"
+  register: prepared_img_stat
+
+# Hash first so a cached image that already matches the pin is not re-fetched, and one that does
+# not is replaced — the same self-healing get_url gave us, kept explicit now that the download is
+# split by transport. Costs nothing under NO_CACHE, where the file has just been removed.
+- name: Check whether a cached source image already matches the pin
+  ansible.builtin.stat:
+    path: "{{ base_img_path }}"
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: source_img_stat
+
+- name: Download source image (pinned, parallel)
+  ansible.builtin.command:
+    cmd: >-
+      aria2c -x 16 -s 16 -k 1M --allow-overwrite=true
+      --checksum=sha-256={{ source_image_sha256 }}
+      --dir={{ base_img_path | dirname }}
+      --out={{ base_img_path | basename }}
+      {{ source_image_url }}
+  when:
+    - source_image_url is match('https?://')
+    - not source_img_stat.stat.exists or source_img_stat.stat.checksum != source_image_sha256
+  changed_when: true
+
+- name: Ensure source image permissions
+  ansible.builtin.file:
+    path: "{{ base_img_path }}"
+    mode: '0644'
+  when: source_image_url is match('https?://')
+
+# aria2c speaks only http(s) — it rejects file:// outright — so local and other transports keep
+# the single-stream path. Parallelism would not help a local copy anyway.
+- name: Download source image (pinned, non-HTTP transport)
+  ansible.builtin.get_url:
+    url: "{{ source_image_url }}"
+    dest: "{{ base_img_path }}"
+    checksum: "sha256:{{ source_image_sha256 }}"
+    mode: '0644'
+  when: source_image_url is not match('https?://')

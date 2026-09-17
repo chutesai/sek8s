@@ -4,6 +4,24 @@
     path: /etc/apt/apt.conf.d/01proxy
     state: absent
 
+# A point-in-time archive pins package VERSIONS, which a mirror cannot: mirrors all serve
+# whatever is current, so two builds days apart get different packages from the same host. With
+# a snapshot the whole mirror-selection question is moot — there is one URL and it is frozen.
+- name: Pin apt to a point-in-time archive snapshot
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    regexp: '^URIs:.*$'
+    replace: "URIs: {{ apt_snapshot_base_url }}/{{ apt_snapshot }}"
+  loop:
+    - /etc/apt/sources.list.d/ubuntu.sources
+  failed_when: false
+  when: apt_snapshot | default('') | length > 0
+
+- name: Report the pinned snapshot
+  ansible.builtin.debug:
+    msg: "apt pinned to {{ apt_snapshot_base_url }}/{{ apt_snapshot }} (archive + security)"
+  when: apt_snapshot | default('') | length > 0
+
 - name: Benchmark Ubuntu mirrors and select fastest
   ansible.builtin.shell: |
     best_mirror="archive.ubuntu.com"
@@ -28,15 +46,19 @@
     echo "${best_mirror}"
   register: benchmarked_mirror
   changed_when: false
-  when: apt_mirror | length == 0
+  when:
+    - apt_snapshot | default('') | length == 0
+    - apt_mirror | length == 0
 
 - name: Set effective apt mirror fact
   ansible.builtin.set_fact:
     effective_apt_mirror: "{{ apt_mirror if apt_mirror | length > 0 else benchmarked_mirror.stdout | trim }}"
+  when: apt_snapshot | default('') | length == 0
 
 - name: Log selected mirror
   ansible.builtin.debug:
     msg: "{{ 'Using pinned apt mirror: ' + effective_apt_mirror if apt_mirror | length > 0 else 'Auto-detected fastest apt mirror: ' + effective_apt_mirror }}"
+  when: apt_snapshot | default('') | length == 0
 
 - name: Update apt sources to use selected mirror
   ansible.builtin.replace:
@@ -44,6 +66,7 @@
     regexp: 'http://[^/]*/ubuntu'
     replace: "http://{{ effective_apt_mirror }}/ubuntu"
   failed_when: false
+  when: apt_snapshot | default('') | length == 0
 
 - name: Update legacy sources.list if present
   ansible.builtin.replace:
@@ -51,3 +74,5 @@
     regexp: 'http://[^/]*/ubuntu'
     replace: "http://{{ effective_apt_mirror }}/ubuntu"
   failed_when: false
+
+  when: apt_snapshot | default('') | length == 0

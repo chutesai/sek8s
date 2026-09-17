@@ -1,0 +1,4 @@
+---
+# Empty = benchmark for the fastest mirror. Ignored when apt_snapshot is set.
+apt_mirror: ""
+base_img_resize: "100G"

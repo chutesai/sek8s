@@ -24,3 +24,21 @@
     owner: root
     group: root
     mode: "0644"
+
+# Enforcing builds only — the verifier powers off when a profile is not in enforce mode, and
+# debug builds deliberately run them in complain. Requires= ignores enablement, so the drop-in
+# itself must be absent.
+- name: Copy system-manager AppArmor verification dependency (enforcing builds only)
+  ansible.builtin.copy:
+    src: files/system-manager.service.d/apparmor-verify.conf
+    dest: /etc/systemd/system/system-manager.service.d/apparmor-verify.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: not (debug_build | default(false) | bool)
+
+- name: Remove system-manager AppArmor verification dependency on debug builds
+  ansible.builtin.file:
+    path: /etc/systemd/system/system-manager.service.d/apparmor-verify.conf
+    state: absent
+  when: debug_build | default(false) | bool

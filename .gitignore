@@ -17,6 +17,12 @@ measure
 **/*.qcow2
 **/*.raw
 
+# Image build outputs (qcow2 + its boot artifacts, manifests, sha256/provenance sidecars).
+# Only the directory itself is tracked; everything a build writes into it is published to R2,
+# not committed.
+guest-tools/image/*
+!guest-tools/image/.gitkeep
+
 # GPU admin tools - ignore source files and build artifacts, keep wheel and config files
 host-tools/scripts/gpu-tools/*
 !host-tools/scripts/gpu-tools/bundle-tools.sh

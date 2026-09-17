@@ -1,0 +1,92 @@
+---
+# Host-side virtualisation prerequisites for driving a build VM: packages, libvirt
+# dynamic ownership, the default network and the build VM's DHCP reservation.
+#
+# Split out of run-vm, which had grown to mean four things at once. This part is host
+# provisioning, not VM lifecycle — build-setup.yml installs most of these packages already,
+# so this is the idempotent belt for a host that was provisioned before they were added.
+- name: Install dependencies
+  ansible.builtin.apt:
+    name:
+      - git
+      - libguestfs-tools
+      - virtinst
+      - genisoimage
+      - libvirt-daemon-system
+      - qemu-utils
+      - cryptsetup
+      - cloud-image-utils
+      # fetch-image pulls the multi-GB base image in parallel; a single HTTP stream caps at
+      # around 30 MB/s to the CDN regardless of available bandwidth.
+      - aria2
+    state: present
+    update_cache: yes
+    cache_valid_time: 3600
+
+# Both of these are needed by run-vm, several roles later and after the multi-GB base image has
+# already been fetched. Neither failed usefully on its own: a missing key surfaced as a file-lookup
+# error while rendering cloud-init, and missing KVM did not fail at all — virt-install silently
+# fell back to emulation, turning a ~30 minute build into a many-hour one that merely looked hung.
+- name: Check the build VM SSH keypair and KVM are present
+  ansible.builtin.stat:
+    path: "{{ item | expanduser }}"
+  register: _build_host_reqs
+  loop:
+    - "{{ ssh_public_key_path }}"
+    - "{{ ssh_private_key_path }}"
+    - /dev/kvm
+
+- name: Require an SSH keypair for the build VM
+  ansible.builtin.assert:
+    that: _build_host_reqs.results[0].stat.exists and _build_host_reqs.results[1].stat.exists
+    fail_msg: >-
+      No SSH keypair at {{ ssh_public_key_path | expanduser }} (+ private key). Ansible uses it to
+      reach the build VM, so the build cannot proceed without it. `~` resolves against this
+      process's HOME, so run the build as `sudo env HOME=/root ...` and create the key for root:
+        sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+
+- name: Require KVM
+  ansible.builtin.assert:
+    that: _build_host_reqs.results[2].stat.exists
+    fail_msg: >-
+      /dev/kvm is missing, so the build VM would run under software emulation — it would still
+      succeed, and produce correct measurements, but take hours rather than ~30 minutes. Enable
+      virtualisation in firmware, or nested virtualisation if this host is itself a VM.
+
+- name: Configure libvirt to enable dynamic ownership
+  ansible.builtin.lineinfile:
+    path: /etc/libvirt/qemu.conf
+    regexp: '^#?dynamic_ownership\s*='
+    line: 'dynamic_ownership = 1'
+    backup: yes
+  notify: restart libvirtd
+
+- name: Apply libvirt config before any disk operations
+  ansible.builtin.meta: flush_handlers
+
+- name: Ensure libvirt default network is active
+  ansible.builtin.command: virsh net-start default
+  changed_when: false
+  failed_when: false
+
+- name: Set libvirt default network to autostart
+  ansible.builtin.command: virsh net-autostart default
+  changed_when: false
+  failed_when: false
+
+- name: Remove any existing DHCP reservations for build VM
+  ansible.builtin.shell: |
+    virsh net-dumpxml default | grep -q "{{ build_vm_mac }}" && \
+    virsh net-update default delete ip-dhcp-host \
+      "<host mac='{{ build_vm_mac }}'/>" --live --config || true
+  changed_when: false
+  failed_when: false
+
+- name: Create static DHCP reservation for build VM
+  ansible.builtin.command: |
+    virsh net-update default add-last ip-dhcp-host \
+      "<host mac='{{ build_vm_mac }}' name='build-node' ip='{{ build_vm_ip }}'/>" \
+      --live --config
+  register: reservation_result
+  failed_when: false
+  changed_when: "'Updated' in reservation_result.stdout or reservation_result.rc == 0"

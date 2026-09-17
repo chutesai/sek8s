@@ -1,0 +1,107 @@
+---
+# Turn a raw Ubuntu cloud image into something bootable: resize, expand the rootfs, and install
+# the kernel/grub packages offline via virt-customize.
+#
+# ONLY base-image.yml includes this. It MUTATES the image, which is why it is not part of run-vm:
+# re-running it on our published base image would resize an already-resized disk and re-run apt
+# install on installed kernel/grub packages against a live archive, dropping new versions into
+# RTMR3-measured paths. A guest build cannot do that here because it never loads these tasks.
+- name: Benchmark Ubuntu mirrors and select fastest
+  ansible.builtin.shell: |
+    best_mirror="archive.ubuntu.com"
+    best_speed=0
+    for mirror in \
+        au.archive.ubuntu.com \
+        nz.archive.ubuntu.com \
+        us.archive.ubuntu.com \
+        de.archive.ubuntu.com \
+        gb.archive.ubuntu.com \
+        archive.ubuntu.com; do
+      speed=$(curl -o /dev/null -s --connect-timeout 3 --max-time 8 \
+        -w "%{speed_download}" \
+        "http://${mirror}/ubuntu/dists/noble/Release" 2>/dev/null \
+        | awk '{print int($1)}')
+      speed=${speed:-0}
+      if [ "$speed" -gt "$best_speed" ]; then
+        best_speed="$speed"
+        best_mirror="$mirror"
+      fi
+    done
+    echo "${best_mirror}"
+  register: benchmarked_mirror_host
+  changed_when: false
+  when: apt_mirror | length == 0
+
+- name: Set effective apt mirror fact
+  ansible.builtin.set_fact:
+    effective_apt_mirror: "{{ apt_mirror if apt_mirror | length > 0 else benchmarked_mirror_host.stdout | trim }}"
+
+- name: Log selected mirror
+  ansible.builtin.debug:
+    msg: "{{ 'Using pinned apt mirror: ' + effective_apt_mirror if apt_mirror | length > 0 else 'Auto-detected fastest apt mirror: ' + effective_apt_mirror }}"
+
+# Downloading is always needed; PREPARING is not. The prepare steps below (resize, rootfs
+# expand, kernel/grub install) belong to building the base image from a raw cloud image. Running
+# them again on top of our published base image would resize an already-resized disk and — far
+# worse — `virt-customize --install` would run apt against a LIVE mirror on already-installed
+# kernel and grub packages, upgrading them to whatever is current. Those land in measured paths,
+
+- name: Prepare source image into an offline checkpoint
+  when: not prepared_img_stat.stat.exists
+  block:
+    - name: Resize cloud image
+      ansible.builtin.command: qemu-img resize "{{ base_img_path }}" +{{ base_img_resize }}
+      changed_when: true
+
+    - name: Expand rootfs partition
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}" --no-network
+        --run-command 'growpart /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0 1'
+        --run-command 'resize2fs /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_hd0-part1'
+        --run-command 'systemctl mask pollinate.service'
+      changed_when: true
+
+    # These four packages land in the base image and therefore in RTMR3, so they have to come
+    # from the same archive as everything else. An Acquire::http::Mirror directive takes a HOST,
+    # which cannot express a snapshot URL (it carries a path), so the snapshot variant rewrites
+    # the sources file inside the image instead. Left rewritten on purpose: the image then
+    # records what it was built from, and `common` sets the same URLs when it runs.
+    - name: Install kernel and boot packages offline (live mirror)
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}"
+        --run-command 'echo "Acquire::http::Mirror \"http://{{ effective_apt_mirror }}\";" > /etc/apt/apt.conf.d/99mirror'
+        --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
+        --run-command 'systemctl mask grub-initrd-fallback.service'
+        --run-command 'rm -f /etc/apt/apt.conf.d/99mirror'
+      changed_when: true
+      when: apt_snapshot | default('') | length == 0
+
+    - name: Install kernel and boot packages offline (pinned snapshot)
+      ansible.builtin.command: >
+        virt-customize -a "{{ base_img_path }}"
+        --run-command 'sed -i "s|^URIs:.*|URIs: {{ apt_snapshot_base_url }}/{{ apt_snapshot }}|" /etc/apt/sources.list.d/ubuntu.sources'
+        --install linux-image-generic,shim-signed,grub-efi-amd64-signed,grub-efi-amd64-bin
+        --run-command 'systemctl mask grub-initrd-fallback.service'
+      changed_when: true
+      when: apt_snapshot | default('') | length > 0
+
+    - name: Ensure the checkpoint directory exists
+      ansible.builtin.file:
+        path: "{{ prepared_img_path | dirname }}"
+        state: directory
+        mode: '0755'
+
+    - name: Save prepared offline checkpoint
+      ansible.builtin.copy:
+        src: "{{ base_img_path }}"
+        dest: "{{ prepared_img_path }}"
+        remote_src: true
+        mode: '0644'
+
+# The prepared checkpoint is what a VM should boot from when this role ran. Published as a fact
+# rather than inferred from the file existing: both playbooks run on the same host, so the
+# checkpoint from a base image build is still on disk when a guest build runs, and guessing from
+# its presence would boot a pre-`common` image.
+- name: Publish the prepared image as this build's starting point
+  ansible.builtin.set_fact:
+    prepared_start_img_path: "{{ prepared_img_path }}"

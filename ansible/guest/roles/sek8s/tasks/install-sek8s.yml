@@ -91,21 +91,63 @@
     cmd: python3 -m venv /opt/sek8s/venv
     creates: /opt/sek8s/venv
 
-- name: Upgrade pip in virtual environment
+# /opt/sek8s/venv is measured into RTMR3, so every input is pinned; `state: latest` made the
+# measurement a function of the build date. setuptools and wheel come from
+# guest-requirements.txt (locked main-group packages). poetry-core must match the pin in the
+# packages' [build-system] requires — it builds the editable installs below and stamps its
+# version into each dist-info/WHEEL; test_poetry_core_pins_are_aligned asserts they agree.
+- name: Install pinned build tooling into the virtual environment
   ansible.builtin.pip:
-    name: 
-      - pip
-      - setuptools
-      - wheel
-    state: latest
+    name:
+      - pip==24.0
+      - poetry-core==2.4.1
     virtualenv: /opt/sek8s/venv
+    extra_args: "--no-compile"
 
-- name: Install sek8s package with pip
+- name: Stage the hash-pinned guest requirements
+  ansible.builtin.copy:
+    src: guest-requirements.txt
+    dest: /opt/sek8s/guest-requirements.txt
+    owner: root
+    group: root
+    mode: '0644'
+
+# --require-hashes: a substituted artifact fails the build instead of silently changing RTMR3.
+# --no-compile: bytecode is written in one deterministic pass at the end of this file.
+- name: Install guest dependencies (exact versions, hash-checked)
   ansible.builtin.pip:
-    name: /opt/sek8s/src/sek8s/
+    requirements: /opt/sek8s/guest-requirements.txt
+    virtualenv: /opt/sek8s/venv
+    extra_args: "--no-compile --require-hashes"
+
+# Editable installs cannot be hash-checked, so they run separately with --no-deps; everything
+# they need is already installed above. --no-build-isolation uses the poetry-core pinned above
+# instead of downloading an unpinned copy at build time.
+#
+# `editable: yes` rather than `-e` in extra_args: the module appends extra_args before the
+# package path, so an `-e` written there lands first and consumes the next flag as its argument
+# ("--no-deps is not a valid editable requirement"). The flag appends -e last, next to the path.
+- name: Install sek8s packages (editable, no deps)
+  ansible.builtin.pip:
+    name: "{{ item }}"
     virtualenv: /opt/sek8s/venv
     state: present
-    extra_args: "-e"
+    editable: yes
+    extra_args: "--no-deps --no-build-isolation --no-compile"
+  loop:
+    - /opt/sek8s/src/sek8s-common/
+    - /opt/sek8s/src/sek8s/
+
+# Default (timestamp) invalidation embeds each source mtime in the .pyc header, so identical
+# sources produce different bytes and RTMR3 moves. unchecked-hash writes no mtime, and means
+# Python never revalidates against the .py — so nothing rewrites these at runtime either.
+# /opt/sek8s/src is deliberately not compiled; it is measured as the repo ships it.
+- name: Byte-compile the virtual environment deterministically
+  ansible.builtin.command:
+    cmd: >-
+      /opt/sek8s/venv/bin/python -m compileall -q -f
+      --invalidation-mode unchecked-hash /opt/sek8s/venv
+  changed_when: true
 
 - name: Clean up temporary build directory
   ansible.builtin.file:

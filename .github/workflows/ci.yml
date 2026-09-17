@@ -43,6 +43,21 @@ jobs:
       - name: Install dependencies
         run: poetry install
 
+      # Without this, the five profile-parse cases in test_apparmor_profiles.py
+      # pytest.skip silently, so a profile that fails to compile ships green. A profile
+      # that will not load is boot-fatal: verify-apparmor-profiles.service powers the
+      # guest off when a sek8s profile is missing from the loaded set.
+      # apparmor-utils: without apparmor_parser the profile compile checks skip silently,
+      #   so a profile that will not load ships green -- and that is boot-fatal.
+      # en_US.UTF-8: the RTMR3 collation test must run under a locale whose sort order
+      #   differs from C, or it cannot detect the LC_ALL=C pin being dropped. Runners
+      #   default to C.UTF-8, which collates in byte order and proves nothing.
+      - name: Install test prerequisites (AppArmor parser, non-C locale)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor-utils locales
+          sudo locale-gen en_US.UTF-8
+
       - name: Run unit tests
         run: make test-local
 
@@ -69,6 +84,118 @@ jobs:
       - name: Require no pending fragments (main target)
         if: github.base_ref == 'main'
         run: python scripts/promote_changelogs.py --check --strict
+
+  # The guest venv is measured into RTMR3, and guest-requirements.txt decides what goes into it.
+  # If it drifts from poetry.lock the published image installs packages the repo does not
+  # describe, and a third party rebuilding from source cannot reproduce our measurements --
+  # which is not detectable after the fact. Both directions are checked: the lock must match
+  # pyproject (a dep edited without re-locking), and the requirements must match the lock.
+  guest-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Verify poetry.lock matches pyproject
+        run: poetry check --lock
+
+      # Stdlib only, so no poetry install is needed here.
+      - name: Verify guest requirements match poetry.lock
+        run: make check-guest-requirements
+
+      # poetry-core is a [build-system] requirement, not a locked dependency, so nothing else
+      # notices the packages and the guest install drifting apart -- and it stamps its version
+      # into each dist-info/WHEEL, which lands in the measured venv.
+      - name: Verify poetry-core is pinned consistently
+        run: |
+          files=$(ls pyproject.toml nvevidence/pyproject.toml src/*/pyproject.toml \
+                     ansible/guest/roles/sek8s/tasks/install-sek8s.yml)
+          missing=""
+          for f in $files; do
+            grep -qE 'poetry-core==[0-9.]+' "$f" || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "poetry-core not pinned in:$missing"
+            exit 1
+          fi
+          pins=$(grep -hoE 'poetry-core==[0-9.]+' $files | sort -u)
+          if [ "$(printf '%s\n' "$pins" | wc -l)" -ne 1 ]; then
+            echo "poetry-core pins disagree:"
+            printf '%s\n' "$pins"
+            exit 1
+          fi
+          echo "consistent: $pins"
+
+  # Two invariants around the pinned base image:
+  #
+  #   1. The version and its hash must move together. The version selects the published artifact,
+  #      the hash validates it — changing one alone is a broken pin that either fails the download
+  #      or, worse, validates the wrong artifact.
+  #   2. Changing what the layer CONTAINS requires a new layer. The guest build no longer runs the
+  #      `common` role, so a package added there without rebuilding is simply absent from the image,
+  #      and nothing at build time notices: the layer's hash still matches and the build succeeds.
+  #      This is the one drift hash-pinning cannot catch by itself.
+  guest-base-image:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Base image version and hash must change together
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          ver=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_VERSION' || true)
+          sha=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_SHA256' || true)
+          if [ -n "$ver" ] && [ -z "$sha" ]; then
+            echo "BASE_IMAGE_VERSION changed but BASE_IMAGE_SHA256 did not."
+            echo "The hash validates the artifact the version selects — a new version needs its hash."
+            exit 1
+          fi
+          if [ -z "$ver" ] && [ -n "$sha" ]; then
+            echo "BASE_IMAGE_SHA256 changed but BASE_IMAGE_VERSION did not."
+            echo "Republishing a different artifact under the same version is not allowed: consumers"
+            echo "that already pinned that version would silently get different bytes. Cut a new version."
+            exit 1
+          fi
+          echo "ok"
+
+      - name: Require a base image bump when the common package set changes
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          touches_packages=$(printf '%s\n' "$changed" \
+            | grep -E '^ansible/guest/roles/common/' || true)
+          # The pins the base image is built FROM live in all.yml, which also holds unrelated
+          # vars — so match on the changed LINES, not the file.
+          if printf '%s\n' "$changed" | grep -qFx 'ansible/guest/playbooks/group_vars/all.yml'; then
+            if git diff origin/${{ github.base_ref }}...HEAD -- ansible/guest/playbooks/group_vars/all.yml \
+                 | grep -qE '^[+-](canonical_image_|apt_snapshot)'; then
+              touches_packages="$touches_packages ansible/guest/playbooks/group_vars/all.yml (base image pins)"
+            fi
+          fi
+          bumped=$(printf '%s\n' "$changed" | grep -Fx 'ansible/guest/BASE_IMAGE_VERSION' || true)
+          if [ -n "$touches_packages" ] && [ -z "$bumped" ]; then
+            echo "These change what the base image contains:"
+            printf '  %s\n' $touches_packages
+            echo
+            echo "but ansible/guest/BASE_IMAGE_VERSION was not updated."
+            echo "The guest build does not run the common role, so these packages would be missing"
+            echo "from the image. Rebuild and publish the layer:"
+            echo "  ansible-playbook -i <inventory> playbooks/base-image.yml -e base_image_version=YYYY.MM.P"
+            echo "then update BASE_IMAGE_VERSION and BASE_IMAGE_SHA256."
+            exit 1
+          fi
+          echo "ok"
 
   opa:
     runs-on: ubuntu-latest

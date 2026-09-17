@@ -1,5 +1,38 @@
 ---
-# Chutes config
-validator: 5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ
 # Empty = auto-detect fastest mirror at build time. Set in inventory to pin a specific mirror.
 apt_mirror: ""
+
+# These two decide what the BASE IMAGE contains, and only this role consumes them. They live
+# here rather than in group_vars/all.yml so CI can watch a path that means exactly "the base
+# image's contents changed" — all.yml also holds timezone, CIDRs and the NVIDIA pins, whose
+# changes have nothing to do with the base image.
+
+# System packages to install
+system_packages:
+  - curl
+  - wget
+  - vim
+  - iproute2
+  - socat
+  - conntrack
+  - ipset
+  - jq
+  - apt-transport-https
+  - ca-certificates
+  - gnupg-agent
+  - software-properties-common
+  - cryptsetup
+  - dhcpcd-base
+  - openssl
+  - xfsprogs
+  - e2fsprogs
+
+# Guest HWE kernel pin (Ubuntu <= 24 only). The build installs the rolling meta
+# linux-image-generic-hwe-<major>.<minor>, which tracks the latest HWE kernel and
+# would silently advance on every rebuild — changing the guest RTMR/measurement
+# baseline. Pinning it to an exact version makes the guest kernel reproducible and
+# bumps deliberate. Trade-off: opts out of automatic HWE kernel security updates.
+# MUST stay >= 6.16 (RTMR3 depends on the tsm-mr sysfs interface merged in 6.16).
+# Expires: the pocket keeps only the newest HWE ABI, so a superseded pin stops resolving. Current
+# version: people.canonical.com/~ubuntu-archive/madison.cgi?package=linux-image-generic-hwe-24.04
+guest_hwe_kernel_version: "7.0.0-31.31~24.04.1"

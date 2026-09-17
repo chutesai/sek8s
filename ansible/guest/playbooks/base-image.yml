@@ -1,0 +1,302 @@
+---
+# Build the pinned BASE IMAGE: the Ubuntu cloud image plus the `common` package set.
+#
+# This exists as its own playbook because it is the input the guest build cannot otherwise pin.
+# /usr/lib, /usr/bin and /usr/sbin are ~80% of the ~49,600 files measured into RTMR3 and come
+# almost entirely from here, while the Ubuntu archive and the Intel SGX repo have no version
+# pins — so a guest build that installs those packages itself is a function of what the archive
+# served that day. Freezing them into a published, hash-pinned artifact makes the guest build
+# reproducible without needing every upstream to stay still.
+#
+# It also runs on a different clock: the base image changes when the package set is deliberately
+# bumped (weeks/months), the guest image changes with every code change. Separate playbooks keep
+# those cadences, and their inputs, apart.
+#
+#   Inputs   canonical_image_url + canonical_image_sha256, defaulted in group_vars/all.yml so
+#            the repo records which upstream image each published base image came from. Must be
+#            a DATED respin, not the rolling release/ path.
+#   Output   guest-tools/image/base/<base_image_version>/base-<base_image_version>.qcow2
+#            plus .sha256 and .provenance (the inputs, which are not recoverable by inspecting
+#            the image itself).
+#
+# Usage:
+#   1. bump ansible/guest/BASE_IMAGE_VERSION
+#   2. ansible-playbook -i inventory.debug.yml playbooks/base-image.yml
+#      (writes the resulting hash into ansible/guest/BASE_IMAGE_SHA256)
+#   3. commit both files, then: make publish-base-image
+#
+# Nothing is passed on the command line: the version being built and the image it is built from
+# are both in version control, so `git log` is the record of every artifact ever published.
+#
+# Then publish the artifact and point chutes-miner-vm.yml at it by version + hash.
+#
+# REBUILDABLE FROM PUBLIC INPUTS when apt_snapshot is set: the Canonical image is pinned by hash
+# and the archive is pinned to a timestamp. Without it the layer is only verifiable by INSPECTION
+# (signed artifact, dpkg -V against archive checksums).
+#
+# Rebuilding reproduces the CONTENTS, not the qcow2 bytes — do not expect a rebuild to match
+# base_image_sha256. qcow2 is a sparse allocating format, so cluster ordering and refcount metadata
+# depend on the order a running VM happens to write, and two builds of the same packages differ in
+# the container while agreeing on the files. Measured across an Intel and an AMD host: 201,694
+# filesystem entries, 28 differing, all of them build-time ephemera (logs, the journal directory
+# named after a random machine-id, snapd state, apt/ESM and swcatalog caches, and the two initrds —
+# initramfs is not byte-reproducible). Identical package set, 1,477 packages at identical versions,
+# and not one of the differing paths falls under a measured prefix. So base_image_sha256 proves a
+# consumer got OUR artifact; what a third party reproduces is the contents, and the check that it
+# worked is that their guest build lands on the published measurements.
+#
+# Not every input is snapshot-pinned: a few packages refresh caches from their own endpoints during
+# the build, which is part of why two builds differ in the container. Those land in cache/log paths
+# rather than anything the guest build consumes.
+#
+# snapshot.ubuntu.com throughput varies hugely by location — measured ~1.3 MB/s from a US host vs
+# ~0.33 MB/s from AU, against ~16 MB/s for a nearby mirror — so run this where it is fast. The
+# guest build never touches it.
+
+- name: Confirm base image build configuration
+  hosts: host
+  gather_facts: false
+  tags:
+    - always
+  tasks:
+    # Read from ansible/guest/BASE_IMAGE_VERSION, the same file the guest build pins against —
+    # so publishing a new base image means committing a bump there first, and the version of every
+    # artifact ever built is in git history rather than in someone's shell.
+    - name: Require a base image version
+      ansible.builtin.assert:
+        that:
+          - base_image_version is defined
+          - base_image_version | length > 0
+        fail_msg: >-
+          ansible/guest/BASE_IMAGE_VERSION is empty. Set it to the version you intend to publish
+          (CalVer — the artifact is "the Ubuntu archive as of roughly this date"), commit it, then
+          run this playbook. BASE_IMAGE_SHA256 is filled in from what this run reports.
+
+    - name: Require a pinned Canonical image
+      ansible.builtin.assert:
+        that:
+          - canonical_image_url | default('') | length > 0
+          - canonical_image_sha256 | default('') | length > 0
+        fail_msg: >-
+          canonical_image_url and canonical_image_sha256 must both be set. Use a DATED respin
+          (releases/<ver>/release-YYYYMMDD/...), never releases/<ver>/release/ — that path is
+          rolling and Canonical repoints it, which is what made the guest build unreproducible.
+
+    - name: Refuse the rolling Canonical path
+      ansible.builtin.assert:
+        that: "'/release/' not in canonical_image_url"
+        fail_msg: >-
+          canonical_image_url points at the rolling release/ path. Pin a dated respin so the
+          layer can be rebuilt from the same bytes later.
+
+    - name: Show what this build is pinned to
+      ansible.builtin.debug:
+        msg:
+          - "base image version : {{ base_image_version }}"
+          - "canonical image    : {{ canonical_image_url }}"
+          - "canonical sha256   : {{ canonical_image_sha256 }}"
+          - "apt snapshot       : {{ apt_snapshot | default('(none — verifiable by inspection, not rebuildable)') }}"
+          - "output             : {{ base_image_path }}"
+
+- name: Prepare and boot the build VM from the pinned Canonical image
+  hosts: host
+  become: true
+  tags:
+    - build
+  # This playbook never uses a cache, whatever NO_CACHE says. run-vm only copies the prepared image
+  # over the build disk `when: (not build_image.stat.exists) or no_cache == 'true'`, so with a stale
+  # /var/lib/libvirt/images/tdx-guest.qcow2 lying around and the flag forgotten it boots whatever a
+  # previous run left and captures THAT as the layer. Observed: a base image published with
+  # cuda-toolkit in it, from a half-finished guest build, caught only because it was 3x the expected
+  # size. The output here is a published artifact others pin by hash, so it always starts clean —
+  # and the inputs are hash-pinned anyway, so a re-fetch costs time, never correctness.
+  vars:
+    no_cache: 'true'
+  # virt-host-prereqs notifies `restart libvirtd` when it rewrites qemu.conf. That fires only on a
+  # host whose libvirt is not already configured — i.e. never on ours, and always on a first build
+  # elsewhere — so without this the handler is simply not found and the play dies.
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Host virtualisation prerequisites
+      ansible.builtin.include_role:
+        name: virt-host-prereqs
+
+    - name: Fetch the pinned Ubuntu cloud image
+      ansible.builtin.include_role:
+        name: fetch-image
+      vars:
+        source_image_url: "{{ canonical_image_url }}"
+        source_image_sha256: "{{ canonical_image_sha256 }}"
+
+    # Only this playbook mutates the image. A raw cloud image needs resizing and the kernel/grub
+    # install before it can boot; the guest build never includes this role, so it structurally
+    # cannot repeat that work on our published base image.
+    - name: Prepare the cloud image into a bootable checkpoint
+      ansible.builtin.include_role:
+        name: prepare-image
+
+    - name: Boot the build VM
+      ansible.builtin.include_role:
+        name: run-vm
+
+- name: Install the common package set
+  hosts: vm
+  become: true
+  tags:
+    - build
+  handlers:
+    - name: Global handlers
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
+  tasks:
+    - name: Include common role
+      ansible.builtin.include_role:
+        name: common
+
+    # Must run in the VM play, not the capture play: it has to happen before the shutdown, and the
+    # shutdown is what guarantees it reaches the disk. Otherwise the layer ships the build host's
+    # cloud-config — including its SSH public key — which is both stale state and the one thing
+    # that would stop a third party reproducing these bytes.
+    - name: Clear cloud-init state and logs before capture
+      ansible.builtin.command: cloud-init clean --logs
+      changed_when: true
+
+    # `cloud-init clean` resets the state but leaves what cloud-init INSTALLED: run-vm seeds
+    # `users: - name: root, ssh-authorized-keys`, so the build host's key stays in
+    # /root/.ssh/authorized_keys and ships in the published layer. Same class as the cloud-config
+    # above — host-specific bytes in an artifact that is supposed to be host-independent.
+    #
+    # Safe to delete: it is not what grants access on the next boot. run-vm writes fresh user-data
+    # and mints a new seed ISO on EVERY boot (cloud-localds -> attached as cdrom), and the clean
+    # above means cloud-init re-runs and re-provisions from that seed. So the consumer's own key
+    # is installed at boot; this copy is a stale leftover cloud-init would overwrite anyway.
+    #
+    # Last task in the VM play: nothing needs SSH after it, and the capture play shuts the VM down
+    # via virsh from the host.
+    - name: Purge SSH authorized_keys from the captured layer
+      ansible.builtin.shell: |
+        set -u
+        while IFS=: read -r _ _ _ _ _ home _; do
+          [ -n "$home" ] && [ -d "$home/.ssh" ] || continue
+          rm -f "$home/.ssh/authorized_keys" "$home/.ssh/authorized_keys2"
+          rmdir "$home/.ssh" 2>/dev/null || true
+        done < /etc/passwd
+        find / -xdev -type f -name 'authorized_keys*' -delete 2>/dev/null || true
+      changed_when: true
+
+    # Prove it rather than assume it: a survivor would otherwise surface only as a base layer
+    # nobody else can reproduce, long after it was published and pinned.
+    - name: Verify no authorized_keys survive in the captured layer
+      ansible.builtin.command: find / -xdev -type f -name 'authorized_keys*'
+      register: _base_authorized_keys
+      changed_when: false
+      failed_when: _base_authorized_keys.stdout | length > 0
+
+# Nothing stamps the layer's identity into the image on purpose: base_image_sha256 pins it and
+# fetch-image validates the download against that hash, and the base image is an input to a
+# deterministic build — reproducing the measurements already implies the same layer. A file
+# inside the image asserting its own version proves strictly less than either.
+- name: Capture the base image
+  hosts: host
+  become: true
+  tags:
+    - build
+  tasks:
+    - name: Ensure base image directory exists
+      ansible.builtin.file:
+        path: "{{ base_image_dir }}"
+        state: directory
+        mode: '0755'
+
+    # A terminal capture, not a checkpoint: nothing uses the VM after this, so the image is taken
+    # from a cleanly shut-down guest rather than a suspended one. save-checkpoint must suspend and
+    # resume because its callers keep building in the same VM, but suspend only pauses vCPUs — it
+    # does not flush the guest page cache, so the last writes before it never reach the disk. That
+    # silently dropped `cloud-init clean` here, leaving the build host's cloud-config (and its SSH
+    # public key) in a published, supposedly host-independent artifact.
+    - name: Shut down the build VM
+      ansible.builtin.command: virsh shutdown "{{ vm_name }}"
+      register: _shutdown
+      changed_when: _shutdown.rc == 0
+      failed_when: false
+
+    - name: Wait for the build VM to stop
+      ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
+      register: _vm_stopped
+      retries: 60
+      delay: 5
+      until: _vm_stopped.rc != 0
+      changed_when: false
+      failed_when: _vm_stopped.rc == 0
+
+    - name: Undefine the build VM
+      ansible.builtin.command: virsh undefine "{{ vm_name }}"
+      register: _undefine
+      changed_when: _undefine.rc == 0
+      failed_when: false
+
+    - name: Copy the build disk to the base image
+      ansible.builtin.copy:
+        src: "{{ build_img_path }}"
+        dest: "{{ base_image_path }}"
+        remote_src: true
+        mode: '0644'
+
+    # A torn or truncated copy would otherwise surface as an opaque boot failure in whichever
+    # guest build consumes it, long after the hash was recorded as correct.
+    - name: Verify the captured image
+      ansible.builtin.command: qemu-img check "{{ base_image_path }}"
+      register: _qemu_check
+      changed_when: false
+      failed_when: _qemu_check.rc != 0
+
+    - name: Compute base image sha256
+      ansible.builtin.stat:
+        path: "{{ base_image_path }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: _base_image_stat
+
+    - name: Write sha256 sidecar
+      ansible.builtin.copy:
+        content: "{{ _base_image_stat.stat.checksum }}  {{ base_image_path | basename }}\n"
+        dest: "{{ base_image_path }}.sha256"
+        mode: '0644'
+
+    # Everything about the layer's CONTENTS is inspectable in the image itself (dpkg -l, dpkg -V).
+    # What is not recoverable by inspection is which upstream inputs produced it, so that — and
+    # only that — is recorded here.
+    - name: Write provenance sidecar
+      ansible.builtin.copy:
+        content: |
+          base_image_version: {{ base_image_version }}
+          canonical_image_url: {{ canonical_image_url }}
+          canonical_image_sha256: {{ canonical_image_sha256 }}
+          apt_snapshot: {{ apt_snapshot | default('') }}
+          ubuntu_version: {{ ubuntu_version }}
+          built_from_commit: {{ lookup('pipe', 'git -C ' + repo_root + ' rev-parse HEAD 2>/dev/null || echo unknown') }}
+        dest: "{{ base_image_path }}.provenance"
+        mode: '0644'
+
+    # Write the hash back rather than asking someone to transcribe it. The guest build and
+    # `make publish-base-image` both compare against this file, so a typo here would surface as a
+    # checksum rejection at build time with no obvious cause. The version stays hand-edited — it
+    # is the input, chosen deliberately — but the hash is an output of this run.
+    - name: Record the hash in ansible/guest/BASE_IMAGE_SHA256
+      ansible.builtin.copy:
+        content: "{{ _base_image_stat.stat.checksum }}\n"
+        dest: "{{ playbook_dir }}/../BASE_IMAGE_SHA256"
+        mode: '0644'
+      delegate_to: localhost
+      become: false
+
+    - name: Report the artifact and what to do next
+      ansible.builtin.debug:
+        msg:
+          - "base image : {{ base_image_path }}"
+          - "version    : {{ base_image_version }}  (from ansible/guest/BASE_IMAGE_VERSION)"
+          - "sha256     : {{ _base_image_stat.stat.checksum }}  (written to BASE_IMAGE_SHA256)"
+          - ""
+          - "Next: commit BASE_IMAGE_VERSION + BASE_IMAGE_SHA256, then: make publish-base-image"
+          - "Until it is published, a guest build will fail fetching this version."

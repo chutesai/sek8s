@@ -34,10 +34,59 @@
     state: absent
   failed_when: false
 
-- name: Remove sudo to prevent privilege escalation
+# Removing sshd stops the keys being usable; it does not remove them. The build host authorises
+# its own key as root so Ansible can reach the build VM, and nothing else deletes it: lock-accounts
+# sweeps only uid >= 1000 homed under /home, so /root is excluded by design. The file therefore
+# shipped in the image and, being measured into RTMR3, made the published measurements specific to
+# whichever host built them — no third party could reproduce them. Sweep every account, not just
+# root: AuthorizedKeysFile can point anywhere, so the find is the backstop.
+- name: Purge SSH authorized_keys for every account
+  ansible.builtin.shell: |
+    set -u
+    while IFS=: read -r _ _ _ _ _ home _; do
+      [ -n "$home" ] && [ -d "$home/.ssh" ] || continue
+      rm -f "$home/.ssh/authorized_keys" "$home/.ssh/authorized_keys2"
+      rmdir "$home/.ssh" 2>/dev/null || true
+    done < /etc/passwd
+    find / -xdev -type f -name 'authorized_keys*' -delete 2>/dev/null || true
+  changed_when: true
+
+# The purge is what makes the image host-independent, so prove it rather than assume it: a stray
+# key would otherwise surface only as an unreproducible RTMR3, long after the image shipped.
+- name: Verify no authorized_keys survive anywhere in the image
+  ansible.builtin.command: find / -xdev -type f -name 'authorized_keys*'
+  register: _remaining_authorized_keys
+  changed_when: false
+  failed_when: _remaining_authorized_keys.stdout | length > 0
+
+# sudo stays installed: system-manager needs it for the three commands allowlisted in
+# /etc/sudoers.d/system-manager (shutdown, du, cache-rm). What matters is that no ACCOUNT can
+# escalate, which is enforced here rather than by deleting the package.
+- name: Remove sudo-ldap
   ansible.builtin.package:
     name:
-      - sudo
       - sudo-ldap
     state: absent
   failed_when: false
+
+- name: Strip sudo access from every account except the system-manager allowlist
+  ansible.builtin.shell: |
+    set -uo pipefail
+    find /etc/sudoers.d -type f ! -name README ! -name system-manager -print -delete
+    for g in sudo admin; do
+      getent group "$g" >/dev/null 2>&1 || continue
+      members=$(getent group "$g" | cut -d: -f4 | tr , " ")
+      for u in $members; do
+        [ -n "$u" ] && gpasswd -d "$u" "$g" >/dev/null 2>&1 || true
+      done
+    done
+    echo "remaining sudoers.d:"
+    ls /etc/sudoers.d
+  args:
+    executable: /bin/bash
+  register: _sudo_strip
+  changed_when: true
+
+- name: Show remaining sudo access
+  ansible.builtin.debug:
+    var: _sudo_strip.stdout_lines

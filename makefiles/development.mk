@@ -29,6 +29,28 @@ venv:
 list-packages: ##@development Show packages under src/
 	@echo $(PACKAGES)
 
+.PHONY: guest-requirements
+guest-requirements: ##@development Regenerate the hash-pinned guest venv requirements from poetry.lock
+	python3 scripts/generate_guest_requirements.py
+
+.PHONY: check-guest-requirements
+check-guest-requirements: ##@development Fail if the committed guest requirements are stale vs poetry.lock
+	python3 scripts/generate_guest_requirements.py --check
+
+.PHONY: bundle-gpu-tools
+bundle-gpu-tools: ##@development Rebuild the vendored nvidia-gpu-tools wheel into the chutes-cvm package (maintainer; needs git + network)
+	src/chutes-cvm/tools/gpu-tools/bundle-tools.sh
+
+.PHONY: build-sr25519
+build-sr25519: ##@development Build the static sr25519 binary (maintainer; needs cargo + musl target)
+	cd src/sr25519 && cargo build --release --target x86_64-unknown-linux-musl
+	@echo "built: src/sr25519/target/x86_64-unknown-linux-musl/release/sr25519"
+
+.PHONY: test-sr25519
+test-sr25519: ##@development Run the sr25519 Rust tests plus the substrate-interface cross-check
+	cd src/sr25519 && cargo test
+	${POETRY} run pytest tests/rust -q --no-cov
+
 .PHONY: build
 build: ##@development Build the docker images
 build: args ?= --network=host --build-arg BUILDKIT_INLINE_CACHE=1

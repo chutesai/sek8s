@@ -1,0 +1,11 @@
+---
+# Ansible reaches the build VM with this key; run-vm bakes the public half into the VM's
+# cloud-init. Declared here as well as in run-vm because role defaults are role-scoped: run-vm's
+# copy is not in scope while this role runs, and this role checks the key exists before anything
+# is downloaded. Keep the two in sync. Defaults, not group_vars, so an inventory can still
+# override the path — playbook group_vars outrank inventory vars, role defaults do not.
+#
+# `~` resolves against the invoking process's HOME, so under the required `sudo env HOME=/root`
+# these are /root/.ssh/*.
+ssh_public_key_path: "~/.ssh/id_ed25519.pub"
+ssh_private_key_path: "~/.ssh/id_ed25519"

@@ -210,3 +210,61 @@ async def test_delete_refuses_cache_base_itself(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         await snap.delete()
     assert not called, "rmtree must not run against cache_base itself"
+
+
+@pytest.mark.asyncio
+async def test_partial_blobs_are_counted_in_the_reported_size(cache_base, monkeypatch):
+    """A cancelled download must report the bytes it is actually holding.
+
+    scan_cache_dir counts only blobs that already have a snapshot symlink, which HF
+    creates when a file finishes — so ".incomplete" blobs are invisible to it. Sizing a
+    non-PRESENT chute that way reported megabytes while tens of gigabytes sat on disk,
+    and cleanup()'s max-size eviction cannot reclaim space it cannot see.
+    """
+    snap = HuggingFaceSnapshot(chute_id=CHUTE_ID)
+    blobs = snap.hub_path / "models--foo--bar" / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / "finished").write_bytes(b"x" * 4096)
+    (blobs / "partial.incomplete").write_bytes(b"y" * (4 * 1024 * 1024))
+
+    # What scan_cache_dir would report: the finished blob only.
+    monkeypatch.setattr(
+        "sek8s.system_manager.cache.manager.scan_cache_dir",
+        lambda cache_dir: SimpleNamespace(size_on_disk=4096, repos=[]),
+    )
+
+    size, *_ = await snap._scan_hub()
+    assert size >= 4 * 1024 * 1024, (
+        f"reported {size} bytes but a 4MiB partial blob is on disk; the partial is "
+        f"being dropped from the accounting again"
+    )
+
+
+@pytest.mark.asyncio
+async def test_present_chute_keeps_the_cheap_scan(cache_base, monkeypatch):
+    """PRESENT is the one state with no partials, so it must not pay for a du walk.
+
+    The complete marker is written only after every blob has been materialised.
+    """
+    snap = HuggingFaceSnapshot(chute_id=CHUTE_ID)
+    (snap.hub_path / "models--foo--bar" / "blobs").mkdir(parents=True)
+    snap.path.mkdir(parents=True, exist_ok=True)
+    (snap.path / ".cache_complete").write_text("")
+
+    monkeypatch.setattr(
+        "sek8s.system_manager.cache.manager.scan_cache_dir",
+        lambda cache_dir: SimpleNamespace(size_on_disk=1234, repos=[]),
+    )
+
+    called = False
+
+    async def _boom(self, path):
+        nonlocal called
+        called = True
+        return 999
+
+    monkeypatch.setattr(HuggingFaceSnapshot, "_du_size", _boom)
+
+    size, *_ = await snap._scan_hub()
+    assert size == 1234
+    assert called is False, "PRESENT chute should not need a du walk"
