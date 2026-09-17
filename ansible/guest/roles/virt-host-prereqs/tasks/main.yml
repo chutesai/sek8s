@@ -23,6 +23,36 @@
     update_cache: yes
     cache_valid_time: 3600
 
+# Both of these are needed by run-vm, several roles later and after the multi-GB base image has
+# already been fetched. Neither failed usefully on its own: a missing key surfaced as a file-lookup
+# error while rendering cloud-init, and missing KVM did not fail at all — virt-install silently
+# fell back to emulation, turning a ~30 minute build into a many-hour one that merely looked hung.
+- name: Check the build VM SSH keypair and KVM are present
+  ansible.builtin.stat:
+    path: "{{ item | expanduser }}"
+  register: _build_host_reqs
+  loop:
+    - "{{ ssh_public_key_path }}"
+    - "{{ ssh_private_key_path }}"
+    - /dev/kvm
+
+- name: Require an SSH keypair for the build VM
+  ansible.builtin.assert:
+    that: _build_host_reqs.results[0].stat.exists and _build_host_reqs.results[1].stat.exists
+    fail_msg: >-
+      No SSH keypair at {{ ssh_public_key_path | expanduser }} (+ private key). Ansible uses it to
+      reach the build VM, so the build cannot proceed without it. `~` resolves against this
+      process's HOME, so run the build as `sudo env HOME=/root ...` and create the key for root:
+        sudo ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519
+
+- name: Require KVM
+  ansible.builtin.assert:
+    that: _build_host_reqs.results[2].stat.exists
+    fail_msg: >-
+      /dev/kvm is missing, so the build VM would run under software emulation — it would still
+      succeed, and produce correct measurements, but take hours rather than ~30 minutes. Enable
+      virtualisation in firmware, or nested virtualisation if this host is itself a VM.
+
 - name: Configure libvirt to enable dynamic ownership
   ansible.builtin.lineinfile:
     path: /etc/libvirt/qemu.conf
