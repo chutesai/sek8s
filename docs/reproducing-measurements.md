@@ -141,19 +141,14 @@ one level deeper.
 If you do, **expect a different SHA-256 and do not treat that as a failure.** qcow2 is a sparse
 allocating format: cluster ordering and refcount metadata depend on the order a running VM happens
 to write, so two builds of the same packages produce different containers holding the same files.
-What reproduces is the contents. Building the layer on an Intel and an AMD host gave 201,694
-filesystem entries with 28 differing — all build-time ephemeral (logs, a journal directory named
-after a random machine-id, snapd state, apt caches, and the two initrds, since initramfs is not
-byte-reproducible) — with an identical package set of 1,477 packages at identical versions, and
-none of the differences under a measured path.
+What reproduces is the contents, not the container.
+
+Building the layer on an Intel and an AMD host gave 201,694 filesystem entries with 28 differing —
+all of it build-time ephemera such as logs and caches — and an identical package set of 1,477
+packages at identical versions.
 
 So `BASE_IMAGE_SHA256` tells you that you received *our* artifact rather than something else. It is
 not the test of whether you rebuilt the layer correctly; the guest measurements matching is.
-
-One input is genuinely unpinned: `/var/lib/ubuntu-advantage/apt-esm/` is fetched live from
-`esm.ubuntu.com` and did differ between those two builds. It sits outside the measured paths, so it
-cannot move a measurement — but it is a live archive writing into the image, and it is worth knowing
-that the reason it is harmless is the path list rather than the pinning.
 
 ## Reading your measurements
 

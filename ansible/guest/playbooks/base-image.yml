@@ -45,9 +45,9 @@
 # consumer got OUR artifact; what a third party reproduces is the contents, and the check that it
 # worked is that their guest build lands on the published measurements.
 #
-# One unpinned input remains: /var/lib/ubuntu-advantage/apt-esm/ is fetched live from
-# esm.ubuntu.com and did change between those two builds. It is outside the measured paths, so it
-# does not reach a measurement today — but that is a property of the path list, not of the pinning.
+# Not every input is snapshot-pinned: a few packages refresh caches from their own endpoints during
+# the build, which is part of why two builds differ in the container. Those land in cache/log paths
+# rather than anything the guest build consumes.
 #
 # snapshot.ubuntu.com throughput varies hugely by location — measured ~1.3 MB/s from a US host vs
 # ~0.33 MB/s from AU, against ~16 MB/s for a nearby mirror — so run this where it is fast. The
