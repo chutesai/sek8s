@@ -440,10 +440,21 @@ Version source of truth: `ansible/guest/VERSION`
     measurement survives a reboot — and the `.pyc`, not the `.py`, is what executes.
   Verified by building the full recipe twice in `ubuntu:24.04` at the guest's real paths, separated
   in time: 9,558 byte-identical files.
+- `base-image.yml`'s header no longer claims a third party can rebuild the layer and compare hashes.
+  Rebuilding reproduces the layer's **contents**, not the qcow2 bytes: the format allocates clusters
+  in write order, so two builds of the same packages differ in the container while agreeing on the
+  files. Measured across an Intel and an AMD host — 201,694 filesystem entries, 28 differing, all
+  build-time ephemera (logs, a journal directory named after a random machine-id, snapd state,
+  apt/ESM and swcatalog caches, and the two initrds), identical package set at identical versions,
+  and nothing differing under a measured path. `base_image_sha256` proves a consumer received our
+  artifact; the test of a correct rebuild is the guest measurements, not the layer hash.
+  `docs/reproducing-measurements.md` says the same, so nobody reports a hash mismatch as a bug.
+  Also documents the one input that is still unpinned: `/var/lib/ubuntu-advantage/apt-esm/` comes
+  live from `esm.ubuntu.com` and did differ between those builds — harmless only because it falls
+  outside the measured paths.
 
 ### Fixed
 Both failures were invisible on debug images, which load the sek8s profiles in complain mode.
-
 - The initramfs is packed reproducibly, which was the last source of RTMR2 drift. Even with
   byte-identical content, two builds produced different archive bytes: `mkinitramfs` stages files
   with `cp -pP`, so every cpio member carries its source mtime, and those vary per build.
@@ -572,7 +583,6 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   Neither pinned UUID is secret: the LUKS key is rotated on first boot and the base image is copied
   per VM. Deriving both from version and build type keeps them stable across rebuilds, distinct per
   version, and never shared between a debug and a production image.
-
 - **Production images shipped the build host's SSH public key.** `run-vm` authorises the build
   host's key as root so Ansible can reach the build VM, and nothing removed it: `remove-ssh` deletes
   the sshd packages but not the keys, and `lock-accounts` sweeps only uid >= 1000 homed under
@@ -601,6 +611,13 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   the real content was never written — leaving ECDSA/ECDH not preloaded before `nvidia.ko`. A
   cached build shipped exactly that (its hash was the SHA-384 of the empty string). `copy` with
   inline content is already idempotent, so the guard only ever suppressed repair.
+- The base image shipped the SSH public key of whichever host built it. `remove-ssh` purges
+  `authorized_keys` in the guest build, but never runs in `base-image.yml`, so the key cloud-init
+  seeded into the build VM stayed in the published layer. Deleting it is safe: `run-vm` writes fresh
+  user-data and mints a new seed ISO on every boot, and the `cloud-init clean` immediately before
+  means cloud-init re-provisions from that seed, so the consumer's own key is installed at boot and
+  this copy was only a stale leftover. `base-image.yml` now purges `authorized_keys` for every
+  account and asserts none survive, as `remove-ssh` does.
 
 ### Removed
 - Hard-coded validator SS58 (`5Dt7HZ7Zpw4DppPxFM7Ke3Cm7sDAWhsZXmM5ZAmE7dSVJbcQ`) removed from all Ansible role defaults (`common`, `admission-controller`, `attestation-service`, `system-manager`) and inventory files (`ansible/guest/inventory.yml`, `local/inventory.prod.yml`). The `validator` Ansible variable is no longer used anywhere in the guest image build.
