@@ -162,19 +162,11 @@ Version source of truth: `ansible/guest/VERSION`
   hashed first so a matching one is not re-fetched and a stale one is replaced. `file://` and other
   transports keep the single-stream path, since aria2c rejects them and parallelism would not help
   a local copy.
-- Intermediate cache layers (`*-prepared.qcow2`, `*-gpu.qcow2`) moved from `image/<env>/` to a
-  shared `image/checkpoints/`, keyed on `vm_version` + the base image version. Nothing at or before
-  the GPU checkpoint reads `build_env` or `debug_build` — the layers are identical across envs and
-  variants — so a prod and a debug build now share one checkpoint instead of each building its own,
-  the same way both already share one base image under `base/<version>/`. Keying on the base image
-  version still prevents reusing a cache derived from a different base.
 - `virt-host-prereqs` now verifies the build VM's SSH keypair and `/dev/kvm` before anything is
   downloaded. Both were needed several roles later by `run-vm`, and neither failed usefully: a
   missing key surfaced as a file-lookup error while rendering cloud-init, and missing KVM did not
   fail at all — the build fell back to software emulation and took hours instead of ~30 minutes,
-  with no symptom beyond appearing to hang. `ssh_public_key_path`/`ssh_private_key_path` moved from
-  `run-vm` defaults to `group_vars/host.yml` so the check can see them (role defaults are
-  role-scoped).
+  with no symptom beyond appearing to hang.
 - **`docs/reproducing-measurements.md`** — how a third party independently reproduces the guest
   image measurements and compares them to the published set. Covers host prerequisites (and why
   `build-setup.yml` is the wrong tool for someone else's machine, since it rewrites apt sources and
@@ -184,6 +176,12 @@ Version source of truth: `ansible/guest/VERSION`
   name the responsible files if measurements disagree.
 
 ### Changed
+- Intermediate cache layers (`*-prepared.qcow2`, `*-gpu.qcow2`) moved from `image/<env>/` to a
+  shared `image/checkpoints/`, keyed on `vm_version` + the base image version. Nothing at or before
+  the GPU checkpoint reads `build_env` or `debug_build` — the layers are identical across envs and
+  variants — so a prod and a debug build now share one checkpoint instead of each building its own,
+  the same way both already share one base image under `base/<version>/`. Keying on the base image
+  version still prevents reusing a cache derived from a different base.
 - Renamed Ansible inventory vars: `cosign_public_key_path` -> `cosign_chutes_public_key_path` (`~/.cosign/chutes.pub`) and added `cosign_dockerhub_public_key_path` (`~/.cosign/dockerhub.pub`)
 - Renamed admission controller env vars: `CHUTES_COSIGN_PUBLIC_KEY_PATH` -> `CHUTES_PUBLIC_KEY_PATH`, added `DOCKERHUB_PUBLIC_KEY_PATH`
 - Generalised `_require_ctx_key` to validate against a set of trusted key paths (`required_key_paths`) rather than a single path
@@ -445,30 +443,7 @@ Version source of truth: `ansible/guest/VERSION`
 
 ### Fixed
 Both failures were invisible on debug images, which load the sek8s profiles in complain mode.
-- Guest image builds are reproducible across rebuilds of identical source again. Five values
-  changed on every build and all reached RTMR2, so no two builds produced the same measurements —
-  defeating the third-party verification `inventory-reproduce.yml` documents. Continues the same
-  effort as the earlier admission-controller TLS and pinned-kernel fixes.
-  - **LUKS container UUID** — random per `luksFormat`, and written into `cryptroot/crypttab`
-    inside the initramfs. Now derived from version + build type via `to_uuid` and applied with
-    `cryptsetup luksUUID`, with an assertion that the pin took. (`community.crypto.luks_device`'s
-    `uuid:` parameter cannot do this — it is a selector for *finding* a container, ignored
-    entirely when `device:` is given, so setting it fails silently.)
-  - **ext4 root filesystem UUID** — random per `mkfs.ext4`, and written into the kernel cmdline as
-    `root=UUID=` by `stage-boot-artifacts`. Pinned the same way.
-  - **`k3s-install.sh`** — fetched unpinned from `get.k3s.io` into `/usr/local/bin`, which is
-    measured wholesale, and never used again after install. Removed once k3s is installed, so
-    image measurements no longer depend on what upstream happened to serve at build time. The k3s
-    binary itself stays version-pinned via `INSTALL_K3S_VERSION`.
-  - **`overlayroot` and `mdadm` initramfs hooks** — both unused cloud-image features that wrote
-    per-build data into the initramfs: `overlayroot` a fresh `/.random-seed`, `mdadm` a generation
-    timestamp in `mdadm.conf`. Their hooks are now removed before the final `update-initramfs`.
-    RAID is a host concern here (`ansible/host/playbooks/storage-setup.yml` builds `md0`); the
-    guest is handed individual virtio-blk devices. Removing the hooks rather than the packages
-    avoids dependency risk and is durable, since no apt operation follows in the build.
-  Neither pinned UUID is secret: the LUKS key is rotated on first boot and the base image is copied
-  per VM. Deriving both from version and build type keeps them stable across rebuilds, distinct per
-  version, and never shared between a debug and a production image.
+
 - The initramfs is packed reproducibly, which was the last source of RTMR2 drift. Even with
   byte-identical content, two builds produced different archive bytes: `mkinitramfs` stages files
   with `cp -pP`, so every cpio member carries its source mtime, and those vary per build.
@@ -543,11 +518,13 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   check refuses to delete any `uid >= 1000` account homed outside `/home`, naming it, and a
   post-sweep check asserts the application tree still exists.
 - **The guest image is now byte-reproducible: two `NO_CACHE` builds produce identical
-  MRTD/RTMR1/RTMR2/RTMR3.** It was not before, and had not been for a long time — two of the five
+  MRTD/RTMR1/RTMR2/RTMR3.** It was not before, and had not been for a long time — several of the
   causes below sit in paths measured since well before the RTMR3 path list was expanded. Because
   the RTMR3 expected-hashes manifest is baked into the initramfs, RTMR3 drift drags RTMR2 with it,
-  so both registers moved on every rebuild. Found by diffing `/etc/tdx-rtmr3-expected-hashes`
-  between two builds, which names every measured file whose hash changed.
+  so both registers moved on every rebuild. Two rounds of work were needed: the first pinned the
+  values the build itself generated, the second the inputs it pulled in. Both were found the same
+  way — by diffing `/etc/tdx-rtmr3-expected-hashes` between two builds, which names every measured
+  file whose hash changed.
   - **Base image was verified but not pinned.** `releases/<ver>/release/` is a rolling path
     Canonical repoints at each respin, and the checksum was fetched from that same rolling path —
     which proves integrity ("we got what is served now") but not reproducibility. `/usr/lib`,
@@ -575,6 +552,27 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
     nothing: the guest direct-boots with no Secure Boot chain and no `module.sig_enforce`. RTMR3
     measuring the modules is strictly stronger than a signature from a key regenerated per build
     and trusted by nobody, and this stops baking a throwaway private key into every image.
+  - **LUKS container UUID** — random per `luksFormat`, and written into `cryptroot/crypttab`
+    inside the initramfs. Now derived from version + build type via `to_uuid` and applied with
+    `cryptsetup luksUUID`, with an assertion that the pin took. (`community.crypto.luks_device`'s
+    `uuid:` parameter cannot do this — it is a selector for *finding* a container, ignored
+    entirely when `device:` is given, so setting it fails silently.)
+  - **ext4 root filesystem UUID** — random per `mkfs.ext4`, and written into the kernel cmdline as
+    `root=UUID=` by `stage-boot-artifacts`. Pinned the same way.
+  - **`k3s-install.sh`** — fetched unpinned from `get.k3s.io` into `/usr/local/bin`, which is
+    measured wholesale, and never used again after install. Removed once k3s is installed, so
+    image measurements no longer depend on what upstream happened to serve at build time. The k3s
+    binary itself stays version-pinned via `INSTALL_K3S_VERSION`.
+  - **`overlayroot` and `mdadm` initramfs hooks** — both unused cloud-image features that wrote
+    per-build data into the initramfs: `overlayroot` a fresh `/.random-seed`, `mdadm` a generation
+    timestamp in `mdadm.conf`. Their hooks are now removed before the final `update-initramfs`.
+    RAID is a host concern here (`ansible/host/playbooks/storage-setup.yml` builds `md0`); the
+    guest is handed individual virtio-blk devices. Removing the hooks rather than the packages
+    avoids dependency risk and is durable, since no apt operation follows in the build.
+  Neither pinned UUID is secret: the LUKS key is rotated on first boot and the base image is copied
+  per VM. Deriving both from version and build type keeps them stable across rebuilds, distinct per
+  version, and never shared between a debug and a production image.
+
 - **Production images shipped the build host's SSH public key.** `run-vm` authorises the build
   host's key as root so Ansible can reach the build VM, and nothing removed it: `remove-ssh` deletes
   the sshd packages but not the keys, and `lock-accounts` sweeps only uid >= 1000 homed under
@@ -585,12 +583,6 @@ Both failures were invisible on debug images, which load the sek8s profiles in c
   `authorized_keys` for every account in `/etc/passwd` plus a filesystem-wide sweep (the file is
   relocatable via `AuthorizedKeysFile`), and asserts none survive. Also removes a standing root
   authorisation for the build host from every shipped image.
-- The first build on a clean checkout failed when saving a checkpoint. `save-checkpoint` copies the
-  build disk into `guest-tools/image/<env>/`, but `copy` does not create parent directories and only
-  `guest-tools/image/` itself is tracked (via `.gitkeep`) — the per-env subdirectory is created by
-  earlier builds, so the failure was invisible on any host that had built before. It now creates the
-  directory, as `export-vm-image` and `prepare-image` already did. Found by running
-  `inventory-reproduce.yml` on a host that had never built an image.
 - **Checkpoint capture lost the guest's last writes.** `virsh suspend` pauses vCPUs but does not
   flush the guest page cache, so writes from the seconds before it never reached the virtual disk
   and were absent from the copied image — silently, since the tasks that made them reported
