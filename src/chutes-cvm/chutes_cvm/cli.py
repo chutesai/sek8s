@@ -86,7 +86,9 @@ def _cmd_update(args: argparse.Namespace) -> int:
         repo = os.path.dirname(os.path.dirname(os.path.dirname(installer)))
         print(f"editable install from {repo} — updating the checkout first")
         if os.path.isdir(os.path.join(repo, ".git")):
-            rc = subprocess.call(["git", "-C", repo, "pull", "--ff-only"])  # nosec B603 B607
+            rc = subprocess.call(
+                ["git", "-C", repo, "pull", "--ff-only"]
+            )  # nosec B603 B607
             if rc != 0:
                 print(
                     f"git pull failed in {repo}; resolve it there and re-run.",
@@ -110,10 +112,15 @@ def _cmd_update(args: argparse.Namespace) -> int:
         with urllib.request.urlopen(url, timeout=30) as resp:  # nosec B310
             shutil.copyfileobj(resp, tmp)
         tmp.close()
-    except Exception as exc:  # noqa: BLE001 — any fetch failure is the same user-facing problem
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 — any fetch failure is the same user-facing problem
         tmp.close()
         os.unlink(tmp.name)
-        print(f"could not fetch the installer for ref '{args.ref}': {exc}", file=sys.stderr)
+        print(
+            f"could not fetch the installer for ref '{args.ref}': {exc}",
+            file=sys.stderr,
+        )
         return 1
     os.chmod(tmp.name, 0o755)  # nosec B103
     os.environ["SEK8S_REF"] = args.ref
