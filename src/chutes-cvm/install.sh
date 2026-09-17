@@ -24,12 +24,10 @@
 #   --force            install even if a DIFFERENT chutes-cvm already resolves on PATH (which
 #                      would otherwise shadow the shim); by default that is a hard error
 #                      (see the pre-install path-conflict guard)
-#   SEK8S_REPO         git URL (default https://github.com/chutesai/sek8s.git) — uses the host's
-#                      existing git credentials (the repo is private)
+#   SEK8S_REPO         git URL (default https://github.com/chutesai/sek8s.git) — public, so the
+#                      fetch needs no credentials; override only to install from a fork/mirror
 #   CHUTES_CVM_VENV    venv location (default /opt/chutes-cvm/venv)
 #   CHUTES_CVM_BIN     PATH dir for the shims (default /usr/local/bin)
-#   CHUTES_CVM_PYPI=1  install chutes-cvm from PyPI instead of the checkout
-#   CHUTES_CVM_VERSION PyPI version spec when CHUTES_CVM_PYPI=1
 set -euo pipefail
 
 REPO="${SEK8S_REPO:-https://github.com/chutesai/sek8s.git}"
@@ -96,12 +94,8 @@ CLEANUP_DEST=""
 cleanup() { [ -n "$CLEANUP_DEST" ] && rm -rf "$CLEANUP_DEST" 2>/dev/null || true; }
 trap cleanup EXIT
 
-if [ "${CHUTES_CVM_PYPI:-}" = "1" ]; then
-    MODE="pypi"; REPO_ROOT=""; PKG_DIR=""
-    [ "$EDITABLE" = auto ] && EDITABLE=0
-elif [ -z "$DEST" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
+if [ -z "$DEST" ] && [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
     # Repo-present: this script sits at <repo>/src/chutes-cvm/install.sh.
-    MODE="present"
     PKG_DIR="$SCRIPT_DIR"
     REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
     [ "$EDITABLE" = auto ] && EDITABLE=1
@@ -115,7 +109,7 @@ else
         CLEANUP_DEST="$DEST"   # ephemeral — remove on exit
     fi
     [ "$EDITABLE" = auto ] && EDITABLE=0
-    MODE="bootstrap"; PKG_DIR="$DEST/src/chutes-cvm"; REPO_ROOT="$DEST"
+    PKG_DIR="$DEST/src/chutes-cvm"; REPO_ROOT="$DEST"
     log "sparse shallow fetch $REPO ($REF) -> $DEST"
     mkdir -p "$DEST"
     git -C "$DEST" init -q
@@ -148,19 +142,14 @@ fi
 $SUDO python3 -m venv "$VENV_DIR"            # reuses an existing venv of the same version
 $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet --upgrade pip
 
-if [ "$MODE" = "pypi" ]; then
-    log "install: chutes-cvm${CHUTES_CVM_VERSION:+==$CHUTES_CVM_VERSION} (PyPI)"
-    $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet "chutes-cvm${CHUTES_CVM_VERSION:+==$CHUTES_CVM_VERSION}"
+[ -f "$PKG_DIR/pyproject.toml" ] || {
+    echo "ERROR: package source not found at $PKG_DIR." >&2; exit 1; }
+if [ "$EDITABLE" = "1" ]; then
+    log "install: $PKG_DIR (checkout, editable)"
+    $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet -e "$PKG_DIR"
 else
-    [ -f "$PKG_DIR/pyproject.toml" ] || {
-        echo "ERROR: package source not found at $PKG_DIR." >&2; exit 1; }
-    if [ "$EDITABLE" = "1" ]; then
-        log "install: $PKG_DIR (checkout, editable)"
-        $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet -e "$PKG_DIR"
-    else
-        log "install: $PKG_DIR (checkout, non-editable — source is disposable)"
-        $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet "$PKG_DIR"
-    fi
+    log "install: $PKG_DIR (checkout, non-editable — source is disposable)"
+    $SUDO "$VENV_DIR/bin/python3" -m pip install --quiet "$PKG_DIR"
 fi
 
 # ── Verify the package actually imports ────────────────────────────────────────
@@ -177,7 +166,7 @@ fi
 # An editable install resolves firmware from the persistent checkout. A non-editable install
 # discards the source, so copy the committed firmware next to the venv and point the shim at it.
 FIRMWARE_ENV_LINE=""
-if [ "$EDITABLE" = "0" ] && [ "$MODE" != "pypi" ]; then
+if [ "$EDITABLE" = "0" ]; then
     FIRMWARE_PERSIST="$(dirname "$VENV_DIR")/firmware"
     if ls "$REPO_ROOT"/firmware/*.fd >/dev/null 2>&1; then
         log "firmware: $FIRMWARE_PERSIST (copied from checkout)"

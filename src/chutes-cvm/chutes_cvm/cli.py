@@ -22,8 +22,8 @@ import sys
 
 
 def _installed_version() -> str:
-    """The version of the installed ``chutes-cvm`` distribution (accurate for editable,
-    non-editable, and PyPI installs alike, since it reads the dist metadata)."""
+    """The version of the installed ``chutes-cvm`` distribution (accurate for both the
+    editable and non-editable install, since it reads the dist metadata)."""
     from importlib.metadata import PackageNotFoundError, version
 
     try:
@@ -41,6 +41,83 @@ def _cmd_version(_args: argparse.Namespace) -> int:
     print(f"  package: {os.path.dirname(os.path.abspath(chutes_cvm.__file__))}")
     print(f"  python:  {sys.executable}")
     return 0
+
+
+def _checkout_installer() -> "str | None":
+    """The install.sh of the checkout this CLI is installed FROM, or None when it is not.
+
+    An editable install leaves ``chutes_cvm`` inside ``<repo>/src/chutes-cvm/``; a non-editable
+    one copies it into the venv's site-packages, where no sibling install.sh exists. That is the
+    whole test — the same resolution `version` prints."""
+    import chutes_cvm
+
+    pkg_dir = os.path.dirname(os.path.abspath(chutes_cvm.__file__))
+    installer = os.path.join(os.path.dirname(pkg_dir), "install.sh")
+    return installer if os.path.isfile(installer) else None
+
+
+def _cmd_update(args: argparse.Namespace) -> int:
+    """Re-run install.sh to update this CLI in place.
+
+    install.sh stays the single source of truth for installing; this only picks the mode and
+    hands off, so there is no second copy of the install logic to drift. It execs rather than
+    subprocesses so the running interpreter is replaced outright — a process that reinstalls the
+    package it is importing from is asking for a half-updated venv.
+
+    Deliberately does NOT check the CLI against the installed guest image: nothing declares which
+    versions pair with which, so any such check would be comparing two numbers with no rule
+    relating them.
+    """
+    import shutil
+    import subprocess  # nosec B404
+    import tempfile
+    import urllib.request
+
+    if os.geteuid() != 0:
+        print(
+            "chutes-cvm update needs root: it writes the venv and the /usr/local/bin shim.\n"
+            "  sudo chutes-cvm update",
+            file=sys.stderr,
+        )
+        return 1
+
+    installer = _checkout_installer()
+    if installer:
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(installer)))
+        print(f"editable install from {repo} — updating the checkout first")
+        if os.path.isdir(os.path.join(repo, ".git")):
+            rc = subprocess.call(["git", "-C", repo, "pull", "--ff-only"])  # nosec B603 B607
+            if rc != 0:
+                print(
+                    f"git pull failed in {repo}; resolve it there and re-run.",
+                    file=sys.stderr,
+                )
+                return rc
+        else:
+            print(f"  {repo} is not a git checkout — reinstalling from it as-is.")
+        os.execv("/bin/bash", ["bash", installer, "--editable"])  # nosec B606
+
+    # Non-editable: the source was discarded at install time, so fetch the installer itself.
+    url = (
+        "https://raw.githubusercontent.com/chutesai/sek8s/"
+        f"{args.ref}/src/chutes-cvm/install.sh"
+    )
+    print(f"non-editable install — fetching {url}")
+    tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+        prefix="chutes-cvm-install.", suffix=".sh", delete=False
+    )
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:  # nosec B310
+            shutil.copyfileobj(resp, tmp)
+        tmp.close()
+    except Exception as exc:  # noqa: BLE001 — any fetch failure is the same user-facing problem
+        tmp.close()
+        os.unlink(tmp.name)
+        print(f"could not fetch the installer for ref '{args.ref}': {exc}", file=sys.stderr)
+        return 1
+    os.chmod(tmp.name, 0o755)  # nosec B103
+    os.environ["SEK8S_REF"] = args.ref
+    os.execv("/bin/bash", ["bash", tmp.name])  # nosec B606
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -97,6 +174,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the installed chutes-cvm version and where it resolves from.",
     )
     p_version.set_defaults(func=_cmd_version)
+
+    # Same category as `version`: about this CLI, not about a managed noun. Re-runs install.sh,
+    # which is the only installer — so `update` cannot drift from how the host was set up.
+    p_update = sub.add_parser(
+        "update",
+        help="Update this CLI in place by re-running its installer (needs root).",
+    )
+    p_update.add_argument(
+        "--ref",
+        default="main",
+        help="Branch or tag to install from (default: main, the released state — "
+        "the same default install.sh uses).",
+    )
+    p_update.set_defaults(func=_cmd_update)
 
     return parser
 
