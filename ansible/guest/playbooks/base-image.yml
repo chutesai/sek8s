@@ -31,11 +31,27 @@
 # Then publish the artifact and point chutes-miner-vm.yml at it by version + hash.
 #
 # REBUILDABLE FROM PUBLIC INPUTS when apt_snapshot is set: the Canonical image is pinned by hash
-# and the archive is pinned to a timestamp, so a third party can rebuild this layer and compare.
-# Without it the layer is only verifiable by INSPECTION (signed artifact, dpkg -V against archive
-# checksums). snapshot.ubuntu.com throughput varies hugely by location — measured ~1.3 MB/s from a
-# US host vs ~0.33 MB/s from AU, against ~16 MB/s for a nearby mirror — so run this where it is
-# fast. The guest build never touches it.
+# and the archive is pinned to a timestamp. Without it the layer is only verifiable by INSPECTION
+# (signed artifact, dpkg -V against archive checksums).
+#
+# Rebuilding reproduces the CONTENTS, not the qcow2 bytes — do not expect a rebuild to match
+# base_image_sha256. qcow2 is a sparse allocating format, so cluster ordering and refcount metadata
+# depend on the order a running VM happens to write, and two builds of the same packages differ in
+# the container while agreeing on the files. Measured across an Intel and an AMD host: 201,694
+# filesystem entries, 28 differing, all of them build-time ephemera (logs, the journal directory
+# named after a random machine-id, snapd state, apt/ESM and swcatalog caches, and the two initrds —
+# initramfs is not byte-reproducible). Identical package set, 1,477 packages at identical versions,
+# and not one of the differing paths falls under a measured prefix. So base_image_sha256 proves a
+# consumer got OUR artifact; what a third party reproduces is the contents, and the check that it
+# worked is that their guest build lands on the published measurements.
+#
+# One unpinned input remains: /var/lib/ubuntu-advantage/apt-esm/ is fetched live from
+# esm.ubuntu.com and did change between those two builds. It is outside the measured paths, so it
+# does not reach a measurement today — but that is a property of the path list, not of the pinning.
+#
+# snapshot.ubuntu.com throughput varies hugely by location — measured ~1.3 MB/s from a US host vs
+# ~0.33 MB/s from AU, against ~16 MB/s for a nearby mirror — so run this where it is fast. The
+# guest build never touches it.
 
 - name: Confirm base image build configuration
   hosts: host
@@ -87,6 +103,15 @@
   become: true
   tags:
     - build
+  # This playbook never uses a cache, whatever NO_CACHE says. run-vm only copies the prepared image
+  # over the build disk `when: (not build_image.stat.exists) or no_cache == 'true'`, so with a stale
+  # /var/lib/libvirt/images/tdx-guest.qcow2 lying around and the flag forgotten it boots whatever a
+  # previous run left and captures THAT as the layer. Observed: a base image published with
+  # cuda-toolkit in it, from a half-finished guest build, caught only because it was 3x the expected
+  # size. The output here is a published artifact others pin by hash, so it always starts clean —
+  # and the inputs are hash-pinned anyway, so a re-fetch costs time, never correctness.
+  vars:
+    no_cache: 'true'
   # virt-host-prereqs notifies `restart libvirtd` when it rewrites qemu.conf. That fires only on a
   # host whose libvirt is not already configured — i.e. never on ours, and always on a first build
   # elsewhere — so without this the handler is simply not found and the play dies.
