@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
-## [1.4.0] - 2026-09-16
+## [1.4.0] - 2026-09-17
 
 ### Added
 - **Boot-time miner-hotkey proof-of-possession (guest side).** A small, static, pinned-toolchain (musl) sr25519 signer (`src/sr25519`; Schnorr/Ristretto, which openssl cannot do) is built and staged into the guest initramfs (measured into RTMR2). The boot flow now derives the hotkey from the config-volume seed (`/run/tdx-config/miner-seed`) rather than trusting the claimed `miner-ss58`, and signs each chained server nonce — `/boot/attestation`, `/provision`, and `/provision/confirm` — sending the sr25519 proof in `X-Chutes-Signature`. This closes a cross-miner LUKS-brick vector where a peer could assert a victim's `(hotkey, vm_name)` and rotate its passphrase. The seed is stashed to `/run` for the init-bottom calls and shredded before the initramfs `/run` is moved into userspace. Pairs with a matching server-side signature check (chutes-api). Also fixes a migration miss: root-rotation confirm now uses `/provision/confirm` (the legacy `/luks/confirm` is deprecated).
@@ -168,6 +168,20 @@ Version source of truth: `ansible/guest/VERSION`
   variants — so a prod and a debug build now share one checkpoint instead of each building its own,
   the same way both already share one base image under `base/<version>/`. Keying on the base image
   version still prevents reusing a cache derived from a different base.
+- `virt-host-prereqs` now verifies the build VM's SSH keypair and `/dev/kvm` before anything is
+  downloaded. Both were needed several roles later by `run-vm`, and neither failed usefully: a
+  missing key surfaced as a file-lookup error while rendering cloud-init, and missing KVM did not
+  fail at all — the build fell back to software emulation and took hours instead of ~30 minutes,
+  with no symptom beyond appearing to hang. `ssh_public_key_path`/`ssh_private_key_path` moved from
+  `run-vm` defaults to `group_vars/host.yml` so the check can see them (role defaults are
+  role-scoped).
+- **`docs/reproducing-measurements.md`** — how a third party independently reproduces the guest
+  image measurements and compares them to the published set. Covers host prerequisites (and why
+  `build-setup.yml` is the wrong tool for someone else's machine, since it rewrites apt sources and
+  installs Docker), the root/`HOME=/root` requirement the plays assume, which misconfigurations the
+  preflight catches versus the two it does not (a missing SSH keypair, and no KVM — which silently
+  falls back to emulation rather than failing), and how to diff `/etc/tdx-rtmr3-expected-hashes` to
+  name the responsible files if measurements disagree.
 
 ### Changed
 - Renamed Ansible inventory vars: `cosign_public_key_path` -> `cosign_chutes_public_key_path` (`~/.cosign/chutes.pub`) and added `cosign_dockerhub_public_key_path` (`~/.cosign/dockerhub.pub`)
