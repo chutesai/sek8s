@@ -1,0 +1,220 @@
+"""The host profile: what ``discover-profile.sh`` observed, plus what follows from it.
+
+The document is the single reader's output; this wraps it and derives everything the launch and
+the measurement need. Two halves meet here:
+
+  * the **observed** hardware -- ``GpuDevice`` / ``NvSwitchDevice`` / ``IbDevice`` lists, each
+    device carrying its own identity, NUMA node and BAR layout;
+  * the **authored** policy -- the ``GpuProfile`` that the GPUs' device id selects, holding what
+    the host cannot report (VRAM and VBIOS are invisible once the GPUs are bound to vfio-pci) and
+    what we decide (reserved CPUs, guest-RAM rule, which endpoints to attach).
+
+Nothing is stored that can be computed: device counts, id sets and NUMA vectors are all
+projections of the device lists.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from functools import cached_property
+
+from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
+
+
+def _node_sig(nodes: tuple[int, ...]) -> str:
+    """Compact signature of a per-device NUMA-node vector: ``node{n}`` when every device sits on
+    one node (``(0,0,0,0)`` -> ``node0``), else the raw vector (``(0,0,1,1)`` -> ``0011``).
+    """
+    if len(set(nodes)) == 1:
+        return f"node{nodes[0]}"
+    return "".join(str(n) for n in nodes)
+
+
+@dataclass(frozen=True)
+class HostCpu:
+    """The host's CPU, as reported.
+
+    Observed facts only -- ``vcpus`` and ``-smp`` are derived from these plus the GPU profile's
+    reserve, and live on ``HostProfile``. (This is not the old ``CpuTopology``, which carried the
+    derived vcpus and existed as a value object for a registry lookup the API now owns.)
+
+    ``processor_id`` is CPUID leaf-1 as 8-byte hex; it becomes the SMBIOS Type-4 Processor ID and
+    is None when unreadable, which offline generation refuses rather than measure its own host's
+    CPU. ``vendor`` fixes the SRAT memory hole, which is AMD-guest-gated.
+    """
+
+    count: int
+    sockets: int
+    vendor: str
+    processor_id: "str | None"
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "HostCpu":
+        """The wire calls it ``total``; a total of what is not obvious, so it lands as ``count``."""
+        return cls(
+            count=int(d.get("total") or 0),
+            sockets=int(d.get("sockets") or 0),
+            vendor=d.get("cpu_vendor") or "",
+            processor_id=d.get("cpu_processor_id"),
+        )
+
+
+class HostProfile:
+    """One host, as captured. Construct from the document ``discover-profile.sh`` emits."""
+
+    def __init__(self, raw: dict):
+        self.raw = raw
+
+    # ── observed hardware ───────────────────────────────────────────────────
+    @cached_property
+    def gpus(self) -> tuple[GpuDevice, ...]:
+        return GpuDevice.from_dicts(self.raw.get("gpus"))
+
+    @cached_property
+    def nvswitches(self) -> tuple[NvSwitchDevice, ...]:
+        return NvSwitchDevice.from_dicts(self.raw.get("nvswitches"))
+
+    @cached_property
+    def ib_devices(self) -> tuple[IbDevice, ...]:
+        return IbDevice.from_dicts(self.raw.get("ib_devices"))
+
+    # ── host facts the devices do not carry ─────────────────────────────────
+    @cached_property
+    def cpu(self) -> HostCpu:
+        return HostCpu.from_dict(self.raw.get("cpu") or {})
+
+    @property
+    def host_mem_gb(self) -> int:
+        return int((self.raw.get("memory") or {}).get("total_gb") or 0)
+
+    @property
+    def numa_node_count(self) -> int:
+        return int((self.raw.get("numa") or {}).get("node_count") or 0)
+
+    @property
+    def qemu_version(self) -> str:
+        return (self.raw.get("qemu") or {}).get("qemu_version") or ""
+
+    # ── the policy the hardware selects ─────────────────────────────────────
+    @cached_property
+    def gpu_profile(self) -> GpuProfile:
+        """The ``GpuProfile`` this host's GPUs select.
+
+        All GPUs must be one model: the profile carries a single device id, and one passthrough
+        endpoint describes the whole platform. Checked against real per-device data rather than
+        assumed from one representative.
+        """
+        ids = {g.device_id for g in self.gpus}
+        if len(ids) != 1:
+            raise ValueError(
+                f"expected one GPU model, found {sorted(ids) or 'none'}; "
+                "a host with mixed GPU device ids cannot be profiled"
+            )
+        device_id = ids.pop()
+        for profile in GPU_PROFILES.values():
+            if profile.matches_device_id(device_id):
+                return profile
+        raise ValueError(f"no GPU profile matches device id {device_id}")
+
+    # ── what the launcher will attach ───────────────────────────────────────
+    @property
+    def uses_guest_numa(self) -> bool:
+        """Whether the launcher builds the 2-node guest-NUMA topology rather than a flat one."""
+        return self.gpu_profile.enable_numa_topology and self.numa_node_count == 2
+
+    @cached_property
+    def attached_nvswitches(self) -> tuple[NvSwitchDevice, ...]:
+        """NVSwitches the launcher passes through -- all of them, or none."""
+        if not self.gpu_profile.should_passthrough_nvswitches(len(self.gpus)):
+            return ()
+        return self.nvswitches
+
+    @cached_property
+    def attached_ib(self) -> tuple[IbDevice, ...]:
+        """IB PFs the launcher passes through.
+
+        Bridge PFs are excluded: on B200/B300 HGX they carry the NVSwitch fabric management
+        (VPD ``SMDL=SW_MNG``) and must stay on the host for Fabric Manager. VFs are excluded
+        because a VF is not a PF.
+        """
+        if not self.gpu_profile.should_passthrough_infiniband:
+            return ()
+        return tuple(d for d in self.ib_devices if not d.is_bridge_pf and not d.is_vf)
+
+    # ── the guest that produces ─────────────────────────────────────────────
+    @property
+    def vcpus(self) -> int:
+        """Guest vCPUs: the host's CPUs less the profile's reserve for the host OS."""
+        return self.cpu.count - self.gpu_profile.host_reserved_cpus
+
+    @property
+    def guest_mem_gb(self) -> int:
+        """Guest RAM, per the profile's sizing rule -- NOT a function of host RAM alone."""
+        return self.gpu_profile.guest_mem_gb(self.host_mem_gb, len(self.gpus))
+
+    @property
+    def smp_topology(self) -> str:
+        """QEMU ``-smp``. threads=1 disables guest SMT (each vCPU a core)."""
+        return (
+            f"{self.vcpus},sockets={self.cpu.sockets},"
+            f"cores={self.vcpus // self.cpu.sockets},threads=1"
+        )
+
+    @property
+    def mem(self) -> str:
+        """QEMU ``-m``."""
+        return f"{self.guest_mem_gb}G"
+
+    @staticmethod
+    def _nodes(devices: "tuple[PciDevice, ...]") -> tuple[int, ...]:
+        """Per-device NUMA node. The lists are already in BDF order, which is significant."""
+        return tuple(d.numa_node for d in devices)
+
+    @property
+    def gpu_numa_nodes(self) -> tuple[int, ...]:
+        return self._nodes(self.gpus)
+
+    @property
+    def nvswitch_numa_nodes(self) -> tuple[int, ...]:
+        return self._nodes(self.attached_nvswitches)
+
+    @property
+    def ib_numa_nodes(self) -> tuple[int, ...]:
+        return self._nodes(self.attached_ib)
+
+    @property
+    def variant_label(self) -> str:
+        """Deterministic variant id: ``<path>-<vcpus>c-<mem>g[-devices]``, e.g.
+        ``numa-176c-1944g`` or ``numa-124c-1128g-nvsw-node0``.
+
+        On the NUMA path the extra parts carry each device class's node signature; on the flat
+        path only counts matter, because there is no PXB grouping to differ.
+        """
+        path = "numa" if self.uses_guest_numa else "flat"
+        parts = [path, f"{self.vcpus}c-{self.guest_mem_gb}g"]
+        if self.uses_guest_numa:
+            if self.nvswitch_numa_nodes:
+                parts.append("nvsw-" + _node_sig(self.nvswitch_numa_nodes))
+            if self.ib_numa_nodes:
+                parts.append("ib-" + _node_sig(self.ib_numa_nodes))
+        else:
+            if self.attached_nvswitches:
+                parts.append(f"nvsw{len(self.attached_nvswitches)}")
+            if self.attached_ib:
+                parts.append(f"ib{len(self.attached_ib)}")
+        return "-".join(parts)
+
+    # ── serialisation ───────────────────────────────────────────────────────
+    def to_dict(self) -> dict:
+        """The document as submitted, with the device lists normalised."""
+        return self.raw | {
+            "gpus": [d.to_dict() for d in self.gpus],
+            "nvswitches": [d.to_dict() for d in self.nvswitches],
+            "ib_devices": [d.to_dict() for d in self.ib_devices],
+        }
+
+    def to_json(self) -> str:
+        """Compact separators keep the signed body small; key order is irrelevant to the API."""
+        return json.dumps(self.to_dict(), separators=(",", ":"))

@@ -17,6 +17,7 @@ and so does an NVSwitch BAR's size, so every passed-through device carries its o
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Self
 
 
 @dataclass(frozen=True)
@@ -79,8 +80,11 @@ class PciDevice:
         )
 
     @classmethod
-    def list_from_dicts(cls, raw: "list[dict] | None") -> tuple:
+    def from_dicts(cls, raw: "list[dict] | None") -> tuple[Self, ...]:
         """Every device of this kind, in BDF order.
+
+        A tuple, not a list: the devices are frozen and the ordering is an invariant, so the
+        collection should not invite an append or a re-sort either.
 
         Sorted here so the ordering is an invariant of the list rather than something each reader
         re-applies -- miss it once and the NUMA vector describes a machine that does not exist.
@@ -126,7 +130,7 @@ class PciDevice:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PciDevice":
+    def from_dict(cls, d: dict) -> Self:
         return cls(**cls._kwargs_from(d))
 
     def to_dict(self) -> dict:
