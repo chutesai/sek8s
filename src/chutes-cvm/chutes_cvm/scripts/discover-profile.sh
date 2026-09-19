@@ -75,6 +75,38 @@ size_to_mib() {
 }
 
 # Read sysfs NUMA node for a PCI BDF (returns -1 if unknown)
+# One PCI device as JSON: identity, NUMA affinity, BAR layout. Everything here is readable with
+# the device bound to vfio-pci -- BAR sizes come from /sys/bus/pci/devices/*/resource (world
+# readable, driver independent), which is why they survive a passthrough-prepped host while
+# nvidia-smi values (VRAM, VBIOS) do not.
+#   $1 bdf, $2 optional extra JSON members (leading comma included by the caller)
+pci_device_json() {
+    local bdf="$1" extra="${2:-}"
+    local nn_line vendor device pci_class bars="" bar_line
+
+    # "0000:1a:00.0 3D controller [0302]: NVIDIA Corporation Device [10de:3182] (rev a1)"
+    nn_line=$(lspci -Dnn -s "$bdf" 2>/dev/null | head -1 || true)
+    if [[ "$nn_line" =~ \[([0-9a-fA-F]{4})\]:.*\[([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\] ]]; then
+        pci_class="${BASH_REMATCH[1]}"
+        vendor="${BASH_REMATCH[2]}"
+        device="${BASH_REMATCH[3]}"
+    fi
+
+    # Region lines already report a resizable BAR's *current* size, so no separate parse.
+    while IFS= read -r bar_line; do
+        [[ "$bar_line" =~ Region\ ([0-9]+):\ Memory.*\((32|64)-bit,\ (non-prefetchable|prefetchable)\).*size=([0-9A-Za-z]+) ]] || continue
+        local idx="${BASH_REMATCH[1]}" width="${BASH_REMATCH[2]}" pref="${BASH_REMATCH[3]}"
+        local mib kind
+        mib=$(size_to_mib "${BASH_REMATCH[4]}")
+        kind="m${width}"
+        [[ "$pref" == "prefetchable" ]] && kind="p${width}"
+        bars+="${bars:+,}{\"index\":${idx},\"size_mb\":${mib},\"kind\":\"${kind}\"}"
+    done < <(lspci -vvv -s "$bdf" 2>/dev/null | grep -E 'Region [0-9]+: Memory')
+
+    printf '{"bdf":"%s","vendor":"%s","device_id":"%s","pci_class":"%s","numa_node":%s,"bars":[%s]%s}' \
+        "$bdf" "${vendor:-}" "${device:-}" "${pci_class:-}" "$(pci_numa_node "$bdf")" "$bars" "$extra"
+}
+
 pci_numa_node() {
     local bdf="$1"
     local p="/sys/bus/pci/devices/${bdf}/numa_node"
@@ -576,6 +608,40 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         nvswitch_json="[]"; nvswitch_numa_json="[]"
     fi
 
+    # Device lists: one object per physical device, each carrying its own identity, NUMA node and
+    # BAR layout. Emitted alongside the legacy blocks during the transition -- nothing reads them
+    # yet, so this is additive.
+    build_device_list() {
+        local _var="$1"; shift
+        local _out="[" _sep="" _bdf
+        for _bdf in "$@"; do
+            [[ -n "$_bdf" ]] || continue
+            _out+="${_sep}$(pci_device_json "$_bdf")"
+            _sep=","
+        done
+        _out+="]"
+        printf -v "$_var" '%s' "$_out"
+    }
+    build_device_list gpus_json "${GPU_BDFS[@]:-}"
+    build_device_list nvswitches_json "${NVSWITCH_DEVICES[@]:-}"
+
+    # IB devices carry two flags the others do not. is_bridge_pf comes from VPD, which needs root,
+    # so an unprivileged capture reports every PF as non-bridge -- see the note in devices.py.
+    ib_devices_json="["
+    _sep=""
+    for _bdf in "${IB_CLASS_DEVICES[@]:-}"; do
+        [[ -n "$_bdf" ]] || continue
+        _is_bridge=false
+        for _b in "${BRIDGE_PFS[@]:-}"; do
+            [[ "$_b" == "$_bdf" ]] && _is_bridge=true
+        done
+        _is_vf=false
+        [[ -e "/sys/bus/pci/devices/${_bdf}/physfn" ]] && _is_vf=true
+        ib_devices_json+="${_sep}$(pci_device_json "$_bdf" ",\"is_bridge_pf\":${_is_bridge},\"is_vf\":${_is_vf}")"
+        _sep=","
+    done
+    ib_devices_json+="]"
+
     cat > "$OUT_FILE" <<JSON
 {
   "hostname": "$(hostname)",
@@ -606,6 +672,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "numa_nodes": ${gpu_numa_json},
     "vbios": ${gpu_vbios_json}
   },
+  "gpus": ${gpus_json},
+  "nvswitches": ${nvswitches_json},
+  "ib_devices": ${ib_devices_json},
   "pci_topology": ${pci_topology_json},
   "cpu": {
     "total": ${CPU_TOTAL},
