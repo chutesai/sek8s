@@ -237,16 +237,6 @@ def test_b300_does_not_pass_through_infiniband():
     assert GPU_PROFILES["B300"].should_passthrough_infiniband is False
 
 
-def test_b300_skips_ovmf_mmio_fw_cfg():
-    """B300: 8×512 GiB BARs need OVMF auto-sized aggregate MMIO, not per-GPU fw_cfg."""
-    assert GPU_PROFILES["B300"].use_ovmf_mmio_fw_cfg is False
-
-
-@pytest.mark.parametrize("model_key", ["B200", "H200", "RTX_PRO_6000"])
-def test_other_profiles_use_ovmf_mmio_fw_cfg(model_key):
-    assert GPU_PROFILES[model_key].use_ovmf_mmio_fw_cfg is True
-
-
 def test_b300_matches_pci_device_id_3182():
     profile = GPU_PROFILES["B300"]
     assert profile.matches_device_id("3182")
@@ -777,14 +767,16 @@ def test_detect_profile_skips_topology_check_for_unbaselined_profile():
 
 
 @pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
-def test_pci_bars_vram_matches_bar_size_hint(key):
-    # For profiles that model the GPU endpoint, the largest BAR (VRAM) must
-    # equal bar_size_mb: the fw_cfg MMIO hint and the actual VRAM BAR describe
-    # the same window and must not drift apart.
+def test_pci_bars_have_a_dominant_vram_aperture(key):
+    """The VRAM BAR dwarfs the others, and it is what sizes the guest's 64-bit MMIO window.
+
+    OVMF auto-sizes that window from the BARs it enumerates, so this is the one that matters.
+    """
     bars = GPU_PROFILES[key].passthrough["gpu"].bars
     assert bars, f"{key} should model passthrough['gpu']"
     vram = max(bars, key=lambda b: b.size_mb)
-    assert vram.size_mb == GPU_PROFILES[key].bar_size_mb
+    assert vram.size_mb >= 64 * 1024
+    assert all(b.size_mb * 64 <= vram.size_mb for b in bars if b is not vram)
 
 
 @pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])

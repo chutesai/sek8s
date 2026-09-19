@@ -277,12 +277,6 @@ class HostProfile:
                 kwargs: dict = {"rp_id": f"{prefix}{ordinal}", "chassis": chassis}
                 if numa:
                     kwargs["numa_node"] = device.numa_node
-                # The per-GPU opt/ovmf/X-PciMmio64Mb<N> hint. Inert -- the firmware reads a
-                # single UNSUFFIXED key, so these never match -- but the launch path emits it
-                # too (guest/passthrough.py), so the measurement reproduces it to stay identical.
-                if prefix == "rp" and self.gpu_profile.use_ovmf_mmio_fw_cfg:
-                    kwargs["bar_size_mb"] = self.gpu_profile.bar_size_mb
-                    kwargs["bar_index"] = ordinal
                 topology.add_device(cmd, host_bdf=device.bdf, **kwargs)
         return cmd
 

@@ -94,21 +94,6 @@ class GpuProfile(ABC):
 
     @property
     @abstractmethod
-    def bar_size_mb(self) -> int:
-        """MMIO BAR size in MB for QEMU fw_cfg hint (when use_ovmf_mmio_fw_cfg is True)."""
-        ...
-
-    @property
-    def use_ovmf_mmio_fw_cfg(self) -> bool:
-        """Whether to pass opt/ovmf/X-PciMmio64Mb* fw_cfg hints per GPU to QEMU.
-
-        B300 disables this: 8×512 GiB BARs need a multi-TB aggregate MMIO window that
-        OVMF auto-sizes; per-GPU fw_cfg hints can prevent correct BAR assignment.
-        """
-        return True
-
-    @property
-    @abstractmethod
     def vram_gb(self) -> int:
         """VRAM per GPU in GB. Used to size VM RAM as gpu_count * vram_gb."""
         ...
@@ -221,11 +206,6 @@ class B200Profile(GpuProfile):
         return "B200"
 
     @property
-    def bar_size_mb(self) -> int:
-        # 256 GiB: confirmed from lspci Region 2 on am-b200-34 reference host.
-        return 262144
-
-    @property
     def vram_gb(self) -> int:
         return 192  # B200 HBM3e
 
@@ -288,11 +268,6 @@ class B300Profile(GpuProfile):
         return "B300"
 
     @property
-    def bar_size_mb(self) -> int:
-        # 512 GiB: confirmed from lspci Region 2 on am-b300-61.
-        return 524288
-
-    @property
     def vram_gb(self) -> int:
         return 288  # B300 HBM3e (SXM6 AC)
 
@@ -326,10 +301,6 @@ class B300Profile(GpuProfile):
         # Guest networking uses virtio-net; GPU fabric is NVLink via host-side FM.
         return False
 
-    @property
-    def use_ovmf_mmio_fw_cfg(self) -> bool:
-        return False
-
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
 
@@ -357,10 +328,6 @@ class H200Profile(GpuProfile):
     @property
     def name(self) -> str:
         return "H200"
-
-    @property
-    def bar_size_mb(self) -> int:
-        return 262144  # 256GB
 
     @property
     def vram_gb(self) -> int:
@@ -421,11 +388,6 @@ class RTXPro6000Profile(GpuProfile):
     @property
     def name(self) -> str:
         return "RTX_PRO_6000"
-
-    @property
-    def bar_size_mb(self) -> int:
-        # 128 GiB: matches lspci "Physical Resizable BAR / BAR 2: current size: 128GB" on 2bb5 Server Edition.
-        return 131072
 
     @property
     def vram_gb(self) -> int:

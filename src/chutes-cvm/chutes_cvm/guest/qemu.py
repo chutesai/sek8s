@@ -160,8 +160,6 @@ class PciTopologyState:
         *,
         rp_id: str,
         chassis: int,
-        bar_size_mb: int | None = None,
-        bar_index: int | None = None,
     ):
         """Add a vfio-pci device on a new PCIe root port.
 
@@ -170,8 +168,6 @@ class PciTopologyState:
             host_bdf: host PCI BDF of the device passed through on this root port.
             rp_id: Root port identifier (e.g. 'rp1', 'rp_nvsw1').
             chassis: Chassis number for the root port.
-            bar_size_mb: Optional MMIO BAR size hint (fw_cfg opt/ovmf/X-PciMmio64Mb).
-            bar_index: 1-based fw_cfg index (only when bar_size_mb is set).
         """
         if self.func == 0:
             cmd.devices.append(
@@ -187,11 +183,6 @@ class PciTopologyState:
         cmd.devices.append(
             f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
         )
-
-        if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(
-                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
-            )
 
         self.port += 1
         self.func = (self.func + 1) % 8
@@ -233,15 +224,12 @@ class NumaPciTopologyState:
         rp_id: str,
         chassis: int,
         numa_node: int,
-        bar_size_mb: int | None = None,
-        bar_index: int | None = None,
     ):
         """Add a vfio-pci device on a PCIe root port under the PXB for numa_node.
 
-        numa_node is the device's host NUMA node, resolved by the caller (from
-        sysfs for the launch path, from a topology fingerprint for offline
-        measurement); < 0 (NUMA_NO_NODE — no affinity) falls back to flat
-        placement.
+        numa_node is the device's host NUMA node, resolved by the caller (from sysfs for the
+        launch path, from the captured device for offline measurement); < 0 (NUMA_NO_NODE — no
+        affinity) falls back to flat placement.
         """
         if numa_node < 0:
             self._flat.add_device(
@@ -249,8 +237,6 @@ class NumaPciTopologyState:
                 host_bdf,
                 rp_id=rp_id,
                 chassis=chassis,
-                bar_size_mb=bar_size_mb,
-                bar_index=bar_index,
             )
             return
 
@@ -264,10 +250,6 @@ class NumaPciTopologyState:
         cmd.devices.append(
             f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
         )
-        if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(
-                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
-            )
         print(f"    {host_bdf} -> PXB NUMA node {numa_node}")
         self.port += 1
 
