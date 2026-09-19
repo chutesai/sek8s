@@ -1,8 +1,8 @@
 """TDX host setup orchestration.
 
-Consumes a HostProfile and executes the setup steps: PPAs, packages,
+Consumes a HostRecipe and executes the setup steps: PPAs, packages,
 kernel selection, GRUB configuration, and kvm group membership.
-All OS-version differences are encoded in the profile — this module
+All OS-version differences are encoded in the recipe — this module
 contains no version-specific branching.
 """
 
@@ -14,7 +14,7 @@ import sys
 from urllib.parse import urlparse
 
 from chutes_cvm import proc
-from chutes_cvm.host.profiles import PPA, APTRepo, HostProfile, resolve_profile
+from chutes_cvm.host.recipes import PPA, APTRepo, HostRecipe, resolve_recipe
 
 # Fabric Manager version must match the NVIDIA driver version in the guest
 # image.  FM communicates with GPU firmware shared between host and guest;
@@ -44,8 +44,8 @@ def _assert_kernel_available(kernel_package: str) -> None:
             "archive.\n"
             "       Pockets carry only the newest kernel ABI, so exact pins expire.\n"
             "       Find the current one:  apt-cache policy linux-image-generic\n"
-            "       Then update kernel_package for this profile in "
-            "chutes_cvm/host/profiles.py."
+            "       Then update kernel_package for this recipe in "
+            "chutes_cvm/host/recipes.py."
         )
 
 
@@ -676,7 +676,7 @@ def _setup_ntp():
     timesyncd only slews small offsets; a BMC RTC set minutes ahead would take a long time to
     correct, and a VM inherits the host clock at launch (QEMU RTC) — a skewed clock yields
     boot-time mTLS certs with a wrong notBefore. chrony's ``makestep`` steps immediately so the
-    host clock is right before any launch. chrony itself installs via ``profile.base_packages``.
+    host clock is right before any launch. chrony itself installs via ``recipe.base_packages``.
     (Folded in from the ansible ``ntp`` role.)
     """
     print("\nStep: Configuring chrony (NTP, immediate clock step)...")
@@ -706,8 +706,8 @@ def _ensure_chutes_dirs():
         print(f"  {d}")
 
 
-def setup_host(profile: HostProfile, noninteractive: bool = False):
-    """Execute TDX host setup using the given profile.
+def setup_host(recipe: HostRecipe, noninteractive: bool = False):
+    """Execute TDX host setup using the given recipe.
 
     Must be run as root (or via sudo). This is the complete per-host configuration — a host is
     launch-ready after it (modulo the CLI install itself, PCCS secrets, and a reboot, which the
@@ -732,18 +732,18 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     its own post-install flow.
     """
     print(f"\n{'=' * 60}")
-    print(f"  TDX Host Setup: {profile.describe()}")
+    print(f"  TDX Host Setup: {recipe.describe()}")
     print(f"{'=' * 60}\n")
 
     if os.geteuid() != 0:
         print("Error: this script must be run as root (sudo).", file=sys.stderr)
         sys.exit(1)
 
-    if not _CONCRETE_KERNEL_RE.match(profile.kernel_package):
+    if not _CONCRETE_KERNEL_RE.match(recipe.kernel_package):
         print(
             f"Error: kernel_package must be a pinned version "
             f"(e.g. 'linux-image-7.0.0-31-generic'), "
-            f"got '{profile.kernel_package}'.",
+            f"got '{recipe.kernel_package}'.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -752,17 +752,17 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
         os.environ["DEBIAN_FRONTEND"] = "noninteractive"
 
     # 1. PPAs
-    if profile.ppas:
+    if recipe.ppas:
         print("Step 1: Adding APT PPAs...")
         _run(["apt", "update"])
         _run(["apt", "install", "--yes", "software-properties-common", "gawk"])
-        for ppa in profile.ppas:
-            _add_ppa(ppa, profile.codename)
+        for ppa in recipe.ppas:
+            _add_ppa(ppa, recipe.codename)
     else:
-        print("Step 1: No PPAs needed for this profile")
+        print("Step 1: No PPAs needed for this recipe")
 
     # 1b. Generic APT repos
-    for repo in profile.repos:
+    for repo in recipe.repos:
         _add_repo(repo)
 
     # 2. apt update
@@ -770,12 +770,12 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
     _run(["apt", "update"])
 
     # 3. Install kernel + packages (base_packages = the folded-in host deps: chrony/aria2/xfsprogs)
-    print(f"\nStep 3: Installing kernel ({profile.kernel_package}) and packages...")
-    _assert_kernel_available(profile.kernel_package)
-    all_packages = [profile.kernel_package] + profile.base_packages + profile.packages
+    print(f"\nStep 3: Installing kernel ({recipe.kernel_package}) and packages...")
+    _assert_kernel_available(recipe.kernel_package)
+    all_packages = [recipe.kernel_package] + recipe.base_packages + recipe.packages
     _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
 
-    kernel_version = _get_kernel_version(profile.kernel_package)
+    kernel_version = _get_kernel_version(recipe.kernel_package)
     print(f"  Kernel version resolved: {kernel_version}")
 
     # linux-modules-extra is a separate package that may not be pulled in
@@ -802,7 +802,7 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
 
     # 5. GRUB cmdline
     print("\nStep 5: Updating GRUB cmdline...")
-    _grub_update_cmdline(profile.grub_cmdline_additions)
+    _grub_update_cmdline(recipe.grub_cmdline_additions)
 
     # 5b. Blacklist GPU drivers on host (GPUs are for VFIO passthrough only)
     print("\nStep 5b: Blacklisting nouveau/nvidia drivers on host...")
@@ -835,7 +835,7 @@ def setup_host(profile: HostProfile, noninteractive: bool = False):
 def main(argv: "list[str] | None" = None) -> int:
     """CLI entry for host setup: `chutes-cvm host setup` (or `python -m chutes_cvm.host.setup`).
 
-    Detects the Ubuntu version, resolves the matching host profile, and executes the
+    Detects the Ubuntu version, resolves the matching host recipe, and executes the
     setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
     """
     parser = argparse.ArgumentParser(
@@ -854,12 +854,12 @@ def main(argv: "list[str] | None" = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        profile = resolve_profile()
+        recipe = resolve_recipe()
     except (ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    setup_host(profile, noninteractive=args.noninteractive)
+    setup_host(recipe, noninteractive=args.noninteractive)
     return 0
 
 
