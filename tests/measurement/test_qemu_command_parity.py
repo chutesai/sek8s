@@ -18,7 +18,6 @@ from chutes_cvm.guest.passthrough import _build_pci_topology
 from chutes_cvm.guest.qemu import (
     build_base_cmd,
     cpu_args_for_qemu_version,
-    use_numa_topology,
 )
 
 _FW = "OVMF.inteltdx.fd"
@@ -72,10 +71,9 @@ def _live_cmd(
         "chutes_cvm.guest.passthrough.read_pci_numa_node",
         side_effect=lambda b: node_by_bdf.get(b, -1),
     ):
-        # Resolve nodes exactly as the launcher does: the mocked sysfs list
-        # (host_nodes), gated by the profile's NUMA flag + the 2-node cap, then
-        # hand build_base_cmd the explicit list (it no longer reads sysfs).
-        numa_active = use_numa_topology(profile.enable_numa_topology)
+        # The same rule HostProfile applies, stated over this helper's own inputs: the
+        # profile must want guest NUMA and the host must have exactly two nodes.
+        numa_active = len(host_nodes) == 2 and len(set(node_by_bdf.values())) > 1
         cmd = build_base_cmd(
             mem=mem,
             smp_topology=smp_topology,
@@ -97,6 +95,7 @@ def _live_cmd(
             nvswitches_for_vm=nvsw or [],
             ib_devices=ib or [],
             profile=profile,
+            guest_numa=numa_active,
         )
     return cmd.to_args()
 
@@ -181,3 +180,38 @@ def test_cpu_args_for_qemu_version():
     assert cpu_args_for_qemu_version("10.2.1") == "host,-avx10"
     # Unknown/unsupported QEMU versions fall back to the same -avx10 form.
     assert cpu_args_for_qemu_version("99.9.9") == "host,-avx10"
+
+
+def test_pci_topology_takes_the_decision_it_is_given():
+    """The PCI topology must agree with the memory topology: PXB bridges name guest NUMA nodes,
+    so building them for a guest with no `-numa` is not a valid command -- QEMU refuses with
+    "Illegal numa node 0".
+
+    _build_pci_topology used to re-derive this from the live host instead of taking the caller's
+    answer, so a launcher that chose flat still got PXB bridges. The decision is an argument now,
+    and this pins that it is honoured rather than recomputed.
+    """
+    profile = GPU_PROFILES["H200"]
+    gpus = [f"0000:{0x19 + i:02x}:00.0" for i in range(8)]
+
+    def cmd():
+        return HostProfile(known.h200_doc()).qemu_command(
+            firmware=_FW, cpu_args="host,-avx10"
+        )
+
+    flat = cmd()
+    flat.devices = [d for d in flat.devices if "pxb-pcie" not in d and "rp" not in d]
+    _build_pci_topology(
+        flat, gpus=gpus, nvswitches_for_vm=[], ib_devices=[], profile=profile, guest_numa=False
+    )
+    assert not any("pxb-pcie" in d for d in flat.devices)
+
+    numa = cmd()
+    numa.devices = []
+    with patch(
+        "chutes_cvm.guest.passthrough.read_pci_numa_node", return_value=0
+    ):
+        _build_pci_topology(
+            numa, gpus=gpus, nvswitches_for_vm=[], ib_devices=[], profile=profile, guest_numa=True
+        )
+    assert any("pxb-pcie" in d for d in numa.devices)

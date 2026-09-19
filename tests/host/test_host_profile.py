@@ -172,12 +172,13 @@ def test_guest_shape_comes_from_the_profile_rule_not_host_capacity():
     assert profile.mem == "1128G"
 
 
-def test_guest_numa_needs_both_the_profile_and_two_host_nodes():
+def test_guest_numa_needs_exactly_two_host_nodes():
     assert HostProfile(document()).uses_guest_numa is True
     assert HostProfile(document(numa={"node_count": 4})).uses_guest_numa is False
-    # B300 has enable_numa_topology=False, so two host nodes are not enough.
-    b300 = document(gpus=[gpu(f"0000:{b}:00.0", 0, "3182") for b in ("19", "3b")])
-    assert HostProfile(b300).uses_guest_numa is False
+    assert HostProfile(document(numa={"node_count": 1})).uses_guest_numa is False
+    # The GPU model is not consulted: a 2-node B300 host gets guest NUMA like any other.
+    b300 = document(gpus=[gpu(f"0000:{b}:00.0", n, "3182") for b, n in (("19", 0), ("3b", 1))])
+    assert HostProfile(b300).uses_guest_numa is True
 
 
 def test_nvswitches_attach_only_when_the_profile_says_so():
@@ -231,6 +232,7 @@ def test_variant_label_flat_path_carries_counts():
             "vendor": "GenuineIntel",
             "processor_id": "d1060a00fffba91f",
         },
+        numa={"node_count": 4},  # flat: more nodes than the builder can express
         guest_gb=992,
     )
     profile = HostProfile(doc)
@@ -380,3 +382,24 @@ def test_flat_topology_shape():
     assert cmd.numa == []
     assert "memory-backend=mem0" in cmd.machine
     assert not any("pxb-pcie" in d for d in cmd.devices)
+
+
+def test_guest_numa_is_a_cpu_fact_not_a_gpu_one():
+    """Guest NUMA is vCPUs grouped into nodes with node-local memory -- a CPU/memory property.
+    It depends on the host having nodes to bind to, not on what is plugged into them.
+
+    GpuProfile.enable_numa_topology used to gate this. It recorded a host fact ("2 nodes, GPUs
+    split 4+4, confirmed on <hostname>") on a GPU class, left from when GpuProfile *was* the host
+    profile, and it forced two 2-node B300 hosts onto the flat path for no reason.
+    """
+    assert HostProfile(document()).uses_guest_numa is True
+
+    # Same host, every GPU on one node: the vCPUs still want node-local memory.
+    one_node = HostProfile(
+        document(gpus=[gpu(f"0000:{0x19 + i:02x}:00.0", 0) for i in range(8)])
+    )
+    assert one_node.numa_node_count == 2
+    assert one_node.uses_guest_numa is True
+
+    # Four nodes: more than the builder can express (4 sockets + an NxN SLIT), so flat.
+    assert HostProfile(document(numa={"node_count": 4})).uses_guest_numa is False

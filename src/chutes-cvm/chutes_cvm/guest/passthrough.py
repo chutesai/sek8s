@@ -12,7 +12,6 @@ from chutes_cvm.guest.qemu import (
     PciTopologyState,
     QemuCommand,
     read_pci_numa_node,
-    use_numa_topology,
 )
 from chutes_cvm.paths import SCRIPTS_DIR
 from chutes_cvm.vfio import (
@@ -250,13 +249,20 @@ def _prepare_devices(
 
 def _build_pci_topology(
     cmd: QemuCommand,
+    *,
     gpus: list[str],
     nvswitches_for_vm: list[str],
     ib_devices: list[str],
     profile: GpuProfile,
+    guest_numa: bool,
 ):
-    """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology."""
-    numa = use_numa_topology(profile.enable_numa_topology)
+    """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology.
+
+    ``guest_numa`` is passed in, never re-derived: it has to agree with the memory topology,
+    because PXB bridges name guest NUMA nodes. Deriving it here from the live host once produced
+    PXB bridges on a guest with no ``-numa`` at all, and QEMU refused with "Illegal numa node 0".
+    """
+    numa = guest_numa
     topo: "PciTopologyState | NumaPciTopologyState"
     if numa:
         print("  PCI topology: NUMA-local PXB-PCIe bridges")
@@ -347,4 +353,11 @@ def setup_passthrough(cmd: QemuCommand, host: HostProfile):
         nvswitches if profile.should_passthrough_nvswitches(total_gpus) else []
     )
 
-    _build_pci_topology(cmd, gpus, nvswitches_for_vm, ib_devices, profile)
+    _build_pci_topology(
+        cmd,
+        gpus=gpus,
+        nvswitches_for_vm=nvswitches_for_vm,
+        ib_devices=ib_devices,
+        profile=profile,
+        guest_numa=host.uses_guest_numa,
+    )

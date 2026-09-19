@@ -28,7 +28,6 @@ from chutes_cvm.guest.qemu import (
     build_base_cmd,
     build_network,
     host_numa_nodes,
-    use_numa_topology,
 )
 from chutes_cvm.paths import firmware_dir
 
@@ -106,8 +105,10 @@ def launch_vm(args) -> int:
             f" → {vcpus} vCPUs, {mem} RAM"
         )
 
-    profile_wants_numa = profile is not None and profile.enable_numa_topology
-    numa_active = use_numa_topology(profile_wants_numa)
+    # One derivation, from the captured host -- not from a second read of the live machine.
+    # The memory topology and the PCI topology must agree, and `host` is what the measurement
+    # was generated against, so it is the authority for both.
+    numa_active = host.uses_guest_numa if host is not None else False
 
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")

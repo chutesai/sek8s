@@ -245,8 +245,22 @@ class HostProfile:
     # ── what the launcher will attach ───────────────────────────────────────
     @property
     def uses_guest_numa(self) -> bool:
-        """Whether the launcher builds the 2-node guest-NUMA topology rather than a flat one."""
-        return self.gpu_profile.enable_numa_topology and self.numa_node_count == 2
+        """Whether the launcher builds the 2-node guest-NUMA topology rather than a flat one.
+
+        Hardware only, and only the CPU's: guest NUMA is vCPUs grouped into nodes, per-node
+        memory bound to the matching host node, and a distance matrix. That pays off whenever
+        the host has nodes to bind to, whatever is plugged into it. Two is the cap because two
+        is all the builder can express -- a 4-node guest would need 4 sockets and an NxN SLIT.
+
+        PXB-PCIe grouping rides on the same decision, putting each passthrough device on the
+        guest node its host node maps to. That is a bonus, not the reason: a host whose GPUs all
+        sit on one node still wants node-local memory for its vCPUs.
+
+        The GPU model has no say. ``GpuProfile.enable_numa_topology`` used to gate this, but it
+        recorded a host fact ("2 nodes, GPUs split 4+4, confirmed on <hostname>") on a GPU class,
+        left over from when GpuProfile was the host profile.
+        """
+        return self.numa_node_count == 2
 
     @cached_property
     def attached_nvswitches(self) -> tuple[NvSwitchDevice, ...]:

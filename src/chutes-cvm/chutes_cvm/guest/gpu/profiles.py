@@ -61,7 +61,7 @@ class GpuProfile(ABC):
     # Must name the device the host reports for this model.
     #
     # Exactly one per profile, deliberately. A profile is not just a BAR layout: it carries
-    # host_reserved_cpus, vram_gb, enable_numa_topology, firmware_filename, expected_gpus
+    # host_reserved_cpus, vram_gb, firmware_filename, expected_gpus
     # and the CC/PPCIe mode arguments. Two products that happen to agree on those today can
     # diverge later with nothing to notice, so distinct hardware gets a distinct profile. The
     # control plane already models it that way -- its host-class fingerprint includes the
@@ -138,11 +138,6 @@ class GpuProfile(ABC):
         return False
 
     @property
-    def enable_numa_topology(self) -> bool:
-        """Use guest NUMA nodes, per-node memory bind, and PXB-PCIe grouping."""
-        return False
-
-    @property
     def enable_post_launch_tuning(self) -> bool:
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
         return False
@@ -215,13 +210,6 @@ class B200Profile(GpuProfile):
         return False
 
     @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets. (A Xeon 6 SNC3
-        # host exposes 6 nodes, so use_numa_topology falls back to flat there; the
-        # flag stays True so it activates when SNC is off / 2-node.)
-        return True
-
-    @property
     def enable_post_launch_tuning(self) -> bool:
         return True
 
@@ -286,12 +274,6 @@ class H200Profile(GpuProfile):
         return 141  # H200 HBM3e
 
     @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
-        # Confirmed from discover-profile.sh on dev-h200-tee.
-        return True
-
-    @property
     def enable_post_launch_tuning(self) -> bool:
         return True
 
@@ -338,12 +320,6 @@ class RTXPro6000Profile(GpuProfile):
 
     # Host: 2 sockets × 64 cores × 1 thread = 128 Intel Xeon (Sierra Forest E-core,
     # no SMT) → 124 vcpus. From discover-profile.sh on eu1-hpe1-rtx6000pro-se-008.
-
-    @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
-        # Confirmed from discover-profile.sh on eu1-hpe1-rtx6000pro-se-001.
-        return True
 
     @property
     def enable_post_launch_tuning(self) -> bool:

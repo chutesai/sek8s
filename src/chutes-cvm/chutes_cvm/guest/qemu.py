@@ -45,11 +45,6 @@ def host_numa_nodes() -> list[int]:
     return sorted(nodes)
 
 
-def use_numa_topology(enable_numa_topology: bool) -> bool:
-    """True when profile requests NUMA and host has exactly 2 NUMA nodes."""
-    return enable_numa_topology and len(host_numa_nodes()) == 2
-
-
 class PcieRootPinning:
     """Pin emulated virtio devices to pcie.0 below PXB bridge slots (0x18+)."""
 

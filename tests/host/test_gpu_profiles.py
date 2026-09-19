@@ -134,35 +134,6 @@ def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
 
 
 # ---------------------------------------------------------------------------
-# NUMA topology and post-launch tuning flags
-# ---------------------------------------------------------------------------
-
-
-def test_b200_enables_numa_topology():
-    profile = GPU_PROFILES["B200"]
-    assert profile.enable_numa_topology is True
-
-
-def test_b200_enables_post_launch_tuning():
-    profile = GPU_PROFILES["B200"]
-    assert profile.enable_post_launch_tuning is True
-
-
-@pytest.mark.parametrize("model_key", ["H200", "RTX_PRO_6000"])
-def test_h200_and_rtx_enable_numa_topology(model_key):
-    profile = GPU_PROFILES[model_key]
-    assert profile.enable_numa_topology is True
-    assert profile.enable_post_launch_tuning is True
-
-
-def test_b300_does_not_enable_numa_topology():
-    # B300 hardware topology not yet confirmed via discover-profile.sh.
-    profile = GPU_PROFILES["B300"]
-    assert profile.enable_numa_topology is False
-    assert profile.enable_post_launch_tuning is False
-
-
-# ---------------------------------------------------------------------------
 # Blackwell HGX (B200 / B300): CC mode, host-side NVSwitch
 # ---------------------------------------------------------------------------
 

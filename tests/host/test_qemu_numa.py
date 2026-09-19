@@ -1,6 +1,5 @@
 """Unit tests for QEMU NUMA topology helpers."""
 
-from unittest.mock import patch
 
 import pytest
 from chutes_cvm.guest.qemu import (
@@ -11,7 +10,6 @@ from chutes_cvm.guest.qemu import (
     add_volumes,
     build_base_cmd,
     build_network,
-    use_numa_topology,
 )
 
 
@@ -44,17 +42,6 @@ def test_parse_mem_mib(mem, expected_mib):
 def test_parse_mem_mib_rejects_invalid():
     with pytest.raises(ValueError, match="Invalid memory size"):
         _parse_mem_mib("1.5G")
-
-
-def test_use_numa_topology_requires_two_host_nodes():
-    with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=[0, 1]):
-        assert use_numa_topology(True) is True
-        assert use_numa_topology(False) is False
-
-
-def test_use_numa_topology_falls_back_for_non_dual_node():
-    with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=[0]):
-        assert use_numa_topology(True) is False
 
 
 def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
