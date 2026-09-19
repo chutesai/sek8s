@@ -125,3 +125,32 @@ def test_endpoint_without_captured_bars_raises():
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
     with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")
+
+
+def test_emulated_slot_fillers_follow_the_pxb_presence():
+    """QEMU auto-assigns the launch's emulated devices (no addr=) to the lowest free slots, and
+    PXB bridges shift them up by one. Hardcoding the NUMA answer put every flat guest's DSDT
+    device nodes one slot high, changing the ACPI digest and so RTMR0 -- which is why no flat
+    class ever reproduced its real boot.
+
+    Measured against live DSDTs from both paths on one host:
+        NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
+        FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
+    The shift depends on PXB presence only, not count (verified with 2, 3 and 4 bridges), so a
+    guest-NUMA topology with more nodes stays correct.
+    """
+    numa = _md(known.rtx_numa_doc())["boot_config"]["qemu"]
+    flat = _md(known.rtx_flat_doc())["boot_config"]["qemu"]
+
+    def fillers(q):
+        return sorted(
+            int(d.split("addr=")[1], 16)
+            for d in q["devices"]
+            if d.startswith("virtio-rng-pci")
+        )
+
+    assert any("pxb-pcie" in d for d in numa["devices"])
+    assert fillers(numa) == [2, 3, 4, 5, 6, 7]
+
+    assert not any("pxb-pcie" in d for d in flat["devices"])
+    assert fillers(flat) == [1, 2, 3, 4, 5, 6]

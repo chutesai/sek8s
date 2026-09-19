@@ -363,3 +363,20 @@ def test_host_too_small_for_its_gpus_is_refused():
     doc["memory"]["total_gb"] = 800  # backs 736G, 65% -- refused
     with pytest.raises(ValueError, match="under the 70% floor"):
         HostProfile(doc)._derived_guest_mem_gb
+
+
+def test_flat_topology_shape():
+    """A host whose node count is not 2 gets a flat guest: one machine-level memory backend, no
+    SRAT/SLIT, no PXB grouping.
+
+    Pinned because nothing else covers it -- every class with a validated measurement is a NUMA
+    class, so this path reaches production unverified.
+    """
+    assert HostProfile(document()).uses_guest_numa is True  # 2 nodes -> NUMA path
+
+    flat = HostProfile(document(numa={"node_count": 4}))
+    assert flat.uses_guest_numa is False
+    cmd = flat.qemu_command(firmware="/opt/ovmf/OVMF.fd", cpu_args="host,-avx10")
+    assert cmd.numa == []
+    assert "memory-backend=mem0" in cmd.machine
+    assert not any("pxb-pcie" in d for d in cmd.devices)

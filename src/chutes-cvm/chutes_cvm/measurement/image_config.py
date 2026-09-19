@@ -36,10 +36,32 @@ from chutes_cvm.guest.qemu import QemuCommand
 # container QEMU has no confidential-guest support.
 _DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
 
-# The emulated devices a launch places on pcie.0 (boot disk, net, 3 volumes,
-# vsock) occupy slots 0x2-0x7. Their DSDT nodes are slot-populated markers only
-# (device-type agnostic), so backing-free fillers reproduce them.
-_EMULATED_SLOTS = range(0x2, 0x8)
+# A launch places six emulated devices on pcie.0 (boot disk, net, 3 volumes, vsock) with no
+# explicit addr=, so QEMU auto-assigns them the lowest free slots. Which slots those are depends
+# on the topology: with PXB bridges present (guest-NUMA) they land at 0x2-0x7, without them (flat)
+# one slot lower, at 0x1-0x6. Verified against live DSDTs from both paths on one host:
+#   NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]    FLAT  _ADR slots [1,2,3,4,5,6, 8,9, 31]
+# Their DSDT nodes are slot-populated markers only (device-type agnostic), so backing-free
+# fillers reproduce them -- but only at the right slots, or every device node shifts and the
+# DSDT digest (RTMR0 ACPI event) changes.
+#: How many emulated devices a standard launch puts on pcie.0, auto-assigned (no addr=):
+#: boot disk, net, config volume, cache volume, storage volume, vsock. NOT derivable from the
+#: command the generator builds -- HostProfile.qemu_command emits only the boot disk; the rest
+#: are added later by the launch orchestrator (build_network, volume setup), which the generator
+#: never runs. Changing the volume set changes this number, and a benchmark launch (no cache
+#: volume) is already a different shape.
+_EMULATED_DEVICE_COUNT = 6
+
+
+def _emulated_slots(devices: list[str]) -> range:
+    """The pcie.0 slots QEMU auto-assigns to the launch's emulated devices.
+
+    The first slot depends on whether PXB bridges are present, and only on that: measured with
+    2, 3 and 4 bridges the emulated devices start at 0x2 in every case, and at 0x1 with none.
+    So a future guest-NUMA topology with more nodes stays correct here.
+    """
+    first = 0x2 if any(d.startswith("pxb-pcie") for d in devices) else 0x1
+    return range(first, first + _EMULATED_DEVICE_COUNT)
 
 
 def _bars_arg(bars: list[PciBar]) -> str:
@@ -94,8 +116,11 @@ class ImageConfig:
 
     @property
     def devices(self) -> list[str]:
-        """Fillers for slots 0x2-0x7, then the passthrough topology with stubbed BARs."""
-        out = [f"virtio-rng-pci,bus=pcie.0,addr={s:#x}" for s in _EMULATED_SLOTS]
+        """Fillers for the emulated slots, then the passthrough topology with stubbed BARs."""
+        out = [
+            f"virtio-rng-pci,bus=pcie.0,addr={s:#x}"
+            for s in _emulated_slots(self.cmd.devices)
+        ]
         for dev in self.cmd.devices:
             if dev.startswith("virtio-blk-pci,drive=virtio-disk0"):
                 continue  # boot disk — replaced by the slot-fillers above
