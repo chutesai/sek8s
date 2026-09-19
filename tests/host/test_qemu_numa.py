@@ -10,6 +10,7 @@ from chutes_cvm.guest.qemu import (
     _parse_mem_mib,
     add_volumes,
     build_base_cmd,
+    build_network,
     use_numa_topology,
 )
 
@@ -176,3 +177,23 @@ def test_pcie_root_pinning_assigns_unique_slots():
     pinning = PcieRootPinning(True)
     assert pinning.device_suffix() == ",bus=pcie.0,addr=0x2"
     assert pinning.device_suffix() == ",bus=pcie.0,addr=0x3"
+
+
+# ---------------------------------------------------------------------------
+# Device presence vs backing — a device occupies a measured pcie.0 slot whether
+# or not anything backs it, so offline generation needs one without the other.
+# ---------------------------------------------------------------------------
+
+
+def test_network_device_does_not_depend_on_having_a_host_interface():
+    """The NIC is unconditional; only the netdev backing it follows the inputs. Without an
+    interface the device is emitted alone -- what measurement generation needs, since the device
+    takes a measured pcie.0 slot while a netdev is not a PCI device at all.
+
+    No mode flag: same function, different inputs, deterministic output.
+    """
+    with_iface, without = _empty_cmd(), _empty_cmd()
+    build_network(with_iface, network_type="tap", net_iface="br0", ssh_port=22)
+    build_network(without, network_type="tap", net_iface=None, ssh_port=22)
+    assert without.devices == with_iface.devices
+    assert without.netdevs == [] and len(with_iface.netdevs) == 1

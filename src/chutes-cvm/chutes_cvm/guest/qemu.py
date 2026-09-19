@@ -6,7 +6,6 @@ configuration, PCI device topology, networking, volumes, and vsock.
 
 import os
 import re
-import sys
 from dataclasses import dataclass, field
 
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
@@ -442,23 +441,31 @@ def build_network(
     net_queues: int = 4,
     pci_pinning: PcieRootPinning | None = None,
 ):
-    """Add networking configuration to the QemuCommand."""
+    """Add the guest NIC to the QemuCommand.
+
+    A launch always has exactly one NIC, so the device is unconditional; the ``-netdev`` that
+    backs it follows the inputs. In tap mode that needs a host interface -- without one the
+    device is emitted alone, which is what offline measurement generation wants: the device
+    occupies a pcie.0 slot and slot layout is measured into RTMR0, while a netdev is not a PCI
+    device and is not measured.
+
+    Whether an interface SHOULD have been supplied is the caller's question, not this one.
+    """
     pinning = pci_pinning or PcieRootPinning(False)
     if network_type == "tap":
-        if not net_iface:
-            print("ERROR: --network-type tap requires --net-iface")
-            sys.exit(1)
         vectors = 2 * net_queues + 2
-        print(
-            f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
-        )
-        cmd.netdevs.append(
-            f"tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}"
-        )
         cmd.devices.append(
             f"virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on"
             f"{pinning.device_suffix()}"
         )
+        if net_iface:
+            print(
+                f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
+            )
+            cmd.netdevs.append(
+                f"tap,id=n0,ifname={net_iface},script=no,downscript=no,"
+                f"vhost=on,queues={net_queues}"
+            )
     else:
         print("Networking: Canonical user-mode networking")
         cmd.devices.append(f"virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}")

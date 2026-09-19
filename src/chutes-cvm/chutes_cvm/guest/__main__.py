@@ -144,6 +144,13 @@ def launch_vm(args) -> int:
         cmdline=cmdline,
     )
 
+    # Validation belongs to the launch, not the command builder: a launch without a host
+    # interface is a misconfiguration, while a command built without one is exactly what
+    # offline measurement generation needs.
+    if args.network_type == "tap" and not args.net_iface:
+        print("ERROR: --network-type tap requires --net-iface", file=sys.stderr)
+        return 1
+
     build_network(
         qemu_cmds,
         network_type=args.network_type,
