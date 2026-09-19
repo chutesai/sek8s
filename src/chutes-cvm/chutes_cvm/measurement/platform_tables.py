@@ -14,8 +14,8 @@ dump-side rewrites:
   - **emulated devices**: replace the boot disk with backing-free slot-fillers so
     pcie.0 slots 0x2-0x7 populate the DSDT without real drives.
   - **passthrough**: swap each ``vfio-pci`` endpoint for a ``pci-bar-stub``
-    carrying the device's BAR layout (from the profile), reproducing the per-GPU
-    MMIO windows the real BARs would create.
+    carrying that device's own captured BAR layout, reproducing the MMIO windows
+    the real BARs would create.
   - **serial**: attach one so COM1 appears in the DSDT.
 
 Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no GPU
@@ -28,7 +28,8 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from chutes_cvm.guest.command import MachineSpec, build_qemu_command
-from chutes_cvm.guest.devices import PciBar
+from chutes_cvm.guest.devices import PciBar, PciDevice
+from chutes_cvm.guest.gpu.profiles import PassthroughDevice
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import QemuCommand
 
@@ -93,29 +94,61 @@ class MeasurementMetadata:
                 out.append(dev)  # pxb-pcie / pcie-root-port
         return out
 
-    def _swap_endpoint(self, dev: str) -> str:
-        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` built from the profile's
-        ``passthrough`` spec for that bus kind (gpu / nvswitch / ib)."""
-        bus = re.search(r"bus=([^,]+)", dev)
-        if not bus:
-            raise ValueError(f"vfio-pci device without a bus=: {dev!r}")
-        rp = bus.group(1)
-        if re.fullmatch(r"rp\d+", rp):
-            kind = "gpu"
-        elif rp.startswith("rp_nvsw"):
-            kind = "nvswitch"
-        elif rp.startswith("rp_ib"):
-            kind = "ib"
+    def _endpoint_for(self, root_port: str) -> PassthroughDevice:
+        """The captured device behind a root port, or the profile's fallback entry.
+
+        ``root_port`` is the QEMU ``pcie-root-port`` id the endpoint hangs off, as it appears in
+        the device's ``bus=`` -- ``rp3`` for the third GPU, ``rp_nvsw1``, ``rp_ib1``.
+
+        Root ports are emitted in device order, so ``rp3`` is the third GPU. Using that device's
+        own geometry rather than one representative per kind is what lets a GPU model be measured
+        from a submitted profile instead of a hand-transcribed table entry -- and it is correct
+        even if two devices ever differ, since OVMF sizes the aperture from what it enumerates.
+        """
+        devices: tuple[PciDevice, ...]
+        if ordinal := re.fullmatch(r"rp(\d+)", root_port):
+            kind, devices = "gpu", self.host.gpus
+        elif ordinal := re.fullmatch(r"rp_nvsw(\d+)", root_port):
+            kind, devices = "nvswitch", self.host.attached_nvswitches
+        elif ordinal := re.fullmatch(r"rp_ib(\d+)", root_port):
+            kind, devices = "ib", self.host.attached_ib
         else:
-            raise NotImplementedError(f"unrecognized passthrough bus {rp!r}")
+            raise NotImplementedError(f"unrecognized passthrough bus {root_port!r}")
+
+        index = int(ordinal.group(1)) - 1
+        if index < len(devices) and devices[index].bars:
+            device = devices[index]
+            return PassthroughDevice(
+                vendor=int(device.vendor, 16),
+                device_id=device.device_id,
+                pci_class=int(device.pci_class, 16),
+                bars=list(device.bars),
+            )
+
+        # Pre-capture profiles carry no per-device BARs; fall back to the profile's entry.
         spec = self.host.gpu_profile.passthrough.get(kind)
         if not spec:
             raise ValueError(
-                f"profile {self.host.gpu_profile.name!r} has no passthrough[{kind!r}] — capture "
-                f"lspci -vvvnn for that device and add it (see discover-profile.sh)"
+                f"no passthrough geometry for {root_port!r}: the host profile captured no BARs "
+                f"for its "
+                f"{kind} devices and profile {self.host.gpu_profile.name!r} has no "
+                f"passthrough[{kind!r}] fallback. Re-submit with a current chutes-cvm."
             )
+        return spec
+
+    def _swap_endpoint(self, device_arg: str) -> str:
+        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` carrying that device's BARs.
+
+        ``device_arg`` is the endpoint's whole ``-device`` argument, e.g.
+        ``vfio-pci,host=0000:1b:00.0,bus=rp1``.
+        """
+        bus = re.search(r"bus=([^,]+)", device_arg)
+        if not bus:
+            raise ValueError(f"vfio-pci device without a bus=: {device_arg!r}")
+        root_port = bus.group(1)
+        spec = self._endpoint_for(root_port)
         return (
-            f"pci-bar-stub,bus={rp},bars={_bars_arg(spec.bars)},"
+            f"pci-bar-stub,bus={root_port},bars={_bars_arg(spec.bars)},"
             f"vendor={spec.vendor:#06x},device={int(spec.device_id, 16):#06x},"
             f"class={spec.pci_class:#06x}"
         )
