@@ -61,7 +61,7 @@ import yaml
 from chutes_cvm import proc
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.measurement import ccel_replay as cc
-from chutes_cvm.measurement.platform_tables import MeasurementMetadata
+from chutes_cvm.measurement.image_config import ImageConfig
 from chutes_cvm.measurement.runtime_rtmr import (
     MeasurementError,
     compute_rtmr1_2,
@@ -196,7 +196,7 @@ def generate_acpi_blobs(
 
     Runs OFFLINE on any x86-64 Linux with Docker + the fork — no TDX, no GPUs. KVM
     speeds the brief ACPI-gen QEMU run but isn't required; reserve=off (applied by
-    platform_tables.MeasurementMetadata) lifts the guest-sized-RAM requirement.
+    image_config.ImageConfig) lifts the guest-sized-RAM requirement.
 
     Only the distribution is passed to --create-acpi-tables: the fork pins the exact
     QEMU source-package version *and* container image digest per dist (qemu_pkg_for),
@@ -337,7 +337,7 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             firmware=str(Path(args.bios_dir) / gpu_profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
-            meta = MeasurementMetadata(
+            meta = ImageConfig(
                 spec, host, acpi_tables=str(Path(td) / "acpi.bin")
             ).to_dict()
             out = generate_acpi_blobs(

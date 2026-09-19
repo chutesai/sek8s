@@ -429,7 +429,7 @@ def build_base_cmd(
         # Pinned SMBIOS identity so per-server motherboard differences don't
         # shift RTMR0 within a profile. Single source of truth: the offline
         # measurement path reads this same builder (build_qemu_command →
-        # platform_tables), so launch and measurement can't diverge.
+        # image_config), so launch and measurement can't diverge.
         smbios=[
             "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",
             "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0",

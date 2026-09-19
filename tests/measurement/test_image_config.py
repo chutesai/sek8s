@@ -1,4 +1,4 @@
-"""platform_tables rewrites a measurement MachineSpec into tdx-measure metadata.
+"""image_config rewrites a measurement MachineSpec into tdx-measure metadata.
 
 These assert the structural rewrites (machine, memory, emulated-device fillers,
 vfio->pci-bar-stub swap, serial) that make an offline dump reproduce a real
@@ -9,7 +9,7 @@ tdx-measure container, not here.
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.measurement.platform_tables import MeasurementMetadata
+from chutes_cvm.measurement.image_config import ImageConfig
 from chutes_cvm.measurement.topology_spec import build_topology_spec
 
 _FW = "/opt/ovmf/OVMF.fd"
@@ -18,7 +18,7 @@ _FW = "/opt/ovmf/OVMF.fd"
 def _md(doc, **kw):
     host = HostProfile(doc)
     spec = build_topology_spec(host, cpu_args="host,-avx10", firmware=_FW)
-    return MeasurementMetadata(spec, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
+    return ImageConfig(spec, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
 def _rtx_numa():
@@ -110,7 +110,7 @@ def test_unmodeled_passthrough_raises():
     # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
     # unrecognized bus is NotImplementedError — never a silent wrong measurement.
     host = HostProfile(known.host_document("H200", vcpus=124, gpu_nodes=(0,) * 8))
-    md = MeasurementMetadata(
+    md = ImageConfig(
         build_topology_spec(host, cpu_args="host", firmware=_FW),
         host,
         acpi_tables="/out/a.bin",

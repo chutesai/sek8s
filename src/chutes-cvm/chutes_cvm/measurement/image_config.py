@@ -1,11 +1,10 @@
-"""tdx-measure metadata for offline ACPI generation, from a QemuCommand.
+"""The ``ImageConfig`` handed to tdx-measure, built from a QemuCommand.
 
-The shared ``build_qemu_command`` yields a structured ``QemuCommand`` (the launch
-command). The offline ACPI dumper needs a slightly different command that yields
-the **same measured ACPI** without hardware. ``MeasurementMetadata`` is a view
-over that ``QemuCommand`` + the GPU profile that reads its fields directly — no
-command re-parsing, so it can't drift from the shared builder — and applies the
-dump-side rewrites:
+``build_qemu_command`` yields a structured ``QemuCommand`` (the launch command). The
+offline path needs a slightly different one that yields the **same measured ACPI**
+without hardware. ``ImageConfig`` is a view over that ``QemuCommand`` reading its
+fields directly — no command re-parsing, so it cannot drift from the builder — and
+applies the substitutions the fork needs:
 
   - **machine**: run plain q35 (``smm=off,pic=off``); drop the tdx-guest object
     (not carried over — the dumper QEMU has no confidential-guest support).
@@ -18,9 +17,9 @@ dump-side rewrites:
     the real BARs would create.
   - **serial**: attach one so COM1 appears in the DSDT.
 
-Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no GPU
-present (validated against box-028). Imports the shared VM lib from
-``chutes_cvm.guest``; callers must have ``host-tools/scripts`` on ``sys.path``.
+tdx-measure does the dumping itself inside its container; this only produces its
+input. Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no
+GPU present (validated against box-028).
 """
 
 import re
@@ -58,8 +57,8 @@ def _reserve_off(backend: str) -> str:
 
 
 @dataclass
-class MeasurementMetadata:
-    """The tdx-measure ``ImageConfig`` for offline dumping a spec's ACPI.
+class ImageConfig:
+    """The ``ImageConfig`` tdx-measure consumes to reproduce a launch's ACPI.
 
     Build from a measurement ``MachineSpec`` + its ``HostProfile``; ``to_dict()``
     is the metadata JSON. Reads the shared ``QemuCommand``'s structured fields —

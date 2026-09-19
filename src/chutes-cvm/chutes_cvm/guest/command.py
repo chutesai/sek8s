@@ -81,7 +81,7 @@ def build_qemu_command(spec: MachineSpec) -> QemuCommand:
         host_nodes=spec.host_nodes,
         # This path only dumps ACPI (RTMR0), which is boot-method independent and
         # excludes the kernel — so the boot chain is placeholders. The dump-side
-        # metadata (platform_tables) supplies its own /dev/null direct section.
+        # metadata (image_config) supplies its own /dev/null direct section.
         kernel_path="/dev/null",
         initrd_path="/dev/null",
         cmdline="",
