@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from chutes_cvm.guest.command import MachineSpec, build_qemu_command
-from chutes_cvm.guest.gpu.profiles import GpuProfile, PciBar
-from chutes_cvm.guest.gpu.topology import TopologyFingerprint
+from chutes_cvm.guest.devices import PciBar
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import QemuCommand
 
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
@@ -44,11 +44,7 @@ _EMULATED_SLOTS = range(0x2, 0x8)
 
 def _bars_arg(bars: list[PciBar]) -> str:
     """Format a BAR layout as the pci-bar-stub ``bars=`` value (``;``-separated)."""
-    parts = []
-    for b in bars:
-        size = f"{b.size_mb // 1024}G" if b.size_mb % 1024 == 0 else f"{b.size_mb}M"
-        parts.append(f"{b.index}:{size}:{b.kind}")
-    return ";".join(parts)
+    return ";".join(b.as_stub_arg() for b in bars)
 
 
 def _reserve_off(backend: str) -> str:
@@ -64,14 +60,13 @@ def _reserve_off(backend: str) -> str:
 class MeasurementMetadata:
     """The tdx-measure ``ImageConfig`` for offline dumping a spec's ACPI.
 
-    Build from a measurement ``MachineSpec`` + its ``GpuProfile``; ``to_dict()``
+    Build from a measurement ``MachineSpec`` + its ``HostProfile``; ``to_dict()``
     is the metadata JSON. Reads the shared ``QemuCommand``'s structured fields —
     no re-parsing — so it stays tied to the real launch command.
     """
 
     spec: MachineSpec
-    profile: GpuProfile
-    fingerprint: TopologyFingerprint
+    host: HostProfile
     acpi_tables: str
     with_smbios: bool = True
 
@@ -113,10 +108,10 @@ class MeasurementMetadata:
             kind = "ib"
         else:
             raise NotImplementedError(f"unrecognized passthrough bus {rp!r}")
-        spec = self.profile.passthrough.get(kind)
+        spec = self.host.gpu_profile.passthrough.get(kind)
         if not spec:
             raise ValueError(
-                f"profile {self.profile.name!r} has no passthrough[{kind!r}] — capture "
+                f"profile {self.host.gpu_profile.name!r} has no passthrough[{kind!r}] — capture "
                 f"lspci -vvvnn for that device and add it (see discover-profile.sh)"
             )
         return (
@@ -163,7 +158,7 @@ class MeasurementMetadata:
                     # Pin the SMBIOS Type-4 Processor ID (#14) to the production
                     # CPUID; tdx-measure patches it into the dumped SMBIOS (KVM
                     # can't override the generating host's CPUID). None => unpatched.
-                    "processor_id": self.fingerprint.cpu.cpu_processor_id,
+                    "processor_id": self.host.cpu.processor_id,
                 },
             },
             "direct": {"kernel": "/dev/null", "initrd": "/dev/null", "cmdline": ""},

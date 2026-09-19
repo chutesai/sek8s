@@ -16,6 +16,7 @@ import topology_fixtures as known
 from chutes_cvm.guest.command import build_qemu_command
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.passthrough import _build_pci_topology
 from chutes_cvm.guest.qemu import build_base_cmd, use_numa_topology
 from chutes_cvm.measurement.topology_spec import (
@@ -32,10 +33,13 @@ _RTX_SHAPE = dict(
 )
 
 
-def _synth(profile, fingerprint):
-    spec = build_topology_spec(
-        profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
-    )
+def _synth(doc):
+    """The measurement command, built from a HostProfile over the captured device lists.
+
+    The live command opposite still builds from a TopologyFingerprint read off sysfs, so these
+    assertions now also prove the two derivations agree -- not just the two builders.
+    """
+    spec = build_topology_spec(HostProfile(doc), cpu_args="host,-avx10", firmware=_FW)
     return build_qemu_command(spec).to_args()
 
 
@@ -112,7 +116,7 @@ def _bdfs(n, start=1):
 def test_numa_4_4_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
     fp = known.RTX_NUMA
-    synth = _synth(profile, fp)
+    synth = _synth(known.rtx_numa_doc())
 
     gpus = _bdfs(8)
     live = _live_cmd(
@@ -130,10 +134,11 @@ def test_numa_4_4_matches_live_path():
 
 def test_numa_3_5_split_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
+    nodes = (0, 0, 0, 1, 1, 1, 1, 1)
     fp = TopologyFingerprint(
-        CpuTopology(**_RTX_SHAPE), 768, NumaTopology(gpu_nodes=(0, 0, 0, 1, 1, 1, 1, 1))
+        CpuTopology(**_RTX_SHAPE), 768, NumaTopology(gpu_nodes=nodes)
     )
-    synth = _synth(profile, fp)
+    synth = _synth(known.host_document("RTX_PRO_6000", vcpus=124, gpu_nodes=nodes))
 
     gpus = _bdfs(8)
     live = _live_cmd(
@@ -149,7 +154,7 @@ def test_numa_3_5_split_matches_live_path():
 def test_flat_topology_matches_live_path_and_has_no_pxb():
     profile = GPU_PROFILES["RTX_PRO_6000"]
     fp = known.RTX_FLAT
-    synth = _synth(profile, fp)
+    synth = _synth(known.rtx_flat_doc())
 
     gpus = _bdfs(8)
     live = _live_cmd(profile, fp, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus)
@@ -160,7 +165,7 @@ def test_flat_topology_matches_live_path_and_has_no_pxb():
 def test_h200_numa_with_nvswitches_matches_live_path():
     profile = GPU_PROFILES["H200"]
     fp = known.H200_XE9680
-    synth = _synth(profile, fp)
+    synth = _synth(known.h200_doc(nvswitch_node=1))
 
     gpus = _bdfs(8)
     nvsw = _bdfs(4, start=0x20)

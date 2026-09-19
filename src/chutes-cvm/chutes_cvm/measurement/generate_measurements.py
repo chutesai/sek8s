@@ -59,13 +59,7 @@ from pathlib import Path
 
 import yaml
 from chutes_cvm import proc
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
-from chutes_cvm.guest.gpu.topology import (
-    CpuTopology,
-    FlatTopology,
-    NumaTopology,
-    TopologyFingerprint,
-)
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.measurement import ccel_replay as cc
 from chutes_cvm.measurement.platform_tables import MeasurementMetadata
 from chutes_cvm.measurement.runtime_rtmr import (
@@ -279,77 +273,6 @@ def fetch_host_profiles(api_base: str, include_pending: bool = False) -> list[di
     return data
 
 
-def _resolve_profile_for_devices(device_ids: list[str]) -> GpuProfile:
-    """The GpuProfile for these GPUs — the measurement policy (firmware, CC/PPCIe mode,
-    BAR/VRAM, reserved CPUs, guest-RAM rule) for the class.
-
-    All GPUs must be one model. This used to return the first profile any single id
-    matched, so insertion order decided the answer rather than the evidence and a
-    heterogeneous host was measured as whichever model sorted first. The launch path has
-    always refused to guess (``guest.gpu.profiles.resolve_profile``), and the caller here
-    treats a raise as PENDING, so a malformed document is skipped visibly rather than
-    measured plausibly.
-
-    One id per profile, so comparing ids IS comparing profiles.
-    """
-    unique = set(device_ids)
-    if len(unique) != 1:
-        raise ValueError(
-            f"all GPUs must be one model; device ids are {sorted(unique)}"
-            if unique
-            else "host profile reports no GPU device ids"
-        )
-    device_id = unique.pop()
-    for profile in GPU_PROFILES.values():
-        if profile.matches_device_id(device_id):
-            return profile
-    raise ValueError(f"no GPU profile matches device id {device_id}")
-
-
-def topology_from_profile(doc: dict) -> "tuple[GpuProfile, TopologyFingerprint, str]":
-    """Derive ``(GpuProfile, TopologyFingerprint, qemu_version)`` from an API host-profile document.
-
-    ``doc`` is discover-profile.sh's output as stored by the API. This mirrors the live
-    ``host_topology_fingerprint`` but reads the document instead of sysfs, so the generator
-    reproduces the exact RTMR0 inputs the host launches with. The fingerprint that identifies the
-    class is the API's (carried separately) — it is never recomputed here.
-    """
-    gpu = doc.get("gpu") or {}
-    cpu = doc.get("cpu") or {}
-    memory = doc.get("memory") or {}
-    numa = doc.get("numa") or {}
-    nvswitch = doc.get("nvswitch") or {}
-    nic = doc.get("nic") or {}
-    qemu = (doc.get("launch_determinism") or {}).get("qemu_version") or ""
-
-    device_ids = [str(d).lower() for d in (gpu.get("pci_device_ids") or [])]
-    profile = _resolve_profile_for_devices(device_ids)
-    gpu_count = int(gpu.get("count") or 0)
-
-    cpu_topo = CpuTopology(
-        vcpus=int(cpu.get("total") or 0) - profile.host_reserved_cpus,
-        sockets=int(cpu.get("sockets") or 0),
-        cpu_vendor=cpu.get("cpu_vendor") or "",
-        cpu_processor_id=cpu.get("cpu_processor_id"),
-    )
-    mem_gb = profile.guest_mem_gb(int(memory.get("total_gb") or 0), gpu_count)
-
-    gpu_topo: "NumaTopology | FlatTopology"
-    if profile.enable_numa_topology and int(numa.get("node_count") or 0) == 2:
-        gpu_topo = NumaTopology(
-            gpu_nodes=tuple(gpu.get("numa_nodes") or ()),
-            nvswitch_nodes=tuple(nvswitch.get("numa_nodes") or ()),
-            ib_nodes=tuple(nic.get("passthrough_numa_nodes") or ()),
-        )
-    else:
-        gpu_topo = FlatTopology(
-            gpu_count=gpu_count,
-            nvswitch_count=int(nvswitch.get("count") or 0),
-            ib_count=int(nic.get("ib_class_count") or 0),
-        )
-    return profile, TopologyFingerprint(cpu_topo, mem_gb, gpu_topo), qemu
-
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -406,16 +329,16 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
     divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
     """
 
-    def fork_rtmr0(profile, fp, qemu):
+    def fork_rtmr0(host: HostProfile):
+        gpu_profile, qemu = host.gpu_profile, host.qemu_version
         spec = build_topology_spec(
-            profile,
-            fp,
-            cpu_args=measurement_cpu_args(fp, qemu),
-            firmware=str(Path(args.bios_dir) / profile.firmware_filename),
+            host,
+            cpu_args=measurement_cpu_args(host, qemu),
+            firmware=str(Path(args.bios_dir) / gpu_profile.firmware_filename),
         )
         with tempfile.TemporaryDirectory() as td:
             meta = MeasurementMetadata(
-                spec, profile, fp, acpi_tables=str(Path(td) / "acpi.bin")
+                spec, host, acpi_tables=str(Path(td) / "acpi.bin")
             ).to_dict()
             out = generate_acpi_blobs(
                 meta,
@@ -435,13 +358,12 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
         try:
             if not fingerprint:
                 raise ValueError("host profile has no fingerprint")
-            profile, fp, qemu = topology_from_profile(record.get("profile") or {})
-            rtmr0, mrtd = fork_rtmr0(profile, fp, qemu)
+            host = HostProfile(record.get("profile") or {})
+            profile, qemu = host.gpu_profile, host.qemu_version
+            rtmr0, mrtd = fork_rtmr0(host)
             mrtds.add(mrtd.upper())
-            gpu_count = getattr(fp.gpu, "gpu_count", None) or len(
-                getattr(fp.gpu, "gpu_nodes", ())
-            )
-            hw_name = f"{profile.display_name} [{qemu}, {fp.variant_label}]"
+            gpu_count = len(host.gpus)
+            hw_name = f"{profile.display_name} [{qemu}, {host.variant_label}]"
             hardware.append(
                 {
                     "name": hw_name,

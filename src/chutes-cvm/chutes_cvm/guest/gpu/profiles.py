@@ -36,27 +36,9 @@ RTMR0, so it requires re-baselining that profile's attestation policy.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from chutes_cvm.guest.devices import PciBar
+
 HOST_RESERVED_CPUS = 4
-
-
-@dataclass(frozen=True)
-class PciBar:
-    """One PCI Base Address Register: index, size, and type.
-
-    Read from ``lspci -vvvnn`` (the ``Region N:`` lines, plus the Physical
-    Resizable BAR block for the current VRAM size). ``kind`` is
-    ``m32``/``m64``/``p32``/``p64`` — (m)em non-prefetchable / (p)refetchable,
-    32- or 64-bit addressing. A 64-bit BAR consumes two BAR slots, so a card
-    with three 64-bit BARs reports them at indices 0/2/4.
-
-    Offline measurement generation reproduces these BARs with a ``pci-bar-stub``
-    device so the guest DSDT's MMIO windows match a real passthrough launch
-    without the hardware present.
-    """
-
-    index: int
-    size_mb: int
-    kind: str
 
 
 @dataclass
