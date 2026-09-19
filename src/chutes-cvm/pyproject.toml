@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "chutes-cvm"
-version = "0.1.0"
+version = "0.2.0"
 description = "CLI and toolkit for operating Chutes confidential GPU VMs (host inspection, launch, attestation preflight, measurement generation)"
 authors = ["Kyle Widmann <kyle@chutes.ai>"]
 readme = "README.md"
