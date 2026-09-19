@@ -9,7 +9,6 @@ HostProfile, so what is left is the documents themselves.
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.host_profile import HostProfile
 
-
 #: GPU BAR layouts from `lspci -vvv` on a real host of each model. Documents carry their own;
 #: the profile holds none, since BAR2 is resizable and the host is the only authority on it.
 CAPTURED_GPU_BARS = {

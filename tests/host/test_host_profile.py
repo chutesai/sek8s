@@ -8,7 +8,6 @@ guest-RAM rule fails these rather than passing with whatever the profile now say
     B300  id=3182 reserved=4  numa=False nvswitch(8)=False  vram=288
 """
 
-
 import json
 
 import pytest
@@ -265,7 +264,15 @@ def test_api_profile_carries_only_rtmr0_determinants():
     drops one. Host RAM is the worked example -- 2007 GB and 2011 GB are one H200 class.
     """
     api = HostProfile(document()).to_api_profile()
-    assert set(api) == {"gpus", "nvswitches", "ib_devices", "cpu", "memory", "numa", "qemu"}
+    assert set(api) == {
+        "gpus",
+        "nvswitches",
+        "ib_devices",
+        "cpu",
+        "memory",
+        "numa",
+        "qemu",
+    }
     assert set(api["cpu"]) == {"count", "sockets", "vendor", "processor_id"}
     assert set(api["memory"]) == {"guest_gb"}  # not the host total it came from
     assert set(api["numa"]) == {"node_count"}
@@ -280,7 +287,13 @@ def test_api_profile_does_not_send_host_addresses():
     assert all(d.bdf for d in profile.gpus)  # required on the capture
     api = profile.to_api_profile()
     assert all("bdf" not in d for d in api["gpus"])
-    assert set(api["gpus"][0]) == {"vendor", "device_id", "pci_class", "numa_node", "bars"}
+    assert set(api["gpus"][0]) == {
+        "vendor",
+        "device_id",
+        "pci_class",
+        "numa_node",
+        "bars",
+    }
 
 
 def test_api_profile_sends_attached_devices_not_inventory():
@@ -302,7 +315,9 @@ def test_api_profile_round_trips_for_generation():
     assert back.cpu == src.cpu
     assert (back.vcpus, back.guest_mem_gb) == (src.vcpus, src.guest_mem_gb)
     assert back.variant_label == src.variant_label
-    assert [d.bdf for d in back.gpus] == [f"{i:04x}:00:00.0" for i in range(len(back.gpus))]
+    assert [d.bdf for d in back.gpus] == [
+        f"{i:04x}:00:00.0" for i in range(len(back.gpus))
+    ]
 
 
 def test_guest_ram_is_carried_not_recomputed():
@@ -311,7 +326,11 @@ def test_guest_ram_is_carried_not_recomputed():
     from, which makes re-deriving impossible as well as wrong."""
     api = HostProfile(document()).to_api_profile()
     assert "total_gb" not in api["memory"]
-    assert HostProfile.from_api_profile(api).guest_mem_gb == api["memory"]["guest_gb"] == 1128
+    assert (
+        HostProfile.from_api_profile(api).guest_mem_gb
+        == api["memory"]["guest_gb"]
+        == 1128
+    )
 
 
 def test_stored_profile_builds_the_command_generation_measures():

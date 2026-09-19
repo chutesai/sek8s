@@ -11,6 +11,7 @@ from chutes_cvm.guest import preflight
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.preflight import PreflightError, run_preflight, submit_profile
 
+
 def _capture(**over):
     """A discover-profile capture: an 8-GPU H200 host on 25.10."""
     bars = [
