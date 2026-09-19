@@ -9,6 +9,8 @@ import re
 import sys
 from dataclasses import dataclass, field
 
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS
+
 
 def _block_format(path: str | None) -> str:
     """Infer block format from path. Returns 'raw' or 'qcow2'. Defaults to raw."""
@@ -270,6 +272,20 @@ class NumaPciTopologyState:
         self.port += 1
 
 
+# Which -cpu a given QEMU version launches with. One entry today: 10.2.1 ships with 26.04, the
+# only supported host OS. The map stays so a future release can differ without a code change.
+_CPU_ARGS_BY_QEMU = {"10.2.1": GUEST_CPU_ARGS}
+
+
+def cpu_args_for_qemu_version(qemu_version: str) -> str:
+    """The guest ``-cpu`` args for a QEMU version -- the LAUNCH form.
+
+    Offline generation adds an explicit CPU identity on top (see image_config), so that any box
+    reproduces the production guest's CPU rather than its own.
+    """
+    return _CPU_ARGS_BY_QEMU.get(qemu_version, GUEST_CPU_ARGS)
+
+
 @dataclass
 class QemuCommand:
     """A structured TDX-guest QEMU command.
@@ -428,7 +444,7 @@ def build_base_cmd(
         pidfile=pidfile,
         # Pinned SMBIOS identity so per-server motherboard differences don't
         # shift RTMR0 within a profile. Single source of truth: the offline
-        # measurement path reads this same builder (build_qemu_command →
+        # measurement path reads this same builder (HostProfile.qemu_command →
         # image_config), so launch and measurement can't diverge.
         smbios=[
             "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",

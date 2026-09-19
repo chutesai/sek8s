@@ -1,7 +1,6 @@
 """The measurement spec must reproduce the live launcher's RTMR0-shaping args.
 
-build_topology_spec (fingerprint -> MachineSpec) fed through the shared
-build_qemu_command must match, byte-for-byte, what the real launch path
+HostProfile.qemu_command must match, byte-for-byte, what the real launch path
 (build_base_cmd + passthrough._build_pci_topology) emits with its sysfs lookups
 mocked to the same NUMA layout — so offline measurements can't drift from a real
 launch. Both paths emit a vfio-pci endpoint per root port; the measurement path
@@ -13,15 +12,14 @@ the endpoint device type is settled here.
 from unittest.mock import patch
 
 import topology_fixtures as known
-from chutes_cvm.guest.command import build_qemu_command
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.passthrough import _build_pci_topology
-from chutes_cvm.guest.qemu import build_base_cmd, use_numa_topology
-from chutes_cvm.measurement.topology_spec import (
-    build_topology_spec,
+from chutes_cvm.guest.qemu import (
+    build_base_cmd,
     cpu_args_for_qemu_version,
+    use_numa_topology,
 )
 
 _FW = "OVMF.inteltdx.fd"
@@ -39,8 +37,13 @@ def _synth(doc):
     The live command opposite still builds from a TopologyFingerprint read off sysfs, so these
     assertions now also prove the two derivations agree -- not just the two builders.
     """
-    spec = build_topology_spec(HostProfile(doc), cpu_args="host,-avx10", firmware=_FW)
-    return build_qemu_command(spec).to_args()
+    return (
+        HostProfile(doc)
+        .qemu_command(
+            firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
+        )
+        .to_args()
+    )
 
 
 def _topology_args(cmd):
@@ -74,7 +77,7 @@ def _live_cmd(
 
     ``mem`` / ``-smp`` now come from the matched fingerprint's host shape (the
     launcher reads fingerprint.mem/.smp_topology), so the parity comparison uses
-    the same values build_topology_spec bakes into the synth command.
+    the same values HostProfile.qemu_command bakes into the synth command.
     """
     with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=host_nodes), patch(
         "chutes_cvm.guest.passthrough.read_pci_numa_node",
@@ -128,8 +131,9 @@ def test_numa_4_4_matches_live_path():
     )
     assert _topology_args(synth) == _topology_args(live)
     assert any("pxb-pcie" in a for a in synth)
-    # measurement emits a placeholder-BDF endpoint (never a real host device)
-    assert any("vfio-pci,host=0000:00:00.0" in a for a in synth)
+    # The command is native, so endpoints carry the captured devices' real BDFs; image_config
+    # swaps each for a pci-bar-stub, which is why no placeholder is invented here.
+    assert any("vfio-pci,host=0000:19:00.0" in a for a in synth)
 
 
 def test_numa_3_5_split_matches_live_path():

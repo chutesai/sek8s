@@ -21,6 +21,13 @@ from functools import cached_property
 
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
+from chutes_cvm.guest.qemu import (
+    NumaPciTopologyState,
+    PciTopologyState,
+    QemuCommand,
+    build_base_cmd,
+    cpu_args_for_qemu_version,
+)
 
 
 def _node_sig(nodes: tuple[int, ...]) -> str:
@@ -205,6 +212,79 @@ class HostProfile:
             if self.attached_ib:
                 parts.append(f"ib{len(self.attached_ib)}")
         return "-".join(parts)
+
+    # ── the command it launches with ────────────────────────────────────────
+    @property
+    def passthrough_devices(self) -> "tuple[PciDevice, ...]":
+        """Every endpoint the launcher attaches, in root-port order: GPUs, NVSwitches, IB."""
+        return self.gpus + self.attached_nvswitches + self.attached_ib
+
+    @property
+    def cpu_args(self) -> str:
+        """The ``-cpu`` string this host launches with, from the QEMU version it reports."""
+        return cpu_args_for_qemu_version(self.qemu_version)
+
+    def qemu_command(
+        self,
+        *,
+        firmware: str,
+        cpu_args: "str | None" = None,
+        img_path: str = "root.qcow2",
+        process_name: str = "chutes-td",
+        foreground: bool = False,
+        pidfile: str = "/dev/null",
+        logfile: str = "/dev/null",
+        kernel_path: str = "/dev/null",
+        initrd_path: str = "/dev/null",
+        cmdline: str = "",
+    ) -> QemuCommand:
+        """The QEMU command this host launches with.
+
+        Native throughout: the endpoints carry the devices' real BDFs and ``-cpu`` is the launch
+        form, because this is the command a launch would run. The measurement adapter makes its
+        own substitutions afterwards -- swapping each ``vfio-pci`` endpoint for a
+        ``pci-bar-stub`` and pinning the CPU identity -- so nothing offline leaks in here.
+
+        Root ports are numbered per kind in device order -- ``rp1..rpN`` for GPUs, then
+        ``rp_nvsw*``, then ``rp_ib*`` -- and chassis numbers run across all of them, which is the
+        ordering the guest PXB grouping and therefore RTMR0 depend on.
+        """
+        numa = self.uses_guest_numa
+        cmd = build_base_cmd(
+            mem=self.mem,
+            smp_topology=self.smp_topology,
+            process_name=process_name,
+            cpu_args=cpu_args if cpu_args is not None else self.cpu_args,
+            firmware=firmware,
+            img_path=img_path,
+            foreground=foreground,
+            pidfile=pidfile,
+            logfile=logfile,
+            host_nodes=[0, 1] if numa else [],
+            kernel_path=kernel_path,
+            initrd_path=initrd_path,
+            cmdline=cmdline,
+        )
+        topology = NumaPciTopologyState() if numa else PciTopologyState()
+        chassis = 0
+        for prefix, devices in (
+            ("rp", self.gpus),
+            ("rp_nvsw", self.attached_nvswitches),
+            ("rp_ib", self.attached_ib),
+        ):
+            for ordinal, device in enumerate(devices, start=1):
+                chassis += 1
+                kwargs: dict = {"rp_id": f"{prefix}{ordinal}", "chassis": chassis}
+                if numa:
+                    kwargs["numa_node"] = device.numa_node
+                # The per-GPU opt/ovmf/X-PciMmio64Mb<N> hint. Inert -- the firmware reads a
+                # single UNSUFFIXED key, so these never match -- but the launch path emits it
+                # too (guest/passthrough.py), so the measurement reproduces it to stay identical.
+                if prefix == "rp" and self.gpu_profile.use_ovmf_mmio_fw_cfg:
+                    kwargs["bar_size_mb"] = self.gpu_profile.bar_size_mb
+                    kwargs["bar_index"] = ordinal
+                topology.add_device(cmd, host_bdf=device.bdf, **kwargs)
+        return cmd
 
     # ── serialisation ───────────────────────────────────────────────────────
     def to_dict(self) -> dict:

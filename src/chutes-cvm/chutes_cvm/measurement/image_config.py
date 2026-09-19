@@ -1,6 +1,6 @@
 """The ``ImageConfig`` handed to tdx-measure, built from a QemuCommand.
 
-``build_qemu_command`` yields a structured ``QemuCommand`` (the launch command). The
+``HostProfile.qemu_command`` yields the QEMU command a launch would run. The
 offline path needs a slightly different one that yields the **same measured ACPI**
 without hardware. ``ImageConfig`` is a view over that ``QemuCommand`` reading its
 fields directly — no command re-parsing, so it cannot drift from the builder — and
@@ -16,6 +16,8 @@ applies the substitutions the fork needs:
     carrying that device's own captured BAR layout, reproducing the MMIO windows
     the real BARs would create.
   - **serial**: attach one so COM1 appears in the DSDT.
+  - **cpu**: pin the guest's CPU identity (``vendor=``) so a generating box reproduces the
+    production guest's CPU rather than its own.
 
 tdx-measure does the dumping itself inside its container; this only produces its
 input. Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no
@@ -24,9 +26,7 @@ GPU present (validated against box-028).
 
 import re
 from dataclasses import dataclass
-from functools import cached_property
 
-from chutes_cvm.guest.command import MachineSpec, build_qemu_command
 from chutes_cvm.guest.devices import PciBar, PciDevice
 from chutes_cvm.guest.gpu.profiles import PassthroughDevice
 from chutes_cvm.guest.host_profile import HostProfile
@@ -60,19 +60,31 @@ def _reserve_off(backend: str) -> str:
 class ImageConfig:
     """The ``ImageConfig`` tdx-measure consumes to reproduce a launch's ACPI.
 
-    Build from a measurement ``MachineSpec`` + its ``HostProfile``; ``to_dict()``
+    Build from the host's own ``QemuCommand`` + its ``HostProfile``; ``to_dict()``
     is the metadata JSON. Reads the shared ``QemuCommand``'s structured fields —
     no re-parsing — so it stays tied to the real launch command.
     """
 
-    spec: MachineSpec
+    cmd: QemuCommand
     host: HostProfile
     acpi_tables: str
     with_smbios: bool = True
 
-    @cached_property
-    def cmd(self) -> QemuCommand:
-        return build_qemu_command(self.spec)
+    @property
+    def cpu_args(self) -> str:
+        """The launch ``-cpu`` plus an explicit CPU identity.
+
+        ``vendor`` fixes the SRAT memory hole (AMD-guest-gated); the SMBIOS Type-4 Processor ID
+        is patched separately by tdx-measure from ``processor_id`` -- so BOTH must be set, and a
+        host with neither captured is refused rather than measured as the generating host's CPU.
+        """
+        if not self.host.cpu.vendor or self.host.cpu.processor_id is None:
+            raise ValueError(
+                f"host class {self.host.variant_label!r} has no captured CPU model "
+                f"(processor_id is None); offline RTMR0 would be generated for the generating "
+                f"host's CPU. Re-register from a host of this class with a current chutes-cvm."
+            )
+        return f"{self.cmd.cpu_args},vendor={self.host.cpu.vendor}"
 
     @property
     def objects(self) -> list[str]:
@@ -178,7 +190,7 @@ class ImageConfig:
                 "acpi_tables": self.acpi_tables,
                 "qemu": {
                     "machine": dump_machine,
-                    "cpu": cmd.cpu_args,
+                    "cpu": self.cpu_args,
                     "accel": cmd.accel,
                     "smp": cmd.smp_topology,
                     "objects": self.objects,

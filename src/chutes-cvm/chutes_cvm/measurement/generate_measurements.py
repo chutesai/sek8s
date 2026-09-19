@@ -67,10 +67,6 @@ from chutes_cvm.measurement.runtime_rtmr import (
     compute_rtmr1_2,
     compute_rtmr3,
 )
-from chutes_cvm.measurement.topology_spec import (
-    build_topology_spec,
-    measurement_cpu_args,
-)
 from chutes_cvm.paths import firmware_dir
 
 # The API is the source of truth for known host classes and their fingerprints. `generate`
@@ -330,15 +326,14 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
     """
 
     def fork_rtmr0(host: HostProfile):
-        gpu_profile, qemu = host.gpu_profile, host.qemu_version
-        spec = build_topology_spec(
-            host,
-            cpu_args=measurement_cpu_args(host, qemu),
+        gpu_profile = host.gpu_profile
+        cmd = host.qemu_command(
             firmware=str(Path(args.bios_dir) / gpu_profile.firmware_filename),
+            process_name="chutes-measure",
         )
         with tempfile.TemporaryDirectory() as td:
             meta = ImageConfig(
-                spec, host, acpi_tables=str(Path(td) / "acpi.bin")
+                cmd, host, acpi_tables=str(Path(td) / "acpi.bin")
             ).to_dict()
             out = generate_acpi_blobs(
                 meta,
