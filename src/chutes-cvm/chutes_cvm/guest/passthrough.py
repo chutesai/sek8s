@@ -3,17 +3,10 @@
 import time
 
 from chutes_cvm import proc
-from chutes_cvm.guest.detection import (
-    detect_cx7_bridge_pfs,
-    detect_infiniband_pfs,
-    detect_infiniband_vfs,
-    detect_nvidia_gpus,
-    detect_nvswitches,
-    get_gpu_bdfs,
-    get_gpu_models_from_lspci,
-)
-from chutes_cvm.guest.gpu.profiles import GpuProfile, resolve_profile
+from chutes_cvm.guest.detection import detect_infiniband_vfs
+from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import (
     NumaPciTopologyState,
     PciTopologyState,
@@ -303,34 +296,32 @@ def _build_pci_topology(
     )
 
 
-def setup_passthrough(cmd: QemuCommand):
-    """Detect passthrough devices, prepare and bind them on the host, extend the QemuCommand."""
-    gpus = get_gpu_bdfs()
-    if not gpus:
-        gpus = detect_nvidia_gpus()
+def setup_passthrough(cmd: QemuCommand, host: HostProfile):
+    """Prepare and bind this host's passthrough devices, and extend the QemuCommand.
+
+    Takes the devices from the ``HostProfile`` rather than enumerating them again: the host is
+    read once, by ``discover-profile.sh``, and everything downstream uses that reading. A second
+    enumeration here is what let the two disagree about which NVSwitches and IB PFs count.
+    """
+    gpus = [d.bdf for d in host.gpus]
     if not gpus:
         return
 
-    gpu_models = get_gpu_models_from_lspci(gpus)
-    profile = resolve_profile(gpu_models)
-    total_gpus = len(gpus)
-
-    nvswitches = (
-        detect_nvswitches() if profile.should_passthrough_nvswitches(total_gpus) else []
-    )
+    profile = host.gpu_profile
+    total_gpus = host.gpu_count
+    nvswitches = [d.bdf for d in host.attached_nvswitches]
 
     ib_devices: list[str] = []
-    if profile.should_passthrough_infiniband:
-        # Exclude CX7 NVSwitch bridge PFs (SMDL=SW_MNG in VPD) — these must
-        # remain on the host for Fabric Manager to manage the NVSwitch fabric.
-        # Only regular CX7 NIC PFs should produce VFs for guest passthrough.
-        cx7_bridge_pfs = detect_cx7_bridge_pfs()
-        if cx7_bridge_pfs:
+    if host.attached_ib:
+        # Bridge PFs (SMDL=SW_MNG in VPD) must remain on the host for Fabric Manager to manage
+        # the NVSwitch fabric; HostProfile.attached_ib has already excluded them and any VFs.
+        bridge_pfs = [d.bdf for d in host.ib_devices if d.is_bridge_pf]
+        if bridge_pfs:
             print(
-                f"  Detected {len(cx7_bridge_pfs)} CX7 NVSwitch bridge PF(s) "
-                f"(host-only, excluded from passthrough): {cx7_bridge_pfs}"
+                f"  Detected {len(bridge_pfs)} CX7 NVSwitch bridge PF(s) "
+                f"(host-only, excluded from passthrough): {bridge_pfs}"
             )
-        ib_pfs = detect_infiniband_pfs(exclude_bdfs=cx7_bridge_pfs)
+        ib_pfs = [d.bdf for d in host.attached_ib]
         if ib_pfs:
             print(f"  Creating SR-IOV VFs from {len(ib_pfs)} InfiniBand PF(s)...")
             for pf in ib_pfs:

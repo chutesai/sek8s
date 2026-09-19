@@ -408,11 +408,11 @@ def test_host_profile_reproduces_the_numa_shape_the_host_launches_with():
     assert host.gpu_profile.display_name == "8xh200"
     assert host.qemu_version == "10.2.1"
     assert (host.vcpus, host.guest_mem_gb) == (
-        tf.H200_KR6288.cpu.vcpus,
-        tf.H200_KR6288.mem_gb,
+        124,
+        1128,
     )
-    assert host.gpu_numa_nodes == tf.H200_KR6288.gpu.gpu_nodes
-    assert host.nvswitch_numa_nodes == tf.H200_KR6288.gpu.nvswitch_nodes
+    assert host.gpu_numa_nodes == (0, 0, 0, 0, 1, 1, 1, 1)
+    assert host.nvswitch_numa_nodes == (0, 0, 0, 0)
 
 
 def test_host_profile_falls_back_to_flat():
@@ -421,8 +421,8 @@ def test_host_profile_falls_back_to_flat():
     assert host.gpu_profile.display_name == "8xpro_6000"
     assert host.uses_guest_numa is False
     assert (len(host.gpus), host.guest_mem_gb) == (
-        tf.RTX_FLAT.gpu.gpu_count,
-        tf.RTX_FLAT.mem_gb,
+        8,
+        768,
     )
 
 

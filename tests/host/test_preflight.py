@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.guest import preflight
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.preflight import PreflightError, run_preflight, submit_profile
 
 SAMPLE_PROFILE = json.dumps(
@@ -83,16 +84,15 @@ def _creds(tmp_path):
 
 def test_run_preflight_flow_hits_preflight_endpoint(tmp_path):
     with patch(
-        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+        "chutes_cvm.guest.preflight.HostProfile.from_host",
+        return_value=HostProfile(json.loads(SAMPLE_PROFILE)),
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
         "chutes_cvm.guest.preflight._post",
         return_value={"launchable": True, "fingerprint": "fp", "detail": "ok"},
     ) as post:
-        resp = run_preflight(
-            config_path=_creds(tmp_path), scripts_dir="/x", version="1.4.0", rc=False
-        )
+        resp = run_preflight(config_path=_creds(tmp_path), version="1.4.0", rc=False)
     assert resp["launchable"] is True
     # _post(path, api_base, hotkey, nonce, signature, body)
     path = post.call_args.args[0]
@@ -103,21 +103,21 @@ def test_run_preflight_flow_hits_preflight_endpoint(tmp_path):
 
 def test_run_preflight_encodes_rc_true(tmp_path):
     with patch(
-        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+        "chutes_cvm.guest.preflight.HostProfile.from_host",
+        return_value=HostProfile(json.loads(SAMPLE_PROFILE)),
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
         "chutes_cvm.guest.preflight._post", return_value={"launchable": False}
     ) as post:
-        run_preflight(
-            config_path=_creds(tmp_path), scripts_dir="/x", version="2.0.0", rc=True
-        )
+        run_preflight(config_path=_creds(tmp_path), version="2.0.0", rc=True)
     assert "rc=true" in post.call_args.args[0]
 
 
 def test_run_preflight_target_os_override(tmp_path):
     with patch(
-        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+        "chutes_cvm.guest.preflight.HostProfile.from_host",
+        return_value=HostProfile(json.loads(SAMPLE_PROFILE)),
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
@@ -125,7 +125,6 @@ def test_run_preflight_target_os_override(tmp_path):
     ) as post:
         run_preflight(
             config_path=_creds(tmp_path),
-            scripts_dir="/x",
             version="1.4.0",
             rc=False,
             target_os="26.04",
@@ -137,14 +136,15 @@ def test_run_preflight_target_os_override(tmp_path):
 
 def test_submit_profile_hits_host_profiles_endpoint(tmp_path):
     with patch(
-        "chutes_cvm.guest.preflight._discover_profile_json", return_value=SAMPLE_PROFILE
+        "chutes_cvm.guest.preflight.HostProfile.from_host",
+        return_value=HostProfile(json.loads(SAMPLE_PROFILE)),
     ), patch(
         "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
         "chutes_cvm.guest.preflight._post",
         return_value={"status": "pending", "fingerprint": "fp", "stored": True},
     ) as post:
-        resp = submit_profile(config_path=_creds(tmp_path), scripts_dir="/x")
+        resp = submit_profile(config_path=_creds(tmp_path))
     assert resp["stored"] is True
     assert post.call_args.args[0] == "/servers/tdx/host_profiles"
 

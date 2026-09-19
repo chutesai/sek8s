@@ -18,7 +18,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 
+from chutes_cvm import proc
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
 from chutes_cvm.guest.qemu import (
@@ -28,6 +30,7 @@ from chutes_cvm.guest.qemu import (
     build_base_cmd,
     cpu_args_for_qemu_version,
 )
+from chutes_cvm.paths import SCRIPTS_DIR
 
 
 def _node_sig(nodes: tuple[int, ...]) -> str:
@@ -74,6 +77,37 @@ class HostProfile:
     def __init__(self, raw: dict):
         self.raw = raw
 
+    @classmethod
+    def from_host(cls) -> "HostProfile":
+        """Read this host by running ``discover-profile.sh``.
+
+        The script is the single reader of the hardware -- it stays standalone so an operator can
+        run it without chutes-cvm installed, and so nothing else grows a second way to look at a
+        host. Everything that reads a host goes through here: submit, preflight, and launch.
+
+        It writes a JSON file and prints the path on its last stdout line; the file is transient,
+        so it is read and removed.
+        """
+        script = SCRIPTS_DIR / "discover-profile.sh"
+        if not script.exists():
+            raise FileNotFoundError(f"discover-profile.sh not found at {script}")
+        result = proc.run(
+            ["bash", str(script), "--json-only"], capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"discover-profile.sh failed: {result.stderr.strip() or 'no output'}"
+            )
+        lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
+        if not lines:
+            raise RuntimeError("discover-profile.sh produced no JSON file path")
+        path = Path(lines[-1].strip())
+        try:
+            raw = json.loads(path.read_text())
+        finally:
+            path.unlink(missing_ok=True)
+        return cls(raw)
+
     # ── observed hardware ───────────────────────────────────────────────────
     @cached_property
     def gpus(self) -> tuple[GpuDevice, ...]:
@@ -86,6 +120,10 @@ class HostProfile:
     @cached_property
     def ib_devices(self) -> tuple[IbDevice, ...]:
         return IbDevice.from_dicts(self.raw.get("ib_devices"))
+
+    @property
+    def gpu_count(self) -> int:
+        return len(self.gpus)
 
     # ── host facts the devices do not carry ─────────────────────────────────
     @cached_property
@@ -133,9 +171,20 @@ class HostProfile:
 
     @cached_property
     def attached_nvswitches(self) -> tuple[NvSwitchDevice, ...]:
-        """NVSwitches the launcher passes through -- all of them, or none."""
-        if not self.gpu_profile.should_passthrough_nvswitches(len(self.gpus)):
+        """NVSwitches the launcher passes through -- all of them, or none.
+
+        A profile that requires them on a host reporting none is refused rather than launched
+        without them: the guest would come up with a different PCI topology than the one its
+        class was measured for, so it could not attest.
+        """
+        if not self.gpu_profile.should_passthrough_nvswitches(self.gpu_count):
             return ()
+        if not self.nvswitches:
+            raise ValueError(
+                f"profile {self.gpu_profile.name!r} requires NVSwitches for "
+                f"{self.gpu_count} GPU(s) but this host reports none. Verify with: "
+                f"lspci -Dnn | grep '\\[10de:22a3\\]'"
+            )
         return self.nvswitches
 
     @cached_property
@@ -159,7 +208,7 @@ class HostProfile:
     @property
     def guest_mem_gb(self) -> int:
         """Guest RAM, per the profile's sizing rule -- NOT a function of host RAM alone."""
-        return self.gpu_profile.guest_mem_gb(self.host_mem_gb, len(self.gpus))
+        return self.gpu_profile.guest_mem_gb(self.host_mem_gb, self.gpu_count)
 
     @property
     def smp_topology(self) -> str:

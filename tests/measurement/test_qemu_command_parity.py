@@ -13,7 +13,6 @@ from unittest.mock import patch
 
 import topology_fixtures as known
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
-from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.passthrough import _build_pci_topology
 from chutes_cvm.guest.qemu import (
@@ -24,19 +23,9 @@ from chutes_cvm.guest.qemu import (
 
 _FW = "OVMF.inteltdx.fd"
 
-# Host-shape fields the fingerprint now carries (drive -smp / -m). Mirror each
-# profile's real baselined shape so the synth and live commands agree on mem/smp.
-_RTX_SHAPE = dict(
-    vcpus=124, sockets=2, cpu_vendor="AuthenticAMD", cpu_processor_id=None
-)
-
 
 def _synth(doc):
-    """The measurement command, built from a HostProfile over the captured device lists.
-
-    The live command opposite still builds from a TopologyFingerprint read off sysfs, so these
-    assertions now also prove the two derivations agree -- not just the two builders.
-    """
+    """The measurement command, built from a HostProfile over the captured device lists."""
     return (
         HostProfile(doc)
         .qemu_command(
@@ -71,13 +60,13 @@ def _topology_args(cmd):
 
 
 def _live_cmd(
-    profile, fingerprint, *, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None
+    profile, *, mem, smp_topology, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None
 ):
-    """The command the real launch path produces, with sysfs lookups mocked.
+    """The same command, assembled by driving the low-level builders directly.
 
-    ``mem`` / ``-smp`` now come from the matched fingerprint's host shape (the
-    launcher reads fingerprint.mem/.smp_topology), so the parity comparison uses
-    the same values HostProfile.qemu_command bakes into the synth command.
+    The launcher now goes through ``HostProfile.qemu_command`` like the measurement path does,
+    so this no longer represents a second implementation -- it pins ``qemu_command``'s wiring
+    against the primitives it calls: root-port ids, chassis numbering, PXB placement.
     """
     with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=host_nodes), patch(
         "chutes_cvm.guest.passthrough.read_pci_numa_node",
@@ -88,8 +77,8 @@ def _live_cmd(
         # hand build_base_cmd the explicit list (it no longer reads sysfs).
         numa_active = use_numa_topology(profile.enable_numa_topology)
         cmd = build_base_cmd(
-            mem=fingerprint.mem,
-            smp_topology=fingerprint.cpu.smp_topology,
+            mem=mem,
+            smp_topology=smp_topology,
             process_name="chutes-measure",
             cpu_args="host,-avx10",
             firmware=_FW,
@@ -118,14 +107,15 @@ def _bdfs(n, start=1):
 
 def test_numa_4_4_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
-    fp = known.RTX_NUMA
+    nodes = (0, 0, 0, 0, 1, 1, 1, 1)
+    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
     synth = _synth(known.rtx_numa_doc())
 
     gpus = _bdfs(8)
     live = _live_cmd(
         profile,
-        fp,
-        node_by_bdf=dict(zip(gpus, fp.gpu.gpu_nodes)),
+        **shape,
+        node_by_bdf=dict(zip(gpus, nodes)),
         host_nodes=[0, 1],
         gpus=gpus,
     )
@@ -139,16 +129,14 @@ def test_numa_4_4_matches_live_path():
 def test_numa_3_5_split_matches_live_path():
     profile = GPU_PROFILES["RTX_PRO_6000"]
     nodes = (0, 0, 0, 1, 1, 1, 1, 1)
-    fp = TopologyFingerprint(
-        CpuTopology(**_RTX_SHAPE), 768, NumaTopology(gpu_nodes=nodes)
-    )
+    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
     synth = _synth(known.host_document("RTX_PRO_6000", vcpus=124, gpu_nodes=nodes))
 
     gpus = _bdfs(8)
     live = _live_cmd(
         profile,
-        fp,
-        node_by_bdf=dict(zip(gpus, fp.gpu.gpu_nodes)),
+        **shape,
+        node_by_bdf=dict(zip(gpus, nodes)),
         host_nodes=[0, 1],
         gpus=gpus,
     )
@@ -157,27 +145,33 @@ def test_numa_3_5_split_matches_live_path():
 
 def test_flat_topology_matches_live_path_and_has_no_pxb():
     profile = GPU_PROFILES["RTX_PRO_6000"]
-    fp = known.RTX_FLAT
+    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
     synth = _synth(known.rtx_flat_doc())
 
     gpus = _bdfs(8)
-    live = _live_cmd(profile, fp, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus)
+    live = _live_cmd(
+        profile, **shape, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus
+    )
     assert _topology_args(synth) == _topology_args(live)
     assert not any("pxb-pcie" in a for a in synth)
 
 
 def test_h200_numa_with_nvswitches_matches_live_path():
     profile = GPU_PROFILES["H200"]
-    fp = known.H200_XE9680
+    nodes = (0, 0, 0, 0, 1, 1, 1, 1)
+    shape = dict(mem="1128G", smp_topology="124,sockets=2,cores=62,threads=1")
     synth = _synth(known.h200_doc(nvswitch_node=1))
 
     gpus = _bdfs(8)
     nvsw = _bdfs(4, start=0x20)
-    node_by_bdf = dict(zip(gpus, fp.gpu.gpu_nodes)) | dict(
-        zip(nvsw, fp.gpu.nvswitch_nodes)
-    )
+    node_by_bdf = dict(zip(gpus, nodes)) | dict(zip(nvsw, (1, 1, 1, 1)))
     live = _live_cmd(
-        profile, fp, node_by_bdf=node_by_bdf, host_nodes=[0, 1], gpus=gpus, nvsw=nvsw
+        profile,
+        **shape,
+        node_by_bdf=node_by_bdf,
+        host_nodes=[0, 1],
+        gpus=gpus,
+        nvsw=nvsw,
     )
     assert _topology_args(synth) == _topology_args(live)
     assert any("rp_nvsw" in a for a in synth)

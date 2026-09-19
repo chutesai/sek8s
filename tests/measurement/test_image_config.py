@@ -110,7 +110,11 @@ def test_nvswitch_endpoint_modeled():
 def test_unmodeled_passthrough_raises():
     # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
     # unrecognized bus is NotImplementedError — never a silent wrong measurement.
-    host = HostProfile(known.host_document("H200", vcpus=124, gpu_nodes=(0,) * 8))
+    host = HostProfile(
+        known.host_document(
+            "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
+        )
+    )
     md = ImageConfig(
         host.qemu_command(firmware=_FW, cpu_args="host"),
         host,

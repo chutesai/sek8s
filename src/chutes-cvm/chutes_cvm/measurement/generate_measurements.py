@@ -357,7 +357,7 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             profile, qemu = host.gpu_profile, host.qemu_version
             rtmr0, mrtd = fork_rtmr0(host)
             mrtds.add(mrtd.upper())
-            gpu_count = len(host.gpus)
+            gpu_count = host.gpu_count
             hw_name = f"{profile.display_name} [{qemu}, {host.variant_label}]"
             hardware.append(
                 {

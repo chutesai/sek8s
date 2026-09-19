@@ -36,7 +36,7 @@ from chutes_cvm.guest.preflight import (
     run_host_class_status,
     submit_profile,
 )
-from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
+from chutes_cvm.paths import default_config_path
 
 READY = 0
 BLOCKED = 1
@@ -66,7 +66,6 @@ def _image_version_rc(config_path: str, base_image: "str | None") -> "tuple[str,
 
 def verify_host(
     target_os: "str | None" = None,
-    scripts_dir: "str | None" = None,
     config_path: "str | None" = None,
     api_base: "str | None" = None,
     submit: bool = False,
@@ -77,7 +76,6 @@ def verify_host(
     ``submit`` also registers an unmeasured host class (POST /servers/tdx/host_profiles) so Chutes
     can generate its measurements — on top of the read-only Gate B check.
     """
-    scripts_dir = scripts_dir or str(SCRIPTS_DIR)
 
     # Gate A: which QEMU's measurement matters?
     if target_os is None:
@@ -111,7 +109,6 @@ def verify_host(
     try:
         resp = run_host_class_status(
             config_path=config,
-            scripts_dir=scripts_dir,
             api_base=api,
             target_os=target_os,
         )
@@ -139,7 +136,6 @@ def verify_host(
         try:
             sub = submit_profile(
                 config_path=config,
-                scripts_dir=scripts_dir,
                 api_base=api,
                 target_os=target_os,
             )

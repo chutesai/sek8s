@@ -13,19 +13,12 @@ import sys
 import time
 
 from chutes_cvm import proc
-from chutes_cvm.guest.detection import (
-    GUEST_CPU_ARGS,
-    detect_gpu_numa_nodes,
-    detect_host_mem_gb,
-    detect_nvidia_gpus,
-    detect_profile,
-    get_gpu_bdfs,
-    verify_host_qemu_supported,
-)
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS, verify_host_qemu_supported
 from chutes_cvm.guest.direct_boot import direct_boot_artifacts
 from chutes_cvm.guest.gpu.profiles import (  # noqa: F401 — available for introspection
     GPU_PROFILES,
 )
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.passthrough import setup_passthrough
 from chutes_cvm.guest.post_launch import apply_post_launch_tuning
 from chutes_cvm.guest.qemu import (
@@ -91,24 +84,23 @@ def launch_vm(args) -> int:
     vcpus = DEFAULT_VCPUS
     smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
     profile = None
-    gpus = []
+    host = None
 
     if args.pass_gpus:
-        # detect_profile resolves the GPU-model profile AND this host's full RTMR0
-        # fingerprint, and raises if the live host isn't baselined (the fingerprint
-        # match subsumes the old separate CPU-identity guard: device layout + vendor +
-        # vcpus + mem, plus the exact CPU model once its processor_id is captured).
-        profile, fingerprint = detect_profile()
-        gpus = get_gpu_bdfs() or detect_nvidia_gpus()
-        total_gpus = len(gpus)
+        # One reading of this host, by discover-profile.sh -- the same reading the submitted
+        # profile and the generated measurement are built from, so the guest cannot launch with
+        # a shape the measurement was not generated for.
+        host = HostProfile.from_host()
+        profile = host.gpu_profile
+        total_gpus = host.gpu_count
         # Guest -smp / RAM come from the matched fingerprint, not the host's raw
         # capacity: they shape the guest ACPI/memory-map and therefore RTMR0, so they
         # must be the exact baselined values. We never resize to the host — but we do
         # refuse to launch if the guest RAM cannot physically fit: TDX guest memory is
         # pinned and unreclaimable, so an over-large guest OOM-kills the host instead
         # of paging. Aborting is measurement-safe — it never changes the VM.
-        mem_gb = fingerprint.mem_gb
-        host_gb = detect_host_mem_gb()
+        mem_gb = host.guest_mem_gb
+        host_gb = host.host_mem_gb
         safe_gb = safe_vm_mem_gb(mem_gb, host_gb) if host_gb is not None else mem_gb
         if safe_gb < mem_gb:
             print(
@@ -121,9 +113,9 @@ def launch_vm(args) -> int:
                 file=sys.stderr,
             )
             return 1
-        mem = fingerprint.mem
-        vcpus = str(fingerprint.cpu.vcpus)
-        smp_topology = fingerprint.cpu.smp_topology
+        mem = host.mem
+        vcpus = str(host.vcpus)
+        smp_topology = host.smp_topology
         print(
             f"  GPU passthrough: {total_gpus}x {profile.name}"
             f" ({profile.vram_gb}GB VRAM each)"
@@ -187,8 +179,8 @@ def launch_vm(args) -> int:
 
     add_vsock(qemu_cmds, pci_pinning=pci_pinning)
 
-    if args.pass_gpus:
-        setup_passthrough(qemu_cmds)
+    if args.pass_gpus and host is not None:
+        setup_passthrough(qemu_cmds, host)
 
     # Guest NUMA topology (numa_active) binds memory per node via QEMU
     # memory-backends, so no numactl prefix is needed. Otherwise interleave
@@ -196,7 +188,11 @@ def launch_vm(args) -> int:
     if numa_active:
         launch_prefix = []
     else:
-        numa_nodes = detect_gpu_numa_nodes(gpus) if args.pass_gpus and gpus else []
+        numa_nodes = (
+            sorted({n for n in host.gpu_numa_nodes if n >= 0})
+            if args.pass_gpus and host is not None
+            else []
+        )
         if numa_nodes:
             interleave = ",".join(str(n) for n in numa_nodes)
             print(f"  NUMA: interleaving memory across GPU nodes {interleave}")

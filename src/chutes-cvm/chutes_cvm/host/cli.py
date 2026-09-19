@@ -56,7 +56,6 @@ def _run_verify(target_os, config, api, *, submit: bool, banner: str) -> int:
     print(_color(f"── chutes-cvm: {banner} ──", "1;36"))
     rc = verify_host(
         target_os=target_os,
-        scripts_dir=str(SCRIPTS_DIR),
         config_path=config,
         api_base=api,
         submit=submit,
@@ -120,7 +119,6 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     try:
         result = submit_profile(
             config_path=args.config,
-            scripts_dir=str(SCRIPTS_DIR),
             api_base=args.api,
             target_os=target_os,
         )
