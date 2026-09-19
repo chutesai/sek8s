@@ -10,6 +10,30 @@ from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.host_profile import HostProfile
 
 
+#: GPU BAR layouts from `lspci -vvv` on a real host of each model. Documents carry their own;
+#: the profile holds none, since BAR2 is resizable and the host is the only authority on it.
+CAPTURED_GPU_BARS = {
+    "H200": (  # 10de:2335 on dev-h200-tee
+        {"index": 0, "size_mb": 16, "kind": "p64"},
+        {"index": 2, "size_mb": 262144, "kind": "p64"},
+        {"index": 4, "size_mb": 32, "kind": "p64"},
+    ),
+    "RTX_PRO_6000": (  # 10de:2bb5 on wsl-pve-2-sn64
+        {"index": 0, "size_mb": 64, "kind": "p64"},
+        {"index": 2, "size_mb": 131072, "kind": "p64"},
+        {"index": 4, "size_mb": 32, "kind": "p64"},
+    ),
+    "B300": (  # 10de:3182 GB110 [B300 SXM6 AC]
+        {"index": 0, "size_mb": 64, "kind": "p64"},
+        {"index": 2, "size_mb": 524288, "kind": "p64"},
+        {"index": 4, "size_mb": 32, "kind": "p64"},
+    ),
+}
+
+#: NVSwitch BAR, 10de:22a3 class 0680 on dev-h200-tee.
+NVSWITCH_BARS = ({"index": 0, "size_mb": 32, "kind": "m64"},)
+
+
 def _pci(bdf, node, vendor, device_id, pci_class, bars, **extra):
     return {
         "bdf": bdf,
@@ -42,11 +66,7 @@ def host_document(
     the profile's reserve, and guest RAM follows the profile's own rule from ``host_mem_gb``.
     """
     profile = GPU_PROFILES[model]
-    endpoint = profile.passthrough.get("gpu")
-    bars = [
-        {"index": b.index, "size_mb": b.size_mb, "kind": b.kind}
-        for b in (endpoint.bars if endpoint else [])
-    ]
+    bars = [dict(b) for b in CAPTURED_GPU_BARS[model]]
     doc = {
         "gpus": [
             _pci(
@@ -66,7 +86,7 @@ def host_document(
                 "10de",
                 "22a3",
                 "0680",
-                [{"index": 0, "size_mb": 32, "kind": "m64"}],
+                list(NVSWITCH_BARS),
             )
             for i, n in enumerate(nvswitch_nodes)
         ],

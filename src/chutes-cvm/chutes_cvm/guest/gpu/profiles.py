@@ -44,7 +44,7 @@ HOST_RESERVED_CPUS = 4
 class PassthroughDevice:
     """A passthrough endpoint reproduced offline as a ``pci-bar-stub``: its PCI vendor,
     device id, class, and BAR layout, all from ``lspci -vvvnn``. Keyed by endpoint kind
-    ("gpu"/"nvswitch"/"ib") in ``GpuProfile.passthrough``.
+    ("gpu"/"nvswitch"/"ib") the endpoint hangs off.
     """
 
     vendor: int  # e.g. 0x10DE (NVIDIA), 0x15B3 (Mellanox / IB)
@@ -58,7 +58,7 @@ class GpuProfile(ABC):
 
     # The PCI device ID that identifies this GPU (e.g. 10de:2901 -> 2901). Override in subclass.
     # Drives profile DETECTION at launch (matches_device_id); the offline stub id for the
-    # GPU lives in passthrough["gpu"] and must name the same device.
+    # Must name the device the host reports for this model.
     #
     # Exactly one per profile, deliberately. A profile is not just a BAR layout: it carries
     # host_reserved_cpus, vram_gb, enable_numa_topology, firmware_filename, expected_gpus
@@ -74,12 +74,6 @@ class GpuProfile(ABC):
     # id(s) surfaced in that entry. Override both per subclass.
     display_name: str = ""
     expected_gpus: list[str] = []
-
-    # Every passthrough endpoint reproduced offline as a pci-bar-stub, keyed by the bus kind
-    # _swap_endpoint matches: "gpu" (rp\d+), "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Captured
-    # from `lspci -vvvnn` (discover-profile.sh). No "gpu" entry = not yet modeled for this
-    # model, so offline measurement generation is unavailable (not broken) until it is added.
-    passthrough: dict[str, PassthroughDevice] = {}
 
     def matches_device_id(self, device_id: str) -> bool:
         """Return True if device_id is this profile's GPU."""
@@ -282,17 +276,6 @@ class H200Profile(GpuProfile):
     pci_device_id = "2335"  # H200 SXM (GH100)
     display_name = "8xh200"
     expected_gpus = ["h200"]
-    # lspci -vvvnn on dev-h200-tee: GPU 10de:2335 (BAR2 resizable, 256G) + NVSwitch
-    # 10de:22a3 class 0680 (single 32M BAR).
-    passthrough = {
-        "gpu": PassthroughDevice(
-            0x10DE,
-            "2335",
-            0x0302,
-            [PciBar(0, 16, "p64"), PciBar(2, 262144, "p64"), PciBar(4, 32, "p64")],
-        ),
-        "nvswitch": PassthroughDevice(0x10DE, "22a3", 0x0680, [PciBar(0, 32, "m64")]),
-    }
 
     @property
     def name(self) -> str:
@@ -344,15 +327,6 @@ class RTXPro6000Profile(GpuProfile):
     pci_device_id = "2bb5"
     display_name = "8xpro_6000"
     expected_gpus = ["pro_6000"]
-    # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
-    passthrough = {
-        "gpu": PassthroughDevice(
-            0x10DE,
-            "2bb5",
-            0x0302,
-            [PciBar(0, 64, "p64"), PciBar(2, 131072, "p64"), PciBar(4, 32, "p64")],
-        ),
-    }
 
     @property
     def name(self) -> str:

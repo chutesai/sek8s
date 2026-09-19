@@ -107,9 +107,10 @@ def test_nvswitch_endpoint_modeled():
         assert "device=0x22a3" in stub and "class=0x0680" in stub
 
 
-def test_unmodeled_passthrough_raises():
-    # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
-    # unrecognized bus is NotImplementedError — never a silent wrong measurement.
+def test_endpoint_without_captured_bars_raises():
+    # A root port whose device captured no BARs fails loudly (ValueError); an unrecognized bus is
+    # NotImplementedError — never a silent wrong measurement. There is no table to fall back on:
+    # BAR2 is resizable, so only the host knows its own layout.
     host = HostProfile(
         known.host_document(
             "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
@@ -120,7 +121,7 @@ def test_unmodeled_passthrough_raises():
         host,
         acpi_tables="/out/a.bin",
     )
-    with pytest.raises(ValueError, match=r"passthrough\['ib'\]"):
+    with pytest.raises(ValueError, match="no BARs captured"):
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
     with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")

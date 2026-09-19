@@ -136,16 +136,12 @@ class ImageConfig:
                 bars=list(device.bars),
             )
 
-        # Pre-capture profiles carry no per-device BARs; fall back to the profile's entry.
-        spec = self.host.gpu_profile.passthrough.get(kind)
-        if not spec:
-            raise ValueError(
-                f"no passthrough geometry for {root_port!r}: the host profile captured no BARs "
-                f"for its "
-                f"{kind} devices and profile {self.host.gpu_profile.name!r} has no "
-                f"passthrough[{kind!r}] fallback. Re-submit with a current chutes-cvm."
-            )
-        return spec
+        raise ValueError(
+            f"no BARs captured for {root_port!r} ({kind}) on a "
+            f"{self.host.gpu_profile.name!r} host. The stub reproduces the guest's MMIO windows "
+            f"from them, so without them the generated RTMR0 matches no real boot. Re-submit "
+            f"this host's profile with a current chutes-cvm."
+        )
 
     def _swap_endpoint(self, device_arg: str) -> str:
         """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` carrying that device's BARs.

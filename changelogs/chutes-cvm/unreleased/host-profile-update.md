@@ -26,8 +26,10 @@
 - The measurement adapter builds each GPU's `pci-bar-stub` from the captured device rather than a
   hardcoded per-profile table. OVMF sizes the guest's 64-bit MMIO aperture from the BARs it
   enumerates, so the host is the authoritative source by construction; a GPU model with no table
-  entry previously could not be measured at all. Table entries remain as a fallback for hosts
-  registered before the capture shipped.
+  entry previously could not be measured at all. The per-profile `passthrough` tables are gone
+  entirely, along with the fallback that read them: BAR2 is resizable, so two machines of one
+  model can differ and only the capture knows which. A device that captured no BARs now fails
+  loudly rather than being measured against a shipped constant.
 - Renamed `measurement/platform_tables.py` to `measurement/image_config.py` and `host/profiles.py`
   to `host/recipes.py`, each in its own commit. `platform_tables` stopped being tables when the
   data moved to the host profile; what the module produces is the tdx-measure image config.

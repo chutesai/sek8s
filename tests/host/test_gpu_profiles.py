@@ -99,21 +99,6 @@ def test_every_profile_declares_exactly_one_device_id():
         assert profile.pci_device_id, f"{key}: device id must not be empty"
 
 
-def test_the_passthrough_stub_names_the_profile_s_own_gpu():
-    """The offline stub stands in for the real card, so it must be the same device.
-
-    It used to declare 2bb1 while the profile also matched 2bb5 and the BAR layout came
-    from a 2bb5 card — the stub named a product the measurement was not taken from.
-    """
-    for key, profile in GPU_PROFILES.items():
-        stub = profile.passthrough.get("gpu")
-        if stub is None:
-            continue
-        assert (
-            stub.device_id.lower() == profile.pci_device_id.lower()
-        ), f"{key}: stub device id {stub.device_id} != profile {profile.pci_device_id}"
-
-
 def test_all_registered_profiles_are_gpu_profile_subclasses():
     for key, profile in GPU_PROFILES.items():
         assert isinstance(profile, GpuProfile), f"{key} is not a GpuProfile"
@@ -453,33 +438,34 @@ def test_nvswitch_requiring_profile_refuses_a_host_with_none():
         HostProfile(doc).attached_nvswitches
 
 
-@pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
-def test_pci_bars_have_a_dominant_vram_aperture(key):
+@pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
+def test_captured_bars_have_a_dominant_vram_aperture(model):
     """The VRAM BAR dwarfs the others, and it is what sizes the guest's 64-bit MMIO window.
 
     OVMF auto-sizes that window from the BARs it enumerates, so this is the one that matters.
+    Asserted on the captured layouts the fixtures carry, since the profiles hold none -- BAR2 is
+    resizable and the host is the only authority on its current size.
     """
-    bars = GPU_PROFILES[key].passthrough["gpu"].bars
-    assert bars, f"{key} should model passthrough['gpu']"
-    vram = max(bars, key=lambda b: b.size_mb)
-    assert vram.size_mb >= 64 * 1024
-    assert all(b.size_mb * 64 <= vram.size_mb for b in bars if b is not vram)
+    bars = known.CAPTURED_GPU_BARS[model]
+    vram = max(bars, key=lambda b: b["size_mb"])
+    assert vram["size_mb"] >= 64 * 1024
+    assert all(b["size_mb"] * 64 <= vram["size_mb"] for b in bars if b is not vram)
 
 
-@pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
-def test_pci_bars_are_well_formed(key):
-    for bar in GPU_PROFILES[key].passthrough["gpu"].bars:
-        assert 0 <= bar.index <= 5
-        assert bar.kind in ("m32", "m64", "p32", "p64")
+@pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
+def test_captured_bars_are_well_formed(model):
+    for bar in known.CAPTURED_GPU_BARS[model]:
+        assert 0 <= bar["index"] <= 5
+        assert bar["kind"] in ("m32", "m64", "p32", "p64")
         # A 64-bit BAR consumes two slots, so it lands on an even index.
-        if bar.kind.endswith("64"):
-            assert bar.index % 2 == 0
+        if bar["kind"].endswith("64"):
+            assert bar["index"] % 2 == 0
 
 
-def test_pci_bars_default_empty_when_uncaptured():
-    # Profiles without an lspci capture yet model no GPU endpoint (offline
-    # measurement generation is simply unavailable for them, not broken).
-    assert "gpu" not in GPU_PROFILES["B300"].passthrough
+def test_profiles_carry_no_bar_table():
+    """BAR layout comes from the host, never from a shipped constant: BAR2 is resizable, so two
+    machines of one model can differ and only the capture knows which."""
+    assert not any(hasattr(p, "passthrough") for p in GPU_PROFILES.values())
 
 
 # ---------------------------------------------------------------------------
