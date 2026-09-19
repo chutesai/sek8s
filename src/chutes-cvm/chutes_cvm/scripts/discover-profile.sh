@@ -486,32 +486,6 @@ fi
 if [[ $JSON_OUTPUT -eq 1 ]]; then
     OUT_FILE="discover-profile-$(hostname)-$(date +%Y%m%dT%H%M%S).json"
 
-    json_str_array() {
-        local _var="$1"; shift
-        local _arr=("$@")
-        local _out="["
-        local _sep=""
-        for _e in "${_arr[@]}"; do
-            _out+="${_sep}\"$(printf '%s' "$_e" | sed 's/\\/\\\\/g; s/"/\\"/g')\""
-            _sep=", "
-        done
-        _out+="]"
-        printf -v "$_var" '%s' "$_out"
-    }
-
-    json_int_array() {
-        local _var="$1"; shift
-        local _arr=("$@")
-        local _out="["
-        local _sep=""
-        for _e in "${_arr[@]}"; do
-            _out+="${_sep}${_e}"
-            _sep=", "
-        done
-        _out+="]"
-        printf -v "$_var" '%s' "$_out"
-    }
-
     # Escape an arbitrary string for embedding as a JSON string value.
     # lspci -tv draws the tree with backslashes (\-) and spans multiple lines,
     # so backslash, quote, and control chars must all be escaped.
@@ -524,19 +498,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
         s="${s//$'\n'/\\n}"
         printf -v "$_var" '%s' "$s"
     }
-
-    if [[ ${#GPU_BDFS[@]} -gt 0 ]]; then
-        json_str_array gpu_bdfs_json "${GPU_BDFS[@]}"
-        json_str_array gpu_ids_json  "${GPU_DEVICE_IDS[@]}"
-        json_int_array gpu_numa_json "${GPU_NUMA_NODES[@]}"
-        gpu_vbios_ordered=()
-        for _b in "${GPU_BDFS[@]}"; do
-            gpu_vbios_ordered+=("${VBIOS_BY_BDF[$_b]:-}")
-        done
-        json_str_array gpu_vbios_json "${gpu_vbios_ordered[@]}"
-    else
-        gpu_bdfs_json="[]"; gpu_ids_json="[]"; gpu_numa_json="[]"; gpu_vbios_json="[]"
-    fi
 
     if [[ -n "$PCI_TOPOLOGY" ]]; then
         json_escape _pci_topo_esc "$PCI_TOPOLOGY"
@@ -563,12 +524,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     json_escape qemu_version_esc      "$QEMU_VERSION"
     json_escape qemu_version_full_esc "$QEMU_VERSION_FULL"
 
-    if [[ ${#UNIQUE_DEVICE_IDS[@]} -gt 0 ]]; then
-        json_str_array uniq_ids_json "${UNIQUE_DEVICE_IDS[@]}"
-    else
-        uniq_ids_json="[]"
-    fi
-
     numa_nodes_json="["
     numa_cpus_json="{"
     _sep=""
@@ -580,35 +535,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     numa_nodes_json+="]"
     numa_cpus_json+="}"
 
-    if [[ ${#IB_CLASS_DEVICES[@]} -gt 0 ]]; then
-        json_str_array ib_json "${IB_CLASS_DEVICES[@]}"
-    else
-        ib_json="[]"
-    fi
-
-    if [[ ${#BRIDGE_PFS[@]} -gt 0 ]]; then
-        json_str_array bridge_json "${BRIDGE_PFS[@]}"
-    else
-        bridge_json="[]"
-    fi
-
-    if [[ ${#PASSTHROUGH_CANDIDATES[@]} -gt 0 ]]; then
-        json_str_array passthru_json "${PASSTHROUGH_CANDIDATES[@]}"
-        json_int_array passthru_numa_json "${PASSTHROUGH_NUMA_NODES[@]}"
-    else
-        passthru_json="[]"; passthru_numa_json="[]"
-    fi
-
-    if [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]]; then
-        json_str_array nvswitch_json "${NVSWITCH_DEVICES[@]}"
-        json_int_array nvswitch_numa_json "${NVSWITCH_NUMA_NODES[@]}"
-    else
-        nvswitch_json="[]"; nvswitch_numa_json="[]"
-    fi
-
     # Device lists: one object per physical device, each carrying its own identity, NUMA node and
-    # BAR layout. Emitted alongside the legacy blocks during the transition -- nothing reads them
-    # yet, so this is additive.
+    # BAR layout. These replaced the parallel arrays the document used to carry, whose entries had
+    # to be zipped back together by index at every reader -- and which had nowhere to put a BAR.
     build_device_list() {
         local _var="$1"; shift
         local _out="[" _sep="" _bdf
@@ -657,26 +586,17 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "qemu_version": "${qemu_version_esc}",
     "qemu_version_full": "${qemu_version_full_esc}"
   },
-  "gpu": {
-    "pci_device_ids": ${uniq_ids_json},
-    "bdfs": ${gpu_bdfs_json},
-    "count": ${GPU_COUNT},
-    "vram_gb": ${VRAM_GB:-null},
-    "bar_size_mb": ${BAR_SIZE_MB:--1},
-    "numa_nodes": ${gpu_numa_json},
-    "vbios": ${gpu_vbios_json}
-  },
   "gpus": ${gpus_json},
   "nvswitches": ${nvswitches_json},
   "ib_devices": ${ib_devices_json},
   "pci_topology": ${pci_topology_json},
   "cpu": {
-    "total": ${CPU_TOTAL},
+    "count": ${CPU_TOTAL},
     "sockets": ${CPU_SOCKETS},
     "cores_per_socket": ${CPU_CORES_PER_SOCKET},
     "threads_per_core": ${CPU_THREADS_PER_CORE},
-    "cpu_vendor": "${cpu_vendor_esc}",
-    "cpu_processor_id": ${cpu_processor_id_json}
+    "vendor": "${cpu_vendor_esc}",
+    "processor_id": ${cpu_processor_id_json}
   },
   "memory": {
     "total_gb": ${MEM_TOTAL_GB},
@@ -687,20 +607,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "node_count": ${NUMA_NODE_COUNT},
     "nodes": ${numa_nodes_json},
     "cpus_per_node": ${numa_cpus_json}
-  },
-  "nic": {
-    "ib_class_count": ${#IB_CLASS_DEVICES[@]},
-    "eth_class_count": ${#ETH_CLASS_DEVICES[@]},
-    "ib_devices": ${ib_json},
-    "bridge_pfs": ${bridge_json},
-    "passthrough_candidates": ${passthru_json},
-    "passthrough_numa_nodes": ${passthru_numa_json}
-  },
-  "nvswitch": {
-    "present": $( [[ ${#NVSWITCH_DEVICES[@]} -gt 0 ]] && echo 'true' || echo 'false' ),
-    "count": ${#NVSWITCH_DEVICES[@]},
-    "devices": ${nvswitch_json},
-    "numa_nodes": ${nvswitch_numa_json}
   }
 }
 JSON

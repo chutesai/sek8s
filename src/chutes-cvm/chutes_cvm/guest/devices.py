@@ -16,7 +16,7 @@ and so does an NVSwitch BAR's size, so every passed-through device carries its o
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Self
 
 
@@ -91,30 +91,29 @@ class PciDevice:
         """
         return tuple(sorted(cls.from_dict(d) for d in (raw or ())))
 
-    #: Keys a device document must carry. Subclasses extend, never re-list.
-    KEYS: tuple[str, ...] = (
-        "bdf",
-        "vendor",
-        "device_id",
-        "pci_class",
-        "numa_node",
-        "bars",
-    )
+    @classmethod
+    def keys(cls) -> tuple[str, ...]:
+        """The document keys this device must carry: its own fields.
+
+        Derived rather than listed, so adding a field cannot leave a document that omits it
+        validating. Subclasses need no override -- ``fields`` already includes what they add.
+        """
+        return tuple(f.name for f in fields(cls))
 
     @classmethod
     def _kwargs_from(cls, d: dict) -> dict:
         """Constructor kwargs for one device document, or raise naming what is absent.
 
-        Every key is required. Defaulting a missing one would turn a malformed document into a
-        device with no identity, which surfaces much later as a stub carrying the wrong MMIO
-        windows. An absent key is a broken capture and says so here.
+        Every key is required. Defaulting a missing one would turn a malformed
+        document into a device with no identity, which surfaces much later as a stub carrying the
+        wrong MMIO windows. An absent key is a broken capture and says so here.
 
         Empty *values* are a different matter and are allowed: ``numa_node`` is -1 where sysfs
         reports no affinity, and ``bars`` is empty where lspci found no sized regions. Whether
         either is acceptable depends on the device actually being attached, which this layer does
         not know -- that check belongs where the consequence is known.
         """
-        missing = [k for k in cls.KEYS if k not in d]
+        missing = [k for k in cls.keys() if k not in d]
         if missing:
             raise ValueError(f"device document missing {', '.join(missing)}: {d!r}")
         return {
@@ -132,6 +131,25 @@ class PciDevice:
     @classmethod
     def from_dict(cls, d: dict) -> Self:
         return cls(**cls._kwargs_from(d))
+
+    def to_api_dict(self) -> dict:
+        """This device as the API stores it: the fields that reach RTMR0, and nothing else.
+
+        No ``bdf``. It is not an RTMR0 input -- the measured command substitutes every
+        ``vfio-pci,host=<bdf>`` for a ``pci-bar-stub`` -- so two hosts with the same cards in
+        different slots measure identically and must not land in different classes. The only thing
+        it contributed to the stored shape was position, which the list already encodes.
+        """
+        return {
+            "vendor": self.vendor,
+            "device_id": self.device_id,
+            "pci_class": self.pci_class,
+            "numa_node": self.numa_node,
+            "bars": [
+                {"index": b.index, "size_mb": b.size_mb, "kind": b.kind}
+                for b in self.bars
+            ],
+        }
 
     def to_dict(self) -> dict:
         return {
@@ -169,14 +187,18 @@ class IbDevice(PciDevice):
     is_bridge_pf: bool = False
     is_vf: bool = False
 
-    KEYS = PciDevice.KEYS + ("is_bridge_pf", "is_vf")
-
     @classmethod
     def _kwargs_from(cls, d: dict) -> dict:
         return super()._kwargs_from(d) | {
             "is_bridge_pf": bool(d["is_bridge_pf"]),
             "is_vf": bool(d["is_vf"]),
         }
+
+    def to_api_dict(self) -> dict:
+        # Attachment already excludes bridge PFs and VFs and only attached IB is submitted, so
+        # both flags would be constant; they stay on the capture side. Restated as their
+        # post-gating values so the document still parses back into an IbDevice.
+        return super().to_api_dict() | {"is_bridge_pf": False, "is_vf": False}
 
     def to_dict(self) -> dict:
         return super().to_dict() | {

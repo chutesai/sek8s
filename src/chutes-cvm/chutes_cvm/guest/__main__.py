@@ -28,7 +28,6 @@ from chutes_cvm.guest.qemu import (
     build_base_cmd,
     build_network,
     host_numa_nodes,
-    safe_vm_mem_gb,
     use_numa_topology,
 )
 from chutes_cvm.paths import firmware_dir
@@ -93,26 +92,11 @@ def launch_vm(args) -> int:
         host = HostProfile.from_host()
         profile = host.gpu_profile
         total_gpus = host.gpu_count
-        # Guest -smp / RAM come from the matched fingerprint, not the host's raw
-        # capacity: they shape the guest ACPI/memory-map and therefore RTMR0, so they
-        # must be the exact baselined values. We never resize to the host — but we do
-        # refuse to launch if the guest RAM cannot physically fit: TDX guest memory is
-        # pinned and unreclaimable, so an over-large guest OOM-kills the host instead
-        # of paging. Aborting is measurement-safe — it never changes the VM.
-        mem_gb = host.guest_mem_gb
-        host_gb = host.host_mem_gb
-        safe_gb = safe_vm_mem_gb(mem_gb, host_gb) if host_gb is not None else mem_gb
-        if safe_gb < mem_gb:
-            print(
-                f"Error: profile '{profile.name}' needs {mem_gb}G guest RAM, but only "
-                f"{safe_gb}G can be safely backed on this {host_gb}G host after reserving "
-                f"headroom for the host OS, TDX PAMT, page tables, and VFIO pinning. "
-                f"(TDX guest memory is pinned and unreclaimable, so an over-large guest "
-                f"OOM-kills the host instead of paging.) Guest RAM is fixed for measurement "
-                f"determinism and is never resized, so this host cannot run '{profile.name}'.",
-                file=sys.stderr,
-            )
-            return 1
+        # Guest RAM already fits: HostProfile sizes it to aggregate VRAM clamped by what this
+        # host can back, so there is nothing left to refuse here. A host too small for the full
+        # VRAM gets a smaller guest and therefore its own class -- which is why the shape has to
+        # be registered and measured before launch, and why preflight, not a RAM check, is what
+        # catches a host whose guest nothing has measured.
         mem = host.mem
         vcpus = str(host.vcpus)
         smp_topology = host.smp_topology

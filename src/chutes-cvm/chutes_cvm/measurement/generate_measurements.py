@@ -353,7 +353,7 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
         try:
             if not fingerprint:
                 raise ValueError("host profile has no fingerprint")
-            host = HostProfile(record.get("profile") or {})
+            host = HostProfile.from_api_profile(record.get("profile") or {})
             profile, qemu = host.gpu_profile, host.qemu_version
             rtmr0, mrtd = fork_rtmr0(host)
             mrtds.add(mrtd.upper())
@@ -545,14 +545,14 @@ def _cmd_generate(args: argparse.Namespace) -> int:
 
 def _cmd_list(args: argparse.Namespace) -> int:
     """List the published host classes the API knows — the profiles `generate` builds
-    measurements for. Prints ``<fingerprint> [pending] <count>x [<pci_device_ids>]`` per class.
+    measurements for. Prints ``<fingerprint> [pending] <count>x [<device_ids>]`` per class.
     """
     for record in fetch_host_profiles(args.api_base, args.include_pending):
         fp = record.get("fingerprint") or "<no-fingerprint>"
         state = "" if record.get("measured", True) else " [pending]"
-        gpu = (record.get("profile") or {}).get("gpu") or {}
-        ids = ",".join(gpu.get("pci_device_ids") or []) or "?"
-        print(f"{fp}{state}  {gpu.get('count', '?')}x [{ids}]")
+        gpus = (record.get("profile") or {}).get("gpus") or []
+        ids = ",".join(sorted({g.get("device_id") or "?" for g in gpus})) or "?"
+        print(f"{fp}{state}  {len(gpus)}x [{ids}]")
     return 0
 
 

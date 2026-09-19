@@ -82,18 +82,10 @@ def _apply_target_os(profile_json: str, target_os: str) -> str:
         ) from exc
     qemu = doc.get("qemu")
     if not isinstance(qemu, dict):
-        raise PreflightError("discover-profile output has no qemu block to override")
+        raise PreflightError("host profile has no qemu block to override")
     qemu["qemu_version"] = qemu_version
-    # The distro build string of a QEMU we are not running is unknowable, so mark it as
-    # projected rather than leaving the live host's (now contradictory) one in place.
-    qemu["qemu_version_full"] = (
-        f"QEMU emulator version {qemu_version} (projected for target OS {target_os})"
-    )
-    host = doc.get("host")
-    if isinstance(host, dict):
-        host["os_version_id"] = target_os
     # Compact separators keep the signed body small; key order is irrelevant to the API.
-    return json.dumps(doc, separators=(",", ":"))
+    return json.dumps(doc, separators=(",", ":"), sort_keys=True)
 
 
 def _sign(seed: str, body: bytes, nonce: str) -> "tuple[str, str]":
@@ -162,7 +154,7 @@ def _signed_profile(
         host = HostProfile.from_host()
     except (OSError, RuntimeError, ValueError) as exc:
         raise PreflightError(f"cannot read this host: {exc}") from exc
-    profile_json = host.to_json()
+    profile_json = host.to_api_json()
     if target_os:
         profile_json = _apply_target_os(profile_json, target_os)
     body = profile_json.encode()

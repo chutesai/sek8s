@@ -15,8 +15,10 @@ projections of the device lists.
 
 from __future__ import annotations
 
+import copy
+import itertools
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from functools import cached_property
 from pathlib import Path
 
@@ -42,6 +44,24 @@ def _node_sig(nodes: tuple[int, ...]) -> str:
     return "".join(str(n) for n in nodes)
 
 
+#: Host RAM the guest never takes. TDX guest memory is pinned and unreclaimable, so the guest
+#: must leave the host enough for the host OS, the TDX PAMT, page tables and VFIO DMA pinning --
+#: otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
+#:
+#: Flat, deliberately not a percentage. A percentage breaks down at scale: 12% over-reserved
+#: ~360 GB on a 3 TB host and wrongly rejected valid launches, and any fraction re-introduces the
+#: same mismatch once a host exceeds (reserve / fraction). The only overhead that scales with
+#: guest size is the TDX PAMT (~0.4%), and 64 GB covers PAMT for guests up to ~16 TB.
+VM_MEM_RESERVE_GB = 64
+
+#: The least of its GPUs' aggregate VRAM a guest may be given. Guest RAM is sized to VRAM because
+#: that is roughly what a workload needs to stage and feed the GPUs; a guest far below it thrashes
+#: rather than fails, so it has to be refused rather than launched slowly. Set with headroom over
+#: the tightest real host -- a B300 2 TB sled reaches 84% -- so a supported machine is never
+#: rejected, while a host that cannot come close is.
+MIN_VRAM_FRACTION = 0.7
+
+
 @dataclass(frozen=True)
 class HostCpu:
     """The host's CPU, as reported.
@@ -61,13 +81,32 @@ class HostCpu:
     processor_id: "str | None"
 
     @classmethod
+    def keys(cls) -> tuple[str, ...]:
+        """The document keys a cpu block must carry: this class's fields.
+
+        One spelling here and on the wire -- the capture used to say
+        ``total``/``cpu_vendor``/``cpu_processor_id`` while this said the other thing, and a
+        round-tripped profile came back ``count=0, processor_id=None``: a guest with no CPUs.
+        """
+        return tuple(f.name for f in fields(cls))
+
+    @classmethod
     def from_dict(cls, d: dict) -> "HostCpu":
-        """The wire calls it ``total``; a total of what is not obvious, so it lands as ``count``."""
+        """The cpu block, or raise naming what is absent.
+
+        No defaults: a host has no 0 CPUs and no 0 sockets, so defaulting one turns a broken
+        capture into a profile that measures a machine nobody has. ``processor_id`` may be null --
+        it is unreadable on some hosts -- but the key must be there, and offline generation
+        refuses a null rather than measuring its own host's CPU.
+        """
+        missing = [k for k in cls.keys() if k not in d]
+        if missing:
+            raise ValueError(f"cpu block missing {', '.join(missing)}: {d!r}")
         return cls(
-            count=int(d.get("total") or 0),
-            sockets=int(d.get("sockets") or 0),
-            vendor=d.get("cpu_vendor") or "",
-            processor_id=d.get("cpu_processor_id"),
+            count=int(d["count"]),
+            sockets=int(d["sockets"]),
+            vendor=str(d["vendor"]),
+            processor_id=d["processor_id"],
         )
 
 
@@ -106,7 +145,47 @@ class HostProfile:
             raw = json.loads(path.read_text())
         finally:
             path.unlink(missing_ok=True)
-        return cls(raw)
+        profile = cls(raw)
+        # The one place guest RAM is derived; everything downstream carries it. The script
+        # cannot do it: VRAM is unreadable once the GPUs are bound to vfio-pci, so it comes
+        # from the profile.
+        raw["memory"]["guest_gb"] = profile._derived_guest_mem_gb
+        return profile
+
+    @property
+    def _derived_guest_mem_gb(self) -> int:
+        """Guest RAM: as close to aggregate VRAM as the host can back, keeping its own reserve.
+
+        One rule for every profile. Guest RAM should approximate the VRAM it serves, so the VRAM
+        total is the target and host RAM is only ever a ceiling -- never a target in its own
+        right. Treating it as one is what gave two B200 hosts differing only in RAM (2013 and
+        3023 GB) two guests, two classes and two measurements for one piece of hardware.
+
+        The reserve binds only where VRAM exceeds host RAM -- a B300 2 TB sled against 8x288 GB.
+        A profile in that state tracks host RAM again, so two such sleds can still measure apart.
+
+        ``gpu_count`` is every GPU the host reports, which is also every GPU the launcher binds:
+        passthrough is all-or-nothing today. If that ever changes, guest RAM follows the attached
+        set, not the detected one, and this is one of the places that has to move.
+
+        Called once, by ``from_host``. Everything downstream reads the stored answer.
+        """
+        gpus = self.gpu_count
+        vram_gb = self.gpu_profile.vram_gb
+        total_vram_gb = vram_gb * gpus
+        # Per GPU, so the total is divisible by the GPU count and vcpu/mem stay
+        # socket-divisible. The host's share floors; VRAM is already a whole number per GPU.
+        per_gpu_gb = min(vram_gb, (self.host_mem_gb - VM_MEM_RESERVE_GB) // gpus)
+        guest_gb = per_gpu_gb * gpus
+        floor_gb = int(total_vram_gb * MIN_VRAM_FRACTION)
+        if guest_gb < floor_gb:
+            raise ValueError(
+                f"host has {self.host_mem_gb}G RAM, which backs a {guest_gb}G guest for "
+                f"{gpus}x {self.gpu_profile.name} ({total_vram_gb}G VRAM) -- under the "
+                f"{MIN_VRAM_FRACTION:.0%} floor of {floor_gb}G. This host is too small for these "
+                f"GPUs."
+            )
+        return guest_gb
 
     # ── observed hardware ───────────────────────────────────────────────────
     @cached_property
@@ -128,19 +207,19 @@ class HostProfile:
     # ── host facts the devices do not carry ─────────────────────────────────
     @cached_property
     def cpu(self) -> HostCpu:
-        return HostCpu.from_dict(self.raw.get("cpu") or {})
+        return HostCpu.from_dict(self.raw["cpu"])
 
     @property
     def host_mem_gb(self) -> int:
-        return int((self.raw.get("memory") or {}).get("total_gb") or 0)
+        return int(self.raw["memory"]["total_gb"])
 
     @property
     def numa_node_count(self) -> int:
-        return int((self.raw.get("numa") or {}).get("node_count") or 0)
+        return int(self.raw["numa"]["node_count"])
 
     @property
     def qemu_version(self) -> str:
-        return (self.raw.get("qemu") or {}).get("qemu_version") or ""
+        return str(self.raw["qemu"]["qemu_version"])
 
     # ── the policy the hardware selects ─────────────────────────────────────
     @cached_property
@@ -207,8 +286,14 @@ class HostProfile:
 
     @property
     def guest_mem_gb(self) -> int:
-        """Guest RAM, per the profile's sizing rule -- NOT a function of host RAM alone."""
-        return self.gpu_profile.guest_mem_gb(self.host_mem_gb, self.gpu_count)
+        """Guest RAM: read, never derived.
+
+        Resolved once, by ``from_host``, at the moment the host is read -- the sizing rules are
+        per-GpuProfile, so a later release deriving a different answer would measure one guest and
+        file it under a key computed from another. Every document downstream of a capture carries
+        the answer.
+        """
+        return int(self.raw["memory"]["guest_gb"])
 
     @property
     def smp_topology(self) -> str:
@@ -330,6 +415,57 @@ class HostProfile:
         return cmd
 
     # ── serialisation ───────────────────────────────────────────────────────
+    @classmethod
+    def from_api_profile(cls, doc: dict) -> "HostProfile":
+        """A stored profile, read back to generate its measurement.
+
+        The API keeps only what reaches RTMR0, so the devices arrive without host addresses. A
+        device has no identity without one, so positional stand-ins are filled in here -- at the
+        boundary, where they are known to be meaningless -- rather than by relaxing the capture's
+        invariant. Generation swaps every endpoint for a ``pci-bar-stub`` keyed on its root port,
+        so nothing downstream reads them.
+
+        What comes back describes a guest to measure, not a host to launch. Launching needs real
+        addresses and must start from ``from_host``.
+        """
+        doc = copy.deepcopy(doc)
+        slots = itertools.count()
+        for key in ("gpus", "nvswitches", "ib_devices"):
+            for device in doc.get(key) or ():
+                device["bdf"] = f"{next(slots):04x}:00:00.0"
+        return cls(doc)
+
+    def to_api_profile(self) -> dict:
+        """This host as the API stores it: exactly the RTMR0 determinants.
+
+        Stored == hashed == required, one set. An unhashed field stored beside a hashed one
+        re-splits the class at the byte level -- two hosts that measure identically would differ
+        in the stored row, so the API's first-write-wins would silently drop one of them. That is
+        why host RAM, BDFs, DMI and the lspci tree are absent: none reach RTMR0, so none may be
+        stored. The capture keeps all of it; this is only what crosses the wire.
+
+        NVSwitch and IB are the ATTACHED sets, not the inventory -- what the launcher passes
+        through is what gets measured, so the gating happens once, here.
+        """
+        return {
+            "gpus": [d.to_api_dict() for d in self.gpus],
+            "nvswitches": [d.to_api_dict() for d in self.attached_nvswitches],
+            "ib_devices": [d.to_api_dict() for d in self.attached_ib],
+            "cpu": {
+                "count": self.cpu.count,
+                "sockets": self.cpu.sockets,
+                "vendor": self.cpu.vendor,
+                "processor_id": self.cpu.processor_id,
+            },
+            "memory": {"guest_gb": self.guest_mem_gb},
+            "numa": {"node_count": self.numa_node_count},
+            "qemu": {"qemu_version": self.qemu_version},
+        }
+
+    def to_api_json(self) -> str:
+        """``to_api_profile`` as the signed request body."""
+        return json.dumps(self.to_api_profile(), separators=(",", ":"), sort_keys=True)
+
     def to_dict(self) -> dict:
         """The document as submitted, with the device lists normalised."""
         return self.raw | {

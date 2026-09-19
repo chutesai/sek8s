@@ -21,39 +21,6 @@ def _block_format(path: str | None) -> str:
     return "raw"
 
 
-# TDX guest memory is pinned and unreclaimable, so the guest must leave the host
-# enough RAM for the host OS, the TDX PAMT, page tables, and VFIO DMA pinning --
-# otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
-#
-# This is a FLAT reserve, deliberately not a percentage. It must stay aligned with
-# how the GpuProfiles size guest RAM: a RAM-derived profile's guest_mem_gb leaves
-# exactly this much for the host (B200: "(host_gb - 64) // gpu_count * gpu_count",
-# e.g. (3022 - 64) // 8 * 8 = 2952). A percentage reserve breaks that: 12% over-
-# reserved ~360 GB on a 3 TB host and wrongly rejected valid B200 launches,
-# and any fraction would re-introduce the same mismatch once a host exceeds
-# (reserve / fraction). The only overhead that scales with size is the TDX PAMT
-# (~0.4% of guest), and 64 GB covers PAMT for guests up to ~16 TB, so a flat
-# reserve is safe well beyond current hardware. Revisit deliberately (and resize
-# the affected profiles) if a host ever needs more than this.
-VM_MEM_RESERVE_GB = 64
-
-
-def safe_vm_mem_gb(desired_gb: int, host_gb: int | None) -> int:
-    """Clamp desired guest RAM (GB) to what the host can safely back.
-
-    Returns ``desired_gb`` unchanged when host RAM is unknown or already leaves
-    enough headroom; otherwise caps it at ``host_gb`` minus VM_MEM_RESERVE_GB.
-    Never returns a value below 1 GB or clamps upward.
-    """
-    if not host_gb or host_gb <= 0:
-        return desired_gb
-    safe = host_gb - VM_MEM_RESERVE_GB
-    if safe < 1:
-        # Pathologically small host: can't help, leave the request as-is.
-        return desired_gb
-    return min(desired_gb, safe)
-
-
 def _parse_mem_mib(mem: str) -> int:
     """Parse QEMU memory size string (e.g. '1536G', '512M') to MiB."""
     match = re.match(r"^(\d+)([GgMm])$", mem)

@@ -7,6 +7,7 @@ HostProfile, so what is left is the documents themselves.
 """
 
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
+from chutes_cvm.guest.host_profile import HostProfile
 
 
 def _pci(bdf, node, vendor, device_id, pci_class, bars, **extra):
@@ -46,7 +47,7 @@ def host_document(
         {"index": b.index, "size_mb": b.size_mb, "kind": b.kind}
         for b in (endpoint.bars if endpoint else [])
     ]
-    return {
+    doc = {
         "gpus": [
             _pci(
                 f"0000:{0x19 + i:02x}:00.0",
@@ -83,15 +84,18 @@ def host_document(
             for i, n in enumerate(ib_nodes)
         ],
         "cpu": {
-            "total": vcpus + profile.host_reserved_cpus,
+            "count": vcpus + profile.host_reserved_cpus,
             "sockets": sockets,
-            "cpu_vendor": cpu_vendor,
-            "cpu_processor_id": cpu_processor_id,
+            "vendor": cpu_vendor,
+            "processor_id": cpu_processor_id,
         },
         "memory": {"total_gb": host_mem_gb},
         "numa": {"node_count": numa_node_count},
         "qemu": {"qemu_version": "10.2.1"},
     }
+    # These stand in for from_host's output, which has already resolved guest RAM.
+    doc["memory"]["guest_gb"] = HostProfile(doc)._derived_guest_mem_gb
+    return doc
 
 
 def rtx_numa_doc():

@@ -487,32 +487,42 @@ def test_pci_bars_default_empty_when_uncaptured():
 # ---------------------------------------------------------------------------
 
 
-def test_b300_guest_ram_fits_a_2tb_host():
-    """A B300 host with less RAM than aggregate VRAM must still be launchable.
+def _guest_ram(model, host_gb, gpus=8):
+    """Guest RAM this host would be given, via the one rule on HostProfile."""
+    doc = known.host_document(
+        model, vcpus=124, gpu_nodes=(0,) * gpus, host_mem_gb=host_gb
+    )
+    return doc["memory"]["guest_gb"]
 
-    B300's 8x288 GB VRAM implies a 2304G guest, which a ~2 TB sled cannot back —
-    run-td aborted with "needs 2304G guest RAM, but only 1946G can be safely
-    backed". Guest RAM is derived from the live host, so this is a second
-    fingerprint of the SAME profile, not a sibling class.
+
+def test_guest_ram_targets_vram_and_the_host_is_only_a_ceiling():
+    """One rule for every profile: as close to aggregate VRAM as the host can back.
+
+    B300's 8x288 GB implies a 2304G guest, which a ~2 TB sled cannot back -- run-td aborted with
+    "needs 2304G guest RAM, but only 1946G can be safely backed". Host RAM is never a target in
+    its own right: a bigger host does not get a bigger guest once VRAM is met.
     """
-    profile = GPU_PROFILES["B300"]
-    assert profile.guest_mem_gb(2010, 8) == 1944
-    # Evenly divisible per GPU, so vcpu/mem stay socket-divisible.
-    assert profile.guest_mem_gb(2010, 8) % 8 == 0
+    full = GPU_PROFILES["B300"].vram_gb * 8
+    assert _guest_ram("B300", 2010) == 1944  # clamped: VRAM exceeds the sled
+    assert _guest_ram("B300", 2400) == full  # fits, so VRAM exactly
+    assert _guest_ram("B300", 3000) == full  # bigger host, same guest
 
 
-def test_b300_ram_is_unchanged_on_hosts_that_can_back_full_vram():
-    """The clamp must not re-baseline B300 hosts already in service.
+def test_guest_ram_stays_divisible_per_gpu():
+    """Keeps vcpu/mem socket-divisible."""
+    assert _guest_ram("B300", 2010) % 8 == 0
 
-    A host with enough RAM keeps exactly vram_gb * gpus, so its fingerprint
-    mem_gb — and therefore RTMR0 — does not move. An unclamped host-derived rule
-    would have pushed a 2.4 TB host to 2336G and silently invalidated its
-    registered measurement.
+
+def test_only_a_clamped_profile_is_sensitive_to_host_ram():
+    """Reaching VRAM makes a profile immune to host-RAM variance: every host of the class gets
+    the same guest, so same-tier hosts cannot split into separate measurements.
+
+    B300 is the exception, and unavoidably so -- its 8x288 GB exceeds what a 2 TB sled can back,
+    so guest RAM tracks the host and two sleds 4 GB apart still measure differently.
     """
-    profile = GPU_PROFILES["B300"]
-    full = profile.vram_gb * 8
-    assert profile.guest_mem_gb(2400, 8) == full
-    assert profile.guest_mem_gb(3000, 8) == full
+    for model in ("H200", "RTX_PRO_6000"):
+        assert _guest_ram(model, 2007) == _guest_ram(model, 2011)
+    assert _guest_ram("B300", 2007) != _guest_ram("B300", 2011)
 
 
 def test_b300_vcpus_derive_from_a_256_cpu_host():

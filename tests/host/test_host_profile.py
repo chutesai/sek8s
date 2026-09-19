@@ -8,6 +8,7 @@ guest-RAM rule fails these rather than passing with whatever the profile now say
     B300  id=3182 reserved=4  numa=False nvswitch(8)=False  vram=288
 """
 
+
 import json
 
 import pytest
@@ -55,7 +56,7 @@ def ib(bdf, node, *, bridge=False, vf=False):
     }
 
 
-def document(**over):
+def document(*, guest_gb=1128, **over):
     """An 8-GPU H200 host on two NUMA nodes with four NVSwitches."""
     doc = {
         "gpus": [
@@ -68,16 +69,18 @@ def document(**over):
         "nvswitches": [nvswitch(f"0000:{b}:00.0", 1) for b in ("83", "84", "85", "86")],
         "ib_devices": [],
         "cpu": {
-            "total": 128,
+            "count": 128,
             "sockets": 2,
-            "cpu_vendor": "GenuineIntel",
-            "cpu_processor_id": "f2060c00fffba91f",
+            "vendor": "GenuineIntel",
+            "processor_id": "f2060c00fffba91f",
         },
         "memory": {"total_gb": 2048.0},
         "numa": {"node_count": 2},
         "qemu": {"qemu_version": "10.2.1"},
     }
     doc.update(over)
+    # Documents here stand in for what from_host returns, which has already resolved guest RAM.
+    doc["memory"].setdefault("guest_gb", guest_gb)
     return doc
 
 
@@ -124,10 +127,42 @@ def test_cpu_facts_are_grouped_and_named_for_what_they_are():
     assert cpu.processor_id == "f2060c00fffba91f"
 
 
-def test_missing_processor_id_stays_none():
-    """None is refused by offline generation rather than measured as the generating host's CPU."""
-    doc = document(cpu={"total": 128, "sockets": 2, "cpu_vendor": "GenuineIntel"})
+def test_unreadable_processor_id_stays_none():
+    """The capture always emits the key, null where CPUID leaf-1 was unreadable. None is refused
+    by offline generation rather than measured as the generating host's CPU."""
+    doc = document(
+        cpu={"count": 128, "sockets": 2, "vendor": "GenuineIntel", "processor_id": None}
+    )
     assert HostProfile(doc).cpu.processor_id is None
+
+
+def test_cpu_block_missing_a_key_is_refused():
+    """No defaults: a host has no 0 CPUs, so defaulting one would measure a machine nobody has."""
+    for key in ("count", "sockets", "vendor", "processor_id"):
+        cpu = {
+            "count": 128,
+            "sockets": 2,
+            "vendor": "GenuineIntel",
+            "processor_id": "f2060c00fffba91f",
+        }
+        del cpu[key]
+        with pytest.raises(ValueError, match=f"cpu block missing {key}"):
+            HostProfile(document(cpu=cpu)).cpu
+
+
+def test_required_document_values_are_never_defaulted():
+    """No defaults: every one of these is an RTMR0 input, so a default would not avoid the error,
+    it would move it to a measurement that silently describes the wrong machine."""
+    for block, key, attr in (
+        ("memory", "total_gb", "host_mem_gb"),
+        ("memory", "guest_gb", "guest_mem_gb"),
+        ("numa", "node_count", "numa_node_count"),
+        ("qemu", "qemu_version", "qemu_version"),
+    ):
+        doc = document()
+        del doc[block][key]
+        with pytest.raises(KeyError, match=key):
+            getattr(HostProfile(doc), attr)
 
 
 def test_guest_shape_comes_from_the_profile_rule_not_host_capacity():
@@ -192,11 +227,12 @@ def test_variant_label_flat_path_carries_counts():
         gpus=[gpu(f"0000:{b}:00.0", 0, "3182") for b in ("19", "3b", "4c", "5d")],
         nvswitches=[],
         cpu={
-            "total": 256,
+            "count": 256,
             "sockets": 2,
-            "cpu_vendor": "GenuineIntel",
-            "cpu_processor_id": "d1060a00fffba91f",
+            "vendor": "GenuineIntel",
+            "processor_id": "d1060a00fffba91f",
         },
+        guest_gb=992,
     )
     profile = HostProfile(doc)
     assert profile.uses_guest_numa is False
@@ -216,3 +252,95 @@ def test_round_trips_through_json():
     assert again.gpu_numa_nodes == profile.gpu_numa_nodes
     assert again.variant_label == profile.variant_label
     assert again.gpus[0].bars_arg == "0:16M:p64;2:256G:p64;4:32M:p64"
+
+
+# ── to_api_profile: the subset the API stores ───────────────────────────────
+
+
+def test_api_profile_carries_only_rtmr0_determinants():
+    """Stored == hashed == required, one set.
+
+    An unhashed field stored beside a hashed one re-splits the class at the byte level: two hosts
+    that measure identically differ in the stored row, and the API's first-write-wins silently
+    drops one. Host RAM is the worked example -- 2007 GB and 2011 GB are one H200 class.
+    """
+    api = HostProfile(document()).to_api_profile()
+    assert set(api) == {"gpus", "nvswitches", "ib_devices", "cpu", "memory", "numa", "qemu"}
+    assert set(api["cpu"]) == {"count", "sockets", "vendor", "processor_id"}
+    assert set(api["memory"]) == {"guest_gb"}  # not the host total it came from
+    assert set(api["numa"]) == {"node_count"}
+    assert set(api["qemu"]) == {"qemu_version"}
+
+
+def test_api_profile_does_not_send_host_addresses():
+    """A BDF is mandatory on a capture -- it binds the device and orders the list -- but the
+    measured command swaps every endpoint for a pci-bar-stub, so it never reaches RTMR0. Sending
+    it would split two hosts whose only difference is which slots the cards sit in."""
+    profile = HostProfile(document())
+    assert all(d.bdf for d in profile.gpus)  # required on the capture
+    api = profile.to_api_profile()
+    assert all("bdf" not in d for d in api["gpus"])
+    assert set(api["gpus"][0]) == {"vendor", "device_id", "pci_class", "numa_node", "bars"}
+
+
+def test_api_profile_sends_attached_devices_not_inventory():
+    """Gating happens once, here. The old path took the raw vectors and built root ports for
+    devices the launcher never attaches -- 14 rp_ib on a B300 -- so the generated RTMR0 could not
+    match a real boot."""
+    doc = document(ib_devices=[ib(f"0000:{0x15 + i:02x}:00.0", 0) for i in range(4)])
+    profile = HostProfile(doc)
+    assert profile.ib_devices  # captured
+    assert profile.to_api_profile()["ib_devices"] == []  # no profile passes IB through
+
+
+def test_api_profile_round_trips_for_generation():
+    """Generation rebuilds a HostProfile from the stored row, through from_api_profile, which
+    supplies the positional stand-ins the API does not keep."""
+    src = HostProfile(document())
+    back = HostProfile.from_api_profile(src.to_api_profile())
+    assert back.gpu_profile.name == src.gpu_profile.name
+    assert back.cpu == src.cpu
+    assert (back.vcpus, back.guest_mem_gb) == (src.vcpus, src.guest_mem_gb)
+    assert back.variant_label == src.variant_label
+    assert [d.bdf for d in back.gpus] == [f"{i:04x}:00:00.0" for i in range(len(back.gpus))]
+
+
+def test_guest_ram_is_carried_not_recomputed():
+    """The rule is per-GpuProfile, so a later release deriving a different answer would measure
+    one guest and file it under a key computed from another. Storage drops the host total it came
+    from, which makes re-deriving impossible as well as wrong."""
+    api = HostProfile(document()).to_api_profile()
+    assert "total_gb" not in api["memory"]
+    assert HostProfile.from_api_profile(api).guest_mem_gb == api["memory"]["guest_gb"] == 1128
+
+
+def test_stored_profile_builds_the_command_generation_measures():
+    """The stand-in addresses never reach the measurement: every endpoint is swapped for a
+    pci-bar-stub keyed on its root port."""
+    back = HostProfile.from_api_profile(HostProfile(document()).to_api_profile())
+    cmd = back.qemu_command(firmware="/opt/ovmf/OVMF.fd", cpu_args="host,-avx10")
+    vfio = [d for d in cmd.devices if d.startswith("vfio-pci")]
+    assert len(vfio) == 12  # 8 GPUs + 4 NVSwitches
+    assert all("bus=rp" in d for d in vfio)
+
+
+def test_guest_ram_leaves_the_host_its_reserve():
+    """TDX guest memory is pinned and unreclaimable, so a guest that overruns the host OOM-kills
+    QEMU rather than paging. The reserve binds only when VRAM exceeds host RAM."""
+    from chutes_cvm.guest.host_profile import VM_MEM_RESERVE_GB
+
+    doc = document()
+    doc["memory"]["total_gb"] = 1024  # under 8x141 GB of VRAM
+    assert HostProfile(doc)._derived_guest_mem_gb == 960 == 1024 - VM_MEM_RESERVE_GB
+
+
+def test_host_too_small_for_its_gpus_is_refused():
+    """A guest far below its GPUs' VRAM thrashes rather than fails, so it is refused at sizing
+    rather than launched slowly. 8x H200 is 1128G of VRAM; the floor is 70% of that."""
+    doc = document()
+    doc["memory"]["total_gb"] = 900  # backs 832G, 74% -- allowed
+    assert HostProfile(doc)._derived_guest_mem_gb == 832
+
+    doc["memory"]["total_gb"] = 800  # backs 736G, 65% -- refused
+    with pytest.raises(ValueError, match="under the 70% floor"):
+        HostProfile(doc)._derived_guest_mem_gb

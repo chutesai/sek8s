@@ -19,18 +19,17 @@ fingerprint from the host profiles the API publishes.
 To add a profile:
   1. Encode GPU-model policy on the subclass: pci_device_id, BAR/VRAM, CC/PPCIe
      mode, NVSwitch/IB policy, firmware. Override ``host_reserved_cpus`` if the
-     host runs a heavy fixed workload (B200 = 16 for FabricManager; default 4);
-     override ``guest_mem_gb`` if guest RAM is derived from host RAM rather than
-     pinned to aggregate VRAM (B200 does, most don't). Keep host_reserved_cpus EVEN
-     so vcpus divides across sockets.
+     host runs a heavy fixed workload (B200 = 16 for FabricManager; default 4).
+     Keep host_reserved_cpus EVEN so vcpus divides across sockets. Guest RAM needs
+     no override -- ``vram_gb`` is its whole input.
   2. Submit each host CLASS the GPU ships on via ``chutes-cvm host submit-profile``
-     (``discover-profile.sh`` captures cpu_vendor/cpu_processor_id + the CPU/RAM the
-     fingerprint's vcpus/mem derive from). The API records it and returns the
+     (``discover-profile.sh`` captures the CPU identity and the per-device BARs the
+     fingerprint is built from). The API records it and returns the
      fingerprint the measurement generator then builds against — no per-class data
      is hardcoded here.
 
-Changing host_reserved_cpus / guest_mem_gb moves the fingerprint's vcpus/mem →
-RTMR0, so it requires re-baselining that profile's attestation policy.
+Changing host_reserved_cpus / vram_gb moves the guest's vcpus/mem → RTMR0, so it
+requires re-baselining that profile's attestation policy.
 """
 
 from abc import ABC, abstractmethod
@@ -62,7 +61,7 @@ class GpuProfile(ABC):
     # GPU lives in passthrough["gpu"] and must name the same device.
     #
     # Exactly one per profile, deliberately. A profile is not just a BAR layout: it carries
-    # host_reserved_cpus, guest_mem_gb, enable_numa_topology, firmware_filename, expected_gpus
+    # host_reserved_cpus, vram_gb, enable_numa_topology, firmware_filename, expected_gpus
     # and the CC/PPCIe mode arguments. Two products that happen to agree on those today can
     # diverge later with nothing to notice, so distinct hardware gets a distinct profile. The
     # control plane already models it that way -- its host-class fingerprint includes the
@@ -114,9 +113,9 @@ class GpuProfile(ABC):
     # guest RAM, and CPU identity (vendor + SMBIOS Type-4 Processor ID) — are NOT
     # profile constants: they vary host to host and live on the topology fingerprint
     # (gpu/topology.py). Detection derives them from the LIVE host (vcpus =
-    # host_cpus − host_reserved_cpus; sockets; mem via guest_mem_gb; CPU via
+    # host_cpus − host_reserved_cpus; sockets; mem from vram_gb; CPU via
     # /proc/cpuinfo); acceptance of the resulting fingerprint is the API's call. The
-    # profile supplies only host_reserved_cpus (workload policy) and guest_mem_gb.
+    # profile supplies only host_reserved_cpus and vram_gb.
 
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -143,16 +142,6 @@ class GpuProfile(ABC):
     def should_passthrough_infiniband(self) -> bool:
         """Whether InfiniBand devices should be detected and passed through."""
         return False
-
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        """Total guest RAM in GB for ``gpu_count`` GPUs on a host with ``host_gb`` RAM.
-
-        The default pins guest RAM to aggregate VRAM (host RAM irrelevant). Override
-        when a GPU type is deployed on hosts with more RAM than VRAM and should use it
-        (e.g. B200). Detection bakes the result into the fingerprint's ``mem_gb``, so
-        it feeds RTMR0 — changing the rule re-baselines attestation.
-        """
-        return self.vram_gb * gpu_count
 
     @property
     def enable_numa_topology(self) -> bool:
@@ -209,14 +198,6 @@ class B200Profile(GpuProfile):
     def vram_gb(self) -> int:
         return 192  # B200 HBM3e
 
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        # B200 hosts carry far more RAM than VRAM, so guest RAM is DERIVED from the
-        # host: leave ~64 GB for the host OS, floor-divide the rest per GPU (the floor
-        # absorbs few-GB same-tier variance), re-multiply. ~2 TB host → 243/GPU → 1944
-        # total; ~3 TB Xeon 6 host → 369/GPU → 2952 total. This derivation is what makes
-        # "B200 vs Xeon 6" two fingerprints of one profile rather than two classes.
-        return ((host_gb - 64) // gpu_count) * gpu_count
-
     @property
     def host_reserved_cpus(self) -> int:
         # 16 logical (8 physical cores, 4/socket). The host runs FabricManager
@@ -270,18 +251,6 @@ class B300Profile(GpuProfile):
     @property
     def vram_gb(self) -> int:
         return 288  # B300 HBM3e (SXM6 AC)
-
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        # Aggregate VRAM (2304G for 8), capped at what the host can back: B300 also ships
-        # on ~2 TB sleds, which abort at launch under the plain VRAM rule. ~64 GB is left
-        # for the host OS, TDX PAMT, page tables and VFIO pinning.
-        # The cap, rather than B200's unconditional host-derived sizing, is what keeps
-        # in-service hosts off a re-baseline: anything that can back 2304G still gets
-        # exactly that, so its fingerprint mem_gb — and RTMR0 — does not move.
-        return min(
-            self.vram_gb * gpu_count,
-            ((host_gb - 64) // gpu_count) * gpu_count,
-        )
 
     # Host: 2 sockets x 48 cores x 2 threads = 192 (Intel, from lscpu on am-b300-61)
     # → 188 vcpus. Not yet submitted to the API (uncharacterized): run
