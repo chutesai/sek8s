@@ -544,7 +544,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     else
         pci_topology_json="null"
     fi
-    numa_eligible_json=$([[ "$NUMA_TOPOLOGY_ELIGIBLE" == "yes" ]] && echo 'true' || echo 'false')
 
     json_escape board_vendor_esc  "$BOARD_VENDOR"
     json_escape board_name_esc    "$BOARD_NAME"
@@ -553,7 +552,6 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     json_escape bios_date_esc     "$BIOS_DATE"
     json_escape product_name_esc  "$PRODUCT_NAME"
     json_escape os_version_esc    "$OS_VERSION_ID"
-    json_escape cpu_args_esc      "$CPU_ARGS"
     json_escape cpu_vendor_esc    "$CPU_VENDOR"
     # cpu_processor_id is null when a field was unreadable.
     if [[ -n "$CPU_PROCESSOR_ID" ]]; then
@@ -655,13 +653,9 @@ if [[ $JSON_OUTPUT -eq 1 ]]; then
     "bios_date": "${bios_date_esc}",
     "os_version_id": "${os_version_esc}"
   },
-  "launch_determinism": {
+  "qemu": {
     "qemu_version": "${qemu_version_esc}",
-    "qemu_version_full": "${qemu_version_full_esc}",
-    "numa_node_count": ${NUMA_NODE_COUNT},
-    "numa_topology_eligible": ${numa_eligible_json},
-    "cpu_args": "${cpu_args_esc}",
-    "host_cpu_topology": "sockets=${CPU_SOCKETS},cores_per_socket=${CPU_CORES_PER_SOCKET},threads_per_core=${CPU_THREADS_PER_CORE}"
+    "qemu_version_full": "${qemu_version_full_esc}"
   },
   "gpu": {
     "pci_device_ids": ${uniq_ids_json},

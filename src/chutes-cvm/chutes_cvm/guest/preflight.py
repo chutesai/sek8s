@@ -30,7 +30,7 @@ import urllib.request
 from urllib.parse import urlencode
 
 import yaml
-from chutes_cvm.guest.detection import GUEST_CPU_ARGS, SUPPORTED_QEMU_BY_OS
+from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.paths import DEFAULT_API_BASE
 from substrateinterface import Keypair, KeypairType
@@ -80,18 +80,15 @@ def _apply_target_os(profile_json: str, target_os: str) -> str:
         raise PreflightError(
             f"discover-profile output is not valid JSON: {exc}"
         ) from exc
-    ld = doc.get("launch_determinism")
-    if not isinstance(ld, dict):
-        raise PreflightError(
-            "discover-profile output has no launch_determinism block to override"
-        )
-    ld["qemu_version"] = qemu_version
+    qemu = doc.get("qemu")
+    if not isinstance(qemu, dict):
+        raise PreflightError("discover-profile output has no qemu block to override")
+    qemu["qemu_version"] = qemu_version
     # The distro build string of a QEMU we are not running is unknowable, so mark it as
     # projected rather than leaving the live host's (now contradictory) one in place.
-    ld["qemu_version_full"] = (
+    qemu["qemu_version_full"] = (
         f"QEMU emulator version {qemu_version} (projected for target OS {target_os})"
     )
-    ld["cpu_args"] = GUEST_CPU_ARGS
     host = doc.get("host")
     if isinstance(host, dict):
         host["os_version_id"] = target_os

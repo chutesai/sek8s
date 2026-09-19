@@ -16,10 +16,9 @@ SAMPLE_PROFILE = json.dumps(
         "hostname": "h",
         "timestamp": "t",
         "host": {"os_version_id": "25.10"},
-        "launch_determinism": {
+        "qemu": {
             "qemu_version": "10.1.0",
             "qemu_version_full": "QEMU emulator version 10.1.0 (Debian 1:10.1.0+ds-1)",
-            "cpu_args": "host,-avx10",
         },
         "gpu": {"pci_device_ids": ["2335"], "count": 8},
         "cpu": {"total": 192, "sockets": 2, "cpu_vendor": "GenuineIntel"},
@@ -31,13 +30,12 @@ SAMPLE_PROFILE = json.dumps(
 
 def test_apply_target_os_moves_every_os_derived_field():
     """The bug this guards: a 25.10 host asking about 26.04 must not submit 26.04 + QEMU
-    10.1.0 — the release picks the QEMU, so release/QEMU/-cpu args move together."""
+    10.1.0 -- the release picks the QEMU, so the two move together."""
     out = json.loads(preflight._apply_target_os(SAMPLE_PROFILE, "26.04"))
-    ld = out["launch_determinism"]
+    qemu = out["qemu"]
     assert out["host"]["os_version_id"] == "26.04"
-    assert ld["qemu_version"] == preflight.SUPPORTED_QEMU_BY_OS["26.04"]
-    assert "10.1.0" not in ld["qemu_version_full"]
-    assert ld["cpu_args"] == "host,-avx10"
+    assert qemu["qemu_version"] == preflight.SUPPORTED_QEMU_BY_OS["26.04"]
+    assert "10.1.0" not in qemu["qemu_version_full"]
 
 
 def test_apply_target_os_rejects_unsupported_release():
@@ -46,7 +44,7 @@ def test_apply_target_os_rejects_unsupported_release():
 
 
 def test_apply_target_os_requires_block():
-    with pytest.raises(PreflightError, match="launch_determinism"):
+    with pytest.raises(PreflightError, match="qemu block"):
         preflight._apply_target_os(json.dumps({"gpu": {}}), "26.04")
 
 
@@ -130,7 +128,7 @@ def test_run_preflight_target_os_override(tmp_path):
             target_os="26.04",
         )
     body = json.loads(post.call_args.args[5].decode())
-    assert body["launch_determinism"]["qemu_version"] == "10.2.1"
+    assert body["qemu"]["qemu_version"] == "10.2.1"
     assert body["host"]["os_version_id"] == "26.04"
 
 
