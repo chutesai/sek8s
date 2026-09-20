@@ -248,14 +248,19 @@ sign:
 	fi; \
 	echo ;
 
+# -r so a backslash in the password is not eaten as an escape, and a cheap decrypt check so
+# a wrong one costs two seconds instead of surfacing as rclone's own fallback prompt once
+# per artifact, mid-upload. --ask-password=false stops that fallback from hanging here.
 define _rclone_pass_prompt
 	if [ -z "$$RCLONE_CONFIG_PASS" ]; then \
-		echo "Enter rclone config password:"; \
-		read -s RCLONE_CONFIG_PASS; \
-		export RCLONE_CONFIG_PASS; \
+		read -rsp "Enter rclone config password: " RCLONE_CONFIG_PASS; \
 		echo ""; \
 	fi; \
-	export RCLONE_CONFIG_PASS
+	export RCLONE_CONFIG_PASS; \
+	if ! rclone --ask-password=false listremotes >/dev/null 2>&1; then \
+		echo "rclone cannot decrypt its config with that password." >&2; \
+		exit 1; \
+	fi
 endef
 
 # Publishing is deliberately NOT part of base-image.yml. Keeping it a separate target means a
