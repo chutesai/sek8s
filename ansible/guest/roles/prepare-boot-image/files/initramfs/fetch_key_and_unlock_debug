@@ -13,7 +13,7 @@
 #
 # This script exists ONLY in the debug initramfs, so prod carries none of the fail-open
 # code and has a distinct measurement.
-PREREQ="load-tdx network"
+PREREQ="load-tee network"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 

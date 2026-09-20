@@ -8,7 +8,7 @@
 # rotation and fail-CLOSED cleanup. None of the debug-only signing or
 # boot-through-on-failure logic appears here — it lives in the separate debug entry
 # script and its helper.
-PREREQ="load-tdx network"
+PREREQ="load-tee network"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
