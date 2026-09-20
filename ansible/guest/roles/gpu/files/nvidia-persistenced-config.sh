@@ -1,9 +1,21 @@
 #!/usr/bin/env bash
+# Select nvidia-persistenced's persistence flag from the GPU fabric topology.
+#
+# Writes ONE file: the NVPD_FLAG env file under /run. The systemd drop-in that consumes
+# it is static and baked into the image (files/nvidia-persistenced-dropin.conf), because
+# /etc/systemd/system is RTMR3-measured. Generating the drop-in here -- as this script
+# did through 1.4.0 -- put a file in the measured tree that the build manifest did not
+# contain, which moved RTMR3 on every boot after the first and failed attestation
+# fleet-wide. /run is tmpfs and outside the measured set, so a per-host value can vary
+# there without touching the measurement.
+#
+# Do not write anywhere under a path listed in tdx-measure-{gpu,miner}.conf from this or
+# any other boot-time script.
 set -euo pipefail
 
 LOG_TAG="nvidia-persistenced-config"
-DROPIN_DIR="/etc/systemd/system/nvidia-persistenced.service.d"
-DROPIN_FILE="${DROPIN_DIR}/override.conf"
+# Overridable for tests only; production uses the /run path the static drop-in reads.
+ENV_FILE="${NVPD_ENV_FILE:-/run/nvidia-persistenced-mode.env}"
 MODE="persistence"
 REASON="Defaulting to persistence mode"
 DETECTION_SOURCE=""
@@ -45,39 +57,19 @@ fi
 log "${REASON}"
 log "Ensuring nvidia-persistenced uses ${FLAG}"
 
-mkdir -p "${DROPIN_DIR}"
+mkdir -p "$(dirname "${ENV_FILE}")"
 
-read -r -d '' DESIRED_CONTENT <<EOF || true
-[Unit]
-Requires=nvidia-persistenced-config.service
-After=nvidia-persistenced-config.service
-
-[Service]
-ExecStart=
-ExecStart=/usr/bin/nvidia-persistenced ${FLAG} --verbose
-TimeoutStartSec=300
-EOF
-
-TMP_FILE=$(mktemp)
+# Staged in the target directory and renamed, so nvidia-persistenced can never read a
+# half-written env file: the rename is atomic and same-filesystem.
+TMP_FILE=$(mktemp "${ENV_FILE}.XXXXXX")
 trap 'rm -f "${TMP_FILE}"' EXIT
-printf "%s\n" "${DESIRED_CONTENT}" > "${TMP_FILE}"
+printf 'NVPD_FLAG=%s\n' "${FLAG}" > "${TMP_FILE}"
+chmod 0644 "${TMP_FILE}"
+mv -f "${TMP_FILE}" "${ENV_FILE}"
 
-NEED_RELOAD=0
-if [[ ! -f "${DROPIN_FILE}" ]] || ! cmp -s "${TMP_FILE}" "${DROPIN_FILE}"; then
-    install -m 0644 "${TMP_FILE}" "${DROPIN_FILE}"
-    NEED_RELOAD=1
-    log "Updated ${DROPIN_FILE} for ${MODE} mode"
-else
-    log "${DROPIN_FILE} already configured for ${MODE} mode"
-fi
-
-if [[ ${NEED_RELOAD} -eq 1 ]]; then
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl daemon-reload
-        log "Reloaded systemd daemon"
-    else
-        log "systemctl not found; please reload systemd manually"
-    fi
-fi
+# No `systemctl daemon-reload` here: the drop-in is static, and an EnvironmentFile is
+# read when the consuming unit starts. Before=nvidia-persistenced.service orders this
+# write ahead of that start.
+log "Wrote ${ENV_FILE} for ${MODE} mode"
 
 exit 0

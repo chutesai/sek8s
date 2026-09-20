@@ -12,6 +12,18 @@ PREREQ="load-tdx network"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
+# Fail closed before anything can exit. run_scripts does not abort the boot on a non-zero
+# init-premount script, and `.` on a missing file exits the shell outright — either way the
+# boot reaches mountroot with no root device, where panic() offers a root shell. Replaced by
+# clear_luks_key below. Stays under the prereqs case: that exit 0 runs at build time.
+fail_closed() {
+    [ "${SUCCESS_FLAG:-0}" -eq 1 ] && return 0
+    echo "TDX-LUKS-UNLOCK-FAILED: aborted before the unlock flow started" > /dev/kmsg
+    sleep 5
+    poweroff -f
+}
+trap fail_closed EXIT INT TERM
+
 . /scripts/functions
 . /scripts/luks-helpers
 

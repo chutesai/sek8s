@@ -82,11 +82,15 @@
     state: absent
   failed_when: false
 
+# panic=0 covers the initramfs, which the systemd.mask= entries cannot: systemd never runs
+# if root fails to mount, and panic() spawns a root shell on the console instead. Any
+# non-empty value disallows it; 0 halts rather than reboot-loops. Measured — the cmdline
+# reaches <image>.cmdline, so changing it requires re-registration.
 - name: Disable kernel console access via GRUB cmdline
   ansible.builtin.lineinfile:
     path: /etc/default/grub
     regexp: '^GRUB_CMDLINE_LINUX='
-    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service systemd.mask=serial-getty@hvc0.service systemd.mask=emergency.service systemd.mask=rescue.service"'
+    line: 'GRUB_CMDLINE_LINUX="console=ttyS0,115200n8 panic=0 systemd.mask=getty@tty1.service systemd.mask=serial-getty@ttyS0.service systemd.mask=serial-getty@hvc0.service systemd.mask=emergency.service systemd.mask=rescue.service"'
     backup: true
   notify: update grub
 
