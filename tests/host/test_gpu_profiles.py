@@ -3,23 +3,12 @@
 Tests focus on behavioral contracts and logic branches, not static values.
 """
 
-from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.gpu.profiles import (
-    GPU_PROFILES,
-    HOST_RESERVED_CPUS,
-    GpuProfile,
-    resolve_profile,
-)
-from chutes_cvm.guest.gpu.topology import (
-    CpuTopology,
-    FlatTopology,
-    NumaTopology,
-    TopologyFingerprint,
-)
+from chutes_cvm.guest.detection import verify_host_qemu_supported
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
 
 # ---------------------------------------------------------------------------
 # Host-shape fixtures: the RTMR0-determining host facts carried on the topology
@@ -46,8 +35,6 @@ _B300_SHAPE = dict(
     cpu_processor_id=None,
 )
 # A realistic B200 (Xeon) fingerprint (tests/topology_fixtures.py), used as the
-# stand-in "live" fingerprint detect_profile should return for a B200 host.
-_B200_LIVE_FP = known.B200_XEON_FP
 
 
 # ---------------------------------------------------------------------------
@@ -112,21 +99,6 @@ def test_every_profile_declares_exactly_one_device_id():
         assert profile.pci_device_id, f"{key}: device id must not be empty"
 
 
-def test_the_passthrough_stub_names_the_profile_s_own_gpu():
-    """The offline stub stands in for the real card, so it must be the same device.
-
-    It used to declare 2bb1 while the profile also matched 2bb5 and the BAR layout came
-    from a 2bb5 card — the stub named a product the measurement was not taken from.
-    """
-    for key, profile in GPU_PROFILES.items():
-        stub = profile.passthrough.get("gpu")
-        if stub is None:
-            continue
-        assert (
-            stub.device_id.lower() == profile.pci_device_id.lower()
-        ), f"{key}: stub device id {stub.device_id} != profile {profile.pci_device_id}"
-
-
 def test_all_registered_profiles_are_gpu_profile_subclasses():
     for key, profile in GPU_PROFILES.items():
         assert isinstance(profile, GpuProfile), f"{key} is not a GpuProfile"
@@ -159,35 +131,6 @@ def test_rtx_pro_6000_cc_mode_is_count_independent(gpu_count):
 def test_rtx_pro_6000_never_passes_through_nvswitches(gpu_count):
     profile = GPU_PROFILES["RTX_PRO_6000"]
     assert profile.should_passthrough_nvswitches(gpu_count) is False
-
-
-# ---------------------------------------------------------------------------
-# NUMA topology and post-launch tuning flags
-# ---------------------------------------------------------------------------
-
-
-def test_b200_enables_numa_topology():
-    profile = GPU_PROFILES["B200"]
-    assert profile.enable_numa_topology is True
-
-
-def test_b200_enables_post_launch_tuning():
-    profile = GPU_PROFILES["B200"]
-    assert profile.enable_post_launch_tuning is True
-
-
-@pytest.mark.parametrize("model_key", ["H200", "RTX_PRO_6000"])
-def test_h200_and_rtx_enable_numa_topology(model_key):
-    profile = GPU_PROFILES[model_key]
-    assert profile.enable_numa_topology is True
-    assert profile.enable_post_launch_tuning is True
-
-
-def test_b300_does_not_enable_numa_topology():
-    # B300 hardware topology not yet confirmed via discover-profile.sh.
-    profile = GPU_PROFILES["B300"]
-    assert profile.enable_numa_topology is False
-    assert profile.enable_post_launch_tuning is False
 
 
 # ---------------------------------------------------------------------------
@@ -237,16 +180,6 @@ def test_b300_does_not_pass_through_infiniband():
     assert GPU_PROFILES["B300"].should_passthrough_infiniband is False
 
 
-def test_b300_skips_ovmf_mmio_fw_cfg():
-    """B300: 8×512 GiB BARs need OVMF auto-sized aggregate MMIO, not per-GPU fw_cfg."""
-    assert GPU_PROFILES["B300"].use_ovmf_mmio_fw_cfg is False
-
-
-@pytest.mark.parametrize("model_key", ["B200", "H200", "RTX_PRO_6000"])
-def test_other_profiles_use_ovmf_mmio_fw_cfg(model_key):
-    assert GPU_PROFILES[model_key].use_ovmf_mmio_fw_cfg is True
-
-
 def test_b300_matches_pci_device_id_3182():
     profile = GPU_PROFILES["B300"]
     assert profile.matches_device_id("3182")
@@ -279,75 +212,59 @@ def test_h200_uses_cc_mode_below_8_gpus():
 
 
 # ---------------------------------------------------------------------------
-# vCPU / SMP shape lives on the TopologyFingerprint. These assert the
-# -smp-determining fields of the sample topologies (tests/topology_fixtures.py).
+# -smp shape. These assert the guest CPU topology the sample hosts produce
+# (tests/topology_fixtures.py), which is what reaches the guest's MADT/SRAT.
 # ---------------------------------------------------------------------------
 
-_SAMPLE_FINGERPRINTS = (
-    "H200_KR6288",
-    "H200_XE9680",
-    "B200_XEON_FP",
-    "B200_XEON6_FP",
-    "RTX_NUMA",
-    "RTX_FLAT",
-)
+
+def _sample_hosts():
+    """(name, HostProfile) for each sample host document."""
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    return [
+        ("h200-nvsw0", HostProfile(known.h200_doc())),
+        ("h200-nvsw1", HostProfile(known.h200_doc(nvswitch_node=1))),
+        ("rtx-numa", HostProfile(known.rtx_numa_doc())),
+        ("rtx-flat", HostProfile(known.rtx_flat_doc())),
+    ]
 
 
-def _all_baselined_fingerprints():
-    """(name, fingerprint) for the sample topologies — exercises each one's -smp shape."""
-    return [(name, getattr(known, name)) for name in _SAMPLE_FINGERPRINTS]
+def test_some_hosts_are_sampled():
+    """Guard: the parametrized tests below must not silently no-op."""
+    assert _sample_hosts()
 
 
-def test_some_profiles_are_baselined():
-    """Guard: the fingerprint-parametrized tests below must not silently no-op."""
-    assert _all_baselined_fingerprints()
-
-
-@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
-def test_host_reserved_cpus_is_even(model_key):
-    """Reserve must be even so vcpus stays divisible across sockets."""
-    profile = GPU_PROFILES[model_key]
-    assert profile.host_reserved_cpus % 2 == 0
-
-
-def test_host_reserved_cpus_default_and_b200_override():
-    """Default reserve is HOST_RESERVED_CPUS; B200 overrides to 16."""
-    assert GPU_PROFILES["H200"].host_reserved_cpus == HOST_RESERVED_CPUS
-    assert GPU_PROFILES["B300"].host_reserved_cpus == HOST_RESERVED_CPUS
-    assert GPU_PROFILES["B200"].host_reserved_cpus == 16
-
-
-@pytest.mark.parametrize("key,fp", _all_baselined_fingerprints())
-def test_baselined_fingerprint_vcpus_positive_and_matches_smp(key, fp):
+@pytest.mark.parametrize("name,host", _sample_hosts())
+def test_vcpus_positive_and_matches_smp(name, host):
     """The first -smp field must equal vcpus, and vcpus must be positive."""
-    assert fp.cpu.vcpus > 0
-    assert int(fp.cpu.smp_topology.split(",")[0]) == fp.cpu.vcpus
+    assert host.vcpus > 0
+    assert int(host.smp_topology.split(",")[0]) == host.vcpus
 
 
-@pytest.mark.parametrize("key,fp", _all_baselined_fingerprints())
-def test_baselined_fingerprint_uses_two_sockets(key, fp):
+@pytest.mark.parametrize("name,host", _sample_hosts())
+def test_uses_two_sockets(name, host):
     """2-socket servers must reflect the physical socket count in -smp.
 
     A flat sockets=1 topology causes QEMU to emit a degenerate CPUID with only a
     thread level and 0-bit shift — no core or package levels — which triggers the
     kernel 'arch topology borken' warning on every vCPU at boot.
     """
-    assert fp.cpu.sockets == 2
-    assert "sockets=2" in fp.cpu.smp_topology
+    assert host.cpu.sockets == 2
+    assert "sockets=2" in host.smp_topology
 
 
-@pytest.mark.parametrize("key,fp", _all_baselined_fingerprints())
-def test_baselined_fingerprint_vcpus_divisible_by_sockets(key, fp):
+@pytest.mark.parametrize("name,host", _sample_hosts())
+def test_vcpus_divisible_by_sockets(name, host):
     """vcpus must divide evenly across sockets so each socket has equal cores."""
     assert (
-        fp.cpu.vcpus % fp.cpu.sockets == 0
-    ), f"{key}: vcpus={fp.cpu.vcpus} not divisible by sockets={fp.cpu.sockets}"
+        host.vcpus % host.cpu.sockets == 0
+    ), f"{name}: vcpus={host.vcpus} not divisible by sockets={host.cpu.sockets}"
 
 
-@pytest.mark.parametrize("key,fp", _all_baselined_fingerprints())
-def test_baselined_fingerprint_threads_is_one(key, fp):
+@pytest.mark.parametrize("name,host", _sample_hosts())
+def test_threads_is_one(name, host):
     """threads=1 must always be set (no guest SMT)."""
-    assert "threads=1" in fp.cpu.smp_topology
+    assert "threads=1" in host.smp_topology
 
 
 # ---------------------------------------------------------------------------
@@ -406,22 +323,6 @@ def test_resolve_profile_rejects_all_default():
 # ---------------------------------------------------------------------------
 
 
-def test_match_gpu_model_resolves_by_device_id():
-    from chutes_cvm.guest.detection import _match_gpu_model
-
-    b200 = "0000:0d:00.0 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)"
-    b300 = "0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"
-    assert _match_gpu_model(b200) == "B200"
-    assert _match_gpu_model(b300) == "B300"
-
-
-def test_match_gpu_model_returns_none_for_unknown_device():
-    from chutes_cvm.guest.detection import _match_gpu_model
-
-    line = "0000:0d:00.0 3D controller [0302]: NVIDIA [Unknown] [10de:ffff] (rev a1)"
-    assert _match_gpu_model(line) is None
-
-
 # ---------------------------------------------------------------------------
 # verify_host_qemu_supported: QEMU host-readiness gate (pre-resolution)
 # ---------------------------------------------------------------------------
@@ -454,7 +355,6 @@ def test_verify_host_qemu_supported_passes_when_qemu_matches_os():
 
 
 def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
-    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
     # 26.04 ships 10.2.1; a host on 26.04 running 10.1.0 must be flagged.
     with patch("chutes_cvm.guest.detection.detect_os_version", return_value="26.04"):
@@ -468,7 +368,6 @@ def test_verify_host_qemu_supported_raises_when_qemu_mismatches_os():
 
 
 def test_verify_host_qemu_supported_raises_on_unsupported_os():
-    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
     with patch("chutes_cvm.guest.detection.detect_os_version", return_value="24.04"):
         with patch(
@@ -481,7 +380,6 @@ def test_verify_host_qemu_supported_raises_on_unsupported_os():
 
 
 def test_verify_host_qemu_supported_raises_when_qemu_undetectable():
-    from chutes_cvm.guest.detection import verify_host_qemu_supported
 
     with patch("chutes_cvm.guest.detection.detect_qemu_version", return_value=None):
         with pytest.raises(
@@ -491,316 +389,54 @@ def test_verify_host_qemu_supported_raises_when_qemu_undetectable():
 
 
 # ---------------------------------------------------------------------------
-# detect_profile: full topology detection (returns (profile, fingerprint))
+# HostProfile: the launch-side guard that used to live in detect_profile
 # ---------------------------------------------------------------------------
 
 
-def _make_lspci_b200(bdf: str = "0000:0d:00.0") -> list[str]:
-    return [f"{bdf} 3D controller [0302]: NVIDIA [B200] [10de:2901] (rev a1)"]
+def test_nvswitch_requiring_profile_refuses_a_host_with_none():
+    """H200 passes NVSwitches through, so a host reporting none cannot launch as one.
 
-
-def _patch_detection(
-    lspci_lines=None,
-    numa_count=2,
-    nvswitch_bdfs=None,
-    ib_pf_bdfs=None,
-    gpu_bdfs=None,
-    fingerprint=_B200_LIVE_FP,
-):
-    """Return a context manager stack that patches all detection side effects.
-
-    ``fingerprint`` is what host_topology_fingerprint() returns; the default is a
-    full-shape B200 (Xeon) fingerprint (tests/topology_fixtures.py) so B200 resolution
-    tests get a realistic live shape. detect_profile no longer gates on any local set.
+    Launching without them would build a different PCI topology than the class was measured
+    for, so the guest could not attest. This guard moved here when the launcher stopped
+    reading the host a second time.
     """
-    from contextlib import ExitStack
+    import topology_fixtures as tf
+    from chutes_cvm.guest.host_profile import HostProfile
 
-    stack = ExitStack()
-    stack.enter_context(
-        patch(
-            "chutes_cvm.guest.detection.host_topology_fingerprint",
-            return_value=fingerprint,
-        )
-    )
-    stack.enter_context(
-        patch("chutes_cvm.guest.detection._lspci_lines", return_value=lspci_lines or [])
-    )
-    stack.enter_context(
-        patch(
-            "chutes_cvm.guest.detection.detect_numa_node_count", return_value=numa_count
-        )
-    )
-    stack.enter_context(
-        patch(
-            "chutes_cvm.guest.detection.detect_nvswitches",
-            return_value=nvswitch_bdfs or [],
-        )
-    )
-    stack.enter_context(
-        patch(
-            "chutes_cvm.guest.detection.detect_infiniband_pfs",
-            return_value=ib_pf_bdfs or [],
-        )
-    )
-    stack.enter_context(
-        patch("chutes_cvm.guest.detection.detect_cx7_bridge_pfs", return_value=[])
-    )
-    bdfs = gpu_bdfs if gpu_bdfs is not None else ["0000:0d:00.0"]
-    stack.enter_context(
-        patch("chutes_cvm.guest.detection.get_gpu_bdfs", return_value=bdfs)
-    )
-    return stack
+    doc = tf.h200_doc()
+    doc["nvswitches"] = []
+    with pytest.raises(ValueError, match="requires NVSwitches"):
+        HostProfile(doc).attached_nvswitches
 
 
-def test_detect_profile_returns_correct_profile():
-    from chutes_cvm.guest.detection import detect_profile
+@pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
+def test_captured_bars_have_a_dominant_vram_aperture(model):
+    """The VRAM BAR dwarfs the others, and it is what sizes the guest's 64-bit MMIO window.
 
-    with _patch_detection(lspci_lines=_make_lspci_b200()):
-        profile, fingerprint = detect_profile()
-
-    assert profile is GPU_PROFILES["B200"]
-    assert fingerprint == _B200_LIVE_FP
-
-
-@pytest.mark.parametrize(
-    "numa_count,fingerprint",
-    [
-        # 2 NUMA nodes -> guest-NUMA path.
-        (2, known.RTX_NUMA),
-        # 4 NUMA nodes -> flat fallback.
-        (4, known.RTX_FLAT),
-    ],
-)
-def test_detect_profile_accepts_baselined_rtx_topologies(numa_count, fingerprint):
-    """Both RTX Pro 6000 host shapes (2-node NUMA and 4-node flat) are baselined
-    and must pass the launch-time topology hard-match."""
-    from chutes_cvm.guest.detection import detect_profile
-
-    rtx_lines = [
-        f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA "
-        f"[RTX PRO 6000 Blackwell Server Edition] [10de:2bb5] (rev a1)"
-        for i in range(8)
-    ]
-    bdfs = [f"0000:{i:02x}:00.0" for i in range(8)]
-    with _patch_detection(
-        lspci_lines=rtx_lines,
-        numa_count=numa_count,
-        gpu_bdfs=bdfs,
-        fingerprint=fingerprint,
-    ):
-        profile, _ = detect_profile()
-
-    assert profile is GPU_PROFILES["RTX_PRO_6000"]
+    OVMF auto-sizes that window from the BARs it enumerates, so this is the one that matters.
+    Asserted on the captured layouts the fixtures carry, since the profiles hold none -- BAR2 is
+    resizable and the host is the only authority on its current size.
+    """
+    bars = known.CAPTURED_GPU_BARS[model]
+    vram = max(bars, key=lambda b: b["size_mb"])
+    assert vram["size_mb"] >= 64 * 1024
+    assert all(b["size_mb"] * 64 <= vram["size_mb"] for b in bars if b is not vram)
 
 
-def test_detect_profile_raises_when_nvswitches_expected_but_missing():
-    from chutes_cvm.guest.detection import detect_profile
-
-    h200_lines = [
-        f"0000:{i:02x}:00.0 3D controller [0302]: NVIDIA [H200] [10de:2335] (rev a1)"
-        for i in range(8)
-    ]
-    bdfs = [f"0000:{i:02x}:00.0" for i in range(8)]
-    with _patch_detection(
-        lspci_lines=h200_lines,
-        nvswitch_bdfs=[],
-        gpu_bdfs=bdfs,
-    ):
-        with pytest.raises(ValueError, match="NVSwitch"):
-            detect_profile()
-
-
-def test_detect_profile_raises_when_no_gpus():
-    from chutes_cvm.guest.detection import detect_profile
-
-    with _patch_detection(gpu_bdfs=[]):
-        with pytest.raises(ValueError, match="No GPU devices detected"):
-            detect_profile()
-
-
-# ---------------------------------------------------------------------------
-# host_topology_fingerprint + topology hard-match
-# ---------------------------------------------------------------------------
-
-
-@contextmanager
-def _patch_host_shape(*, cpus, sockets, mem_gb, vendor, proc_id):
-    """Pin the four host-shape detectors host_topology_fingerprint reads so the
-    resulting fingerprint's shape is deterministic."""
-    with patch("chutes_cvm.guest.detection.detect_host_cpus", return_value=cpus), patch(
-        "chutes_cvm.guest.detection.detect_host_sockets", return_value=sockets
-    ), patch(
-        "chutes_cvm.guest.detection.detect_host_mem_gb", return_value=mem_gb
-    ), patch(
-        "chutes_cvm.guest.detection.detect_host_cpu_identity",
-        return_value=(vendor, proc_id),
-    ):
-        yield
-
-
-def test_topology_fingerprint_numa_path_includes_device_layout():
-    from chutes_cvm.guest.detection import host_topology_fingerprint
-
-    profile = GPU_PROFILES["H200"]  # enable_numa_topology = True; guest_mem = 141*8
-    with _patch_host_shape(
-        cpus=128,
-        sockets=2,
-        mem_gb=2048,
-        vendor="GenuineIntel",
-        proc_id="f2060c00fffba91f",
-    ):
-        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
-            with patch(
-                "chutes_cvm.guest.detection._device_numa_layout",
-                side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (1, 1, 1, 1), ()],
-            ):
-                fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
-    assert fp == known.H200_XE9680
-
-
-def test_topology_fingerprint_flat_when_not_two_numa_nodes():
-    from chutes_cvm.guest.detection import host_topology_fingerprint
-
-    profile = GPU_PROFILES["H200"]
-    with _patch_host_shape(
-        cpus=128,
-        sockets=2,
-        mem_gb=2048,
-        vendor="GenuineIntel",
-        proc_id="f2060c00fffba91f",
-    ):
-        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=4):
-            fp = host_topology_fingerprint(profile, ["g"] * 8, ["n"] * 4, [])
-    assert fp == TopologyFingerprint(
-        CpuTopology(**_H200_SHAPE), 1128, FlatTopology(gpu_count=8, nvswitch_count=4)
-    )
-
-
-def test_topology_fingerprint_flat_when_profile_disables_numa():
-    # B300 never uses guest NUMA topology -> flat regardless of host node count.
-    from chutes_cvm.guest.detection import host_topology_fingerprint
-
-    profile = GPU_PROFILES["B300"]  # guest_mem = 288*8 = 2304
-    with _patch_host_shape(
-        cpus=192,
-        sockets=2,
-        mem_gb=3000,
-        vendor="GenuineIntel",
-        proc_id=None,
-    ):
-        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
-            fp = host_topology_fingerprint(profile, ["g"] * 8, [], [])
-    assert fp == TopologyFingerprint(
-        CpuTopology(**_B300_SHAPE), 2304, FlatTopology(gpu_count=8)
-    )
-
-
-def test_topology_fingerprint_includes_ib_layout_on_numa_path():
-    # Two B200 hosts with the same GPU/NVSwitch layout but different IB->NUMA
-    # wiring must produce different fingerprints (IB VFs are passed through and
-    # attach to PXB bridges by NUMA, so they move RTMR0).
-    from chutes_cvm.guest.detection import host_topology_fingerprint
-
-    profile = GPU_PROFILES["B200"]  # vcpus = 192-16 = 176; guest_mem = 1944 @ 2008G
-    gpus = ["g"] * 8
-    ib = ["i0", "i1", "i2", "i3"]
-    with _patch_host_shape(
-        cpus=192,
-        sockets=2,
-        mem_gb=2008,
-        vendor="GenuineIntel",
-        proc_id=None,
-    ):
-        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=2):
-            with patch(
-                "chutes_cvm.guest.detection._device_numa_layout",
-                side_effect=[(0, 0, 0, 0, 1, 1, 1, 1), (), (0, 0, 1, 1)],
-            ):
-                fp = host_topology_fingerprint(profile, gpus, [], ib)
-    assert fp == TopologyFingerprint(
-        CpuTopology(**_B200_XEON_SHAPE),
-        1944,
-        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), ib_nodes=(0, 0, 1, 1)),
-    )
-
-
-def test_topology_fingerprint_ib_count_on_flat_path():
-    # On the flat path only device counts matter; IB count is the ib_count field.
-    from chutes_cvm.guest.detection import host_topology_fingerprint
-
-    profile = GPU_PROFILES["B200"]
-    with _patch_host_shape(
-        cpus=192,
-        sockets=2,
-        mem_gb=2008,
-        vendor="GenuineIntel",
-        proc_id=None,
-    ):
-        with patch("chutes_cvm.guest.detection.detect_numa_node_count", return_value=6):
-            fp = host_topology_fingerprint(profile, ["g"] * 8, [], ["i"] * 4)
-    assert fp == TopologyFingerprint(
-        CpuTopology(**_B200_XEON_SHAPE), 1944, FlatTopology(gpu_count=8, ib_count=4)
-    )
-
-
-def test_detect_profile_has_no_local_topology_gate():
-    # Acceptance moved to the control plane (chutes-cvm host verify): detect_profile
-    # returns the (profile, fingerprint) even for a topology not in any in-repo set — it never
-    # gates locally now. The fingerprint still drives the launch -smp / -m.
-    from chutes_cvm.guest.detection import detect_profile
-
-    fp = TopologyFingerprint(
-        CpuTopology(**_B200_XEON_SHAPE),
-        1944,
-        NumaTopology(gpu_nodes=(0, 1, 0, 1, 0, 1, 0, 1)),
-    )
-    with _patch_detection(lspci_lines=_make_lspci_b200(), fingerprint=fp):
-        profile, fingerprint = detect_profile()
-        assert profile.name == "B200"
-        assert fingerprint == fp
-
-
-def test_detect_profile_skips_topology_check_for_unbaselined_profile():
-    # No profile gates on a local topology set anymore (acceptance is the control plane's),
-    # so an arbitrary B300 fingerprint must resolve the profile, not refuse the launch.
-    from chutes_cvm.guest.detection import detect_profile
-
-    b300_lines = [
-        "0000:0d:00.0 3D controller [0302]: NVIDIA [B300] [10de:3182] (rev a1)"
-    ]
-    with _patch_detection(
-        lspci_lines=b300_lines,
-        gpu_bdfs=["0000:0d:00.0"],
-        fingerprint=("anything", "goes"),
-    ):
-        assert detect_profile()[0] is GPU_PROFILES["B300"]
-
-
-@pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
-def test_pci_bars_vram_matches_bar_size_hint(key):
-    # For profiles that model the GPU endpoint, the largest BAR (VRAM) must
-    # equal bar_size_mb: the fw_cfg MMIO hint and the actual VRAM BAR describe
-    # the same window and must not drift apart.
-    bars = GPU_PROFILES[key].passthrough["gpu"].bars
-    assert bars, f"{key} should model passthrough['gpu']"
-    vram = max(bars, key=lambda b: b.size_mb)
-    assert vram.size_mb == GPU_PROFILES[key].bar_size_mb
-
-
-@pytest.mark.parametrize("key", ["RTX_PRO_6000", "H200"])
-def test_pci_bars_are_well_formed(key):
-    for bar in GPU_PROFILES[key].passthrough["gpu"].bars:
-        assert 0 <= bar.index <= 5
-        assert bar.kind in ("m32", "m64", "p32", "p64")
+@pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
+def test_captured_bars_are_well_formed(model):
+    for bar in known.CAPTURED_GPU_BARS[model]:
+        assert 0 <= bar["index"] <= 5
+        assert bar["kind"] in ("m32", "m64", "p32", "p64")
         # A 64-bit BAR consumes two slots, so it lands on an even index.
-        if bar.kind.endswith("64"):
-            assert bar.index % 2 == 0
+        if bar["kind"].endswith("64"):
+            assert bar["index"] % 2 == 0
 
 
-def test_pci_bars_default_empty_when_uncaptured():
-    # Profiles without an lspci capture yet model no GPU endpoint (offline
-    # measurement generation is simply unavailable for them, not broken).
-    assert "gpu" not in GPU_PROFILES["B300"].passthrough
+def test_profiles_carry_no_bar_table():
+    """BAR layout comes from the host, never from a shipped constant: BAR2 is resizable, so two
+    machines of one model can differ and only the capture knows which."""
+    assert not any(hasattr(p, "passthrough") for p in GPU_PROFILES.values())
 
 
 # ---------------------------------------------------------------------------
@@ -808,32 +444,42 @@ def test_pci_bars_default_empty_when_uncaptured():
 # ---------------------------------------------------------------------------
 
 
-def test_b300_guest_ram_fits_a_2tb_host():
-    """A B300 host with less RAM than aggregate VRAM must still be launchable.
+def _guest_ram(model, host_gb, gpus=8):
+    """Guest RAM this host would be given, via the one rule on HostProfile."""
+    doc = known.host_document(
+        model, vcpus=124, gpu_nodes=(0,) * gpus, host_mem_gb=host_gb
+    )
+    return doc["memory"]["guest_gb"]
 
-    B300's 8x288 GB VRAM implies a 2304G guest, which a ~2 TB sled cannot back —
-    run-td aborted with "needs 2304G guest RAM, but only 1946G can be safely
-    backed". Guest RAM is derived from the live host, so this is a second
-    fingerprint of the SAME profile, not a sibling class.
+
+def test_guest_ram_targets_vram_and_the_host_is_only_a_ceiling():
+    """One rule for every profile: as close to aggregate VRAM as the host can back.
+
+    B300's 8x288 GB implies a 2304G guest, which a ~2 TB sled cannot back -- run-td aborted with
+    "needs 2304G guest RAM, but only 1946G can be safely backed". Host RAM is never a target in
+    its own right: a bigger host does not get a bigger guest once VRAM is met.
     """
-    profile = GPU_PROFILES["B300"]
-    assert profile.guest_mem_gb(2010, 8) == 1944
-    # Evenly divisible per GPU, so vcpu/mem stay socket-divisible.
-    assert profile.guest_mem_gb(2010, 8) % 8 == 0
+    full = GPU_PROFILES["B300"].vram_gb * 8
+    assert _guest_ram("B300", 2010) == 1944  # clamped: VRAM exceeds the sled
+    assert _guest_ram("B300", 2400) == full  # fits, so VRAM exactly
+    assert _guest_ram("B300", 3000) == full  # bigger host, same guest
 
 
-def test_b300_ram_is_unchanged_on_hosts_that_can_back_full_vram():
-    """The clamp must not re-baseline B300 hosts already in service.
+def test_guest_ram_stays_divisible_per_gpu():
+    """Keeps vcpu/mem socket-divisible."""
+    assert _guest_ram("B300", 2010) % 8 == 0
 
-    A host with enough RAM keeps exactly vram_gb * gpus, so its fingerprint
-    mem_gb — and therefore RTMR0 — does not move. An unclamped host-derived rule
-    would have pushed a 2.4 TB host to 2336G and silently invalidated its
-    registered measurement.
+
+def test_only_a_clamped_profile_is_sensitive_to_host_ram():
+    """Reaching VRAM makes a profile immune to host-RAM variance: every host of the class gets
+    the same guest, so same-tier hosts cannot split into separate measurements.
+
+    B300 is the exception, and unavoidably so -- its 8x288 GB exceeds what a 2 TB sled can back,
+    so guest RAM tracks the host and two sleds 4 GB apart still measure differently.
     """
-    profile = GPU_PROFILES["B300"]
-    full = profile.vram_gb * 8
-    assert profile.guest_mem_gb(2400, 8) == full
-    assert profile.guest_mem_gb(3000, 8) == full
+    for model in ("H200", "RTX_PRO_6000"):
+        assert _guest_ram(model, 2007) == _guest_ram(model, 2011)
+    assert _guest_ram("B300", 2007) != _guest_ram("B300", 2011)
 
 
 def test_b300_vcpus_derive_from_a_256_cpu_host():

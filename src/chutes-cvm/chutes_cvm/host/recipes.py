@@ -1,10 +1,14 @@
-"""Host profile registry: per-Ubuntu-version TDX host setup parameters.
+"""Host recipe registry: per-Ubuntu-version TDX host setup parameters.
 
-Each supported Ubuntu version is a HostProfile subclass that declares PPAs,
+Each supported Ubuntu version is a HostRecipe subclass that declares PPAs,
 third-party APT repos, kernel package, apt packages, and GRUB cmdline additions.
-A single setup orchestrator consumes the profile — no OS-version branching in the
-setup logic.  Adding a new Ubuntu version requires one subclass and one
-HOST_PROFILES entry.
+A single setup orchestrator (``host/setup.py``) executes the recipe — no OS-version
+branching in the setup logic.  Adding a new Ubuntu version requires one subclass and
+one HOST_RECIPES entry.
+
+Not to be confused with the API's "host profile" (``/servers/tdx/host_profiles``), which
+is the captured hardware description a host submits so its measurements can be generated.
+This is the install recipe for getting a bare machine to a TDX-capable state.
 """
 
 from abc import ABC, abstractmethod
@@ -67,7 +71,7 @@ class APTRepo:
             )
 
 
-class HostProfile(ABC):
+class HostRecipe(ABC):
     """Base class for Ubuntu-version-specific TDX host setup."""
 
     @property
@@ -129,7 +133,7 @@ class HostProfile(ABC):
         return f"Ubuntu {self.name} ({self.codename})"
 
 
-class Ubuntu2604Profile(HostProfile):
+class Ubuntu2604Recipe(HostRecipe):
     """Ubuntu 26.04 (Resolute) — native TDX kernel and QEMU 10.2, attestation via Intel DCAP repo."""
 
     @property
@@ -205,8 +209,8 @@ class Ubuntu2604Profile(HostProfile):
         return ["nohibernate", "kvm_intel.tdx=1", "modprobe.blacklist=nouveau"]
 
 
-HOST_PROFILES: dict[str, HostProfile] = {
-    "26.04": Ubuntu2604Profile(),
+HOST_RECIPES: dict[str, HostRecipe] = {
+    "26.04": Ubuntu2604Recipe(),
 }
 
 
@@ -226,18 +230,18 @@ def detect_ubuntu_version() -> str:
     return result.stdout.strip()
 
 
-def resolve_profile(version: str | None = None) -> HostProfile:
-    """Resolve a HostProfile for the given (or detected) Ubuntu version.
+def resolve_recipe(version: str | None = None) -> HostRecipe:
+    """Resolve a HostRecipe for the given (or detected) Ubuntu version.
 
     Raises ValueError if the version is not supported.
     """
     if version is None:
         version = detect_ubuntu_version()
 
-    profile = HOST_PROFILES.get(version)
-    if profile is None:
+    recipe = HOST_RECIPES.get(version)
+    if recipe is None:
         raise ValueError(
             f"Unsupported Ubuntu version: {version}. "
-            f"Supported: {list(HOST_PROFILES.keys())}"
+            f"Supported: {list(HOST_RECIPES.keys())}"
         )
-    return profile
+    return recipe

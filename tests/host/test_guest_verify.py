@@ -56,7 +56,7 @@ def _patch(
 def test_ready_when_the_class_is_measured(capsys):
     stack, _, _ = _patch()
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.READY
+        assert verify.verify_host() == verify.READY
     out = capsys.readouterr().out
     assert "1.4.0" in out and "1.4.0 (rc)" in out
 
@@ -65,7 +65,7 @@ def test_no_downloaded_image_does_not_block():
     """The regression this endpoint exists for: a host with nothing downloaded still verifies."""
     stack, _, st = _patch(local_image=None)
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.READY
+        assert verify.verify_host() == verify.READY
         st.assert_called_once()
 
 
@@ -73,7 +73,7 @@ def test_status_call_is_version_free():
     """No version may reach the API — that dependency is what forced an image to be present."""
     stack, _, st = _patch()
     with stack:
-        verify.verify_host(scripts_dir="/x")
+        verify.verify_host()
     assert "version" not in st.call_args.kwargs
     assert "rc" not in st.call_args.kwargs
 
@@ -81,7 +81,7 @@ def test_status_call_is_version_free():
 def test_warning_when_nothing_is_published_for_the_class(capsys):
     stack, _, _ = _patch(covered=[], status="unknown")
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+        assert verify.verify_host() == verify.WARNING
     assert "submit-profile" in capsys.readouterr().out
 
 
@@ -89,7 +89,7 @@ def test_pending_class_is_told_to_wait_not_resubmit(capsys):
     """Already registered: re-submitting neither helps nor advances the queue."""
     stack, _, _ = _patch(covered=[], status="pending")
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+        assert verify.verify_host() == verify.WARNING
     out = capsys.readouterr().out
     assert "Nothing to do" in out
     assert "submit-profile" not in out
@@ -99,7 +99,7 @@ def test_blocked_when_qemu_gate_fails():
     # The QEMU gate runs first (as-is mode); when it fails we never reach the API.
     stack, _, st = _patch(qemu_raises=True)
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.BLOCKED
+        assert verify.verify_host() == verify.BLOCKED
         st.assert_not_called()
 
 
@@ -107,13 +107,13 @@ def test_blocked_when_the_status_call_fails():
     # No verdict (transport/auth/API error) -> fail closed.
     stack, _, _ = _patch(status_raises=True)
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.BLOCKED
+        assert verify.verify_host() == verify.BLOCKED
 
 
 def test_blocked_when_target_os_unsupported():
     stack, _, st = _patch()
     with stack:
-        assert verify.verify_host(target_os="99.99", scripts_dir="/x") == verify.BLOCKED
+        assert verify.verify_host(target_os="99.99") == verify.BLOCKED
         st.assert_not_called()  # unsupported target fails before any API call
 
 
@@ -123,7 +123,7 @@ def test_target_os_skips_live_qemu_gate_and_passes_target_os():
     # derives that release's QEMU from it).
     stack, gate, st = _patch(qemu_raises=True)
     with stack:
-        assert verify.verify_host(target_os="26.04", scripts_dir="/x") == verify.READY
+        assert verify.verify_host(target_os="26.04") == verify.READY
         gate.assert_not_called()
         assert st.call_args.kwargs.get("target_os") == "26.04"
 
@@ -135,7 +135,7 @@ def test_submit_registers_an_unknown_class():
         "chutes_cvm.guest.verify.submit_profile",
         return_value={"status": "pending", "stored": True, "fingerprint": "fp"},
     ) as sub:
-        assert verify.verify_host(scripts_dir="/x", submit=True) == verify.WARNING
+        assert verify.verify_host(submit=True) == verify.WARNING
         sub.assert_called_once()
 
 
@@ -148,24 +148,21 @@ def test_submit_registers_the_target_os_class_not_the_live_one():
         "chutes_cvm.guest.verify.submit_profile",
         return_value={"status": "pending", "stored": True, "fingerprint": "fp"},
     ) as sub:
-        assert (
-            verify.verify_host(target_os="26.04", scripts_dir="/x", submit=True)
-            == verify.WARNING
-        )
+        assert verify.verify_host(target_os="26.04", submit=True) == verify.WARNING
         assert sub.call_args.kwargs["target_os"] == "26.04"
 
 
 def test_submit_hint_carries_the_target_os(capsys):
     stack, _, _ = _patch(covered=[], status="unknown", qemu_raises=True)
     with stack:
-        verify.verify_host(target_os="26.04", scripts_dir="/x")
+        verify.verify_host(target_os="26.04")
     assert "submit-profile --target-os 26.04" in capsys.readouterr().out
 
 
 def test_downloaded_image_in_the_covered_set_is_noted(capsys):
     stack, _, _ = _patch(local_image=("1.4.0", False))
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.READY
+        assert verify.verify_host() == verify.READY
     assert "1.4.0 is covered" in capsys.readouterr().out
 
 
@@ -173,7 +170,7 @@ def test_downloaded_image_outside_the_covered_set_is_flagged(capsys):
     """A missing measurement for one image is flagged, not fatal — the class is still viable."""
     stack, _, _ = _patch(local_image=("1.5.0", False))
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+        assert verify.verify_host() == verify.WARNING
     out = capsys.readouterr().out
     assert "NOT in the covered set" in out
     assert "1.4.0" in out  # still tells the operator what it CAN run
@@ -185,5 +182,5 @@ def test_rc_must_match_for_the_local_image_note(capsys):
         covered=[{"version": "1.4.0", "rc": False}], local_image=("1.4.0", True)
     )
     with stack:
-        assert verify.verify_host(scripts_dir="/x") == verify.WARNING
+        assert verify.verify_host() == verify.WARNING
     assert "NOT in the covered set" in capsys.readouterr().out

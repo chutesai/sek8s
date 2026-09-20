@@ -9,11 +9,31 @@ an honest heterogeneous host was measured as the wrong SKU.
 
 import pytest
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
-from chutes_cvm.measurement.generate_measurements import _resolve_profile_for_devices
+from chutes_cvm.guest.host_profile import HostProfile
 
 
 def device_id(profile_name: str) -> str:
     return GPU_PROFILES[profile_name].pci_device_id
+
+
+def _resolve_profile_for_devices(ids):
+    """Resolve the GPU profile a host with these GPU device ids selects.
+
+    Resolution moved onto HostProfile when the document became device lists; these cases are
+    about the semantics, not where they live, so they follow it.
+    """
+    gpus = [
+        {
+            "bdf": f"0000:{i:02x}:00.0",
+            "vendor": "10de",
+            "device_id": did,
+            "pci_class": "0302",
+            "numa_node": 0,
+            "bars": [],
+        }
+        for i, did in enumerate(ids)
+    ]
+    return HostProfile({"gpus": gpus}).gpu_profile
 
 
 @pytest.mark.parametrize("name", sorted(GPU_PROFILES))
@@ -24,7 +44,7 @@ def test_homogeneous_devices_resolve_to_their_profile(name):
 def test_mixed_models_are_rejected_not_resolved_to_the_first():
     """The defect: insertion order decided the answer rather than the evidence."""
     ids = [device_id("B200"), device_id("H200")]
-    with pytest.raises(ValueError, match="must be one model"):
+    with pytest.raises(ValueError, match="expected one GPU model"):
         _resolve_profile_for_devices(ids)
 
 
@@ -34,13 +54,13 @@ def test_mixed_is_rejected_regardless_of_order():
         [device_id("H200"), device_id("B200")],
         [device_id("B200"), device_id("H200")],
     ):
-        with pytest.raises(ValueError, match="must be one model"):
+        with pytest.raises(ValueError, match="expected one GPU model"):
             _resolve_profile_for_devices(ids)
 
 
 def test_a_known_id_beside_an_unknown_one_is_rejected():
     """It must not resolve to the known profile — that is the first-match bug again."""
-    with pytest.raises(ValueError, match="must be one model"):
+    with pytest.raises(ValueError, match="expected one GPU model"):
         _resolve_profile_for_devices([device_id("H200"), "dead"])
 
 
@@ -60,7 +80,7 @@ def test_an_unsupported_edition_does_not_resolve_to_its_sibling():
 
 
 def test_empty_is_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="expected one GPU model"):
         _resolve_profile_for_devices([])
 
 
@@ -74,5 +94,5 @@ def test_measurement_path_is_no_looser_than_the_launch_path():
 
     with pytest.raises(ValueError, match="Mixed GPU"):
         resolve_profile({"0": "B200", "1": "H200"})
-    with pytest.raises(ValueError, match="must be one model"):
+    with pytest.raises(ValueError, match="expected one GPU model"):
         _resolve_profile_for_devices([device_id("B200"), device_id("H200")])

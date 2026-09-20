@@ -395,57 +395,43 @@ def test_generate_full_without_image_is_usage_error(capsys):
 # ── API-driven generation: host-profile document → topology, fetch, fingerprint ──
 
 import topology_fixtures as tf  # noqa: E402  (tests/ is on sys.path)
+from chutes_cvm.guest.host_profile import HostProfile  # noqa: E402
 
-# Minimal discover-profile documents (API `profile` wire shape) for two known classes.
-_H200_DOC = {
-    "gpu": {
-        "pci_device_ids": ["2335"],
-        "count": 8,
-        "numa_nodes": [0, 0, 0, 0, 1, 1, 1, 1],
-    },
-    "cpu": {
-        "total": 128,
-        "sockets": 2,
-        "cpu_vendor": "GenuineIntel",
-        "cpu_processor_id": "f2060c00fffba91f",
-    },
-    "memory": {"total_gb": 2048},
-    "numa": {"node_count": 2},
-    "nvswitch": {"count": 4, "numa_nodes": [0, 0, 0, 0]},
-    "launch_determinism": {"qemu_version": "10.2.1"},
-}
-_RTX_FLAT_DOC = {
-    "gpu": {"pci_device_ids": ["2bb5"], "count": 8},
-    "cpu": {
-        "total": 128,
-        "sockets": 2,
-        "cpu_vendor": "GenuineIntel",
-        "cpu_processor_id": "f3060a00fffba91f",
-    },
-    "memory": {"total_gb": 2048},
-    "numa": {"node_count": 4},  # not 2 → flat fallback
-    "launch_determinism": {"qemu_version": "10.2.1"},
-}
+# Discover-profile documents (device-list wire shape) for two known classes.
+_H200_DOC = tf.h200_doc(nvswitch_node=0)
+_RTX_FLAT_DOC = tf.rtx_flat_doc()
 
 
-def test_topology_from_profile_reproduces_numa_fingerprint():
-    """The document deriver must reproduce the exact fingerprint the host would launch with —
-    here byte-identical to the former hardcoded H200 NVSwitch-node-0 registry entry."""
-    profile, fp, qemu = gm.topology_from_profile(_H200_DOC)
-    assert profile.display_name == "8xh200"
-    assert qemu == "10.2.1"
-    assert fp == tf.H200_KR6288  # vcpus 124, mem 1128, NUMA gpu 4+4, nvsw node 0
+def test_host_profile_reproduces_the_numa_shape_the_host_launches_with():
+    """Same values the former hardcoded H200 NVSwitch-node-0 registry entry carried."""
+    host = HostProfile(_H200_DOC)
+    assert host.gpu_profile.display_name == "8xh200"
+    assert host.qemu_version == "10.2.1"
+    assert (host.vcpus, host.guest_mem_gb) == (
+        124,
+        1128,
+    )
+    assert host.gpu_numa_nodes == (0, 0, 0, 0, 1, 1, 1, 1)
+    assert host.nvswitch_numa_nodes == (0, 0, 0, 0)
 
 
-def test_topology_from_profile_flat_fallback():
-    profile, fp, qemu = gm.topology_from_profile(_RTX_FLAT_DOC)
-    assert profile.display_name == "8xpro_6000"
-    assert fp == tf.RTX_FLAT  # >2 NUMA nodes → FlatTopology(gpu_count=8), mem 768
+def test_host_profile_falls_back_to_flat():
+    """More than two host NUMA nodes means no guest grouping -- only counts can matter."""
+    host = HostProfile(_RTX_FLAT_DOC)
+    assert host.gpu_profile.display_name == "8xpro_6000"
+    assert host.uses_guest_numa is False
+    assert (len(host.gpus), host.guest_mem_gb) == (
+        8,
+        768,
+    )
 
 
-def test_topology_from_profile_rejects_unknown_device():
+def test_host_profile_rejects_unknown_device():
     with pytest.raises(ValueError, match="no GPU profile matches"):
-        gm.topology_from_profile({"gpu": {"pci_device_ids": ["dead"], "count": 8}})
+        HostProfile(
+            tf.host_document("H200", vcpus=124, gpu_nodes=(0,))
+            | {"gpus": [dict(tf.h200_doc()["gpus"][0], device_id="dead")]}
+        ).gpu_profile
 
 
 class _Resp:

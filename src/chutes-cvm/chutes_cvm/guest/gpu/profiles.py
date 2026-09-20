@@ -19,51 +19,32 @@ fingerprint from the host profiles the API publishes.
 To add a profile:
   1. Encode GPU-model policy on the subclass: pci_device_id, BAR/VRAM, CC/PPCIe
      mode, NVSwitch/IB policy, firmware. Override ``host_reserved_cpus`` if the
-     host runs a heavy fixed workload (B200 = 16 for FabricManager; default 4);
-     override ``guest_mem_gb`` if guest RAM is derived from host RAM rather than
-     pinned to aggregate VRAM (B200 does, most don't). Keep host_reserved_cpus EVEN
-     so vcpus divides across sockets.
+     host runs a heavy fixed workload (B200 = 16 for FabricManager; default 4).
+     Keep host_reserved_cpus EVEN so vcpus divides across sockets. Guest RAM needs
+     no override -- ``vram_gb`` is its whole input.
   2. Submit each host CLASS the GPU ships on via ``chutes-cvm host submit-profile``
-     (``discover-profile.sh`` captures cpu_vendor/cpu_processor_id + the CPU/RAM the
-     fingerprint's vcpus/mem derive from). The API records it and returns the
+     (``discover-profile.sh`` captures the CPU identity and the per-device BARs the
+     fingerprint is built from). The API records it and returns the
      fingerprint the measurement generator then builds against — no per-class data
      is hardcoded here.
 
-Changing host_reserved_cpus / guest_mem_gb moves the fingerprint's vcpus/mem →
-RTMR0, so it requires re-baselining that profile's attestation policy.
+Changing host_reserved_cpus / vram_gb moves the guest's vcpus/mem → RTMR0, so it
+requires re-baselining that profile's attestation policy.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from chutes_cvm.guest.devices import PciBar
+
 HOST_RESERVED_CPUS = 4
-
-
-@dataclass(frozen=True)
-class PciBar:
-    """One PCI Base Address Register: index, size, and type.
-
-    Read from ``lspci -vvvnn`` (the ``Region N:`` lines, plus the Physical
-    Resizable BAR block for the current VRAM size). ``kind`` is
-    ``m32``/``m64``/``p32``/``p64`` — (m)em non-prefetchable / (p)refetchable,
-    32- or 64-bit addressing. A 64-bit BAR consumes two BAR slots, so a card
-    with three 64-bit BARs reports them at indices 0/2/4.
-
-    Offline measurement generation reproduces these BARs with a ``pci-bar-stub``
-    device so the guest DSDT's MMIO windows match a real passthrough launch
-    without the hardware present.
-    """
-
-    index: int
-    size_mb: int
-    kind: str
 
 
 @dataclass
 class PassthroughDevice:
     """A passthrough endpoint reproduced offline as a ``pci-bar-stub``: its PCI vendor,
     device id, class, and BAR layout, all from ``lspci -vvvnn``. Keyed by endpoint kind
-    ("gpu"/"nvswitch"/"ib") in ``GpuProfile.passthrough``.
+    ("gpu"/"nvswitch"/"ib") the endpoint hangs off.
     """
 
     vendor: int  # e.g. 0x10DE (NVIDIA), 0x15B3 (Mellanox / IB)
@@ -77,10 +58,10 @@ class GpuProfile(ABC):
 
     # The PCI device ID that identifies this GPU (e.g. 10de:2901 -> 2901). Override in subclass.
     # Drives profile DETECTION at launch (matches_device_id); the offline stub id for the
-    # GPU lives in passthrough["gpu"] and must name the same device.
+    # Must name the device the host reports for this model.
     #
     # Exactly one per profile, deliberately. A profile is not just a BAR layout: it carries
-    # host_reserved_cpus, guest_mem_gb, enable_numa_topology, firmware_filename, expected_gpus
+    # host_reserved_cpus, vram_gb, expected_gpus
     # and the CC/PPCIe mode arguments. Two products that happen to agree on those today can
     # diverge later with nothing to notice, so distinct hardware gets a distinct profile. The
     # control plane already models it that way -- its host-class fingerprint includes the
@@ -94,12 +75,6 @@ class GpuProfile(ABC):
     display_name: str = ""
     expected_gpus: list[str] = []
 
-    # Every passthrough endpoint reproduced offline as a pci-bar-stub, keyed by the bus kind
-    # _swap_endpoint matches: "gpu" (rp\d+), "nvswitch" (rp_nvsw*), "ib" (rp_ib*). Captured
-    # from `lspci -vvvnn` (discover-profile.sh). No "gpu" entry = not yet modeled for this
-    # model, so offline measurement generation is unavailable (not broken) until it is added.
-    passthrough: dict[str, PassthroughDevice] = {}
-
     def matches_device_id(self, device_id: str) -> bool:
         """Return True if device_id is this profile's GPU."""
         return device_id.lower() == self.pci_device_id.lower()
@@ -109,21 +84,6 @@ class GpuProfile(ABC):
     def name(self) -> str:
         """Short model identifier (e.g. 'B200', 'H200')."""
         ...
-
-    @property
-    @abstractmethod
-    def bar_size_mb(self) -> int:
-        """MMIO BAR size in MB for QEMU fw_cfg hint (when use_ovmf_mmio_fw_cfg is True)."""
-        ...
-
-    @property
-    def use_ovmf_mmio_fw_cfg(self) -> bool:
-        """Whether to pass opt/ovmf/X-PciMmio64Mb* fw_cfg hints per GPU to QEMU.
-
-        B300 disables this: 8×512 GiB BARs need a multi-TB aggregate MMIO window that
-        OVMF auto-sizes; per-GPU fw_cfg hints can prevent correct BAR assignment.
-        """
-        return True
 
     @property
     @abstractmethod
@@ -147,9 +107,9 @@ class GpuProfile(ABC):
     # guest RAM, and CPU identity (vendor + SMBIOS Type-4 Processor ID) — are NOT
     # profile constants: they vary host to host and live on the topology fingerprint
     # (gpu/topology.py). Detection derives them from the LIVE host (vcpus =
-    # host_cpus − host_reserved_cpus; sockets; mem via guest_mem_gb; CPU via
+    # host_cpus − host_reserved_cpus; sockets; mem from vram_gb; CPU via
     # /proc/cpuinfo); acceptance of the resulting fingerprint is the API's call. The
-    # profile supplies only host_reserved_cpus (workload policy) and guest_mem_gb.
+    # profile supplies only host_reserved_cpus and vram_gb.
 
     @abstractmethod
     def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
@@ -177,21 +137,6 @@ class GpuProfile(ABC):
         """Whether InfiniBand devices should be detected and passed through."""
         return False
 
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        """Total guest RAM in GB for ``gpu_count`` GPUs on a host with ``host_gb`` RAM.
-
-        The default pins guest RAM to aggregate VRAM (host RAM irrelevant). Override
-        when a GPU type is deployed on hosts with more RAM than VRAM and should use it
-        (e.g. B200). Detection bakes the result into the fingerprint's ``mem_gb``, so
-        it feeds RTMR0 — changing the rule re-baselines attestation.
-        """
-        return self.vram_gb * gpu_count
-
-    @property
-    def enable_numa_topology(self) -> bool:
-        """Use guest NUMA nodes, per-node memory bind, and PXB-PCIe grouping."""
-        return False
-
     @property
     def enable_post_launch_tuning(self) -> bool:
         """Tune host CPU power and pin QEMU vCPU threads after launch."""
@@ -206,17 +151,6 @@ class GpuProfile(ABC):
         properly re-initialize NVLink connections after each reset.
         """
         return False
-
-    @property
-    def firmware_filename(self) -> str:
-        """TDVF firmware filename in the repo firmware/ directory.
-
-        Changing the firmware changes MRTD — attestation policy must be
-        re-baselined for any profile using a different image.
-        """
-        # Built from edk2 Config-B (IntelTdxX64.dsc), no Secure Boot.
-        # Run firmware/build-firmware.sh to rebuild from source.
-        return "OVMF.inteltdx.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""
@@ -239,21 +173,8 @@ class B200Profile(GpuProfile):
         return "B200"
 
     @property
-    def bar_size_mb(self) -> int:
-        # 256 GiB: confirmed from lspci Region 2 on am-b200-34 reference host.
-        return 262144
-
-    @property
     def vram_gb(self) -> int:
         return 192  # B200 HBM3e
-
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        # B200 hosts carry far more RAM than VRAM, so guest RAM is DERIVED from the
-        # host: leave ~64 GB for the host OS, floor-divide the rest per GPU (the floor
-        # absorbs few-GB same-tier variance), re-multiply. ~2 TB host → 243/GPU → 1944
-        # total; ~3 TB Xeon 6 host → 369/GPU → 2952 total. This derivation is what makes
-        # "B200 vs Xeon 6" two fingerprints of one profile rather than two classes.
-        return ((host_gb - 64) // gpu_count) * gpu_count
 
     @property
     def host_reserved_cpus(self) -> int:
@@ -278,13 +199,6 @@ class B200Profile(GpuProfile):
         return False
 
     @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets. (A Xeon 6 SNC3
-        # host exposes 6 nodes, so use_numa_topology falls back to flat there; the
-        # flag stays True so it activates when SNC is off / 2-node.)
-        return True
-
-    @property
     def enable_post_launch_tuning(self) -> bool:
         return True
 
@@ -306,25 +220,8 @@ class B300Profile(GpuProfile):
         return "B300"
 
     @property
-    def bar_size_mb(self) -> int:
-        # 512 GiB: confirmed from lspci Region 2 on am-b300-61.
-        return 524288
-
-    @property
     def vram_gb(self) -> int:
         return 288  # B300 HBM3e (SXM6 AC)
-
-    def guest_mem_gb(self, host_gb: int, gpu_count: int) -> int:
-        # Aggregate VRAM (2304G for 8), capped at what the host can back: B300 also ships
-        # on ~2 TB sleds, which abort at launch under the plain VRAM rule. ~64 GB is left
-        # for the host OS, TDX PAMT, page tables and VFIO pinning.
-        # The cap, rather than B200's unconditional host-derived sizing, is what keeps
-        # in-service hosts off a re-baseline: anything that can back 2304G still gets
-        # exactly that, so its fingerprint mem_gb — and RTMR0 — does not move.
-        return min(
-            self.vram_gb * gpu_count,
-            ((host_gb - 64) // gpu_count) * gpu_count,
-        )
 
     # Host: 2 sockets x 48 cores x 2 threads = 192 (Intel, from lscpu on am-b300-61)
     # → 188 vcpus. Not yet submitted to the API (uncharacterized): run
@@ -344,10 +241,6 @@ class B300Profile(GpuProfile):
         # Guest networking uses virtio-net; GPU fabric is NVLink via host-side FM.
         return False
 
-    @property
-    def use_ovmf_mmio_fw_cfg(self) -> bool:
-        return False
-
     def describe_mode(self, total_gpus: int) -> str:
         return "CC mode (B300)"
 
@@ -360,35 +253,14 @@ class H200Profile(GpuProfile):
     pci_device_id = "2335"  # H200 SXM (GH100)
     display_name = "8xh200"
     expected_gpus = ["h200"]
-    # lspci -vvvnn on dev-h200-tee: GPU 10de:2335 (BAR2 resizable, 256G) + NVSwitch
-    # 10de:22a3 class 0680 (single 32M BAR).
-    passthrough = {
-        "gpu": PassthroughDevice(
-            0x10DE,
-            "2335",
-            0x0302,
-            [PciBar(0, 16, "p64"), PciBar(2, 262144, "p64"), PciBar(4, 32, "p64")],
-        ),
-        "nvswitch": PassthroughDevice(0x10DE, "22a3", 0x0680, [PciBar(0, 32, "m64")]),
-    }
 
     @property
     def name(self) -> str:
         return "H200"
 
     @property
-    def bar_size_mb(self) -> int:
-        return 262144  # 256GB
-
-    @property
     def vram_gb(self) -> int:
         return 141  # H200 HBM3e
-
-    @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
-        # Confirmed from discover-profile.sh on dev-h200-tee.
-        return True
 
     @property
     def enable_post_launch_tuning(self) -> bool:
@@ -426,24 +298,10 @@ class RTXPro6000Profile(GpuProfile):
     pci_device_id = "2bb5"
     display_name = "8xpro_6000"
     expected_gpus = ["pro_6000"]
-    # lspci -vvvnn on box-028 (10de:2bb5, Server Edition): BAR2 resizable, current 128GB.
-    passthrough = {
-        "gpu": PassthroughDevice(
-            0x10DE,
-            "2bb5",
-            0x0302,
-            [PciBar(0, 64, "p64"), PciBar(2, 131072, "p64"), PciBar(4, 32, "p64")],
-        ),
-    }
 
     @property
     def name(self) -> str:
         return "RTX_PRO_6000"
-
-    @property
-    def bar_size_mb(self) -> int:
-        # 128 GiB: matches lspci "Physical Resizable BAR / BAR 2: current size: 128GB" on 2bb5 Server Edition.
-        return 131072
 
     @property
     def vram_gb(self) -> int:
@@ -451,12 +309,6 @@ class RTXPro6000Profile(GpuProfile):
 
     # Host: 2 sockets × 64 cores × 1 thread = 128 Intel Xeon (Sierra Forest E-core,
     # no SMT) → 124 vcpus. From discover-profile.sh on eu1-hpe1-rtx6000pro-se-008.
-
-    @property
-    def enable_numa_topology(self) -> bool:
-        # Host has 2 NUMA nodes with GPUs split 4+4 across sockets.
-        # Confirmed from discover-profile.sh on eu1-hpe1-rtx6000pro-se-001.
-        return True
 
     @property
     def enable_post_launch_tuning(self) -> bool:

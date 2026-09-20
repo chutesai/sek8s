@@ -6,8 +6,10 @@ configuration, PCI device topology, networking, volumes, and vsock.
 
 import os
 import re
-import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+
+from chutes_cvm.guest.devices import PciDevice
 
 
 def _block_format(path: str | None) -> str:
@@ -17,39 +19,6 @@ def _block_format(path: str | None) -> str:
     if path.lower().endswith(".qcow2"):
         return "qcow2"
     return "raw"
-
-
-# TDX guest memory is pinned and unreclaimable, so the guest must leave the host
-# enough RAM for the host OS, the TDX PAMT, page tables, and VFIO DMA pinning --
-# otherwise the kernel OOM-kills QEMU (the whole VM) as the guest faults in pages.
-#
-# This is a FLAT reserve, deliberately not a percentage. It must stay aligned with
-# how the GpuProfiles size guest RAM: a RAM-derived profile's guest_mem_gb leaves
-# exactly this much for the host (B200: "(host_gb - 64) // gpu_count * gpu_count",
-# e.g. (3022 - 64) // 8 * 8 = 2952). A percentage reserve breaks that: 12% over-
-# reserved ~360 GB on a 3 TB host and wrongly rejected valid B200 launches,
-# and any fraction would re-introduce the same mismatch once a host exceeds
-# (reserve / fraction). The only overhead that scales with size is the TDX PAMT
-# (~0.4% of guest), and 64 GB covers PAMT for guests up to ~16 TB, so a flat
-# reserve is safe well beyond current hardware. Revisit deliberately (and resize
-# the affected profiles) if a host ever needs more than this.
-VM_MEM_RESERVE_GB = 64
-
-
-def safe_vm_mem_gb(desired_gb: int, host_gb: int | None) -> int:
-    """Clamp desired guest RAM (GB) to what the host can safely back.
-
-    Returns ``desired_gb`` unchanged when host RAM is unknown or already leaves
-    enough headroom; otherwise caps it at ``host_gb`` minus VM_MEM_RESERVE_GB.
-    Never returns a value below 1 GB or clamps upward.
-    """
-    if not host_gb or host_gb <= 0:
-        return desired_gb
-    safe = host_gb - VM_MEM_RESERVE_GB
-    if safe < 1:
-        # Pathologically small host: can't help, leave the request as-is.
-        return desired_gb
-    return min(desired_gb, safe)
 
 
 def _parse_mem_mib(mem: str) -> int:
@@ -77,27 +46,36 @@ def host_numa_nodes() -> list[int]:
     return sorted(nodes)
 
 
-def use_numa_topology(enable_numa_topology: bool) -> bool:
-    """True when profile requests NUMA and host has exactly 2 NUMA nodes."""
-    return enable_numa_topology and len(host_numa_nodes()) == 2
-
-
 class PcieRootPinning:
-    """Pin emulated virtio devices to pcie.0 below PXB bridge slots (0x18+)."""
+    """Assign the launch's emulated virtio devices their pcie.0 slots, in order.
 
-    _SLOTS = (0x2, 0x3, 0x4, 0x5, 0x6, 0x7)
+    The boot disk, NIC, volumes and vsock occupy slots, and slot layout lands in the DSDT and so
+    in RTMR0. QEMU would auto-assign them the lowest free slots anyway, but the command states
+    them instead of inheriting an allocator decision: that is what lets offline measurement
+    generation reproduce the layout by reading the command rather than re-deriving the rule, and
+    a rule derived twice is a rule that can disagree with itself.
 
-    def __init__(self, enabled: bool):
-        self.enabled = enabled
-        self._index = 0
+    One instance is shared across the builders of a single command -- each call takes the next
+    slot, so how many devices there are is the callers' business, not this object's. The run
+    starts at 0x1, except under guest NUMA where it starts at 0x2 to keep every emulated device
+    below the PXB bridges. Both match live DSDTs from the two paths on one host:
+        NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
+        FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
+
+    Adding an emulated device therefore shifts nothing already placed, but it does take the next
+    slot and so changes the DSDT -- and with it every published RTMR0.
+    """
+
+    _LAST_SLOT = 0x17  # guest-NUMA PXB bridges start at 0x18
+
+    def __init__(self, guest_numa: bool):
+        self._next = 0x2 if guest_numa else 0x1
 
     def device_suffix(self) -> str:
-        if not self.enabled:
-            return ""
-        if self._index >= len(self._SLOTS):
+        if self._next > self._LAST_SLOT:
             raise RuntimeError("No free pcie.0 slots for emulated PCI devices")
-        addr = self._SLOTS[self._index]
-        self._index += 1
+        addr = self._next
+        self._next += 1
         return f",bus=pcie.0,addr=0x{addr:x}"
 
 
@@ -158,8 +136,6 @@ class PciTopologyState:
         *,
         rp_id: str,
         chassis: int,
-        bar_size_mb: int | None = None,
-        bar_index: int | None = None,
     ):
         """Add a vfio-pci device on a new PCIe root port.
 
@@ -168,8 +144,6 @@ class PciTopologyState:
             host_bdf: host PCI BDF of the device passed through on this root port.
             rp_id: Root port identifier (e.g. 'rp1', 'rp_nvsw1').
             chassis: Chassis number for the root port.
-            bar_size_mb: Optional MMIO BAR size hint (fw_cfg opt/ovmf/X-PciMmio64Mb).
-            bar_index: 1-based fw_cfg index (only when bar_size_mb is set).
         """
         if self.func == 0:
             cmd.devices.append(
@@ -185,11 +159,6 @@ class PciTopologyState:
         cmd.devices.append(
             f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
         )
-
-        if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(
-                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
-            )
 
         self.port += 1
         self.func = (self.func + 1) % 8
@@ -231,15 +200,12 @@ class NumaPciTopologyState:
         rp_id: str,
         chassis: int,
         numa_node: int,
-        bar_size_mb: int | None = None,
-        bar_index: int | None = None,
     ):
         """Add a vfio-pci device on a PCIe root port under the PXB for numa_node.
 
-        numa_node is the device's host NUMA node, resolved by the caller (from
-        sysfs for the launch path, from a topology fingerprint for offline
-        measurement); < 0 (NUMA_NO_NODE — no affinity) falls back to flat
-        placement.
+        numa_node is the device's host NUMA node, resolved by the caller (from sysfs for the
+        launch path, from the captured device for offline measurement); < 0 (NUMA_NO_NODE — no
+        affinity) falls back to flat placement.
         """
         if numa_node < 0:
             self._flat.add_device(
@@ -247,8 +213,6 @@ class NumaPciTopologyState:
                 host_bdf,
                 rp_id=rp_id,
                 chassis=chassis,
-                bar_size_mb=bar_size_mb,
-                bar_index=bar_index,
             )
             return
 
@@ -262,12 +226,63 @@ class NumaPciTopologyState:
         cmd.devices.append(
             f"vfio-pci,host={host_bdf},bus={rp_id},addr=0x0,iommufd=iommufd0"
         )
-        if bar_size_mb is not None and bar_index is not None:
-            cmd.fw_cfg.append(
-                f"name=opt/ovmf/X-PciMmio64Mb{bar_index},string={bar_size_mb}"
-            )
         print(f"    {host_bdf} -> PXB NUMA node {numa_node}")
         self.port += 1
+
+
+def build_pci_topology(
+    cmd: "QemuCommand",
+    *,
+    gpus: "Sequence[PciDevice]",
+    nvswitches: "Sequence[PciDevice]",
+    ib_devices: "Sequence[PciDevice]",
+    guest_numa: bool,
+) -> None:
+    """Add every passthrough endpoint to the command's PCI topology.
+
+    Takes the devices, not a host: the caller decides which ones the guest gets (NVSwitch and IB
+    are gated by the GPU profile) and this places them. Each device's NUMA node comes from the
+    capture it was read from -- never from a second read of the live machine, which is how the
+    launch and the measurement came to disagree about where a GPU sat.
+
+    ``guest_numa`` must agree with the memory topology, because PXB bridges name guest NUMA
+    nodes; building them for a guest with no ``-numa`` makes QEMU refuse with "Illegal numa
+    node 0".
+
+    NB: when IB passthrough is enabled, a launch attaches the SR-IOV VFs it creates, not the PFs
+    the profile captured. Nothing passes IB through today, so both are empty and it is open.
+    """
+    topo: "PciTopologyState | NumaPciTopologyState"
+    if guest_numa:
+        print("  PCI topology: NUMA-local PXB-PCIe bridges")
+        topo = NumaPciTopologyState()
+    else:
+        topo = PciTopologyState()
+
+    print(f"  Adding {len(gpus)} GPU(s) to PCI topology...")
+    # OVMF sizes the guest's 64-bit MMIO window from the BARs it enumerates; nothing is pinned.
+    print("    MMIO: OVMF auto-sizes the 64-bit window from the passed-through BARs")
+    chassis = 0
+    for prefix, devices in (
+        ("rp", gpus),
+        ("rp_nvsw", nvswitches),
+        ("rp_ib", ib_devices),
+    ):
+        for ordinal, device in enumerate(devices, start=1):
+            chassis += 1
+            placement = {"numa_node": device.numa_node} if guest_numa else {}
+            topo.add_device(
+                cmd,
+                host_bdf=device.bdf,
+                rp_id=f"{prefix}{ordinal}",
+                chassis=chassis,
+                **placement,
+            )
+
+    print(
+        f"  Passthrough configured: {len(gpus)} GPU(s), "
+        f"{len(nvswitches)} NVSwitch(es), {len(ib_devices)} IB device(s)"
+    )
 
 
 @dataclass
@@ -390,7 +405,7 @@ def build_base_cmd(
     kernel_path: str,
     initrd_path: str,
     cmdline: str,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ) -> QemuCommand:
     """Build the base QEMU command (TDX, firmware, CPU, memory, direct boot).
 
@@ -409,7 +424,6 @@ def build_base_cmd(
     independent and the measured tables don't include the kernel).
     """
     numa_enabled = len(host_nodes) >= 2
-    pinning = pci_pinning or PcieRootPinning(numa_enabled)
 
     if numa_enabled:
         machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx"
@@ -428,8 +442,8 @@ def build_base_cmd(
         pidfile=pidfile,
         # Pinned SMBIOS identity so per-server motherboard differences don't
         # shift RTMR0 within a profile. Single source of truth: the offline
-        # measurement path reads this same builder (build_qemu_command →
-        # platform_tables), so launch and measurement can't diverge.
+        # measurement path reads this same builder (HostProfile.qemu_command →
+        # image_config), so launch and measurement can't diverge.
         smbios=[
             "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",
             "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0",
@@ -460,7 +474,7 @@ def build_base_cmd(
     elif img_fmt == "raw":
         drive_opts += ",discard=on,detect-zeroes=on"
     cmd.drives.append(drive_opts)
-    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pinning.device_suffix()}"
+    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pci_pinning.device_suffix()}"
     if img_fmt == "raw":
         dev_opts += ",num-queues=4"
     cmd.devices.append(dev_opts)
@@ -475,28 +489,37 @@ def build_network(
     net_iface: str | None,
     ssh_port: int,
     net_queues: int = 4,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ):
-    """Add networking configuration to the QemuCommand."""
-    pinning = pci_pinning or PcieRootPinning(False)
+    """Add the guest NIC to the QemuCommand.
+
+    A launch always has exactly one NIC, so the device is unconditional; the ``-netdev`` that
+    backs it follows the inputs. In tap mode that needs a host interface -- without one the
+    device is emitted alone, which is what offline measurement generation wants: the device
+    occupies a pcie.0 slot and slot layout is measured into RTMR0, while a netdev is not a PCI
+    device and is not measured.
+
+    Whether an interface SHOULD have been supplied is the caller's question, not this one.
+    """
     if network_type == "tap":
-        if not net_iface:
-            print("ERROR: --network-type tap requires --net-iface")
-            sys.exit(1)
         vectors = 2 * net_queues + 2
-        print(
-            f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
-        )
-        cmd.netdevs.append(
-            f"tap,id=n0,ifname={net_iface},script=no,downscript=no,vhost=on,queues={net_queues}"
-        )
         cmd.devices.append(
             f"virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on"
-            f"{pinning.device_suffix()}"
+            f"{pci_pinning.device_suffix()}"
         )
+        if net_iface:
+            print(
+                f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
+            )
+            cmd.netdevs.append(
+                f"tap,id=n0,ifname={net_iface},script=no,downscript=no,"
+                f"vhost=on,queues={net_queues}"
+            )
     else:
         print("Networking: Canonical user-mode networking")
-        cmd.devices.append(f"virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}")
+        cmd.devices.append(
+            f"virtio-net-pci,netdev=nic0_td{pci_pinning.device_suffix()}"
+        )
         cmd.netdevs.append(f"user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22")
 
 
@@ -506,16 +529,15 @@ def add_volumes(
     config_volume: str | None,
     cache_volume: str | None,
     storage_volume: str | None,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ):
     """Add config, cache, and storage volumes to the QemuCommand."""
-    pinning = pci_pinning or PcieRootPinning(False)
     if config_volume:
         cmd.drives.append(
             f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on"
         )
         cmd.devices.append(
-            f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}"
+            f"virtio-blk-pci,drive=virtio-config{pci_pinning.device_suffix()}"
         )
     for vol_path, vol_id in [
         (cache_volume, "virtio-cache"),
@@ -528,13 +550,12 @@ def add_volumes(
         if vol_fmt == "raw":
             drive_opts += ",discard=on,detect-zeroes=on"
         cmd.drives.append(drive_opts)
-        dev_opts = f"virtio-blk-pci,drive={vol_id}{pinning.device_suffix()}"
+        dev_opts = f"virtio-blk-pci,drive={vol_id}{pci_pinning.device_suffix()}"
         if vol_fmt == "raw":
             dev_opts += ",num-queues=4"
         cmd.devices.append(dev_opts)
 
 
-def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning | None = None):
+def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning):
     """Add vhost-vsock device to the QemuCommand."""
-    pinning = pci_pinning or PcieRootPinning(False)
-    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}")
+    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pci_pinning.device_suffix()}")

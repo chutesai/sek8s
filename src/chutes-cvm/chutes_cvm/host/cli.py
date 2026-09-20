@@ -19,6 +19,7 @@ without a running guest, so they live under ``host``, not ``guest``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -56,7 +57,6 @@ def _run_verify(target_os, config, api, *, submit: bool, banner: str) -> int:
     print(_color(f"── chutes-cvm: {banner} ──", "1;36"))
     rc = verify_host(
         target_os=target_os,
-        scripts_dir=str(SCRIPTS_DIR),
         config_path=config,
         api_base=api,
         submit=submit,
@@ -117,10 +117,28 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
             )
             print(_color("\nResult: FAILED", "1;31"))
             return 1
+    if getattr(args, "dry_run", False):
+        # Print what WOULD be submitted, without submitting. The document is the whole of what
+        # the class is keyed on, so two hosts printing the same document are one class -- which
+        # makes this the check for "did my reconciled row match the real host?".
+        from chutes_cvm.guest.host_profile import HostProfile
+
+        try:
+            host = HostProfile.from_host()
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"Registration failed: cannot read this host: {exc}")
+            print(_color("\nResult: FAILED", "1;31"))
+            return 1
+        document = host.to_api_profile()
+        if target_os:
+            document["qemu"]["qemu_version"] = SUPPORTED_QEMU_BY_OS[target_os]
+        print(json.dumps(document, indent=2, sort_keys=True))
+        print(_color("\nResult: DRY RUN (nothing submitted)", "1;33"))
+        return 0
+
     try:
         result = submit_profile(
             config_path=args.config,
-            scripts_dir=str(SCRIPTS_DIR),
             api_base=args.api,
             target_os=target_os,
         )
@@ -238,6 +256,11 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Register the class this host becomes after an OS upgrade, e.g. 26.04 — the "
         "profile's OS release, QEMU version and -cpu args are all taken from that release "
         "instead of the live host.",
+    )
+    submit.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the profile that would be submitted and exit, without registering it.",
     )
     _add_api_args(submit)
     submit.set_defaults(func=_cmd_submit_profile)

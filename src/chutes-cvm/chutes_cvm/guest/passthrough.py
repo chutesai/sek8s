@@ -3,24 +3,11 @@
 import time
 
 from chutes_cvm import proc
-from chutes_cvm.guest.detection import (
-    detect_cx7_bridge_pfs,
-    detect_infiniband_pfs,
-    detect_infiniband_vfs,
-    detect_nvidia_gpus,
-    detect_nvswitches,
-    get_gpu_bdfs,
-    get_gpu_models_from_lspci,
-)
-from chutes_cvm.guest.gpu.profiles import GpuProfile, resolve_profile
+from chutes_cvm.guest.detection import detect_infiniband_vfs
+from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
-from chutes_cvm.guest.qemu import (
-    NumaPciTopologyState,
-    PciTopologyState,
-    QemuCommand,
-    read_pci_numa_node,
-    use_numa_topology,
-)
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand, build_pci_topology
 from chutes_cvm.paths import SCRIPTS_DIR
 from chutes_cvm.vfio import (
     bind_explicit_devices_to_vfio,
@@ -255,96 +242,32 @@ def _prepare_devices(
     install_udev_rules(str(SCRIPTS_DIR))
 
 
-def _build_pci_topology(
-    cmd: QemuCommand,
-    gpus: list[str],
-    nvswitches_for_vm: list[str],
-    ib_devices: list[str],
-    profile: GpuProfile,
-):
-    """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology."""
-    numa = use_numa_topology(profile.enable_numa_topology)
-    topo: "PciTopologyState | NumaPciTopologyState"
-    if numa:
-        print("  PCI topology: NUMA-local PXB-PCIe bridges")
-        topo = NumaPciTopologyState()
-    else:
-        topo = PciTopologyState()
+def setup_passthrough(cmd: QemuCommand, host: HostProfile):
+    """Prepare and bind this host's passthrough devices, and extend the QemuCommand.
 
-    def _add(host_bdf, rp_id, chassis, **bar):
-        # On the NUMA path, resolve the device's node from sysfs here and pass it
-        # as placement; add_device no longer reads sysfs, so offline measurement
-        # generation can supply the node from a topology fingerprint instead.
-        if numa:
-            bar["numa_node"] = read_pci_numa_node(host_bdf)
-        topo.add_device(cmd, host_bdf=host_bdf, rp_id=rp_id, chassis=chassis, **bar)
-
-    print(f"  Adding {len(gpus)} GPU(s) to PCI topology...")
-    if profile.use_ovmf_mmio_fw_cfg:
-        mmio_note = f"fw_cfg BAR hint {profile.bar_size_mb} MB per GPU"
-    else:
-        mmio_note = (
-            f"OVMF auto-sizes MMIO window (no fw_cfg; "
-            f"~{profile.bar_size_mb} MB BAR per {profile.name} GPU)"
-        )
-    print(f"    MMIO: {mmio_note}")
-    for i, gpu in enumerate(gpus):
-        bar_kwargs: dict = {}
-        if profile.use_ovmf_mmio_fw_cfg:
-            bar_kwargs = {
-                "bar_size_mb": profile.bar_size_mb,
-                "bar_index": i + 1,
-            }
-            print(f"    GPU {gpu}: {profile.name}, BAR fw_cfg {profile.bar_size_mb} MB")
-        else:
-            print(f"    GPU {gpu}: {profile.name}")
-        _add(gpu, f"rp{i + 1}", i + 1, **bar_kwargs)
-
-    if nvswitches_for_vm:
-        print(f"  Adding {len(nvswitches_for_vm)} NVSwitch(es) to PCI topology...")
-    for j, nvsw in enumerate(nvswitches_for_vm):
-        _add(nvsw, f"rp_nvsw{j + 1}", len(gpus) + j + 1)
-
-    if ib_devices:
-        print(f"  Adding {len(ib_devices)} InfiniBand device(s) to PCI topology...")
-    for k, ib_dev in enumerate(ib_devices):
-        _add(ib_dev, f"rp_ib{k + 1}", len(gpus) + len(nvswitches_for_vm) + k + 1)
-
-    print(
-        f"  Passthrough configured: {len(gpus)} GPU(s), "
-        f"{len(nvswitches_for_vm)} NVSwitch(es), "
-        f"{len(ib_devices)} IB device(s)"
-    )
-
-
-def setup_passthrough(cmd: QemuCommand):
-    """Detect passthrough devices, prepare and bind them on the host, extend the QemuCommand."""
-    gpus = get_gpu_bdfs()
-    if not gpus:
-        gpus = detect_nvidia_gpus()
+    Takes the devices from the ``HostProfile`` rather than enumerating them again: the host is
+    read once, by ``discover-profile.sh``, and everything downstream uses that reading. A second
+    enumeration here is what let the two disagree about which NVSwitches and IB PFs count.
+    """
+    gpus = [d.bdf for d in host.gpus]
     if not gpus:
         return
 
-    gpu_models = get_gpu_models_from_lspci(gpus)
-    profile = resolve_profile(gpu_models)
-    total_gpus = len(gpus)
-
-    nvswitches = (
-        detect_nvswitches() if profile.should_passthrough_nvswitches(total_gpus) else []
-    )
+    profile = host.gpu_profile
+    total_gpus = host.gpu_count
+    nvswitches = [d.bdf for d in host.attached_nvswitches]
 
     ib_devices: list[str] = []
-    if profile.should_passthrough_infiniband:
-        # Exclude CX7 NVSwitch bridge PFs (SMDL=SW_MNG in VPD) — these must
-        # remain on the host for Fabric Manager to manage the NVSwitch fabric.
-        # Only regular CX7 NIC PFs should produce VFs for guest passthrough.
-        cx7_bridge_pfs = detect_cx7_bridge_pfs()
-        if cx7_bridge_pfs:
+    if host.attached_ib:
+        # Bridge PFs (SMDL=SW_MNG in VPD) must remain on the host for Fabric Manager to manage
+        # the NVSwitch fabric; HostProfile.attached_ib has already excluded them and any VFs.
+        bridge_pfs = [d.bdf for d in host.ib_devices if d.is_bridge_pf]
+        if bridge_pfs:
             print(
-                f"  Detected {len(cx7_bridge_pfs)} CX7 NVSwitch bridge PF(s) "
-                f"(host-only, excluded from passthrough): {cx7_bridge_pfs}"
+                f"  Detected {len(bridge_pfs)} CX7 NVSwitch bridge PF(s) "
+                f"(host-only, excluded from passthrough): {bridge_pfs}"
             )
-        ib_pfs = detect_infiniband_pfs(exclude_bdfs=cx7_bridge_pfs)
+        ib_pfs = [d.bdf for d in host.attached_ib]
         if ib_pfs:
             print(f"  Creating SR-IOV VFs from {len(ib_pfs)} InfiniBand PF(s)...")
             for pf in ib_pfs:
@@ -366,8 +289,13 @@ def setup_passthrough(cmd: QemuCommand):
     _prepare_devices(gpus, nvswitches, ib_devices, profile)
     cmd.objects.append("iommufd,id=iommufd0")
 
-    nvswitches_for_vm = (
-        nvswitches if profile.should_passthrough_nvswitches(total_gpus) else []
+    # Which NVSwitches reach the guest is decided once, by HostProfile.attached_nvswitches,
+    # which the topology builder reads. `nvswitches` above is the host's full inventory --
+    # needed for binding, not for the guest.
+    build_pci_topology(
+        cmd,
+        gpus=host.gpus,
+        nvswitches=host.attached_nvswitches,
+        ib_devices=host.attached_ib,
+        guest_numa=host.uses_guest_numa,
     )
-
-    _build_pci_topology(cmd, gpus, nvswitches_for_vm, ib_devices, profile)

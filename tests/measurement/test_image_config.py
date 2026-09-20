@@ -1,4 +1,4 @@
-"""platform_tables rewrites a measurement MachineSpec into tdx-measure metadata.
+"""image_config rewrites a host's own QEMU command into tdx-measure metadata.
 
 These assert the structural rewrites (machine, memory, emulated-device fillers,
 vfio->pci-bar-stub swap, serial) that make an offline dump reproduce a real
@@ -8,34 +8,22 @@ tdx-measure container, not here.
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
-from chutes_cvm.guest.gpu.topology import CpuTopology, NumaTopology, TopologyFingerprint
-from chutes_cvm.measurement.platform_tables import MeasurementMetadata
-from chutes_cvm.measurement.topology_spec import build_topology_spec
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.measurement.image_config import ImageConfig
 
 _FW = "/opt/ovmf/OVMF.fd"
 
-# Host-shape fields the fingerprint carries (drive -smp / -m / #14 processor_id).
-_H200_SHAPE = dict(
-    vcpus=124,
-    sockets=2,
-    cpu_vendor="GenuineIntel",
-    cpu_processor_id="f2060c00fffba91f",
-)
 
-
-def _md(model, fingerprint, **kw):
-    profile = GPU_PROFILES[model]
-    spec = build_topology_spec(
-        profile, fingerprint, cpu_args="host,-avx10", firmware=_FW
+def _md(doc, **kw):
+    host = HostProfile(doc)
+    cmd = host.qemu_command(
+        firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
     )
-    return MeasurementMetadata(
-        spec, profile, fingerprint, acpi_tables="/out/acpi.bin", **kw
-    ).to_dict()
+    return ImageConfig(cmd, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
 def _rtx_numa():
-    return _md("RTX_PRO_6000", known.RTX_NUMA)
+    return _md(known.rtx_numa_doc())
 
 
 def test_machine_is_rewritten_to_non_tdx():
@@ -81,14 +69,14 @@ def test_serial_attached_for_com1():
 
 
 def test_smbios_can_be_dropped():
-    with_it = _md("RTX_PRO_6000", known.RTX_NUMA, with_smbios=True)
-    without = _md("RTX_PRO_6000", known.RTX_NUMA, with_smbios=False)
+    with_it = _md(known.rtx_numa_doc(), with_smbios=True)
+    without = _md(known.rtx_numa_doc(), with_smbios=False)
     assert with_it["boot_config"]["qemu"]["smbios"]
     assert without["boot_config"]["qemu"]["smbios"] == []
 
 
 def test_flat_topology_generates():
-    q = _md("RTX_PRO_6000", known.RTX_FLAT)["boot_config"]["qemu"]
+    q = _md(known.rtx_flat_doc())["boot_config"]["qemu"]
     assert not any("pxb-pcie" in d for d in q["devices"])
     assert sum(d.startswith("pci-bar-stub") for d in q["devices"]) == 8
 
@@ -103,12 +91,13 @@ def test_boot_config_scalars():
 def test_nvswitch_endpoint_modeled():
     # NVSwitch is a passthrough device too; its BARs shape the DSDT. H200 models it,
     # so each switch endpoint becomes a pci-bar-stub with the captured layout.
-    fp = TopologyFingerprint(
-        CpuTopology(**_H200_SHAPE),
-        1128,
-        NumaTopology(gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1), nvswitch_nodes=(0, 1, 0, 1)),
+    doc = known.host_document(
+        "H200",
+        vcpus=124,
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
+        nvswitch_nodes=(0, 1, 0, 1),
     )
-    q = _md("H200", fp)["boot_config"]["qemu"]
+    q = _md(doc)["boot_config"]["qemu"]
     nvsw = [
         d for d in q["devices"] if d.startswith("pci-bar-stub") and "bus=rp_nvsw" in d
     ]
@@ -118,20 +107,61 @@ def test_nvswitch_endpoint_modeled():
         assert "device=0x22a3" in stub and "class=0x0680" in stub
 
 
-def test_unmodeled_passthrough_raises():
-    # A bus kind with no passthrough[...] entry fails loudly (ValueError); an
-    # unrecognized bus is NotImplementedError — never a silent wrong measurement.
-    profile = GPU_PROFILES["H200"]
-    fp = TopologyFingerprint(
-        CpuTopology(**_H200_SHAPE), 1128, NumaTopology(gpu_nodes=(0,) * 8)
+def test_endpoint_without_captured_bars_raises():
+    # A root port whose device captured no BARs fails loudly (ValueError); an unrecognized bus is
+    # NotImplementedError — never a silent wrong measurement. There is no table to fall back on:
+    # BAR2 is resizable, so only the host knows its own layout.
+    host = HostProfile(
+        known.host_document(
+            "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
+        )
     )
-    md = MeasurementMetadata(
-        build_topology_spec(profile, fp, cpu_args="host", firmware=_FW),
-        profile,
-        fp,
+    md = ImageConfig(
+        host.qemu_command(firmware=_FW, cpu_args="host"),
+        host,
         acpi_tables="/out/a.bin",
     )
-    with pytest.raises(ValueError, match=r"passthrough\['ib'\]"):
+    with pytest.raises(ValueError, match="no BARs captured"):
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
     with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
         md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")
+
+
+def test_emulated_slot_fillers_keep_the_slots_the_command_assigned():
+    """Fillers stand in for the launch's emulated devices at the *same* pcie.0 slots.
+
+    Which slots those are is the builder's decision, not this adapter's: ``PcieRootPinning``
+    states them on both paths -- 0x1 upward, or 0x2 upward under guest NUMA so they sit below the
+    PXB bridges at 0x18+ -- and this only carries them across. Deciding it twice is what put every
+    flat guest's DSDT device nodes one slot high, changing the ACPI digest and so RTMR0, which is
+    why no flat class ever reproduced its real boot.
+
+    Measured against live DSDTs from both paths on one host:
+        NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
+        FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
+    """
+    numa = _md(known.rtx_numa_doc())["boot_config"]["qemu"]
+    flat = _md(known.rtx_flat_doc())["boot_config"]["qemu"]
+
+    def fillers(q):
+        return [d for d in q["devices"] if d.startswith("virtio-rng-pci")]
+
+    assert any("pxb-pcie" in d for d in numa["devices"])
+    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(numa)) == [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+    ]
+
+    assert not any("pxb-pcie" in d for d in flat["devices"])
+    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(flat)) == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]

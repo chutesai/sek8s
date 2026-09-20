@@ -1,4 +1,4 @@
-"""Unit tests for host profile registry and setup orchestration.
+"""Unit tests for host recipe registry and setup orchestration.
 
 Tests focus on behavioral contracts, registry integrity, and setup
 orchestration logic (mocking all subprocess/OS calls).
@@ -7,12 +7,12 @@ orchestration logic (mocking all subprocess/OS calls).
 from unittest.mock import MagicMock, patch
 
 import pytest
-from chutes_cvm.host.profiles import (
-    HOST_PROFILES,
+from chutes_cvm.host.recipes import (
+    HOST_RECIPES,
     PPA,
-    HostProfile,
-    Ubuntu2604Profile,
-    resolve_profile,
+    HostRecipe,
+    Ubuntu2604Recipe,
+    resolve_recipe,
 )
 from chutes_cvm.host.setup import (
     _ensure_chutes_dirs,
@@ -52,9 +52,9 @@ def test_ppa_suite_override():
 
 
 def test_ppa_signing_key_required():
-    """Every PPA in every profile must declare a signing key."""
-    for version, profile in HOST_PROFILES.items():
-        for ppa in profile.ppas:
+    """Every PPA in every recipe must declare a signing key."""
+    for version, recipe in HOST_RECIPES.items():
+        for ppa in recipe.ppas:
             assert ppa.signing_key, f"{version} PPA {ppa.name} missing signing_key"
 
 
@@ -64,19 +64,19 @@ def test_ppa_signing_key_required():
 
 
 def test_all_registered_profiles_are_host_profile_subclasses():
-    for key, profile in HOST_PROFILES.items():
-        assert isinstance(profile, HostProfile), f"{key} is not a HostProfile"
+    for key, recipe in HOST_RECIPES.items():
+        assert isinstance(recipe, HostRecipe), f"{key} is not a HostRecipe"
 
 
 def test_registry_keys_match_profile_names():
-    for key, profile in HOST_PROFILES.items():
+    for key, recipe in HOST_RECIPES.items():
         assert (
-            key == profile.name
-        ), f"Registry key '{key}' does not match profile.name '{profile.name}'"
+            key == recipe.name
+        ), f"Registry key '{key}' does not match recipe.name '{recipe.name}'"
 
 
 def test_no_duplicate_codenames():
-    codenames = [p.codename for p in HOST_PROFILES.values()]
+    codenames = [p.codename for p in HOST_RECIPES.values()]
     assert len(codenames) == len(set(codenames)), "Duplicate codenames in registry"
 
 
@@ -85,69 +85,69 @@ def test_no_duplicate_codenames():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_has_nohibernate(version):
-    """nohibernate must be in every profile's GRUB cmdline."""
-    profile = HOST_PROFILES[version]
-    assert "nohibernate" in profile.grub_cmdline_additions
+    """nohibernate must be in every recipe's GRUB cmdline."""
+    recipe = HOST_RECIPES[version]
+    assert "nohibernate" in recipe.grub_cmdline_additions
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_includes_attestation_packages(version):
     """Attestation is mandatory on every host -- packages must be present."""
-    profile = HOST_PROFILES[version]
+    recipe = HOST_RECIPES[version]
     required = {"sgx-dcap-pccs", "tdx-qgs", "libsgx-dcap-default-qpl"}
     assert required.issubset(
-        set(profile.packages)
-    ), f"{version} missing attestation packages: {required - set(profile.packages)}"
+        set(recipe.packages)
+    ), f"{version} missing attestation packages: {required - set(recipe.packages)}"
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_includes_qemu(version):
-    profile = HOST_PROFILES[version]
-    assert "qemu-system-x86" in profile.packages
+    recipe = HOST_RECIPES[version]
+    assert "qemu-system-x86" in recipe.packages
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_describe_contains_version_and_codename(version):
-    profile = HOST_PROFILES[version]
-    desc = profile.describe()
-    assert profile.name in desc
-    assert profile.codename in desc
+    recipe = HOST_RECIPES[version]
+    desc = recipe.describe()
+    assert recipe.name in desc
+    assert recipe.codename in desc
 
 
 @pytest.mark.parametrize(
-    "profile_cls",
-    [Ubuntu2604Profile],
+    "recipe_cls",
+    [Ubuntu2604Recipe],
 )
-def test_host_profiles_do_not_include_libvirt(profile_cls):
+def test_host_recipes_do_not_include_libvirt(recipe_cls):
     """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
-    profile = profile_cls()
-    assert "libvirt-daemon-system" not in profile.packages
-    assert "libvirt-clients" not in profile.packages
+    recipe = recipe_cls()
+    assert "libvirt-daemon-system" not in recipe.packages
+    assert "libvirt-clients" not in recipe.packages
 
 
 # ---------------------------------------------------------------------------
-# Every profile: Intel DCAP repo required
+# Every recipe: Intel DCAP repo required
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_has_intel_sgx_repo(version):
     """All supported profiles must source attestation from Intel's DCAP repo."""
-    profile = HOST_PROFILES[version]
-    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
+    recipe = HOST_RECIPES[version]
+    intel_repos = [r for r in recipe.repos if r.name == "intel-sgx"]
     assert len(intel_repos) == 1, f"{version} missing intel-sgx repo"
     assert "download.01.org" in intel_repos[0].uri
     assert intel_repos[0].components == "main"
     assert intel_repos[0].signing_key_url.endswith("intel-sgx-deb.key")
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_has_no_kobuk_ppas(version):
-    """No profile should reference kobuk-team PPAs (unreliable, superseded by Intel DCAP)."""
-    profile = HOST_PROFILES[version]
-    kobuk_ppas = [p for p in profile.ppas if "kobuk" in p.team]
+    """No recipe should reference kobuk-team PPAs (unreliable, superseded by Intel DCAP)."""
+    recipe = HOST_RECIPES[version]
+    kobuk_ppas = [p for p in recipe.ppas if "kobuk" in p.team]
     assert kobuk_ppas == [], f"{version} still has kobuk PPAs: {kobuk_ppas}"
 
 
@@ -158,65 +158,65 @@ def test_every_profile_has_no_kobuk_ppas(version):
 
 def test_2604_does_not_need_tdx_release_ppa():
     """26.04 has native TDX kernel/QEMU -- no tdx-release PPA needed."""
-    profile = Ubuntu2604Profile()
-    ppa_names = {ppa.name for ppa in profile.ppas}
+    recipe = Ubuntu2604Recipe()
+    ppa_names = {ppa.name for ppa in recipe.ppas}
     assert "tdx-release" not in ppa_names
 
 
 def test_2604_has_intel_sgx_repo():
     """26.04 uses Intel's official SGX/DCAP repository (resolute suite)."""
-    profile = Ubuntu2604Profile()
-    assert len(profile.repos) >= 1
-    intel_repos = [r for r in profile.repos if r.name == "intel-sgx"]
+    recipe = Ubuntu2604Recipe()
+    assert len(recipe.repos) >= 1
+    intel_repos = [r for r in recipe.repos if r.name == "intel-sgx"]
     assert len(intel_repos) == 1
     assert intel_repos[0].suite == "resolute"
     assert "download.01.org" in intel_repos[0].uri
 
 
 def test_2604_pins_kernel_package():
-    profile = Ubuntu2604Profile()
-    assert profile.kernel_package == "linux-image-7.0.0-31-generic"
+    recipe = Ubuntu2604Recipe()
+    assert recipe.kernel_package == "linux-image-7.0.0-31-generic"
 
 
 def test_2604_enables_kvm_intel_tdx():
     """26.04 requires explicit kvm_intel.tdx=1 kernel param."""
-    profile = Ubuntu2604Profile()
-    assert "kvm_intel.tdx=1" in profile.grub_cmdline_additions
+    recipe = Ubuntu2604Recipe()
+    assert "kvm_intel.tdx=1" in recipe.grub_cmdline_additions
 
 
 # ---------------------------------------------------------------------------
-# resolve_profile
+# resolve_recipe
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
-def test_resolve_profile_returns_correct_instance(version):
-    profile = resolve_profile(version)
-    assert profile is HOST_PROFILES[version]
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
+def test_resolve_recipe_returns_correct_instance(version):
+    recipe = resolve_recipe(version)
+    assert recipe is HOST_RECIPES[version]
 
 
-def test_resolve_profile_rejects_unsupported_version():
+def test_resolve_recipe_rejects_unsupported_version():
     with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_profile("18.04")
+        resolve_recipe("18.04")
 
 
-def test_resolve_profile_rejects_2510():
+def test_resolve_recipe_rejects_2510():
     # 26.04 is the only supported host OS; 25.10 hosts must upgrade first.
     with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_profile("25.10")
+        resolve_recipe("25.10")
 
 
-@patch("chutes_cvm.host.profiles.detect_ubuntu_version", return_value="26.04")
-def test_resolve_profile_auto_detects(mock_detect):
-    profile = resolve_profile(None)
-    assert isinstance(profile, Ubuntu2604Profile)
+@patch("chutes_cvm.host.recipes.detect_ubuntu_version", return_value="26.04")
+def test_resolve_recipe_auto_detects(mock_detect):
+    recipe = resolve_recipe(None)
+    assert isinstance(recipe, Ubuntu2604Recipe)
     mock_detect.assert_called_once()
 
 
-@patch("chutes_cvm.host.profiles.detect_ubuntu_version", return_value="99.99")
-def test_resolve_profile_auto_detect_unsupported(mock_detect):
+@patch("chutes_cvm.host.recipes.detect_ubuntu_version", return_value="99.99")
+def test_resolve_recipe_auto_detect_unsupported(mock_detect):
     with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_profile(None)
+        resolve_recipe(None)
 
 
 # ---------------------------------------------------------------------------
@@ -256,12 +256,12 @@ def test_setup_host_calls_all_steps(
     mock_ntp,
     mock_dirs,
 ):
-    profile = Ubuntu2604Profile()
-    setup_host(profile)
+    recipe = Ubuntu2604Recipe()
+    setup_host(recipe)
 
-    mock_kver.assert_called_once_with(profile.kernel_package)
+    mock_kver.assert_called_once_with(recipe.kernel_package)
     mock_grub_kernel.assert_called_once_with("6.17.0-15-generic")
-    mock_grub_cmdline.assert_called_once_with(profile.grub_cmdline_additions)
+    mock_grub_cmdline.assert_called_once_with(recipe.grub_cmdline_additions)
     mock_kvm.assert_called_once()
     # The folded-in per-host config steps run as part of setup-host.
     mock_ntp.assert_called_once()
@@ -278,9 +278,9 @@ def test_setup_host_calls_all_steps(
 
 @patch("os.geteuid", return_value=1000)
 def test_setup_host_exits_if_not_root(mock_euid):
-    profile = Ubuntu2604Profile()
+    recipe = Ubuntu2604Recipe()
     with pytest.raises(SystemExit):
-        setup_host(profile)
+        setup_host(recipe)
 
 
 # ---------------------------------------------------------------------------
@@ -288,11 +288,11 @@ def test_setup_host_exits_if_not_root(mock_euid):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_PROFILES.keys()))
+@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
 def test_every_profile_base_packages_include_host_deps(version):
     """The folded-in host operational deps must be present so setup-host fully provisions."""
-    profile = HOST_PROFILES[version]
-    assert {"chrony", "aria2", "xfsprogs"}.issubset(set(profile.base_packages))
+    recipe = HOST_RECIPES[version]
+    assert {"chrony", "aria2", "xfsprogs"}.issubset(set(recipe.base_packages))
 
 
 @patch("chutes_cvm.host.setup._run")

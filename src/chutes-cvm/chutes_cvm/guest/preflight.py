@@ -27,12 +27,11 @@ import json
 import time
 import urllib.error
 import urllib.request
-from pathlib import Path
 from urllib.parse import urlencode
 
 import yaml
-from chutes_cvm import proc
-from chutes_cvm.guest.detection import GUEST_CPU_ARGS, SUPPORTED_QEMU_BY_OS
+from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.paths import DEFAULT_API_BASE
 from substrateinterface import Keypair, KeypairType
 
@@ -60,42 +59,6 @@ def _load_miner_creds(config_path: str) -> "tuple[str, str]":
     return ss58, seed
 
 
-def _discover_profile_json(scripts_dir: str) -> str:
-    """Run ``discover-profile.sh --json-only`` and return the profile JSON text.
-
-    The script writes a JSON file and prints its path (last stdout line); we read it,
-    then delete it — the profile is transient, only the POST needs it.
-    """
-    script = Path(scripts_dir) / "discover-profile.sh"
-    if not script.exists():
-        raise PreflightError(f"discover-profile.sh not found at {script}")
-    result = proc.run(
-        ["bash", str(script), "--json-only"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise PreflightError(
-            f"discover-profile.sh failed: {result.stderr.strip() or 'no output'}"
-        )
-    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    if not lines:
-        raise PreflightError("discover-profile.sh produced no JSON file path")
-    path = Path(lines[-1].strip())
-    try:
-        data = path.read_text()
-    except OSError as exc:
-        raise PreflightError(
-            f"cannot read discover-profile output {path}: {exc}"
-        ) from exc
-    finally:
-        try:
-            path.unlink()
-        except OSError:
-            pass
-    return data
-
-
 def _apply_target_os(profile_json: str, target_os: str) -> str:
     """Return the profile rewritten as if this host were already on ``target_os``.
 
@@ -117,23 +80,12 @@ def _apply_target_os(profile_json: str, target_os: str) -> str:
         raise PreflightError(
             f"discover-profile output is not valid JSON: {exc}"
         ) from exc
-    ld = doc.get("launch_determinism")
-    if not isinstance(ld, dict):
-        raise PreflightError(
-            "discover-profile output has no launch_determinism block to override"
-        )
-    ld["qemu_version"] = qemu_version
-    # The distro build string of a QEMU we are not running is unknowable, so mark it as
-    # projected rather than leaving the live host's (now contradictory) one in place.
-    ld["qemu_version_full"] = (
-        f"QEMU emulator version {qemu_version} (projected for target OS {target_os})"
-    )
-    ld["cpu_args"] = GUEST_CPU_ARGS
-    host = doc.get("host")
-    if isinstance(host, dict):
-        host["os_version_id"] = target_os
+    qemu = doc.get("qemu")
+    if not isinstance(qemu, dict):
+        raise PreflightError("host profile has no qemu block to override")
+    qemu["qemu_version"] = qemu_version
     # Compact separators keep the signed body small; key order is irrelevant to the API.
-    return json.dumps(doc, separators=(",", ":"))
+    return json.dumps(doc, separators=(",", ":"), sort_keys=True)
 
 
 def _sign(seed: str, body: bytes, nonce: str) -> "tuple[str, str]":
@@ -189,7 +141,7 @@ def _post(
 
 
 def _signed_profile(
-    config_path: str, scripts_dir: str, target_os: "str | None" = None
+    config_path: str, target_os: "str | None" = None
 ) -> "tuple[str, str, str, bytes]":
     """Discover this host's profile and sign it with the miner hotkey.
 
@@ -198,7 +150,11 @@ def _signed_profile(
     preflight check and the submit path.
     """
     ss58, seed = _load_miner_creds(config_path)
-    profile_json = _discover_profile_json(scripts_dir)
+    try:
+        host = HostProfile.from_host()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PreflightError(f"cannot read this host: {exc}") from exc
+    profile_json = host.to_api_json()
     if target_os:
         profile_json = _apply_target_os(profile_json, target_os)
     body = profile_json.encode()
@@ -216,7 +172,6 @@ def _signed_profile(
 
 def run_preflight(
     config_path: str,
-    scripts_dir: str,
     version: str,
     rc: bool,
     api_base: str = DEFAULT_API_BASE,
@@ -227,9 +182,7 @@ def run_preflight(
     Asks whether a published measurement for an image of ``(version, rc)`` covers this host class.
     Returns {fingerprint, launchable, detail}; raises PreflightError on any failure to reach a
     verdict (the caller fails closed)."""
-    hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_os
-    )
+    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
     query = urlencode({"version": version, "rc": "true" if rc else "false"})
     return _post(
         f"/servers/tdx/preflight?{query}", api_base, hotkey, nonce, signature, body
@@ -238,7 +191,6 @@ def run_preflight(
 
 def run_host_class_status(
     config_path: str,
-    scripts_dir: str,
     api_base: str = DEFAULT_API_BASE,
     target_os: "str | None" = None,
 ) -> dict:
@@ -253,9 +205,7 @@ def run_host_class_status(
     whether the miner must register the class or simply wait. Raises PreflightError on any failure
     to reach a verdict.
     """
-    hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_os
-    )
+    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
     return _post(
         "/servers/tdx/host_profiles/status", api_base, hotkey, nonce, signature, body
     )
@@ -263,7 +213,6 @@ def run_host_class_status(
 
 def submit_profile(
     config_path: str,
-    scripts_dir: str,
     api_base: str = DEFAULT_API_BASE,
     target_os: "str | None" = None,
 ) -> dict:
@@ -274,7 +223,5 @@ def submit_profile(
     reports the class is not yet launchable. ``target_os`` registers the class the host will BE
     after an OS upgrade (target release + the QEMU it ships), not the one it is on now.
     """
-    hotkey, nonce, signature, body = _signed_profile(
-        config_path, scripts_dir, target_os
-    )
+    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
     return _post("/servers/tdx/host_profiles", api_base, hotkey, nonce, signature, body)

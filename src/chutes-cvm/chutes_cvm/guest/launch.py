@@ -132,7 +132,6 @@ def _launchable(config_path: str, base_image: str, force: bool) -> bool:
     try:
         resp = run_preflight(
             config_path=config_path,
-            scripts_dir=str(SCRIPTS_DIR),
             version=version,
             rc=rc,
             api_base=api_base,
