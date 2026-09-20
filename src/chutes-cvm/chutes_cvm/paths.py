@@ -23,6 +23,12 @@ SCRIPTS_DIR = PACKAGE_DIR / "scripts"
 _REPO_ROOT = PACKAGE_DIR.parents[2]
 
 
+#: The guest TDVF. One build for every GPU model -- edk2 Config-B (IntelTdxX64.dsc), no Secure
+#: Boot; rebuild with firmware/build-firmware.sh. It is MRTD-measured, so changing it re-baselines
+#: attestation policy for EVERY class, not one profile's.
+GUEST_FIRMWARE = "OVMF.inteltdx.fd"
+
+
 def firmware_dir() -> Path:
     """The guest firmware (OVMF) directory.
 
@@ -31,6 +37,11 @@ def firmware_dir() -> Path:
     bundled in this host-side package; a standalone (non-editable) install copies it out of the
     checkout and sets the env in the shim, so no repo or R2 is needed at runtime."""
     return Path(os.environ.get("CHUTES_CVM_FIRMWARE_DIR") or (_REPO_ROOT / "firmware"))
+
+
+def firmware_path() -> str:
+    """Full path to the guest TDVF. MUST NOT be overridable by user config: MRTD depends on it."""
+    return str(firmware_dir() / GUEST_FIRMWARE)
 
 
 def gpu_tools_dir() -> Path:

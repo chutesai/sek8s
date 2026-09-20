@@ -11,7 +11,8 @@ guest-RAM rule fails these rather than passing with whatever the profile now say
 import json
 
 import pytest
-from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.gpu.profiles import HOST_RESERVED_CPUS
+from chutes_cvm.guest.host_profile import VM_MEM_RESERVE_GB, HostProfile
 
 H200_BARS = [
     {"index": 0, "size_mb": 16, "kind": "p64"},
@@ -111,6 +112,27 @@ def test_mixed_gpu_models_are_refused():
 def test_no_gpus_is_refused():
     with pytest.raises(ValueError, match="expected one GPU model"):
         HostProfile(document(gpus=[])).gpu_profile
+
+
+def test_gpu_less_host_sizes_its_guest_from_itself():
+    """A host with no GPUs still launches a debug guest, and the host's own CPU/RAM size it.
+
+    Everything GPU-derived has a host-level answer: the vcpu reserve falls back to the base
+    (no FabricManager to keep CPUs for) and guest RAM becomes host RAM less the reserve, since
+    there is no VRAM total to approximate. The alternative -- a fixed 100G/32-vcpu shape -- fits
+    no particular machine and was a second guest shape reachable on production hardware.
+    """
+    doc = document(gpus=[], nvswitches=[])
+    host = HostProfile(doc)
+
+    assert host.vcpus == host.cpu.count - HOST_RESERVED_CPUS
+    assert host._derived_guest_mem_gb == host.host_mem_gb - VM_MEM_RESERVE_GB
+    # the CPU facts never involved a GPU, so they answer as they always did
+    assert host.uses_guest_numa is (host.numa_node_count == 2)
+    assert host.cpu_args == "host,-avx10"
+    # but there is still no profile: nothing publishes a measurement for a GPU-less class
+    with pytest.raises(ValueError, match="expected one GPU model"):
+        host.gpu_profile
 
 
 def test_unknown_gpu_model_is_refused():

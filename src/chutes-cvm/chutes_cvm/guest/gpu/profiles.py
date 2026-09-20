@@ -61,7 +61,7 @@ class GpuProfile(ABC):
     # Must name the device the host reports for this model.
     #
     # Exactly one per profile, deliberately. A profile is not just a BAR layout: it carries
-    # host_reserved_cpus, vram_gb, firmware_filename, expected_gpus
+    # host_reserved_cpus, vram_gb, expected_gpus
     # and the CC/PPCIe mode arguments. Two products that happen to agree on those today can
     # diverge later with nothing to notice, so distinct hardware gets a distinct profile. The
     # control plane already models it that way -- its host-class fingerprint includes the
@@ -151,17 +151,6 @@ class GpuProfile(ABC):
         properly re-initialize NVLink connections after each reset.
         """
         return False
-
-    @property
-    def firmware_filename(self) -> str:
-        """TDVF firmware filename in the repo firmware/ directory.
-
-        Changing the firmware changes MRTD — attestation policy must be
-        re-baselined for any profile using a different image.
-        """
-        # Built from edk2 Config-B (IntelTdxX64.dsc), no Secure Boot.
-        # Run firmware/build-firmware.sh to rebuild from source.
-        return "OVMF.inteltdx.fd"
 
     def describe_mode(self, total_gpus: int) -> str:
         """Human-readable description of the mode for logging."""

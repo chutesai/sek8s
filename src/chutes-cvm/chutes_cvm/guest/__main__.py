@@ -29,17 +29,11 @@ from chutes_cvm.guest.qemu import (
     build_network,
     host_numa_nodes,
 )
-from chutes_cvm.paths import firmware_dir
+from chutes_cvm.paths import firmware_path
 
 PIDFILE = "/tmp/tdx-td-pid.pid"  # nosec B108
 LOGFILE = "/tmp/tdx-guest-td.log"  # nosec B108
 PROCESS_NAME = "chutes-td"
-
-
-# TDVF MUST NOT be overridden by user config (MRTD depends on it).
-# The filename is selected per GPU profile; see GpuProfile.firmware_filename.
-def _firmware_path(filename: str) -> str:
-    return str(firmware_dir() / filename)
 
 
 def print_vm_status(ssh_port: int, show_ssh: bool = False):
@@ -78,7 +72,11 @@ def launch_vm(args) -> int:
     # measurement was not generated for. Read unconditionally: every value below comes from it,
     # and --no-gpus means "do not bind the GPUs", not "invent a different guest".
     host = HostProfile.from_host()
-    profile = host.gpu_profile
+
+    # The CPU facts hold either way -- guest NUMA is a property of the host's nodes and -cpu of
+    # its QEMU version; neither involves a GPU.
+    numa_active = host.uses_guest_numa
+    cpu_args = host.cpu_args
 
     # Guest RAM already fits: HostProfile sizes it to aggregate VRAM clamped by what this host
     # can back, so there is nothing left to refuse here. A host too small for the full VRAM gets
@@ -88,22 +86,29 @@ def launch_vm(args) -> int:
     mem = host.mem
     vcpus = str(host.vcpus)
     smp_topology = host.smp_topology
-    numa_active = host.uses_guest_numa
-    cpu_args = host.cpu_args
 
-    if args.pass_gpus:
+    firmware = firmware_path()
+
+    if host.gpus:
+        profile = host.gpu_profile
+        if args.pass_gpus:
+            print(
+                f"  GPU passthrough: {host.gpu_count}x {profile.name}"
+                f" ({profile.vram_gb}GB VRAM each)"
+                f" → {vcpus} vCPUs, {mem} RAM"
+            )
+    elif args.pass_gpus:
+        print("Error: --pass-gpus, but this host has no GPUs.", file=sys.stderr)
+        return 1
+    else:
         print(
-            f"  GPU passthrough: {host.gpu_count}x {profile.name}"
-            f" ({profile.vram_gb}GB VRAM each)"
-            f" → {vcpus} vCPUs, {mem} RAM"
+            "  No GPUs on this host: debug guest, sized from the host; it cannot attest."
         )
 
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
     pci_pinning = PcieRootPinning(numa_active)
-
-    firmware = _firmware_path(profile.firmware_filename)
     print(f"Firmware: {firmware}")
 
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping

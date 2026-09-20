@@ -67,7 +67,7 @@ from chutes_cvm.measurement.runtime_rtmr import (
     compute_rtmr1_2,
     compute_rtmr3,
 )
-from chutes_cvm.paths import firmware_dir
+from chutes_cvm.paths import GUEST_FIRMWARE, firmware_dir
 
 # The API is the source of truth for known host classes and their fingerprints. `generate`
 # reads the published host profiles (the platform inputs each measurement is built from) from
@@ -326,9 +326,8 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
     """
 
     def fork_rtmr0(host: HostProfile):
-        gpu_profile = host.gpu_profile
         cmd = host.qemu_command(
-            firmware=str(Path(args.bios_dir) / gpu_profile.firmware_filename),
+            firmware=str(Path(args.bios_dir) / GUEST_FIRMWARE),
             process_name="chutes-measure",
         )
         with tempfile.TemporaryDirectory() as td:
@@ -599,7 +598,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--bios-dir",
             default=str(firmware_dir()),
-            help="directory holding the OVMF firmware (profile.firmware_filename); the fork "
+            help="directory holding the OVMF firmware (paths.GUEST_FIRMWARE); the fork "
             "opens the metadata's 'bios' path, so it must resolve absolutely "
             "(default: chutes-cvm firmware dir; env CHUTES_CVM_FIRMWARE_DIR)",
         )

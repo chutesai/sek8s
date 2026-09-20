@@ -25,7 +25,7 @@ from pathlib import Path
 from chutes_cvm import proc
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
+from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, HOST_RESERVED_CPUS, GpuProfile
 from chutes_cvm.guest.qemu import (
     PcieRootPinning,
     QemuCommand,
@@ -178,6 +178,12 @@ class HostProfile:
 
         Called once, by ``from_host``. Everything downstream reads the stored answer.
         """
+        if not self.gpus:
+            # No VRAM to approximate, so host RAM is the only input -- all of it bar the reserve.
+            # Nothing publishes a measurement for a GPU-less class, so this guest is a debug one;
+            # sizing it from the host beats a fixed number that fits no particular machine.
+            return self.host_mem_gb - VM_MEM_RESERVE_GB
+
         gpus = self.gpu_count
         vram_gb = self.gpu_profile.vram_gb
         total_vram_gb = vram_gb * gpus
@@ -303,8 +309,15 @@ class HostProfile:
     # ── the guest that produces ─────────────────────────────────────────────
     @property
     def vcpus(self) -> int:
-        """Guest vCPUs: the host's CPUs less the profile's reserve for the host OS."""
-        return self.cpu.count - self.gpu_profile.host_reserved_cpus
+        """Guest vCPUs: the host's CPUs less the reserve for the host OS.
+
+        The reserve is the GPU profile's where there is one (a heavier fixed host workload, e.g.
+        FabricManager, keeps more); a host with no GPUs runs none of that and takes the base.
+        """
+        reserved = (
+            self.gpu_profile.host_reserved_cpus if self.gpus else HOST_RESERVED_CPUS
+        )
+        return self.cpu.count - reserved
 
     @property
     def guest_mem_gb(self) -> int:
