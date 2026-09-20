@@ -285,14 +285,20 @@ publish-base-image:
 	$(_rclone_pass_prompt); \
 	guest-tools/scripts/publish-base-image.sh --version "$(BASE_VER)"
 
+# Archival options, as variables because make consumes bare `--flags` itself:
+#   make publish-guest PREFIX=tdx-guest-1.4.0   -> r2:.../tdx-guest-1.4.0/tdx-guest.*
+# PREFIX/NAME make it an archival publish, which will not overwrite an existing set
+# unless FORCE=1.
+_publish_opts = $(if $(PREFIX),--prefix $(PREFIX)) $(if $(NAME),--name $(NAME)) $(if $(FORCE),--force)
+
 .PHONY: publish-guest
-publish-guest: ##@images Publish built prod guest image + direct-boot artifacts to R2 (ENV=prod)
+publish-guest: ##@images Publish built prod guest image + direct-boot artifacts to R2 (ENV=prod, PREFIX=, NAME=, FORCE=1)
 publish-guest:
 	@$(_rclone_pass_prompt); \
-	guest-tools/scripts/publish-image.sh --env $(or $(ENV),prod)
+	guest-tools/scripts/publish-image.sh --env $(or $(ENV),prod) $(_publish_opts)
 
 .PHONY: publish-guest-debug
-publish-guest-debug: ##@images Publish built debug guest image + direct-boot artifacts to R2 (ENV=prod)
+publish-guest-debug: ##@images Publish built debug guest image + direct-boot artifacts to R2 (ENV=prod, PREFIX=, NAME=, FORCE=1)
 publish-guest-debug:
 	@$(_rclone_pass_prompt); \
-	guest-tools/scripts/publish-image.sh --debug --env $(or $(ENV),prod)
+	guest-tools/scripts/publish-image.sh --debug --env $(or $(ENV),prod) $(_publish_opts)
