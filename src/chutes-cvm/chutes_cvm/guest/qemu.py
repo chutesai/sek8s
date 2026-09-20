@@ -48,21 +48,35 @@ def host_numa_nodes() -> list[int]:
 
 
 class PcieRootPinning:
-    """Pin emulated virtio devices to pcie.0 below PXB bridge slots (0x18+)."""
+    """Assign the launch's emulated virtio devices their pcie.0 slots, in order.
 
-    _SLOTS = (0x2, 0x3, 0x4, 0x5, 0x6, 0x7)
+    The boot disk, NIC, volumes and vsock occupy slots, and slot layout lands in the DSDT and so
+    in RTMR0. QEMU would auto-assign them the lowest free slots anyway, but the command states
+    them instead of inheriting an allocator decision: that is what lets offline measurement
+    generation reproduce the layout by reading the command rather than re-deriving the rule, and
+    a rule derived twice is a rule that can disagree with itself.
 
-    def __init__(self, enabled: bool):
-        self.enabled = enabled
-        self._index = 0
+    One instance is shared across the builders of a single command -- each call takes the next
+    slot, so how many devices there are is the callers' business, not this object's. The run
+    starts at 0x1, except under guest NUMA where it starts at 0x2 to keep every emulated device
+    below the PXB bridges. Both match live DSDTs from the two paths on one host:
+        NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
+        FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
+
+    Adding an emulated device therefore shifts nothing already placed, but it does take the next
+    slot and so changes the DSDT -- and with it every published RTMR0.
+    """
+
+    _LAST_SLOT = 0x17  # guest-NUMA PXB bridges start at 0x18
+
+    def __init__(self, guest_numa: bool):
+        self._next = 0x2 if guest_numa else 0x1
 
     def device_suffix(self) -> str:
-        if not self.enabled:
-            return ""
-        if self._index >= len(self._SLOTS):
+        if self._next > self._LAST_SLOT:
             raise RuntimeError("No free pcie.0 slots for emulated PCI devices")
-        addr = self._SLOTS[self._index]
-        self._index += 1
+        addr = self._next
+        self._next += 1
         return f",bus=pcie.0,addr=0x{addr:x}"
 
 
@@ -406,7 +420,7 @@ def build_base_cmd(
     kernel_path: str,
     initrd_path: str,
     cmdline: str,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ) -> QemuCommand:
     """Build the base QEMU command (TDX, firmware, CPU, memory, direct boot).
 
@@ -425,7 +439,6 @@ def build_base_cmd(
     independent and the measured tables don't include the kernel).
     """
     numa_enabled = len(host_nodes) >= 2
-    pinning = pci_pinning or PcieRootPinning(numa_enabled)
 
     if numa_enabled:
         machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx"
@@ -476,7 +489,7 @@ def build_base_cmd(
     elif img_fmt == "raw":
         drive_opts += ",discard=on,detect-zeroes=on"
     cmd.drives.append(drive_opts)
-    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pinning.device_suffix()}"
+    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pci_pinning.device_suffix()}"
     if img_fmt == "raw":
         dev_opts += ",num-queues=4"
     cmd.devices.append(dev_opts)
@@ -491,7 +504,7 @@ def build_network(
     net_iface: str | None,
     ssh_port: int,
     net_queues: int = 4,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ):
     """Add the guest NIC to the QemuCommand.
 
@@ -503,12 +516,11 @@ def build_network(
 
     Whether an interface SHOULD have been supplied is the caller's question, not this one.
     """
-    pinning = pci_pinning or PcieRootPinning(False)
     if network_type == "tap":
         vectors = 2 * net_queues + 2
         cmd.devices.append(
             f"virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on"
-            f"{pinning.device_suffix()}"
+            f"{pci_pinning.device_suffix()}"
         )
         if net_iface:
             print(
@@ -520,7 +532,9 @@ def build_network(
             )
     else:
         print("Networking: Canonical user-mode networking")
-        cmd.devices.append(f"virtio-net-pci,netdev=nic0_td{pinning.device_suffix()}")
+        cmd.devices.append(
+            f"virtio-net-pci,netdev=nic0_td{pci_pinning.device_suffix()}"
+        )
         cmd.netdevs.append(f"user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22")
 
 
@@ -530,16 +544,15 @@ def add_volumes(
     config_volume: str | None,
     cache_volume: str | None,
     storage_volume: str | None,
-    pci_pinning: PcieRootPinning | None = None,
+    pci_pinning: PcieRootPinning,
 ):
     """Add config, cache, and storage volumes to the QemuCommand."""
-    pinning = pci_pinning or PcieRootPinning(False)
     if config_volume:
         cmd.drives.append(
             f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on"
         )
         cmd.devices.append(
-            f"virtio-blk-pci,drive=virtio-config{pinning.device_suffix()}"
+            f"virtio-blk-pci,drive=virtio-config{pci_pinning.device_suffix()}"
         )
     for vol_path, vol_id in [
         (cache_volume, "virtio-cache"),
@@ -552,13 +565,12 @@ def add_volumes(
         if vol_fmt == "raw":
             drive_opts += ",discard=on,detect-zeroes=on"
         cmd.drives.append(drive_opts)
-        dev_opts = f"virtio-blk-pci,drive={vol_id}{pinning.device_suffix()}"
+        dev_opts = f"virtio-blk-pci,drive={vol_id}{pci_pinning.device_suffix()}"
         if vol_fmt == "raw":
             dev_opts += ",num-queues=4"
         cmd.devices.append(dev_opts)
 
 
-def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning | None = None):
+def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning):
     """Add vhost-vsock device to the QemuCommand."""
-    pinning = pci_pinning or PcieRootPinning(False)
-    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pinning.device_suffix()}")
+    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pci_pinning.device_suffix()}")

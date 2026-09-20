@@ -10,8 +10,8 @@ applies the substitutions the fork needs:
     (not carried over — the dumper QEMU has no confidential-guest support).
   - **memory**: ``reserve=off`` on every backend (maps any-size guest RAM on a
     small host without allocating it) and strip host-nodes/policy binding.
-  - **emulated devices**: replace the boot disk with backing-free slot-fillers so
-    pcie.0 slots 0x2-0x7 populate the DSDT without real drives.
+  - **emulated devices**: replace each with a backing-free filler at the slot the
+    command gave it, so the same pcie.0 slots populate the DSDT without real drives.
   - **passthrough**: swap each ``vfio-pci`` endpoint for a ``pci-bar-stub``
     carrying that device's own captured BAR layout, reproducing the MMIO windows
     the real BARs would create.
@@ -35,33 +35,6 @@ from chutes_cvm.guest.qemu import QemuCommand
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
 # container QEMU has no confidential-guest support.
 _DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
-
-# A launch places six emulated devices on pcie.0 (boot disk, net, 3 volumes, vsock) with no
-# explicit addr=, so QEMU auto-assigns them the lowest free slots. Which slots those are depends
-# on the topology: with PXB bridges present (guest-NUMA) they land at 0x2-0x7, without them (flat)
-# one slot lower, at 0x1-0x6. Verified against live DSDTs from both paths on one host:
-#   NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]    FLAT  _ADR slots [1,2,3,4,5,6, 8,9, 31]
-# Their DSDT nodes are slot-populated markers only (device-type agnostic), so backing-free
-# fillers reproduce them -- but only at the right slots, or every device node shifts and the
-# DSDT digest (RTMR0 ACPI event) changes.
-#: How many emulated devices a standard launch puts on pcie.0, auto-assigned (no addr=):
-#: boot disk, net, config volume, cache volume, storage volume, vsock. NOT derivable from the
-#: command the generator builds -- HostProfile.qemu_command emits only the boot disk; the rest
-#: are added later by the launch orchestrator (build_network, volume setup), which the generator
-#: never runs. Changing the volume set changes this number, and a benchmark launch (no cache
-#: volume) is already a different shape.
-_EMULATED_DEVICE_COUNT = 6
-
-
-def _emulated_slots(devices: list[str]) -> range:
-    """The pcie.0 slots QEMU auto-assigns to the launch's emulated devices.
-
-    The first slot depends on whether PXB bridges are present, and only on that: measured with
-    2, 3 and 4 bridges the emulated devices start at 0x2 in every case, and at 0x1 with none.
-    So a future guest-NUMA topology with more nodes stays correct here.
-    """
-    first = 0x2 if any(d.startswith("pxb-pcie") for d in devices) else 0x1
-    return range(first, first + _EMULATED_DEVICE_COUNT)
 
 
 def _bars_arg(bars: list[PciBar]) -> str:
@@ -116,18 +89,24 @@ class ImageConfig:
 
     @property
     def devices(self) -> list[str]:
-        """Fillers for the emulated slots, then the passthrough topology with stubbed BARs."""
-        out = [
-            f"virtio-rng-pci,bus=pcie.0,addr={s:#x}"
-            for s in _emulated_slots(self.cmd.devices)
-        ]
+        """Every device the launch declares, made reproducible without hardware.
+
+        The launch's emulated devices (boot disk, NIC, three volumes, vsock) each reference a
+        drive or netdev the dump has no backing for, but their pcie.0 slots land in the DSDT and
+        so in RTMR0. Each is replaced by a backing-free filler **in place**, keeping the address
+        the command assigned it -- explicit when ``PcieRootPinning`` pinned it below the PXB
+        bridges, absent when it did not, in which case QEMU auto-assigns here exactly as it does
+        at launch. The slot rule lives in the builder; this only preserves its output.
+        """
+        out = []
         for dev in self.cmd.devices:
-            if dev.startswith("virtio-blk-pci,drive=virtio-disk0"):
-                continue  # boot disk — replaced by the slot-fillers above
             if dev.startswith("vfio-pci"):
                 out.append(self._swap_endpoint(dev))
+            elif dev.startswith(("pxb-pcie", "pcie-root-port")):
+                out.append(dev)
             else:
-                out.append(dev)  # pxb-pcie / pcie-root-port
+                addr = re.search(r",addr=0x[0-9a-f]+", dev)
+                out.append(f"virtio-rng-pci,bus=pcie.0{addr.group(0) if addr else ''}")
         return out
 
     def _endpoint_for(self, root_port: str) -> PassthroughDevice:

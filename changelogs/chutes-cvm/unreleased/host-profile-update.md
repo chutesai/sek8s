@@ -63,6 +63,14 @@
   generate its measurement, at the boundary where they are known to be meaningless. `--target-os`
   now rewrites only the QEMU version, since the OS release is no longer submitted.
 
+- A launch states the pcie.0 slots of its six emulated devices (boot disk, NIC, the three volumes,
+  vsock) instead of letting QEMU auto-assign them. The layout is unchanged — QEMU picked the same
+  slots — but it is now written in the command, which is what lets offline generation reproduce it
+  by reading the command rather than re-deriving the rule. `PcieRootPinning` owns the rule for both
+  paths and every builder now requires the caller's pinning object, so the slots cannot be decided
+  twice. Command assembly stays pure: the same inputs give the same command, and the measurement
+  adapter substitutes backing-free fillers at the addresses already there.
+
 ### Removed
 
 - The per-GPU `opt/ovmf/X-PciMmio64Mb<N>` fw_cfg hint and its `bar_size_mb` plumbing. The
@@ -76,3 +84,14 @@
   attach — on a B300, 14 `rp_ib` ports that never exist in a real boot — because it took the raw
   NUMA vectors while the launch path gated on the GPU profile's `passthrough` entries. Both paths
   now gate identically, so a generated RTMR0 can match the boot it describes.
+
+- Every flat-topology guest measured one pcie.0 slot high. Offline generation hardcoded the
+  guest-NUMA slot run (0x2-0x7) for the emulated devices, but a flat guest pins nothing and QEMU
+  fills from 0x1, so each DSDT device node shifted, changing the ACPI digest and so RTMR0. No flat
+  class ever reproduced its own boot. Confirmed against live CCELs captured from both paths on one
+  host: NUMA `_ADR` slots [2,3,4,5,6,7,24,25,31], flat [1,2,3,4,5,6,8,9,31]. A forced-flat boot's
+  real RTMR0 now regenerates byte-for-byte offline.
+- Generating a flat topology also needs tdx-measure's `fix/pxb-roots`: the fork emitted an
+  `extra-pci-roots` event unconditionally, adding a 15th RTMR0 event to guests that declare no PXB
+  bridges. Both bugs had to be fixed for a flat class to measure correctly, which is why only
+  guest-NUMA hosts ever attested.

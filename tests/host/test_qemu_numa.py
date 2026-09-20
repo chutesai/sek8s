@@ -1,13 +1,17 @@
 """Unit tests for QEMU NUMA topology helpers."""
 
+import re
 
 import pytest
+import topology_fixtures as known
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import (
     PcieRootPinning,
     QemuCommand,
     _append_numa_memory,
     _parse_mem_mib,
     add_volumes,
+    add_vsock,
     build_base_cmd,
     build_network,
 )
@@ -61,6 +65,7 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
         kernel_path="/boot/vmlinuz",
         initrd_path="/boot/initrd.img",
         cmdline="root=UUID=x ro",
+        pci_pinning=PcieRootPinning(True),
     )
     flat = " ".join(cmd.to_args())
     assert "memory-backend-ram,id=mem-node0" in flat
@@ -95,6 +100,7 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
         kernel_path="/boot/vmlinuz",
         initrd_path="/boot/initrd.img",
         cmdline="root=UUID=x ro",
+        pci_pinning=PcieRootPinning(False),
     )
     flat = " ".join(cmd.to_args())
     assert (
@@ -129,6 +135,7 @@ def test_direct_boot_emits_kernel_initrd_append_and_drops_bootindex(tmp_path):
         kernel_path="/boot/vmlinuz",
         initrd_path="/boot/initrd.img",
         cmdline="root=UUID=abc ro console=ttyS0",
+        pci_pinning=PcieRootPinning(False),
     )
     args = cmd.to_args()
     flat = " ".join(args)
@@ -180,7 +187,64 @@ def test_network_device_does_not_depend_on_having_a_host_interface():
     No mode flag: same function, different inputs, deterministic output.
     """
     with_iface, without = _empty_cmd(), _empty_cmd()
-    build_network(with_iface, network_type="tap", net_iface="br0", ssh_port=22)
-    build_network(without, network_type="tap", net_iface=None, ssh_port=22)
+    pinning = PcieRootPinning(False)
+    build_network(with_iface, network_type="tap", net_iface="br0", ssh_port=22,
+                  pci_pinning=pinning)
+    build_network(without, network_type="tap", net_iface=None, ssh_port=22,
+                  pci_pinning=PcieRootPinning(False))
     assert without.devices == with_iface.devices
     assert without.netdevs == [] and len(with_iface.netdevs) == 1
+
+
+def test_generation_command_carries_a_launch_emulated_device_set():
+    """The measurement command must place the same emulated devices, at the same slots, as a
+    launch -- their pcie.0 slots land in the DSDT and so in RTMR0.
+
+    Both commands come from these same builders, so the set cannot be stated as a constant that
+    drifts: add or remove a volume and both move together. What this guards is that
+    ``HostProfile.qemu_command`` keeps *calling* them, with the same pinning -- drop one and a
+    generated DSDT loses a device node while every real guest still has it.
+    """
+
+    def emulated(cmd):
+        infra = ("pxb-pcie", "pcie-root-port", "vfio-pci")
+        return [d for d in cmd.devices if not d.startswith(infra)]
+
+    host = HostProfile(known.rtx_numa_doc())
+    pinning = PcieRootPinning(True)  # one object across every builder, as __main__ does
+    launch = build_base_cmd(
+        mem="1128G",
+        smp_topology="124,sockets=2,cores=62,threads=1",
+        process_name="chutes-td",
+        cpu_args="host,-avx10",
+        firmware="/f",
+        img_path="/root.qcow2",
+        foreground=False,
+        pidfile="/dev/null",
+        logfile="/dev/null",
+        host_nodes=[0, 1],
+        kernel_path="/dev/null",
+        initrd_path="/dev/null",
+        cmdline="",
+        pci_pinning=pinning,
+    )
+    build_network(launch, network_type="tap", net_iface="br0", ssh_port=22, pci_pinning=pinning)
+    add_volumes(
+        launch,
+        config_volume="/c.qcow2",
+        cache_volume="/k.raw",
+        storage_volume="/s.raw",
+        pci_pinning=pinning,
+    )
+    add_vsock(launch, pci_pinning=pinning)
+
+    generated = host.qemu_command(firmware="/f", cpu_args="host,-avx10")
+
+    def kinds(cmd):
+        return [
+            (d.split(",")[0], (re.search(r"addr=(0x[0-9a-f]+)", d) or [None, None])[1])
+            for d in emulated(cmd)
+        ]
+
+    assert kinds(generated) == kinds(launch)
+    assert [a for _, a in kinds(launch)] == [f"0x{slot:x}" for slot in range(2, 8)]
