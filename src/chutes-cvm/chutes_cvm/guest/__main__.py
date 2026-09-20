@@ -13,7 +13,7 @@ import sys
 import time
 
 from chutes_cvm import proc
-from chutes_cvm.guest.detection import GUEST_CPU_ARGS, verify_host_qemu_supported
+from chutes_cvm.guest.detection import verify_host_qemu_supported
 from chutes_cvm.guest.direct_boot import direct_boot_artifacts
 from chutes_cvm.guest.gpu.profiles import (  # noqa: F401 — available for introspection
     GPU_PROFILES,
@@ -35,15 +35,10 @@ PIDFILE = "/tmp/tdx-td-pid.pid"  # nosec B108
 LOGFILE = "/tmp/tdx-guest-td.log"  # nosec B108
 PROCESS_NAME = "chutes-td"
 
-DEFAULT_MEM = "100G"
-DEFAULT_VCPUS = "32"
 
 # TDVF MUST NOT be overridden by user config (MRTD depends on it).
 # The filename is selected per GPU profile; see GpuProfile.firmware_filename.
-_DEFAULT_FIRMWARE = "OVMF.inteltdx.fd"
-
-
-def _firmware_path(filename: str = _DEFAULT_FIRMWARE) -> str:
+def _firmware_path(filename: str) -> str:
     return str(firmware_dir() / filename)
 
 
@@ -78,47 +73,37 @@ def launch_vm(args) -> int:
     # Fail early if the host QEMU isn't the one baselined for its OS (moves RTMR0).
     verify_host_qemu_supported()
 
-    mem = DEFAULT_MEM
-    vcpus = DEFAULT_VCPUS
-    smp_topology = f"{DEFAULT_VCPUS},sockets=1,cores={DEFAULT_VCPUS},threads=1"
-    profile = None
-    host = None
+    # One reading of this host, by discover-profile.sh -- the same reading the submitted profile
+    # and the generated measurement are built from, so the guest cannot launch with a shape the
+    # measurement was not generated for. Read unconditionally: every value below comes from it,
+    # and --no-gpus means "do not bind the GPUs", not "invent a different guest".
+    host = HostProfile.from_host()
+    profile = host.gpu_profile
+
+    # Guest RAM already fits: HostProfile sizes it to aggregate VRAM clamped by what this host
+    # can back, so there is nothing left to refuse here. A host too small for the full VRAM gets
+    # a smaller guest and therefore its own class -- which is why the shape has to be registered
+    # and measured before launch, and why preflight, not a RAM check, is what catches a host
+    # whose guest nothing has measured.
+    mem = host.mem
+    vcpus = str(host.vcpus)
+    smp_topology = host.smp_topology
+    numa_active = host.uses_guest_numa
+    cpu_args = host.cpu_args
 
     if args.pass_gpus:
-        # One reading of this host, by discover-profile.sh -- the same reading the submitted
-        # profile and the generated measurement are built from, so the guest cannot launch with
-        # a shape the measurement was not generated for.
-        host = HostProfile.from_host()
-        profile = host.gpu_profile
-        total_gpus = host.gpu_count
-        # Guest RAM already fits: HostProfile sizes it to aggregate VRAM clamped by what this
-        # host can back, so there is nothing left to refuse here. A host too small for the full
-        # VRAM gets a smaller guest and therefore its own class -- which is why the shape has to
-        # be registered and measured before launch, and why preflight, not a RAM check, is what
-        # catches a host whose guest nothing has measured.
-        mem = host.mem
-        vcpus = str(host.vcpus)
-        smp_topology = host.smp_topology
         print(
-            f"  GPU passthrough: {total_gpus}x {profile.name}"
+            f"  GPU passthrough: {host.gpu_count}x {profile.name}"
             f" ({profile.vram_gb}GB VRAM each)"
             f" → {vcpus} vCPUs, {mem} RAM"
         )
 
-    # One derivation, from the captured host -- not from a second read of the live machine.
-    # The memory topology and the PCI topology must agree, and `host` is what the measurement
-    # was generated against, so it is the authority for both.
-    numa_active = host.uses_guest_numa if host is not None else False
-
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
-    cpu_args = GUEST_CPU_ARGS
-
     pci_pinning = PcieRootPinning(numa_active)
 
-    firmware_filename = profile.firmware_filename if profile else _DEFAULT_FIRMWARE
-    firmware = _firmware_path(firmware_filename)
+    firmware = _firmware_path(profile.firmware_filename)
     print(f"Firmware: {firmware}")
 
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
@@ -171,7 +156,7 @@ def launch_vm(args) -> int:
 
     add_vsock(qemu_cmds, pci_pinning=pci_pinning)
 
-    if args.pass_gpus and host is not None:
+    if args.pass_gpus:
         setup_passthrough(qemu_cmds, host)
 
     # Guest NUMA topology (numa_active) binds memory per node via QEMU
@@ -181,9 +166,7 @@ def launch_vm(args) -> int:
         launch_prefix = []
     else:
         numa_nodes = (
-            sorted({n for n in host.gpu_numa_nodes if n >= 0})
-            if args.pass_gpus and host is not None
-            else []
+            sorted({n for n in host.gpu_numa_nodes if n >= 0}) if args.pass_gpus else []
         )
         if numa_nodes:
             interleave = ",".join(str(n) for n in numa_nodes)

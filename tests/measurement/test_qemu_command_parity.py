@@ -14,7 +14,6 @@ import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import (
     build_pci_topology,
-    cpu_args_for_qemu_version,
 )
 
 _FW = "OVMF.inteltdx.fd"
@@ -100,10 +99,13 @@ def test_nvswitch_endpoints_follow_the_gpus():
     assert ids == [f"rp{i}" for i in range(1, 9)] + [f"rp_nvsw{i}" for i in range(1, 5)]
 
 
-def test_cpu_args_for_qemu_version():
-    assert cpu_args_for_qemu_version("10.2.1") == "host,-avx10"
-    # Unknown/unsupported QEMU versions fall back to the same -avx10 form.
-    assert cpu_args_for_qemu_version("99.9.9") == "host,-avx10"
+def test_cpu_args_come_from_the_reported_qemu_version():
+    doc = known.rtx_numa_doc()
+    doc["qemu"]["qemu_version"] = "10.2.1"
+    assert HostProfile(doc).cpu_args == "host,-avx10"
+    # Unknown/unsupported QEMU versions take the same -avx10 form.
+    doc["qemu"]["qemu_version"] = "99.9.9"
+    assert HostProfile(doc).cpu_args == "host,-avx10"
 
 
 def test_pci_topology_takes_the_decision_it_is_given():

@@ -23,6 +23,7 @@ from functools import cached_property
 from pathlib import Path
 
 from chutes_cvm import proc
+from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
 from chutes_cvm.guest.qemu import (
@@ -33,7 +34,6 @@ from chutes_cvm.guest.qemu import (
     build_base_cmd,
     build_network,
     build_pci_topology,
-    cpu_args_for_qemu_version,
 )
 from chutes_cvm.paths import SCRIPTS_DIR
 
@@ -115,6 +115,11 @@ class HostCpu:
 
 class HostProfile:
     """One host, as captured. Construct from the document ``discover-profile.sh`` emits."""
+
+    #: The guest ``-cpu`` per host QEMU version, in the LAUNCH form -- offline generation adds an
+    #: explicit CPU identity on top (see image_config). One entry today: 10.2.1 ships with 26.04,
+    #: the only supported host OS. Any other version takes the same form.
+    CPU_ARGS_BY_QEMU = {"10.2.1": GUEST_CPU_ARGS}
 
     def __init__(self, raw: dict):
         self.raw = raw
@@ -373,7 +378,7 @@ class HostProfile:
     @property
     def cpu_args(self) -> str:
         """The ``-cpu`` string this host launches with, from the QEMU version it reports."""
-        return cpu_args_for_qemu_version(self.qemu_version)
+        return self.CPU_ARGS_BY_QEMU.get(self.qemu_version, GUEST_CPU_ARGS)
 
     def qemu_command(
         self,

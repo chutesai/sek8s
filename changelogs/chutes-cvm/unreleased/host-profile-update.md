@@ -71,6 +71,22 @@
   twice. Command assembly stays pure: the same inputs give the same command, and the measurement
   adapter substitutes backing-free fillers at the addresses already there.
 
+- A launch took `-cpu` from the `GUEST_CPU_ARGS` constant while measurement generation resolved it
+  from the profile's QEMU version. They agreed only because the version table holds one entry
+  pointing at that same constant, so the first host on a second QEMU version would have booted with
+  one `-cpu` having been measured with another — an attestation failure with nothing in the command
+  to show why. The launch now reads `host.cpu_args`, the same resolution generation uses.
+
+- A launch reads the host profile unconditionally. It previously read one only under
+  `--pass-gpus`, so `--no-gpus` booted a hardcoded 100G/32-vcpu/single-socket guest that no
+  profile described and no measurement was ever generated for — a second, unattestable guest
+  shape reachable by a flag, expressed as `host is not None` guards scattered through the
+  launcher. `--no-gpus` now means what it says: the same guest this host is measured for,
+  without binding its GPUs.
+- `cpu_args` is a lookup on `HostProfile` (`CPU_ARGS_BY_QEMU`) rather than a module-level table
+  and helper function in `qemu.py`. One QEMU version maps to one `-cpu`; the host profile knows
+  the version, so it is where the answer belongs.
+
 ### Removed
 
 - The per-GPU `opt/ovmf/X-PciMmio64Mb<N>` fw_cfg hint and its `bar_size_mb` plumbing. The
