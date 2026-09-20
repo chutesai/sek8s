@@ -147,7 +147,21 @@ def test_emulated_slot_fillers_keep_the_slots_the_command_assigned():
         return [d for d in q["devices"] if d.startswith("virtio-rng-pci")]
 
     assert any("pxb-pcie" in d for d in numa["devices"])
-    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(numa)) == [2, 3, 4, 5, 6, 7]
+    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(numa)) == [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+    ]
 
     assert not any("pxb-pcie" in d for d in flat["devices"])
-    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(flat)) == [1, 2, 3, 4, 5, 6]
+    assert sorted(int(d.split("addr=")[1], 16) for d in fillers(flat)) == [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]

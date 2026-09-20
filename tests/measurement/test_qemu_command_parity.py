@@ -9,12 +9,9 @@ are dropped from the comparison — only their BDF differs, and neither the BDF 
 the endpoint device type is settled here.
 """
 
-
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import (
-    build_pci_topology,
-)
+from chutes_cvm.guest.qemu import build_pci_topology
 
 _FW = "OVMF.inteltdx.fd"
 
@@ -68,9 +65,9 @@ def test_numa_topology_groups_gpus_by_node():
     """
     args = _topology_args(_synth(known.rtx_numa_doc()))
     assert _slots(args, "pxb-pcie") == ["0x18", "0x19"]  # one per node, 24 + node
-    assert [a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")] == [
-        f"rp{i}" for i in range(1, 9)
-    ]
+    assert [
+        a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")
+    ] == [f"rp{i}" for i in range(1, 9)]
     # The command is native, so endpoints carry the captured devices' real BDFs; image_config
     # swaps each for a pci-bar-stub, which is why no placeholder is invented here.
     assert any("vfio-pci,host=0000:19:00.0" in a for a in _synth(known.rtx_numa_doc()))
@@ -82,7 +79,9 @@ def test_uneven_numa_split_follows_the_captured_vector():
     args = _topology_args(
         _synth(known.host_document("RTX_PRO_6000", vcpus=124, gpu_nodes=nodes))
     )
-    buses = [a.split("bus=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")]
+    buses = [
+        a.split("bus=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")
+    ]
     assert buses == ["pxb_numa0"] * 3 + ["pxb_numa1"] * 5
 
 
@@ -95,7 +94,9 @@ def test_flat_topology_has_no_pxb():
 def test_nvswitch_endpoints_follow_the_gpus():
     """NVSwitch root ports are numbered after the GPUs and keep their own node placement."""
     args = _topology_args(_synth(known.h200_doc(nvswitch_node=1)))
-    ids = [a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")]
+    ids = [
+        a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")
+    ]
     assert ids == [f"rp{i}" for i in range(1, 9)] + [f"rp_nvsw{i}" for i in range(1, 5)]
 
 

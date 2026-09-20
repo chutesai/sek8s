@@ -199,7 +199,9 @@ def test_guest_numa_needs_exactly_two_host_nodes():
     assert HostProfile(document(numa={"node_count": 4})).uses_guest_numa is False
     assert HostProfile(document(numa={"node_count": 1})).uses_guest_numa is False
     # The GPU model is not consulted: a 2-node B300 host gets guest NUMA like any other.
-    b300 = document(gpus=[gpu(f"0000:{b}:00.0", n, "3182") for b, n in (("19", 0), ("3b", 1))])
+    b300 = document(
+        gpus=[gpu(f"0000:{b}:00.0", n, "3182") for b, n in (("19", 0), ("3b", 1))]
+    )
     assert HostProfile(b300).uses_guest_numa is True
 
 

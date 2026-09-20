@@ -188,10 +188,20 @@ def test_network_device_does_not_depend_on_having_a_host_interface():
     """
     with_iface, without = _empty_cmd(), _empty_cmd()
     pinning = PcieRootPinning(False)
-    build_network(with_iface, network_type="tap", net_iface="br0", ssh_port=22,
-                  pci_pinning=pinning)
-    build_network(without, network_type="tap", net_iface=None, ssh_port=22,
-                  pci_pinning=PcieRootPinning(False))
+    build_network(
+        with_iface,
+        network_type="tap",
+        net_iface="br0",
+        ssh_port=22,
+        pci_pinning=pinning,
+    )
+    build_network(
+        without,
+        network_type="tap",
+        net_iface=None,
+        ssh_port=22,
+        pci_pinning=PcieRootPinning(False),
+    )
     assert without.devices == with_iface.devices
     assert without.netdevs == [] and len(with_iface.netdevs) == 1
 
@@ -228,7 +238,9 @@ def test_generation_command_carries_a_launch_emulated_device_set():
         cmdline="",
         pci_pinning=pinning,
     )
-    build_network(launch, network_type="tap", net_iface="br0", ssh_port=22, pci_pinning=pinning)
+    build_network(
+        launch, network_type="tap", net_iface="br0", ssh_port=22, pci_pinning=pinning
+    )
     add_volumes(
         launch,
         config_volume="/c.qcow2",
