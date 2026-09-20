@@ -26,10 +26,9 @@ from chutes_cvm import proc
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile
 from chutes_cvm.guest.qemu import (
-    NumaPciTopologyState,
-    PciTopologyState,
     QemuCommand,
     build_base_cmd,
+    build_pci_topology,
     cpu_args_for_qemu_version,
 )
 from chutes_cvm.paths import SCRIPTS_DIR
@@ -413,19 +412,13 @@ class HostProfile:
             initrd_path=initrd_path,
             cmdline=cmdline,
         )
-        topology = NumaPciTopologyState() if numa else PciTopologyState()
-        chassis = 0
-        for prefix, devices in (
-            ("rp", self.gpus),
-            ("rp_nvsw", self.attached_nvswitches),
-            ("rp_ib", self.attached_ib),
-        ):
-            for ordinal, device in enumerate(devices, start=1):
-                chassis += 1
-                kwargs: dict = {"rp_id": f"{prefix}{ordinal}", "chassis": chassis}
-                if numa:
-                    kwargs["numa_node"] = device.numa_node
-                topology.add_device(cmd, host_bdf=device.bdf, **kwargs)
+        build_pci_topology(
+            cmd,
+            gpus=self.gpus,
+            nvswitches=self.attached_nvswitches,
+            ib_devices=self.attached_ib,
+            guest_numa=numa,
+        )
         return cmd
 
     # ── serialisation ───────────────────────────────────────────────────────

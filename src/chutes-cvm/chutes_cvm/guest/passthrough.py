@@ -7,12 +7,7 @@ from chutes_cvm.guest.detection import detect_infiniband_vfs
 from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import (
-    NumaPciTopologyState,
-    PciTopologyState,
-    QemuCommand,
-    read_pci_numa_node,
-)
+from chutes_cvm.guest.qemu import QemuCommand, build_pci_topology
 from chutes_cvm.paths import SCRIPTS_DIR
 from chutes_cvm.vfio import (
     bind_explicit_devices_to_vfio,
@@ -247,61 +242,6 @@ def _prepare_devices(
     install_udev_rules(str(SCRIPTS_DIR))
 
 
-def _build_pci_topology(
-    cmd: QemuCommand,
-    *,
-    gpus: list[str],
-    nvswitches_for_vm: list[str],
-    ib_devices: list[str],
-    profile: GpuProfile,
-    guest_numa: bool,
-):
-    """Add GPU, NVSwitch, and IB devices to the QemuCommand's PCI topology.
-
-    ``guest_numa`` is passed in, never re-derived: it has to agree with the memory topology,
-    because PXB bridges name guest NUMA nodes. Deriving it here from the live host once produced
-    PXB bridges on a guest with no ``-numa`` at all, and QEMU refused with "Illegal numa node 0".
-    """
-    numa = guest_numa
-    topo: "PciTopologyState | NumaPciTopologyState"
-    if numa:
-        print("  PCI topology: NUMA-local PXB-PCIe bridges")
-        topo = NumaPciTopologyState()
-    else:
-        topo = PciTopologyState()
-
-    def _add(host_bdf, rp_id, chassis, **bar):
-        # On the NUMA path, resolve the device's node from sysfs here and pass it
-        # as placement; add_device no longer reads sysfs, so offline measurement
-        # generation can supply the node from a topology fingerprint instead.
-        if numa:
-            bar["numa_node"] = read_pci_numa_node(host_bdf)
-        topo.add_device(cmd, host_bdf=host_bdf, rp_id=rp_id, chassis=chassis, **bar)
-
-    print(f"  Adding {len(gpus)} GPU(s) to PCI topology...")
-    # OVMF sizes the guest's 64-bit MMIO window from the BARs it enumerates; nothing is pinned.
-    print("    MMIO: OVMF auto-sizes the 64-bit window from the passed-through BARs")
-    for i, gpu in enumerate(gpus):
-        print(f"    GPU {gpu}: {profile.name}")
-        _add(gpu, f"rp{i + 1}", i + 1)
-
-    if nvswitches_for_vm:
-        print(f"  Adding {len(nvswitches_for_vm)} NVSwitch(es) to PCI topology...")
-    for j, nvsw in enumerate(nvswitches_for_vm):
-        _add(nvsw, f"rp_nvsw{j + 1}", len(gpus) + j + 1)
-
-    if ib_devices:
-        print(f"  Adding {len(ib_devices)} InfiniBand device(s) to PCI topology...")
-    for k, ib_dev in enumerate(ib_devices):
-        _add(ib_dev, f"rp_ib{k + 1}", len(gpus) + len(nvswitches_for_vm) + k + 1)
-
-    print(
-        f"  Passthrough configured: {len(gpus)} GPU(s), "
-        f"{len(nvswitches_for_vm)} NVSwitch(es), "
-        f"{len(ib_devices)} IB device(s)"
-    )
-
-
 def setup_passthrough(cmd: QemuCommand, host: HostProfile):
     """Prepare and bind this host's passthrough devices, and extend the QemuCommand.
 
@@ -349,15 +289,13 @@ def setup_passthrough(cmd: QemuCommand, host: HostProfile):
     _prepare_devices(gpus, nvswitches, ib_devices, profile)
     cmd.objects.append("iommufd,id=iommufd0")
 
-    nvswitches_for_vm = (
-        nvswitches if profile.should_passthrough_nvswitches(total_gpus) else []
-    )
-
-    _build_pci_topology(
+    # Which NVSwitches reach the guest is decided once, by HostProfile.attached_nvswitches,
+    # which the topology builder reads. `nvswitches` above is the host's full inventory --
+    # needed for binding, not for the guest.
+    build_pci_topology(
         cmd,
-        gpus=gpus,
-        nvswitches_for_vm=nvswitches_for_vm,
-        ib_devices=ib_devices,
-        profile=profile,
+        gpus=host.gpus,
+        nvswitches=host.attached_nvswitches,
+        ib_devices=host.attached_ib,
         guest_numa=host.uses_guest_numa,
     )

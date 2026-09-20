@@ -6,9 +6,11 @@ configuration, PCI device topology, networking, volumes, and vsock.
 
 import os
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
+from chutes_cvm.guest.devices import PciDevice
 
 
 def _block_format(path: str | None) -> str:
@@ -227,6 +229,61 @@ def cpu_args_for_qemu_version(qemu_version: str) -> str:
     reproduces the production guest's CPU rather than its own.
     """
     return _CPU_ARGS_BY_QEMU.get(qemu_version, GUEST_CPU_ARGS)
+
+
+def build_pci_topology(
+    cmd: "QemuCommand",
+    *,
+    gpus: "Sequence[PciDevice]",
+    nvswitches: "Sequence[PciDevice]",
+    ib_devices: "Sequence[PciDevice]",
+    guest_numa: bool,
+) -> None:
+    """Add every passthrough endpoint to the command's PCI topology.
+
+    Takes the devices, not a host: the caller decides which ones the guest gets (NVSwitch and IB
+    are gated by the GPU profile) and this places them. Each device's NUMA node comes from the
+    capture it was read from -- never from a second read of the live machine, which is how the
+    launch and the measurement came to disagree about where a GPU sat.
+
+    ``guest_numa`` must agree with the memory topology, because PXB bridges name guest NUMA
+    nodes; building them for a guest with no ``-numa`` makes QEMU refuse with "Illegal numa
+    node 0".
+
+    NB: when IB passthrough is enabled, a launch attaches the SR-IOV VFs it creates, not the PFs
+    the profile captured. Nothing passes IB through today, so both are empty and it is open.
+    """
+    topo: "PciTopologyState | NumaPciTopologyState"
+    if guest_numa:
+        print("  PCI topology: NUMA-local PXB-PCIe bridges")
+        topo = NumaPciTopologyState()
+    else:
+        topo = PciTopologyState()
+
+    print(f"  Adding {len(gpus)} GPU(s) to PCI topology...")
+    # OVMF sizes the guest's 64-bit MMIO window from the BARs it enumerates; nothing is pinned.
+    print("    MMIO: OVMF auto-sizes the 64-bit window from the passed-through BARs")
+    chassis = 0
+    for prefix, devices in (
+        ("rp", gpus),
+        ("rp_nvsw", nvswitches),
+        ("rp_ib", ib_devices),
+    ):
+        for ordinal, device in enumerate(devices, start=1):
+            chassis += 1
+            placement = {"numa_node": device.numa_node} if guest_numa else {}
+            topo.add_device(
+                cmd,
+                host_bdf=device.bdf,
+                rp_id=f"{prefix}{ordinal}",
+                chassis=chassis,
+                **placement,
+            )
+
+    print(
+        f"  Passthrough configured: {len(gpus)} GPU(s), "
+        f"{len(nvswitches)} NVSwitch(es), {len(ib_devices)} IB device(s)"
+    )
 
 
 @dataclass

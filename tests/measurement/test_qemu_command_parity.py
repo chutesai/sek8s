@@ -9,14 +9,11 @@ are dropped from the comparison — only their BDF differs, and neither the BDF 
 the endpoint device type is settled here.
 """
 
-from unittest.mock import patch
 
 import topology_fixtures as known
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.passthrough import _build_pci_topology
 from chutes_cvm.guest.qemu import (
-    build_base_cmd,
+    build_pci_topology,
     cpu_args_for_qemu_version,
 )
 
@@ -58,122 +55,49 @@ def _topology_args(cmd):
     return out
 
 
-def _live_cmd(
-    profile, *, mem, smp_topology, node_by_bdf, host_nodes, gpus, nvsw=None, ib=None
-):
-    """The same command, assembled by driving the low-level builders directly.
+def _slots(args, prefix):
+    """The pcie.0 addresses of args starting with ``prefix``, in emission order."""
+    return [a.split("addr=")[1].split(",")[0] for a in args if a.startswith(prefix)]
 
-    The launcher now goes through ``HostProfile.qemu_command`` like the measurement path does,
-    so this no longer represents a second implementation -- it pins ``qemu_command``'s wiring
-    against the primitives it calls: root-port ids, chassis numbering, PXB placement.
+
+def test_numa_topology_groups_gpus_by_node():
+    """One PXB per host NUMA node, each GPU on the bridge for its own node.
+
+    There is no second assembly to compare against any more -- launch and measurement generation
+    call the same builder (passthrough._build_pci_topology), fed from the same captured devices.
+    What is worth pinning is the shape it produces.
     """
-    with patch("chutes_cvm.guest.qemu.host_numa_nodes", return_value=host_nodes), patch(
-        "chutes_cvm.guest.passthrough.read_pci_numa_node",
-        side_effect=lambda b: node_by_bdf.get(b, -1),
-    ):
-        # The same rule HostProfile applies, stated over this helper's own inputs: the
-        # profile must want guest NUMA and the host must have exactly two nodes.
-        numa_active = len(host_nodes) == 2 and len(set(node_by_bdf.values())) > 1
-        cmd = build_base_cmd(
-            mem=mem,
-            smp_topology=smp_topology,
-            process_name="chutes-measure",
-            cpu_args="host,-avx10",
-            firmware=_FW,
-            img_path="root.qcow2",
-            foreground=False,
-            pidfile="/dev/null",
-            logfile="/dev/null",
-            host_nodes=host_nodes if numa_active else [],
-            kernel_path="/dev/null",
-            initrd_path="/dev/null",
-            cmdline="",
-        )
-        _build_pci_topology(
-            cmd,
-            gpus=gpus,
-            nvswitches_for_vm=nvsw or [],
-            ib_devices=ib or [],
-            profile=profile,
-            guest_numa=numa_active,
-        )
-    return cmd.to_args()
-
-
-def _bdfs(n, start=1):
-    return [f"0000:{start + i:02x}:00.0" for i in range(n)]
-
-
-def test_numa_4_4_matches_live_path():
-    profile = GPU_PROFILES["RTX_PRO_6000"]
-    nodes = (0, 0, 0, 0, 1, 1, 1, 1)
-    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
-    synth = _synth(known.rtx_numa_doc())
-
-    gpus = _bdfs(8)
-    live = _live_cmd(
-        profile,
-        **shape,
-        node_by_bdf=dict(zip(gpus, nodes)),
-        host_nodes=[0, 1],
-        gpus=gpus,
-    )
-    assert _topology_args(synth) == _topology_args(live)
-    assert any("pxb-pcie" in a for a in synth)
+    args = _topology_args(_synth(known.rtx_numa_doc()))
+    assert _slots(args, "pxb-pcie") == ["0x18", "0x19"]  # one per node, 24 + node
+    assert [a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")] == [
+        f"rp{i}" for i in range(1, 9)
+    ]
     # The command is native, so endpoints carry the captured devices' real BDFs; image_config
     # swaps each for a pci-bar-stub, which is why no placeholder is invented here.
-    assert any("vfio-pci,host=0000:19:00.0" in a for a in synth)
+    assert any("vfio-pci,host=0000:19:00.0" in a for a in _synth(known.rtx_numa_doc()))
 
 
-def test_numa_3_5_split_matches_live_path():
-    profile = GPU_PROFILES["RTX_PRO_6000"]
+def test_uneven_numa_split_follows_the_captured_vector():
+    """Root ports hang off the bridge for each device's own node, so a 3/5 split is not 4/4."""
     nodes = (0, 0, 0, 1, 1, 1, 1, 1)
-    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
-    synth = _synth(known.host_document("RTX_PRO_6000", vcpus=124, gpu_nodes=nodes))
-
-    gpus = _bdfs(8)
-    live = _live_cmd(
-        profile,
-        **shape,
-        node_by_bdf=dict(zip(gpus, nodes)),
-        host_nodes=[0, 1],
-        gpus=gpus,
+    args = _topology_args(
+        _synth(known.host_document("RTX_PRO_6000", vcpus=124, gpu_nodes=nodes))
     )
-    assert _topology_args(synth) == _topology_args(live)
+    buses = [a.split("bus=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")]
+    assert buses == ["pxb_numa0"] * 3 + ["pxb_numa1"] * 5
 
 
-def test_flat_topology_matches_live_path_and_has_no_pxb():
-    profile = GPU_PROFILES["RTX_PRO_6000"]
-    shape = dict(mem="768G", smp_topology="124,sockets=2,cores=62,threads=1")
-    synth = _synth(known.rtx_flat_doc())
-
-    gpus = _bdfs(8)
-    live = _live_cmd(
-        profile, **shape, node_by_bdf={}, host_nodes=[0, 1, 2, 3], gpus=gpus
-    )
-    assert _topology_args(synth) == _topology_args(live)
-    assert not any("pxb-pcie" in a for a in synth)
+def test_flat_topology_has_no_pxb():
+    args = _topology_args(_synth(known.rtx_flat_doc()))
+    assert not any("pxb-pcie" in a for a in args)
+    assert _slots(args, "pcie-root-port")[0] == "0x8"
 
 
-def test_h200_numa_with_nvswitches_matches_live_path():
-    profile = GPU_PROFILES["H200"]
-    nodes = (0, 0, 0, 0, 1, 1, 1, 1)
-    shape = dict(mem="1128G", smp_topology="124,sockets=2,cores=62,threads=1")
-    synth = _synth(known.h200_doc(nvswitch_node=1))
-
-    gpus = _bdfs(8)
-    nvsw = _bdfs(4, start=0x20)
-    node_by_bdf = dict(zip(gpus, nodes)) | dict(zip(nvsw, (1, 1, 1, 1)))
-    live = _live_cmd(
-        profile,
-        **shape,
-        node_by_bdf=node_by_bdf,
-        host_nodes=[0, 1],
-        gpus=gpus,
-        nvsw=nvsw,
-    )
-    assert _topology_args(synth) == _topology_args(live)
-    assert any("rp_nvsw" in a for a in synth)
+def test_nvswitch_endpoints_follow_the_gpus():
+    """NVSwitch root ports are numbered after the GPUs and keep their own node placement."""
+    args = _topology_args(_synth(known.h200_doc(nvswitch_node=1)))
+    ids = [a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")]
+    assert ids == [f"rp{i}" for i in range(1, 9)] + [f"rp_nvsw{i}" for i in range(1, 5)]
 
 
 def test_cpu_args_for_qemu_version():
@@ -187,31 +111,20 @@ def test_pci_topology_takes_the_decision_it_is_given():
     so building them for a guest with no `-numa` is not a valid command -- QEMU refuses with
     "Illegal numa node 0".
 
-    _build_pci_topology used to re-derive this from the live host instead of taking the caller's
-    answer, so a launcher that chose flat still got PXB bridges. The decision is an argument now,
-    and this pins that it is honoured rather than recomputed.
+    This used to be re-derived from the live host instead of taken from the caller, so a
+    launcher that chose flat still got PXB bridges.
     """
-    profile = GPU_PROFILES["H200"]
-    gpus = [f"0000:{0x19 + i:02x}:00.0" for i in range(8)]
-
-    def cmd():
-        return HostProfile(known.h200_doc()).qemu_command(
-            firmware=_FW, cpu_args="host,-avx10"
-        )
-
-    flat = cmd()
-    flat.devices = [d for d in flat.devices if "pxb-pcie" not in d and "rp" not in d]
-    _build_pci_topology(
-        flat, gpus=gpus, nvswitches_for_vm=[], ib_devices=[], profile=profile, guest_numa=False
+    host = HostProfile(known.h200_doc())
+    devices = dict(
+        gpus=host.gpus, nvswitches=host.attached_nvswitches, ib_devices=host.attached_ib
     )
+
+    flat = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
+    flat.devices = []
+    build_pci_topology(flat, **devices, guest_numa=False)
     assert not any("pxb-pcie" in d for d in flat.devices)
 
-    numa = cmd()
+    numa = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
     numa.devices = []
-    with patch(
-        "chutes_cvm.guest.passthrough.read_pci_numa_node", return_value=0
-    ):
-        _build_pci_topology(
-            numa, gpus=gpus, nvswitches_for_vm=[], ib_devices=[], profile=profile, guest_numa=True
-        )
+    build_pci_topology(numa, **devices, guest_numa=True)
     assert any("pxb-pcie" in d for d in numa.devices)
