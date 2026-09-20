@@ -8,9 +8,9 @@ from loguru import logger
 from sek8s.config import AttestationServiceConfig
 from sek8s.exceptions import AttestationException, NonceError, NvmlException
 from sek8s.models import DeviceInfo
+from sek8s.providers.base import QuoteProvider
 from sek8s.providers.gpu import GpuDeviceProvider
 from sek8s.providers.nvtrust import NvEvidenceProvider
-from sek8s.providers.tdx import TdxQuoteProvider
 from sek8s.responses import AttestationResponse
 from sek8s.server import WebServer
 
@@ -45,7 +45,12 @@ class AttestationServer(WebServer):
         self.app.add_api_route("/health", self.ping, methods=["GET"])
         self.app.add_api_route("/attest", self.attest, methods=["GET"])
         self.app.add_api_route("/devices", self.get_device_info, methods=["GET"])
+        # Aliases onto one handler, not two formats: both return the same unqualified
+        # base64 blob. /tdx/quote predates AMD support and its name is now a misnomer on
+        # an SEV-SNP guest, but the proxy wildcards /server/{path} so it is externally
+        # reachable and no caller can be ruled out. /quote is the name to prefer.
         self.app.add_api_route("/tdx/quote", self.get_quote, methods=["GET"])
+        self.app.add_api_route("/quote", self.get_quote, methods=["GET"])
         self.app.add_api_route(
             "/nvtrust/evidence", self.get_nvtrust_evidence, methods=["GET"]
         )
@@ -63,15 +68,20 @@ class AttestationServer(WebServer):
     ):
         try:
             gpu_ids = _normalize_gpu_ids(gpu_ids)
-            tdx_provider = TdxQuoteProvider()
+            quote_provider = QuoteProvider.create()
             with NvEvidenceProvider() as nvtrust_provider:
-                quote_content = await tdx_provider.get_quote(nonce)
+                quote_content = await quote_provider.get_quote(nonce)
                 nvtrust_evidence = await nvtrust_provider.get_evidence(
                     self.config.hostname, nonce, gpu_ids
                 )
 
+            encoded_quote = base64.b64encode(quote_content).decode("utf-8")
+            # Named per TEE rather than a tee_type discriminator plus a generic blob:
+            # the field is the type, so evidence cannot be mislabelled. tdx_quote keeps
+            # its original name, so pre-AMD verifiers are unaffected on TDX hosts.
+            quote_field = f"{quote_provider.tee_type}_quote"
             return AttestationResponse(
-                tdx_quote=base64.b64encode(quote_content).decode("utf-8"),
+                **{quote_field: encoded_quote},
                 nvtrust_evidence=nvtrust_evidence,
             )
 
@@ -121,8 +131,21 @@ class AttestationServer(WebServer):
     async def get_quote(
         self, nonce: str = Query(..., description="Nonce to include in the quote")
     ):
+        """A nonce-bound quote as bare base64, with no indication of which TEE made it.
+
+        Callers are expected to know the platform already (it is fixed at registration),
+        so the blob is unqualified. If that ever stops holding, this is the place to add
+        an envelope -- /attest already names the platform via its tdx_quote/snp_quote
+        field and is the better model.
+
+        Intended for periodic health checks. Note what that can mean per platform: a TDX
+        runtime quote carries RTMR3 and so can show drift since boot, whereas SEV-SNP has
+        no runtime register -- its report repeats the launch measurement byte for byte, so
+        polling it proves liveness, key possession and freshness, but NOT that nothing
+        inside the guest changed.
+        """
         try:
-            provider = TdxQuoteProvider()
+            provider = QuoteProvider.create()
             quote_content = await provider.get_quote(nonce)
 
             return base64.b64encode(quote_content).decode("utf-8")
@@ -132,10 +155,10 @@ class AttestationServer(WebServer):
             logger.warning(f"Rejected quote request with invalid nonce: {e}")
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
         except Exception as e:
-            logger.error(f"Unexpected error generating TDX quote:{e}")
+            logger.error(f"Unexpected error generating attestation evidence:{e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Unexpected error generating TDX quote.",
+                detail="Unexpected error generating attestation evidence.",
             )
 
     async def get_nvtrust_evidence(
