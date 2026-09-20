@@ -285,6 +285,26 @@
             group: root
             mode: '0644'
 
+        # The drop-in is installed at BUILD time and never written at boot. It lives in
+        # /etc/systemd/system, which is RTMR3-measured, so it has to be present in the
+        # image for the build manifest to cover it. nvidia-persistenced-config.sh now
+        # only writes NVPD_FLAG to /run, which this drop-in reads.
+        - name: Create nvidia-persistenced drop-in directory
+          ansible.builtin.file:
+            path: /etc/systemd/system/nvidia-persistenced.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install static nvidia-persistenced drop-in
+          ansible.builtin.copy:
+            src: nvidia-persistenced-dropin.conf
+            dest: /etc/systemd/system/nvidia-persistenced.service.d/override.conf
+            owner: root
+            group: root
+            mode: '0644'
+
         - name: Reload systemd after installing nvidia-persistenced config units
           ansible.builtin.systemd:
             daemon_reload: true
