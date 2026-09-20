@@ -4,9 +4,10 @@
 from unittest.mock import MagicMock, patch
 
 import chutes_cvm.guest.__main__ as guest_main
+import pytest
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
-from chutes_cvm.guest.tee import TdxTeeProvider
 from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.guest.tee import HostTee
 from chutes_cvm.paths import SCRIPTS_DIR
 
 _FAKE_CMD = QemuCommand(
@@ -22,10 +23,10 @@ _FAKE_CMD = QemuCommand(
 )
 
 
-# get_tee_provider reads the host's kvm module parameters and raises when no TEE is
-# enabled, so without this the test only passes on a machine that happens to have TDX
-# or SEV-SNP turned on — it is not a property of the code under test.
-@patch("chutes_cvm.guest.__main__.get_tee_provider", return_value=TdxTeeProvider())
+# The provider itself comes from the mocked host profile (an Intel doc -> TDX), so only
+# the CAPABILITY check is stubbed: it reads this machine's kvm module parameters, which
+# are a property of the box running the tests, not of the code under test.
+@patch("chutes_cvm.guest.__main__.detect_host_tee", return_value=HostTee.TDX)
 @patch(
     "chutes_cvm.guest.__main__.direct_boot_artifacts",
     return_value=("/k", "/i", "root=UUID=x ro"),
@@ -84,7 +85,10 @@ def test_launch_vm_returns_qemu_nonzero(
 @patch("chutes_cvm.guest.__main__.build_network")
 @patch("chutes_cvm.guest.__main__.build_base_cmd", return_value=_FAKE_CMD)
 @patch("chutes_cvm.guest.__main__.HostProfile.from_host")
+# As above: the profile decides the platform; this only stubs the host capability probe.
+@patch("chutes_cvm.guest.__main__.detect_host_tee", return_value=HostTee.TDX)
 def test_launch_takes_cpu_args_from_the_host_profile(
+    _mock_tee2,
     mock_from_host,
     mock_base,
     _mock_net,
@@ -143,3 +147,38 @@ def test_discover_profile_reports_the_launch_cpu_args():
     baseline a class against CPUID leaves no VM ever boots with."""
     script = (SCRIPTS_DIR / "discover-profile.sh").read_text()
     assert f'CPU_ARGS="{GUEST_CPU_ARGS}"' in script
+
+
+@patch("chutes_cvm.guest.__main__.verify_host_qemu_supported")
+@patch("chutes_cvm.guest.__main__.HostProfile.from_host")
+@patch("chutes_cvm.guest.__main__.detect_host_tee", return_value=HostTee.TDX)
+def test_launch_refuses_when_the_host_contradicts_the_profile(
+    _mock_tee, mock_from_host, _mock_qemu_check
+):
+    """An AMD profile on a machine reporting TDX means the profile was captured
+    elsewhere, or SEV-SNP is off in BIOS. Either way the guest would be measured
+    against a platform it is not booting on, so refuse before any VM work."""
+    from argparse import Namespace
+
+    import topology_fixtures as known
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    doc = known.rtx_numa_doc()
+    doc["cpu"]["vendor"] = "AuthenticAMD"
+    mock_from_host.return_value = HostProfile(doc)
+
+    with pytest.raises(RuntimeError, match="but the machine reports"):
+        guest_main.launch_vm(
+            Namespace(
+                image="/tmp/fake.img",
+                pass_gpus=False,
+                foreground=True,
+                config_volume=None,
+                cache_volume=None,
+                storage_volume=None,
+                ssh_port=10022,
+                network_type="user",
+                net_iface=None,
+                net_queues=4,
+            )
+        )

@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from chutes_cvm.guest.devices import PciDevice
+from chutes_cvm.guest.tee import TdxTeeProvider, TeeProvider
 
 
 def _block_format(path: str | None) -> str:
@@ -91,7 +92,10 @@ def read_pci_numa_node(bdf: str) -> int:
 
 
 def _append_numa_memory(
-    cmd: "QemuCommand", mem_mib: int, host_nodes: list[int]
+    cmd: "QemuCommand",
+    mem_mib: int,
+    host_nodes: list[int],
+    tee: "TeeProvider | None" = None,
 ) -> None:
     """Add per-node memory backends and guest NUMA topology to ``cmd``.
 
@@ -103,6 +107,7 @@ def _append_numa_memory(
     OOM-killing the host during pod warmup. host-nodes/policy=bind keeps the
     lazy allocations NUMA-local, which is the only reason these backends exist.
     """
+    tee = tee or TdxTeeProvider()
     num_nodes = len(host_nodes)
     per_node_mib = mem_mib // num_nodes
     for i, hnode in enumerate(host_nodes):
@@ -111,8 +116,7 @@ def _append_numa_memory(
         else:
             node_size_mib = per_node_mib
         cmd.objects.append(
-            f"memory-backend-ram,id=mem-node{i},size={node_size_mib}M,"
-            f"host-nodes={hnode},policy=bind"
+            tee.memory_backend(f"mem-node{i}", f"{node_size_mib}M", host_node=hnode)
         )
         cmd.numa.append(f"node,nodeid={i},memdev=mem-node{i}")
         cmd.numa.append(f"cpu,node-id={i},socket-id={i}")
@@ -287,7 +291,7 @@ def build_pci_topology(
 
 @dataclass
 class QemuCommand:
-    """A structured TDX-guest QEMU command.
+    """A structured confidential-guest QEMU command (Intel TDX or AMD SEV-SNP).
 
     Builders populate the structured fields (``objects``/``numa``/``devices``/…)
     in composition order; ``to_args()`` renders them into the flat
@@ -310,7 +314,10 @@ class QemuCommand:
     logfile: str
     pidfile: str
     accel: str = "kvm"
-    tdx_guest: str = (
+    # The confidential-guest -object. Defaults to TDX so anything constructing a
+    # QemuCommand directly (offline measurement included) is unchanged; the launcher
+    # and build_base_cmd set it from the detected platform's TeeProvider.
+    tee_object: str = (
         '{"qom-type":"tdx-guest","id":"tdx",'
         '"quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}'
     )
@@ -345,7 +352,7 @@ class QemuCommand:
             "-cpu",
             self.cpu_args,
             "-object",
-            self.tdx_guest,
+            self.tee_object,
         ]
         for o in self.objects:
             args += ["-object", o]
@@ -406,8 +413,9 @@ def build_base_cmd(
     initrd_path: str,
     cmdline: str,
     pci_pinning: PcieRootPinning,
+    tee: "TeeProvider | None" = None,
 ) -> QemuCommand:
-    """Build the base QEMU command (TDX, firmware, CPU, memory, direct boot).
+    """Build the base QEMU command (confidential guest, firmware, CPU, memory, direct boot).
 
     Pure: reads no live hardware. ``host_nodes`` is the explicit guest-NUMA node
     list, fully resolved by the caller — the launcher from sysfs
@@ -423,12 +431,15 @@ def build_base_cmd(
     the offline ACPI-dump path passes placeholders (RTMR0 is boot-method
     independent and the measured tables don't include the kernel).
     """
-    numa_enabled = len(host_nodes) >= 2
+    # Defaults to TDX rather than detecting: this runs on ordinary build hosts during
+    # offline measurement, where there is no TEE to detect and the answer must not depend
+    # on the generating machine. The launcher passes the detected provider explicitly.
+    tee = tee or TdxTeeProvider()
 
-    if numa_enabled:
-        machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx"
-    else:
-        machine = "q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+    numa_enabled = len(host_nodes) >= 2
+    # A flat guest binds the machine to its single backend; a NUMA guest gets one
+    # backend per node via _append_numa_memory and binds none here.
+    machine = tee.machine(None if numa_enabled else "mem0")
 
     cmd = QemuCommand(
         mem=mem,
@@ -444,22 +455,24 @@ def build_base_cmd(
         # shift RTMR0 within a profile. Single source of truth: the offline
         # measurement path reads this same builder (HostProfile.qemu_command →
         # image_config), so launch and measurement can't diverge.
+        tee_object=tee.guest_object(),
         smbios=[
-            "type=1,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0,uuid=00000000-0000-0000-0000-000000000000",
-            "type=2,manufacturer=Chutes,product=TDX-VM,version=1.0,serial=0",
+            f"type=1,manufacturer=Chutes,product={tee.smbios_product},version=1.0,serial=0,"
+            "uuid=00000000-0000-0000-0000-000000000000",
+            f"type=2,manufacturer=Chutes,product={tee.smbios_product},version=1.0,serial=0",
             "type=3,manufacturer=Chutes,version=1.0,serial=0",
         ],
     )
 
     if numa_enabled:
         mem_mib = _parse_mem_mib(mem)
-        _append_numa_memory(cmd, mem_mib, host_nodes)
+        _append_numa_memory(cmd, mem_mib, host_nodes, tee)
         print(
             f"NUMA: {len(host_nodes)} guest nodes, "
             f"{mem_mib // len(host_nodes)}M each (approx), host nodes {host_nodes}"
         )
     else:
-        cmd.objects.append(f"memory-backend-ram,id=mem0,size={mem}")
+        cmd.objects.append(tee.memory_backend("mem0", mem))
 
     # Direct boot (always): OVMF loads the kernel/initrd/cmdline itself. The qcow2
     # is still the LUKS root, just not the boot device — so no bootindex.

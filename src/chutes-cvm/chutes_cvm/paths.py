@@ -39,9 +39,14 @@ def firmware_dir() -> Path:
     return Path(os.environ.get("CHUTES_CVM_FIRMWARE_DIR") or (_REPO_ROOT / "firmware"))
 
 
-def firmware_path() -> str:
-    """Full path to the guest TDVF. MUST NOT be overridable by user config: MRTD depends on it."""
-    return str(firmware_dir() / GUEST_FIRMWARE)
+def firmware_path(filename: str = GUEST_FIRMWARE) -> str:
+    """Full path to the guest firmware. MUST NOT be overridable by user config: the TDX MRTD
+    and the SEV-SNP launch digest are both computed over these exact bytes.
+
+    ``filename`` comes from the platform's ``TeeProvider.default_firmware`` -- the TDVF for
+    Intel, the AMD OVMF build for SEV-SNP. Defaults to the TDX firmware so every existing
+    caller is unchanged."""
+    return str(firmware_dir() / filename)
 
 
 def gpu_tools_dir() -> Path:

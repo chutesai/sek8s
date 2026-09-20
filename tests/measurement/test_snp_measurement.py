@@ -4,11 +4,9 @@ import hashlib
 import re
 import subprocess
 from pathlib import Path
-from unittest.mock import mock_open, patch
+from unittest.mock import patch
 
 import pytest
-
-from chutes_cvm.guest.detection import detect_host_cpu_identity
 from chutes_cvm.guest.tee import SNP_DEFAULT_POLICY, tee_for_cpu_vendor
 from chutes_cvm.measurement.runtime_rtmr import MeasurementError
 from chutes_cvm.measurement.snp_measurement import (
@@ -24,41 +22,79 @@ REPO = Path(__file__).resolve().parents[2]
 GENOA_PROCESSOR_ID = "110fa100fffba91f"
 GENOA_FMS = (25, 17, 1)
 
+# EPYC 7763 (Milan) — the 8x RTX PRO 6000 SEV-SNP host, from its /proc/cpuinfo.
+MILAN_FMS = (25, 1, 1)
+MILAN_PROCESSOR_ID = "110fa000fffba91f"
+# The Intel host the shipped RTX_PRO_6000 profile was captured on.
+INTEL_PROCESSOR_ID = "f3060a00fffba91f"
 
-def _cpuinfo(vendor, family, model, stepping):
-    return (
-        f"vendor_id\t: {vendor}\n"
-        f"cpu family\t: {family}\n"
-        f"model\t\t: {model}\n"
-        f"stepping\t: {stepping}\n"
+
+def _shipped_encoder(
+    family: int, model: int, stepping: int, edx: str = "0x1FA9FBFF"
+) -> str:
+    """Run the processor_id encoder exactly as shipped.
+
+    It lives as an embedded Python heredoc inside discover-profile.sh -- the capture side is
+    bash -- so the round-trip extracts and runs *that* source rather than restating it here.
+    A restatement would agree with a broken decoder; this disagrees the moment either side
+    moves.
+    """
+    script = (
+        REPO / "src/chutes-cvm/chutes_cvm/scripts/discover-profile.sh"
+    ).read_text()
+    body = re.search(r"<<'PY'[^\n]*\n(.*?)\nPY\n", script, re.S)
+    assert (
+        body
+    ), "could not find the processor_id encoder heredoc in discover-profile.sh"
+    out = subprocess.run(
+        ["python3", "-", str(family), str(model), str(stepping), edx],
+        input=body.group(1),
+        capture_output=True,
+        text=True,
+        check=True,
     )
+    return out.stdout.strip()
 
 
 # ── CPU identity ──────────────────────────────────────────────────────────────
 
 
 def test_decodes_a_real_amd_processor_id():
+    """Captured from the EPYC 9124 SEV-SNP host, cross-checked against its /proc/cpuinfo."""
     assert cpu_fms_from_processor_id(GENOA_PROCESSOR_ID) == GENOA_FMS
 
 
 @pytest.mark.parametrize(
-    "vendor,family,model,stepping",
+    "family,model,stepping",
     [
-        ("AuthenticAMD", 25, 17, 1),  # EPYC Genoa
-        ("AuthenticAMD", 25, 1, 1),  # EPYC Milan
-        ("AuthenticAMD", 26, 2, 0),  # EPYC Turin (family >= 0xF, extended)
-        ("GenuineIntel", 6, 143, 8),  # Sapphire Rapids (family < 0xF, extended model)
-        ("GenuineIntel", 6, 15, 2),  # base model only, no extended bits
+        (25, 17, 1),  # EPYC Genoa (the SEV-SNP dev host)
+        (25, 1, 1),  # EPYC Milan
+        (26, 2, 0),  # EPYC Turin (family >= 0xF, extended family)
+        (6, 143, 8),  # Sapphire Rapids (family < 0xF, extended model)
+        (6, 15, 2),  # base model only, no extended bits
     ],
 )
-def test_decode_is_the_exact_inverse_of_detection(vendor, family, model, stepping):
-    """Round-trips against the shipped encoder rather than a restatement of it: if
-    detection's packing ever changes, this fails instead of silently disagreeing."""
-    with patch("builtins.open", mock_open(read_data=_cpuinfo(vendor, family, model, stepping))):
-        detected_vendor, processor_id = detect_host_cpu_identity()
+def test_decode_is_the_exact_inverse_of_the_shipped_encoder(family, model, stepping):
+    """Round-trips against the encoder that actually produces host profiles, so a change
+    to its packing fails here instead of silently disagreeing with the decoder."""
+    processor_id = _shipped_encoder(family, model, stepping)
 
-    assert detected_vendor == vendor
     assert cpu_fms_from_processor_id(processor_id) == (family, model, stepping)
+
+
+@pytest.mark.parametrize(
+    "fms,processor_id",
+    [
+        (GENOA_FMS, GENOA_PROCESSOR_ID),  # EPYC 9124, the H100 PCIe SEV-SNP host
+        (MILAN_FMS, MILAN_PROCESSOR_ID),  # EPYC 7763, the 8x RTX PRO 6000 SEV-SNP host
+    ],
+)
+def test_shipped_encoder_reproduces_the_real_hosts(fms, processor_id):
+    """Anchors the round-trip to hardware: fed each host's real /proc/cpuinfo values, the
+    encoder must produce the processor_id that host's capture carries. Two different Zen
+    generations, so a family/model packing error cannot pass by coincidence."""
+    assert _shipped_encoder(*fms) == processor_id
+    assert cpu_fms_from_processor_id(processor_id) == fms
 
 
 def test_missing_processor_id_is_refused():
@@ -141,7 +177,10 @@ def test_measurement_is_generated_from_the_pinned_inputs(tmp_path):
     digest = "ab" * 48
     cmd = []
 
-    with patch("subprocess.run", _fake_run(stdout=digest + "\n", capture=cmd)):
+    with patch(
+        "chutes_cvm.measurement.snp_measurement.proc.run",
+        _fake_run(stdout=digest + "\n", capture=cmd),
+    ):
         result = compute_snp_measurement(
             str(image), str(firmware), 28, GENOA_PROCESSOR_ID
         )
@@ -161,7 +200,9 @@ def test_missing_firmware_is_refused(tmp_path):
     image = _stage_image(tmp_path)
 
     with pytest.raises(MeasurementError, match="guest firmware"):
-        compute_snp_measurement(str(image), str(tmp_path / "absent.fd"), 28, GENOA_PROCESSOR_ID)
+        compute_snp_measurement(
+            str(image), str(tmp_path / "absent.fd"), 28, GENOA_PROCESSOR_ID
+        )
 
 
 def test_tool_failure_is_surfaced(tmp_path):
@@ -169,7 +210,10 @@ def test_tool_failure_is_surfaced(tmp_path):
     firmware = tmp_path / "OVMF.amdsev.fd"
     firmware.write_bytes(b"firmware")
 
-    with patch("subprocess.run", _fake_run(returncode=2, stderr="bad vcpu count")):
+    with patch(
+        "chutes_cvm.measurement.snp_measurement.proc.run",
+        _fake_run(returncode=2, stderr="bad vcpu count"),
+    ):
         with pytest.raises(MeasurementError, match="bad vcpu count"):
             compute_snp_measurement(str(image), str(firmware), 28, GENOA_PROCESSOR_ID)
 
@@ -181,7 +225,10 @@ def test_unexpected_tool_output_is_refused(tmp_path):
     firmware = tmp_path / "OVMF.amdsev.fd"
     firmware.write_bytes(b"firmware")
 
-    with patch("subprocess.run", _fake_run(stdout="not-a-measurement\n")):
+    with patch(
+        "chutes_cvm.measurement.snp_measurement.proc.run",
+        _fake_run(stdout="not-a-measurement\n"),
+    ):
         with pytest.raises(MeasurementError, match="unexpected measurement"):
             compute_snp_measurement(str(image), str(firmware), 28, GENOA_PROCESSOR_ID)
 
@@ -194,7 +241,7 @@ def test_missing_binary_is_reported(tmp_path):
     def raise_missing(cmd, **kwargs):
         raise FileNotFoundError(cmd[0])
 
-    with patch("subprocess.run", raise_missing):
+    with patch("chutes_cvm.measurement.snp_measurement.proc.run", raise_missing):
         with pytest.raises(MeasurementError, match="not found on PATH"):
             compute_snp_measurement(str(image), str(firmware), 28, GENOA_PROCESSOR_ID)
 
@@ -229,21 +276,35 @@ def test_guest_policy_is_shared_with_the_launcher():
 # ── per-TEE dispatch in the single generator ──────────────────────────────────
 
 
-def _profile_record(name, vendor, *, gpus=("h100",), gpu_count=8, processor_id=GENOA_PROCESSOR_ID):
-    """(api record, patched topology_from_profile return) for one host class."""
-    from types import SimpleNamespace
+def _host_doc(vendor: str, processor_id: "str | None"):
+    """A real discover-profile document for an 8x RTX PRO 6000 host of ``vendor``.
 
-    fp = SimpleNamespace(
-        cpu=SimpleNamespace(cpu_vendor=vendor, vcpus=28, cpu_processor_id=processor_id),
-        gpu=SimpleNamespace(gpu_count=gpu_count, gpu_nodes=()),
-        variant_label=name,
+    The same GPU genuinely appears on both platforms -- the shipped RTX_PRO_6000 profile was
+    captured on an Intel Xeon host, while the SEV-SNP box carrying those GPUs is an EPYC 7763
+    -- so one GPU profile across two TEEs is the real case, not a contrived one.
+    """
+    import topology_fixtures as known
+
+    doc = known.host_document(
+        "RTX_PRO_6000",
+        vcpus=124,
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
+        cpu_vendor=vendor,
+        cpu_processor_id=processor_id,
     )
-    profile = SimpleNamespace(
-        display_name=name,
-        expected_gpus=list(gpus),
-        firmware_filename="OVMF.inteltdx.fd",
-    )
-    return {"fingerprint": name + "-fp", "profile": {"name": name}}, (profile, fp, "10.2.1")
+    return doc
+
+
+def _records(*specs):
+    """(api records, {fingerprint: HostProfile}) for the given (name, vendor, pid) specs."""
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    records, hosts = [], {}
+    for name, vendor, pid in specs:
+        fp = f"{name}-fp"
+        records.append({"fingerprint": fp, "profile": {"name": name}})
+        hosts[name] = HostProfile(_host_doc(vendor, pid))
+    return records, hosts
 
 
 def _args(tmp_path):
@@ -261,38 +322,88 @@ def _args(tmp_path):
     )
 
 
+def _patched(gm, hosts, **extra):
+    """Patch the API read and the profile parse; callers add the generators."""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch.object(gm, "fetch_host_profiles", return_value=extra.pop("records"))
+    )
+    stack.enter_context(
+        patch.object(
+            gm.HostProfile,
+            "from_api_profile",
+            side_effect=lambda doc: hosts[doc["name"]],
+        )
+    )
+    return stack
+
+
 def test_each_host_class_gets_the_measurement_its_cpu_needs(tmp_path):
     """One pass over the published host profiles produces Intel RTMR0 entries and AMD
-    launch-digest entries side by side — the vendor on the fingerprint decides which."""
+    launch-digest entries side by side — the CPU vendor on the profile decides which."""
     import chutes_cvm.measurement.generate_measurements as gm
 
     _stage_image(tmp_path)
-    intel_rec, intel_topo = _profile_record("intel-8xh200", "GenuineIntel")
-    amd_rec, amd_topo = _profile_record("amd-8xh100", "AuthenticAMD")
-    topo = {"intel-8xh200": intel_topo, "amd-8xh100": amd_topo}
-    records = [intel_rec, amd_rec]
+    records, hosts = _records(
+        ("intel-rtx", "GenuineIntel", INTEL_PROCESSOR_ID),
+        ("amd-rtx", "AuthenticAMD", MILAN_PROCESSOR_ID),
+    )
 
-    with patch.object(gm, "fetch_host_profiles", return_value=records), patch.object(
-        gm, "topology_from_profile", side_effect=lambda doc: topo[doc["name"]]
-    ), patch.object(
-        gm, "generate_acpi_blobs", return_value={"rtmr0": "r0hex", "mrtd": "mrtdhex"}
-    ), patch.object(
-        # The RTMR0 spec builder wants a full topology; this test is about which
-        # measurement each class gets, not about building that spec.
-        gm, "build_topology_spec"
-    ), patch.object(
-        gm, "MeasurementMetadata"
-    ), patch.object(
-        gm, "compute_snp_measurement", return_value="M" * 96
-    ) as snp:
+    with _patched(gm, hosts, records=records) as stack:
+        stack.enter_context(
+            patch.object(
+                gm,
+                "generate_acpi_blobs",
+                return_value={"rtmr0": "r0hex", "mrtd": "mrtdhex"},
+            )
+        )
+        snp = stack.enter_context(
+            patch.object(gm, "compute_snp_measurement", return_value="M" * 96)
+        )
         block = gm._hardware_blocks(_args(tmp_path))
 
-    assert [e["name"] for e in block["tdx_hardware"]] == ["intel-8xh200 [10.2.1, intel-8xh200]"]
-    assert [e["name"] for e in block["snp_hardware"]] == ["amd-8xh100 [10.2.1, amd-8xh100]"]
+    # One entry each, and the label is the profile's own (it is derived, not asserted here).
+    assert len(block["tdx_hardware"]) == 1 and len(block["snp_hardware"]) == 1
+    assert block["tdx_hardware"][0]["name"].startswith("8xpro_6000 [10.2.1,")
+    assert block["snp_hardware"][0]["name"].startswith("8xpro_6000 [10.2.1,")
     assert block["tdx_hardware"][0]["rtmr0"] == "R0HEX"
     assert block["snp_hardware"][0]["measurement"] == "M" * 96
-    # SNP is measured against the PINNED AMD firmware, not the profile's TDX firmware.
+    # SNP is measured against the PINNED AMD firmware, never the TDX one.
     assert snp.call_args.args[1].endswith("OVMF.amdsev.fd")
+    # The vCPU count and CPU identity reach the generator from the host profile.
+    assert snp.call_args.args[2] == 124
+    assert snp.call_args.args[3] == MILAN_PROCESSOR_ID
+
+
+def test_colliding_names_across_tees_are_disambiguated(tmp_path):
+    """Both lands in one measurements.yaml, and the two classes above share a display name
+    because only their CPU differs — so the suffixing has to span both lists."""
+    import chutes_cvm.measurement.generate_measurements as gm
+
+    _stage_image(tmp_path)
+    records, hosts = _records(
+        ("intel-rtx", "GenuineIntel", INTEL_PROCESSOR_ID),
+        ("amd-rtx", "AuthenticAMD", MILAN_PROCESSOR_ID),
+    )
+
+    with _patched(gm, hosts, records=records) as stack:
+        stack.enter_context(
+            patch.object(
+                gm,
+                "generate_acpi_blobs",
+                return_value={"rtmr0": "r0hex", "mrtd": "mrtdhex"},
+            )
+        )
+        stack.enter_context(
+            patch.object(gm, "compute_snp_measurement", return_value="M" * 96)
+        )
+        block = gm._hardware_blocks(_args(tmp_path))
+
+    names = [e["name"] for e in block["tdx_hardware"] + block["snp_hardware"]]
+    assert len(set(names)) == 2, f"names not disambiguated across TEEs: {names}"
+    assert all(n.endswith(")") for n in names)  # suffixed with the fingerprint
 
 
 def test_rtmr0_partial_skips_amd_classes(tmp_path):
@@ -300,11 +411,10 @@ def test_rtmr0_partial_skips_amd_classes(tmp_path):
     from, so AMD classes are simply absent rather than pending."""
     import chutes_cvm.measurement.generate_measurements as gm
 
-    amd_rec, amd_topo = _profile_record("amd-8xh100", "AuthenticAMD")
+    records, hosts = _records(("amd-rtx", "AuthenticAMD", MILAN_PROCESSOR_ID))
 
-    with patch.object(gm, "fetch_host_profiles", return_value=[amd_rec]), patch.object(
-        gm, "topology_from_profile", return_value=amd_topo
-    ), patch.object(gm, "compute_snp_measurement") as snp:
+    with _patched(gm, hosts, records=records) as stack:
+        snp = stack.enter_context(patch.object(gm, "compute_snp_measurement"))
         block = gm._hardware_blocks(_args(tmp_path), include_snp=False)
 
     assert block["snp_hardware"] == []
@@ -318,22 +428,24 @@ def test_a_class_that_cannot_be_generated_is_pending_not_fatal(tmp_path):
     import chutes_cvm.measurement.generate_measurements as gm
 
     _stage_image(tmp_path)
-    good_rec, good_topo = _profile_record("amd-ok", "AuthenticAMD")
-    bad_rec, bad_topo = _profile_record("amd-nocpu", "AuthenticAMD", processor_id=None)
-    topo = {"amd-ok": good_topo, "amd-nocpu": bad_topo}
+    records, hosts = _records(
+        ("amd-ok", "AuthenticAMD", MILAN_PROCESSOR_ID),
+        ("amd-nocpu", "AuthenticAMD", None),
+    )
 
-    with patch.object(
-        gm, "fetch_host_profiles", return_value=[good_rec, bad_rec]
-    ), patch.object(
-        gm, "topology_from_profile", side_effect=lambda doc: topo[doc["name"]]
-    ), patch.object(
-        gm,
-        "compute_snp_measurement",
-        side_effect=lambda image, fw, vcpus, pid, **kw: (
-            "M" * 96 if pid else (_ for _ in ()).throw(MeasurementError("no cpu_processor_id"))
-        ),
-    ):
+    with _patched(gm, hosts, records=records) as stack:
+        stack.enter_context(
+            patch.object(
+                gm,
+                "compute_snp_measurement",
+                side_effect=lambda image, fw, vcpus, pid, **kw: (
+                    "M" * 96
+                    if pid
+                    else (_ for _ in ()).throw(MeasurementError("no cpu_processor_id"))
+                ),
+            )
+        )
         block = gm._hardware_blocks(_args(tmp_path))
 
-    assert [e["name"] for e in block["snp_hardware"]] == ["amd-ok [10.2.1, amd-ok]"]
+    assert len(block["snp_hardware"]) == 1
     assert block["pending_profiles"] == ["amd-nocpu-fp"]

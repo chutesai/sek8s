@@ -140,6 +140,8 @@ class SnpQuoteProvider(QuoteProvider):
         status, report_size = struct.unpack_from("=II", resp, 0)
         if status != 0:
             raise SnpQuoteException(f"SNP_GET_REPORT returned status {status}")
-        return bytes(
-            resp[SNP_REPORT_RESP_HEADER : SNP_REPORT_RESP_HEADER + report_size]
-        )
+        # Bounds hoisted to locals: black spaces out a slice whose bounds are expressions,
+        # which flake8 then rejects as E203 (no longer ignored in .flake8).
+        start = SNP_REPORT_RESP_HEADER
+        end = start + report_size
+        return bytes(resp[start:end])

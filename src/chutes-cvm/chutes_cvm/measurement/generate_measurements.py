@@ -60,6 +60,7 @@ from pathlib import Path
 import yaml
 from chutes_cvm import proc
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.tee import SnpTeeProvider, tee_for_cpu_vendor
 from chutes_cvm.measurement import ccel_replay as cc
 from chutes_cvm.measurement.image_config import ImageConfig
 from chutes_cvm.measurement.runtime_rtmr import (
@@ -67,6 +68,7 @@ from chutes_cvm.measurement.runtime_rtmr import (
     compute_rtmr1_2,
     compute_rtmr3,
 )
+from chutes_cvm.measurement.snp_measurement import compute_snp_measurement
 from chutes_cvm.paths import GUEST_FIRMWARE, firmware_dir
 
 # The API is the source of truth for known host classes and their fingerprints. `generate`
@@ -311,18 +313,33 @@ def resolve_hardware_names(hardware: list[dict]) -> None:
                 e["name"] = f"{name} ({e['fingerprint'][:12]})"
 
 
-def _rtmr0_block(args: argparse.Namespace) -> dict:
-    """Generate the version-level RTMR0 block: {version, mrtd, hardware[], pending_profiles?}.
+def _hardware_blocks(args: argparse.Namespace, *, include_snp: bool = True) -> dict:
+    """Generate every hardware entry for a version, grouped by TEE.
+
+    Returns ``{mrtd, tdx_hardware[], snp_hardware[], pending_profiles?}``.
 
     Reads the published host profiles from the API (the source of truth for known host classes)
-    and generates ONE hardware entry per profile. For each, the fork self-generates the COMPLETE
-    RTMR0 (all 15 events, no CCEL) from the topology derived off the profile document, and the
-    API's fingerprint is carried through onto the entry (never recomputed) so the reconciler can
-    join it to the submitted host profile. A profile that can't be generated offline yet (e.g. an
-    uncaptured CPU model — cpu_processor_id null) is listed PENDING by fingerprint, not fatal.
+    and generates ONE hardware entry per profile, from the SAME image — one guest image boots on
+    both platforms, so one pass covers both rather than a separate tool per TEE. Which
+    measurement a class needs follows from its CPU vendor (``tee_for_cpu_vendor``), because a
+    host class is Intel or AMD and never both:
 
-    Raises ValueError on a hard error (API unreachable, duplicate hardware names, or MRTD
-    divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
+    * **TDX** — the fork self-generates the COMPLETE RTMR0 (all 15 events, no CCEL) from the
+      topology the profile describes.
+    * **SEV-SNP** — one launch digest over the pinned firmware and the direct-boot artifacts.
+      It does not depend on GPU or memory topology, so two AMD classes differing only in their
+      GPUs legitimately share a measurement.
+
+    In both cases the API's fingerprint is carried through onto the entry (never recomputed) so
+    the reconciler can join it to the submitted host profile. A profile that can't be generated
+    offline yet (e.g. an uncaptured CPU model — ``processor_id`` null) is listed PENDING by
+    fingerprint, not fatal.
+
+    ``include_snp=False`` serves the TDX-only ``--register rtmr0`` partial, which has no image
+    to measure SNP from.
+
+    Raises ValueError on a hard error (API unreachable, a duplicate host-profile fingerprint, or
+    MRTD divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
     """
 
     def fork_rtmr0(host: HostProfile):
@@ -342,8 +359,11 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             )
         return (out.get("rtmr0") or "").upper(), out.get("mrtd", "")
 
+    snp_firmware = str(Path(args.bios_dir) / SnpTeeProvider.default_firmware)
+
     records = fetch_host_profiles(args.api_base, args.include_pending)
-    hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
+    tdx_hardware: list[dict] = []
+    snp_hardware: list[dict] = []
     mrtds: set[str] = set()
     pending: list[str] = []
     for record in records:
@@ -354,24 +374,40 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
                 raise ValueError("host profile has no fingerprint")
             host = HostProfile.from_api_profile(record.get("profile") or {})
             profile, qemu = host.gpu_profile, host.qemu_version
-            rtmr0, mrtd = fork_rtmr0(host)
-            mrtds.add(mrtd.upper())
+            tee = tee_for_cpu_vendor(host.cpu.vendor)
+            if tee == "snp" and not include_snp:
+                continue
             gpu_count = host.gpu_count
             hw_name = f"{profile.display_name} [{qemu}, {host.variant_label}]"
-            hardware.append(
-                {
-                    "name": hw_name,
-                    "description": (
-                        f"{gpu_count}x {profile.expected_gpus[0].upper()} "
-                        "GPU configuration"
-                    ),
-                    "fingerprint": fingerprint,
-                    "rtmr0": rtmr0,
-                    "expected_gpus": list(profile.expected_gpus),
-                    "gpu_count": gpu_count,
-                }
-            )
-            print(f"    {hw_name}  fp={label}…  rtmr0={rtmr0[:16]}…", file=sys.stderr)
+            entry = {
+                "name": hw_name,
+                "description": (
+                    f"{gpu_count}x {profile.expected_gpus[0].upper()} GPU configuration"
+                ),
+                "fingerprint": fingerprint,
+                "expected_gpus": list(profile.expected_gpus),
+                "gpu_count": gpu_count,
+            }
+            if tee == "snp":
+                measurement = compute_snp_measurement(
+                    args.image,
+                    snp_firmware,
+                    host.vcpus,
+                    host.cpu.processor_id,
+                    sev_snp_measure_bin=args.sev_snp_measure_bin,
+                )
+                snp_hardware.append({**entry, "measurement": measurement})
+                print(
+                    f"    {hw_name}  fp={label}…  measurement={measurement[:16]}…",
+                    file=sys.stderr,
+                )
+            else:
+                rtmr0, mrtd = fork_rtmr0(host)
+                mrtds.add(mrtd.upper())
+                tdx_hardware.append({**entry, "rtmr0": rtmr0})
+                print(
+                    f"    {hw_name}  fp={label}…  rtmr0={rtmr0[:16]}…", file=sys.stderr
+                )
         except Exception as exc:
             pending.append(fingerprint or label)
             print(
@@ -379,19 +415,36 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             )
             continue
 
-    resolve_hardware_names(hardware)
-    # MRTD is version-level (same OVMF/TDVF across every topology of a build).
+    # Across BOTH platforms in one pass: the two lists land in a single measurements.yaml,
+    # so a name colliding between them still needs disambiguating, and a fingerprint repeated
+    # across them is the same corrupt input it would be within one. Entries are mutated in
+    # place, so the concatenation does not detach them from their lists.
+    resolve_hardware_names(tdx_hardware + snp_hardware)
+    # MRTD is version-level (same OVMF/TDVF across every TDX topology of a build).
     if len(mrtds) > 1:
         raise ValueError(f"MRTD differs across topologies: {sorted(mrtds)}")
 
     block: dict = {
-        "version": args.version,
         "mrtd": next(iter(mrtds), ""),
-        "hardware": hardware,
+        "tdx_hardware": tdx_hardware,
+        "snp_hardware": snp_hardware,
     }
     if pending:
         block["pending_profiles"] = sorted(set(pending))
     return block
+
+
+def _rtmr0_block(args: argparse.Namespace) -> dict:
+    """The TDX-only ``{version, mrtd, hardware[]}`` shape, for ``--register rtmr0``."""
+    block = _hardware_blocks(args, include_snp=False)
+    out = {
+        "version": args.version,
+        "mrtd": block["mrtd"],
+        "hardware": block["tdx_hardware"],
+    }
+    if block.get("pending_profiles"):
+        out["pending_profiles"] = block["pending_profiles"]
+    return out
 
 
 def _write_output(payload: str, output: str) -> None:
@@ -438,29 +491,46 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
     data assembly — no file output; raises ValueError (topology/aggregation) or MeasurementError
     (rtmr1/2/3) on failure. Replaces the old compute-rtmr0/1-2/rtmr3 + aggregate roles.
     """
-    block = _rtmr0_block(args)
-    rtmr1, rtmr2 = compute_rtmr1_2(args.image, tdx_measure_bin=args.tdx_measure_bin)
-    rtmr3, _ = compute_rtmr3(
-        args.image, luks_passphrase=os.environ.get("LUKS_PASSPHRASE")
-    )
-    print(
-        f"    RTMR1={rtmr1[:16]}…  RTMR2={rtmr2[:16]}…  RTMR3={rtmr3[:16]}…",
-        file=sys.stderr,
-    )
+    block = _hardware_blocks(args)
     pending = block.get("pending_profiles")
     if pending:
         print(f"    pending profiles: {pending}", file=sys.stderr)
 
-    # Insertion order (version → mrtd → rtmr1/2 → runtime_rtmr3 → hardware) matches the
-    # chutes-ops values.yaml teeMeasurements layout this merges into; sort_keys=False keeps it.
-    return {
-        "version": args.version,
-        "mrtd": block["mrtd"],
-        "rtmr1": rtmr1,
-        "rtmr2": rtmr2,
-        "runtime_rtmr3": rtmr3,
-        "hardware": block["hardware"],
-    }
+    # One version block, one section per TEE. Insertion order matches the chutes-ops
+    # values.yaml teeMeasurements layout this merges into; sort_keys=False keeps it.
+    entry: dict = {"version": args.version}
+
+    if block["tdx_hardware"]:
+        # RTMR1/2/3 are Intel runtime registers with no SEV-SNP counterpart, so they are
+        # computed only when this version actually has Intel hardware — an AMD-only release
+        # should not require the tdx-measure fork at all.
+        rtmr1, rtmr2 = compute_rtmr1_2(args.image, tdx_measure_bin=args.tdx_measure_bin)
+        rtmr3, _ = compute_rtmr3(
+            args.image, luks_passphrase=os.environ.get("LUKS_PASSPHRASE")
+        )
+        print(
+            f"    RTMR1={rtmr1[:16]}…  RTMR2={rtmr2[:16]}…  RTMR3={rtmr3[:16]}…",
+            file=sys.stderr,
+        )
+        entry["tdx"] = {
+            "mrtd": block["mrtd"],
+            "rtmr1": rtmr1,
+            "rtmr2": rtmr2,
+            "runtime_rtmr3": rtmr3,
+            "hardware": block["tdx_hardware"],
+        }
+
+    if block["snp_hardware"]:
+        # No version-level values: SEV-SNP folds firmware and kernel/initrd/cmdline into
+        # each hardware entry's single launch digest.
+        entry["snp"] = {"hardware": block["snp_hardware"]}
+
+    if len(entry) == 1:
+        raise ValueError(
+            "no measurements generated — the API returned no host profiles that could be "
+            f"generated offline{f' (pending: {pending})' if pending else ''}"
+        )
+    return entry
 
 
 def _generate_full(args: argparse.Namespace) -> int:
@@ -480,11 +550,10 @@ def _generate_full(args: argparse.Namespace) -> int:
         {"measurements": [entry]}, sort_keys=False, indent=2, default_flow_style=False
     )
     _write_output(payload, args.output)
-    n = len(entry["hardware"])
-    print(
-        f"measurements.yaml: {n} hardware entr{'y' if n == 1 else 'ies'}",
-        file=sys.stderr,
-    )
+    counts = [
+        f"{len(entry[tee]['hardware'])} {tee}" for tee in ("tdx", "snp") if tee in entry
+    ]
+    print(f"measurements.yaml: {', '.join(counts)} hardware entries", file=sys.stderr)
     return 0
 
 
@@ -587,6 +656,11 @@ def main(argv: list[str] | None = None) -> int:
     def _add_fork_args(p: argparse.ArgumentParser) -> None:
         """Shared RTMR0-generation options (the tdx-measure fork inputs + host-profile source)."""
         _add_api_arg(p)
+        p.add_argument(
+            "--sev-snp-measure-bin",
+            default="sev-snp-measure",
+            help="path to the sev-snp-measure binary (AMD launch measurement)",
+        )
         p.add_argument(
             "--tdx-measure-bin",
             default="tdx-measure",

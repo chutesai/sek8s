@@ -360,12 +360,16 @@ def test_compute_measurements_skips_tdx_registers_for_an_amd_only_release(monkey
     blocks = _blocks(snp=[{"name": "amd-8xh100", "measurement": "M0"}], mrtd="")
 
     def _explode(*a, **k):
-        raise AssertionError("TDX register computation must not run for an AMD-only release")
+        raise AssertionError(
+            "TDX register computation must not run for an AMD-only release"
+        )
 
     with patch.object(gm, "_hardware_blocks", return_value=blocks), patch(
-        "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2", side_effect=_explode
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr1_2",
+        side_effect=_explode,
     ), patch(
-        "chutes_cvm.measurement.generate_measurements.compute_rtmr3", side_effect=_explode
+        "chutes_cvm.measurement.generate_measurements.compute_rtmr3",
+        side_effect=_explode,
     ):
         entry = gm._compute_measurements(_gen_args())
 

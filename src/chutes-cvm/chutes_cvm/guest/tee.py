@@ -144,10 +144,6 @@ class TeeProvider(ABC):
     def _machine_extra(self) -> str:
         return ""
 
-    def finalize_fw_cfg(self, entries: "list[str]") -> "list[str]":
-        """Last chance to rewrite the fw_cfg entries the PCI topology produced."""
-        return entries
-
 
 class TdxTeeProvider(TeeProvider):
     """Intel TDX."""
@@ -259,40 +255,6 @@ class SnpTeeProvider(TeeProvider):
         # for SEV-SNP guests.
         return ",vmport=off"
 
-    def finalize_fw_cfg(self, entries: "list[str]") -> "list[str]":
-        """Collapse the per-GPU MMIO hints into the key stock OVMF reads.
-
-        The PCI topology emits ``opt/ovmf/X-PciMmio64Mb1``, ``…Mb2``, one per GPU.
-        Upstream ``OvmfPkg/PlatformPei`` only ever looks up the UNINDEXED
-        ``opt/ovmf/X-PciMmio64Mb``, so on the distro ``OVMF.amdsev.fd`` those
-        indexed entries are silently ignored, the aperture stays at its 32 GB
-        default, and a large GPU BAR cannot be placed — the guest then sees
-        ``BAR2 is 0M @ 0x0`` and the NVIDIA driver fails to probe.
-
-        TDX is left alone: it boots a different firmware build and its indexed
-        entries are load-bearing there.
-        """
-        total_mb = 0
-        passthrough: "list[str]" = []
-        for entry in entries:
-            if "opt/ovmf/X-PciMmio64Mb" in entry:
-                try:
-                    total_mb += int(entry.rsplit("string=", 1)[1])
-                except (IndexError, ValueError):
-                    # Unparseable hint: drop it rather than guess a size.
-                    continue
-            else:
-                passthrough.append(entry)
-
-        if not total_mb:
-            return entries
-
-        # Headroom for alignment: a 128 GiB BAR must sit on a 128 GiB boundary, so
-        # an aperture sized exactly to the BAR total usually cannot fit it.
-        aperture_mb = max(total_mb * 2, 65536)
-        passthrough.append(f"name=opt/ovmf/X-PciMmio64Mb,string={aperture_mb}")
-        return passthrough
-
 
 _PROVIDERS = {
     HostTee.TDX: TdxTeeProvider,
@@ -301,8 +263,24 @@ _PROVIDERS = {
 
 
 def get_tee_provider(override: "HostTee | str | None" = None) -> TeeProvider:
-    """Return the TEE provider for the detected (or overridden) platform."""
+    """Return the TEE provider for the detected (or overridden) platform.
+
+    Detection-based: answers "what can this machine launch right now". For the TEE a
+    given host CLASS runs, derive it from the profile's CPU vendor instead --
+    ``provider_for_cpu_vendor`` / ``HostProfile.tee_provider``.
+    """
     return _PROVIDERS[detect_host_tee(override)]()
+
+
+def provider_for_cpu_vendor(cpu_vendor: str) -> TeeProvider:
+    """The TEE provider a host class runs, from its CPU vendor.
+
+    The identity question, and the one a host profile answers: this silicon runs that
+    TEE. Distinct from ``detect_host_tee``, which answers the capability question --
+    whether the platform is switched on right now -- and cannot be derived from a
+    profile because it is a BIOS setting, not a property of the class.
+    """
+    return _PROVIDERS[HostTee(tee_for_cpu_vendor(cpu_vendor))]()
 
 
 def tee_firmware_available(provider: TeeProvider, firmware_dir: str) -> bool:

@@ -35,6 +35,11 @@ from chutes_cvm.guest.qemu import (
     build_network,
     build_pci_topology,
 )
+from chutes_cvm.guest.tee import (
+    TeeProvider,
+    provider_for_cpu_vendor,
+    tee_for_cpu_vendor,
+)
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
@@ -393,6 +398,27 @@ class HostProfile:
         """The ``-cpu`` string this host launches with, from the QEMU version it reports."""
         return self.CPU_ARGS_BY_QEMU.get(self.qemu_version, GUEST_CPU_ARGS)
 
+    @property
+    def tee(self) -> str:
+        """``tdx`` or ``snp`` -- the same vocabulary ``detect_host_tee`` reports in, so the
+        launcher can compare what the profile says against what the machine has enabled.
+        """
+        return tee_for_cpu_vendor(self.cpu.vendor)
+
+    @property
+    def tee_provider(self) -> TeeProvider:
+        """The confidential-computing platform this host class runs.
+
+        Derived from the CPU vendor, not detected: a class is Intel or AMD silicon, so the
+        profile already determines the TEE, the firmware it boots and the guest object it
+        launches with. Nothing needs to be passed in or re-detected alongside the profile.
+
+        This is the class's identity, NOT whether the platform is enabled on the machine in
+        front of you -- SEV-SNP can be off in BIOS on AMD silicon. The launcher checks that
+        separately (``detect_host_tee``) and reports it as a host problem.
+        """
+        return provider_for_cpu_vendor(self.cpu.vendor)
+
     def qemu_command(
         self,
         *,
@@ -427,6 +453,7 @@ class HostProfile:
             smp_topology=self.smp_topology,
             process_name=process_name,
             cpu_args=cpu_args if cpu_args is not None else self.cpu_args,
+            tee=self.tee_provider,
             firmware=firmware,
             img_path=img_path,
             foreground=foreground,

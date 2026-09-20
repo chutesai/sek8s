@@ -334,32 +334,17 @@ class H100PcieProfile(GpuProfile):
     pci_device_id = "2331"  # GH100 [H100 PCIe]
     display_name = "1xh100"
     expected_gpus = ["h100"]
-    # lspci -vvvnn on dev-snp-1 (10de:2331): BAR0 16M, BAR2 resizable at 128G, BAR4 32M.
-    passthrough = {
-        "gpu": PassthroughDevice(
-            0x10DE,
-            "2331",
-            0x0302,
-            [PciBar(0, 16, "p64"), PciBar(2, 131072, "p64"), PciBar(4, 32, "p64")],
-        ),
-    }
 
     @property
     def name(self) -> str:
         return "H100_PCIE"
 
     @property
-    def bar_size_mb(self) -> int:
-        return 131072  # 128 GiB, matching BAR2's current resizable size
-
-    @property
     def vram_gb(self) -> int:
         return 80  # HBM3
 
-    @property
-    def enable_numa_topology(self) -> bool:
-        # Single-socket EPYC host with one GPU; no cross-socket split to model.
-        return False
+    # Host: single-socket EPYC 9124 (Genoa, 16C/32T) with one GPU, so no cross-socket
+    # split to model. From discover-profile.sh on dev-snp-1.
 
     @property
     def enable_post_launch_tuning(self) -> bool:

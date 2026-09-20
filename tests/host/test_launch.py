@@ -325,7 +325,9 @@ def test_main_blocks_when_no_tee_is_active(capsys):
 
 def test_main_launches_on_an_amd_host(capsys):
     """The gate is which TEE is active, not whether it is Intel."""
-    with _happy(_tee_active=(True, "snp", "sysfs")), patch(f"{P}._boot", return_value=0):
+    with _happy(_tee_active=(True, "snp", "sysfs")), patch(
+        f"{P}._boot", return_value=0
+    ):
         rc = launch.main(_STD_ARGV)
     assert rc == 0
 

@@ -1,7 +1,6 @@
 import pytest
-
 from chutes_cvm.guest import tee as tee_module
-from chutes_cvm.guest.qemu import build_base_cmd
+from chutes_cvm.guest.qemu import PcieRootPinning, build_base_cmd
 from chutes_cvm.guest.tee import (
     DEFAULT_CBITPOS,
     DEFAULT_REDUCED_PHYS_BITS,
@@ -153,7 +152,7 @@ def test_sev_cbit_parameters_reads_cpuid(monkeypatch, tmp_path):
     assert sev_cbit_parameters() == (51, 1)
 
 
-def _base_cmd(tee, tmp_path):
+def _base_cmd(tee, tmp_path, host_nodes=()):
     return build_base_cmd(
         mem="8G",
         smp_topology="cpus=4,sockets=1,cores=2,threads=2",
@@ -164,10 +163,11 @@ def _base_cmd(tee, tmp_path):
         foreground=False,
         pidfile="/dev/null",
         logfile="/dev/null",
-        host_nodes=[],
+        host_nodes=list(host_nodes),
         kernel_path="/dev/null",
         initrd_path="/dev/null",
         cmdline="",
+        pci_pinning=PcieRootPinning(len(host_nodes) >= 2),
         tee=tee,
     )
 
@@ -191,23 +191,53 @@ def test_build_base_cmd_with_snp_provider(tmp_path):
 
 
 def test_build_base_cmd_snp_numa_backends_are_memfd(tmp_path):
-    cmd = build_base_cmd(
-        mem="8G",
-        smp_topology="cpus=4,sockets=2,cores=1,threads=2",
-        process_name="chutes-td",
-        cpu_args="host,-avx10",
-        firmware=str(tmp_path / "OVMF.fd"),
-        img_path=str(tmp_path / "root.qcow2"),
-        foreground=False,
-        pidfile="/dev/null",
-        logfile="/dev/null",
-        host_nodes=[0, 1],
-        kernel_path="/dev/null",
-        initrd_path="/dev/null",
-        cmdline="",
-        tee=SnpTeeProvider(),
-    )
+    cmd = _base_cmd(SnpTeeProvider(), tmp_path, host_nodes=[0, 1])
     backends = [o for o in cmd.objects if o.startswith("memory-backend")]
     assert len(backends) == 2
     assert all("memory-backend-memfd" in b and "share=on" in b for b in backends)
     assert all("policy=bind" in b for b in backends)
+
+
+# ── the platform is a property of the host class, not a detection ─────────────
+
+
+def _profile(vendor):
+    import topology_fixtures as known
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    return HostProfile(
+        known.host_document(
+            "RTX_PRO_6000", vcpus=124, gpu_nodes=(0,) * 8, cpu_vendor=vendor
+        )
+    )
+
+
+def test_host_profile_derives_its_own_platform():
+    """A class is Intel or AMD silicon, so the profile already determines the TEE --
+    nothing needs to be detected or passed alongside it."""
+    assert _profile("GenuineIntel").tee == "tdx"
+    assert isinstance(_profile("GenuineIntel").tee_provider, TdxTeeProvider)
+    assert _profile("AuthenticAMD").tee == "snp"
+    assert isinstance(_profile("AuthenticAMD").tee_provider, SnpTeeProvider)
+
+
+def test_derived_platform_selects_its_own_firmware():
+    """Firmware is a property of the platform, so it follows from the profile too."""
+    assert _profile("GenuineIntel").tee_provider.default_firmware == "OVMF.inteltdx.fd"
+    assert _profile("AuthenticAMD").tee_provider.default_firmware == "OVMF.amdsev.fd"
+
+
+def test_qemu_command_uses_the_derived_platform(tmp_path):
+    """The command a host launches with carries its own platform's guest object."""
+    intel = _profile("GenuineIntel").qemu_command(firmware=str(tmp_path / "f.fd"))
+    amd = _profile("AuthenticAMD").qemu_command(firmware=str(tmp_path / "f.fd"))
+
+    assert "tdx-guest" in intel.tee_object
+    assert "sev-snp-guest" in amd.tee_object
+    assert "vmport=off" in amd.machine and "vmport=off" not in intel.machine
+
+
+def test_unknown_vendor_has_no_platform():
+    """Fail on the profile rather than silently defaulting to one platform."""
+    with pytest.raises(ValueError, match="cannot determine the TEE"):
+        _profile("SomeOtherVendor").tee_provider

@@ -29,6 +29,7 @@ from chutes_cvm.guest.qemu import (
     build_network,
     host_numa_nodes,
 )
+from chutes_cvm.guest.tee import detect_host_tee
 from chutes_cvm.paths import firmware_path
 
 PIDFILE = "/tmp/tdx-td-pid.pid"  # nosec B108
@@ -62,7 +63,7 @@ def stop_existing_vm():
 
 def launch_vm(args) -> int:
 
-    print("Starting TDX VM...")
+    print("Starting confidential VM...")
 
     # Fail early if the host QEMU isn't the one baselined for its OS (moves RTMR0).
     verify_host_qemu_supported()
@@ -72,6 +73,20 @@ def launch_vm(args) -> int:
     # measurement was not generated for. Read unconditionally: every value below comes from it,
     # and --no-gpus means "do not bind the GPUs", not "invent a different guest".
     host = HostProfile.from_host()
+
+    # The platform comes from the profile -- the CPU vendor determines it, so there is
+    # nothing to detect or pass alongside. What IS detected is whether this machine has
+    # that platform switched on: SEV-SNP can be off in BIOS on AMD silicon, and failing
+    # here names the BIOS settings instead of failing opaquely inside QEMU. A mismatch
+    # also catches a profile captured on different hardware than the one booting it.
+    tee = host.tee_provider
+    enabled = detect_host_tee()
+    if enabled.value != host.tee:
+        raise RuntimeError(
+            f"This host profile is {tee.label} ({tee.guest_id}), but the machine reports "
+            f"{enabled.value} enabled. Either the profile was captured elsewhere, or the "
+            "platform is not enabled in BIOS."
+        )
 
     # The CPU facts hold either way -- guest NUMA is a property of the host's nodes and -cpu of
     # its QEMU version; neither involves a GPU.
@@ -87,7 +102,9 @@ def launch_vm(args) -> int:
     vcpus = str(host.vcpus)
     smp_topology = host.smp_topology
 
-    firmware = firmware_path()
+    # Firmware is a property of the platform, not the GPU profile: TDX boots the pinned
+    # TDVF, SNP the AMD OVMF build. Both are measured, so both are pinned in the repo.
+    firmware = firmware_path(tee.default_firmware)
 
     if host.gpus:
         profile = host.gpu_profile
@@ -105,10 +122,11 @@ def launch_vm(args) -> int:
             "  No GPUs on this host: debug guest, sized from the host; it cannot attest."
         )
 
-    print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
+    print(f"Launching confidential VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
     pci_pinning = PcieRootPinning(numa_active)
+    print(f"TEE: {tee.label} ({tee.guest_id})")
     print(f"Firmware: {firmware}")
 
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
@@ -133,6 +151,7 @@ def launch_vm(args) -> int:
         kernel_path=kernel_path,
         initrd_path=initrd_path,
         cmdline=cmdline,
+        tee=tee,
     )
 
     # Validation belongs to the launch, not the command builder: a launch without a host
@@ -181,6 +200,7 @@ def launch_vm(args) -> int:
         launch_prefix = ["numactl", f"--interleave={interleave}"]
 
     print("Launching QEMU...")
+
     result = proc.run(
         launch_prefix + qemu_cmds.to_args(),
         stderr=proc.STDOUT,

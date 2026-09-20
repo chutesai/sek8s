@@ -20,9 +20,9 @@ a single build host generates both platforms' measurements for a release.
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
+from chutes_cvm import proc
 from chutes_cvm.measurement.runtime_rtmr import MeasurementError
 
 SNP_MEASURE_BIN = "sev-snp-measure"
@@ -73,7 +73,11 @@ def direct_boot_artifacts(image: str) -> tuple[str, str, str]:
     both platforms measure the identical bytes the launcher boots.
     """
     base = os.path.splitext(os.path.abspath(image))[0]
-    kernel, initrd, cmdline_file = base + ".vmlinuz", base + ".initrd", base + ".cmdline"
+    kernel, initrd, cmdline_file = (
+        base + ".vmlinuz",
+        base + ".initrd",
+        base + ".cmdline",
+    )
     for f in (kernel, initrd, cmdline_file):
         if not os.path.isfile(f):
             raise MeasurementError(
@@ -106,19 +110,29 @@ def compute_snp_measurement(
 
     cmd = [
         sev_snp_measure_bin,
-        "--mode", "snp",
-        "--vcpus", str(vcpus),
-        "--vcpu-family", str(family),
-        "--vcpu-model", str(model),
-        "--vcpu-stepping", str(stepping),
-        "--ovmf", firmware,
-        "--kernel", kernel,
-        "--initrd", initrd,
-        "--append", cmdline,
-        "--output-format", "hex",
+        "--mode",
+        "snp",
+        "--vcpus",
+        str(vcpus),
+        "--vcpu-family",
+        str(family),
+        "--vcpu-model",
+        str(model),
+        "--vcpu-stepping",
+        str(stepping),
+        "--ovmf",
+        firmware,
+        "--kernel",
+        kernel,
+        "--initrd",
+        initrd,
+        "--append",
+        cmdline,
+        "--output-format",
+        "hex",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = proc.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         raise MeasurementError(
             f"{sev_snp_measure_bin} not found on PATH — it is a chutes-cvm dependency; "
