@@ -33,7 +33,8 @@ _FAKE_CMD = QemuCommand(
 )
 @patch("chutes_cvm.guest.__main__.verify_host_qemu_supported")
 @patch("chutes_cvm.guest.__main__.proc.run")
-@patch("chutes_cvm.guest.__main__.setup_passthrough")
+@patch("chutes_cvm.guest.__main__.attach_passthrough")
+@patch("chutes_cvm.guest.__main__.bind_passthrough")
 @patch("chutes_cvm.guest.__main__.add_vsock")
 @patch("chutes_cvm.guest.__main__.add_volumes")
 @patch("chutes_cvm.guest.__main__.build_network")
@@ -43,7 +44,8 @@ def test_launch_vm_returns_qemu_nonzero(
     _mock_net,
     _mock_vol,
     _mock_vsock,
-    _mock_pt,
+    _mock_bind,
+    _mock_attach,
     mock_run,
     _mock_qemu_check,
     _mock_stage,
@@ -77,7 +79,8 @@ def test_launch_vm_returns_qemu_nonzero(
 )
 @patch("chutes_cvm.guest.__main__.verify_host_qemu_supported")
 @patch("chutes_cvm.guest.__main__.proc.run")
-@patch("chutes_cvm.guest.__main__.setup_passthrough")
+@patch("chutes_cvm.guest.__main__.attach_passthrough")
+@patch("chutes_cvm.guest.__main__.bind_passthrough")
 @patch("chutes_cvm.guest.__main__.add_vsock")
 @patch("chutes_cvm.guest.__main__.add_volumes")
 @patch("chutes_cvm.guest.__main__.build_network")
@@ -90,7 +93,8 @@ def test_launch_takes_cpu_args_from_the_host_profile(
     _mock_net,
     _mock_vol,
     _mock_vsock,
-    _mock_pt,
+    _mock_bind,
+    _mock_attach,
     mock_run,
     _mock_qemu_check,
     _mock_stage,

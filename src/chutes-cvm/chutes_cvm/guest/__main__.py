@@ -19,7 +19,7 @@ from chutes_cvm.guest.gpu.profiles import (  # noqa: F401 — available for intr
     GPU_PROFILES,
 )
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.passthrough import setup_passthrough
+from chutes_cvm.guest.passthrough import attach_passthrough, bind_passthrough
 from chutes_cvm.guest.post_launch import apply_post_launch_tuning
 from chutes_cvm.guest.qemu import (
     PcieRootPinning,
@@ -163,7 +163,10 @@ def launch_vm(args, host: "HostProfile") -> int:
     add_vsock(qemu_cmds, pci_pinning=pci_pinning)
 
     if args.pass_gpus:
-        setup_passthrough(qemu_cmds, host)
+        # Bind first, then describe: the devices a launch attaches are created by binding
+        # (SR-IOV VFs), and the command has to be able to name them.
+        bind_passthrough(host)
+        attach_passthrough(qemu_cmds, host)
 
     # Guest NUMA topology (numa_active) binds memory per node via QEMU
     # memory-backends, so no numactl prefix is needed. Otherwise interleave
