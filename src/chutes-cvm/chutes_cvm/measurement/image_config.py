@@ -83,8 +83,8 @@ class ImageConfig:
 
     @property
     def objects(self) -> list[str]:
-        # Only the memory-backends (cmd.objects); the tdx-guest object lives in
-        # cmd.tdx_guest and is simply not carried over.
+        # Only the memory-backends (cmd.objects); the confidential-guest object
+        # lives in cmd.tee_object and is simply not carried over.
         return [_reserve_off(o) for o in self.cmd.objects]
 
     @property

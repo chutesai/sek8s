@@ -140,21 +140,38 @@ def _post(
         raise PreflightError(f"API returned an unparseable response: {exc}")
 
 
+def _read_host() -> "HostProfile":
+    """This host, for the commands whose whole job starts with reading it.
+
+    ``host verify`` and ``host submit-profile`` have no earlier reading to be handed, so they take
+    one here -- at the entry point, once, exactly as `guest launch` does in its Step 0. Wrapping
+    the failure keeps "cannot read this host" a PreflightError like every other way these commands
+    fail to reach a verdict.
+    """
+    try:
+        return HostProfile.from_host()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise PreflightError(f"cannot read this host: {exc}") from exc
+
+
 def _signed_profile(
-    config_path: str, target_os: "str | None" = None
+    config_path: str,
+    target_os: "str | None",
+    host_profile: "HostProfile",
 ) -> "tuple[str, str, str, bytes]":
     """Discover this host's profile and sign it with the miner hotkey.
 
     Returns (hotkey, nonce, signature, body) for a POST. ``target_os`` rewrites the profile's
     OS-derived fields (release, QEMU, -cpu args) first, for the pre-upgrade check. Shared by the
     preflight check and the submit path.
+
+    ``host_profile`` is required, not defaulted: every caller is asking about ONE host and has
+    already read it, so a default would only be a second reading that could disagree with the
+    one being signed. A launch passes the profile it will boot, which is what makes the verdict
+    a verdict about the shape that actually launches.
     """
     ss58, seed = _load_miner_creds(config_path)
-    try:
-        host = HostProfile.from_host()
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise PreflightError(f"cannot read this host: {exc}") from exc
-    profile_json = host.to_api_json()
+    profile_json = host_profile.to_api_json()
     if target_os:
         profile_json = _apply_target_os(profile_json, target_os)
     body = profile_json.encode()
@@ -174,15 +191,18 @@ def run_preflight(
     config_path: str,
     version: str,
     rc: bool,
+    host_profile: "HostProfile",
     api_base: str = DEFAULT_API_BASE,
     target_os: "str | None" = None,
 ) -> dict:
-    """Discover -> sign -> POST /servers/tdx/preflight -> verdict.
+    """Sign this host's profile -> POST /servers/tdx/preflight -> verdict.
 
     Asks whether a published measurement for an image of ``(version, rc)`` covers this host class.
     Returns {fingerprint, launchable, detail}; raises PreflightError on any failure to reach a
     verdict (the caller fails closed)."""
-    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, target_os, host_profile
+    )
     query = urlencode({"version": version, "rc": "true" if rc else "false"})
     return _post(
         f"/servers/tdx/preflight?{query}", api_base, hotkey, nonce, signature, body
@@ -205,7 +225,8 @@ def run_host_class_status(
     whether the miner must register the class or simply wait. Raises PreflightError on any failure
     to reach a verdict.
     """
-    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
+    host = _read_host()
+    hotkey, nonce, signature, body = _signed_profile(config_path, target_os, host)
     return _post(
         "/servers/tdx/host_profiles/status", api_base, hotkey, nonce, signature, body
     )
@@ -223,5 +244,6 @@ def submit_profile(
     reports the class is not yet launchable. ``target_os`` registers the class the host will BE
     after an OS upgrade (target release + the QEMU it ships), not the one it is on now.
     """
-    hotkey, nonce, signature, body = _signed_profile(config_path, target_os)
+    host = _read_host()
+    hotkey, nonce, signature, body = _signed_profile(config_path, target_os, host)
     return _post("/servers/tdx/host_profiles", api_base, hotkey, nonce, signature, body)

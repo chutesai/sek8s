@@ -6,6 +6,8 @@ TopologyFingerprint values; the API owns host classes now and both paths build f
 HostProfile, so what is left is the documents themselves.
 """
 
+from dataclasses import dataclass
+
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES
 from chutes_cvm.guest.host_profile import HostProfile
 
@@ -143,3 +145,26 @@ def h200_doc(nvswitch_node=0):
         gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
         nvswitch_nodes=(nvswitch_node,) * 4,
     )
+
+
+@dataclass
+class QemuProfileStub:
+    """The slice of HostProfile that build_base_cmd reads.
+
+    build_base_cmd takes the profile because the profile is the single authority on guest
+    shape. Tests that exercise the command assembly itself want to state mem/-smp directly
+    rather than reverse-engineer a capture that derives them, so they pass this instead.
+    Anything testing the derivation uses a real HostProfile.
+    """
+
+    mem: str
+    smp_topology: str
+    cpu_args: str = "host,-avx10"
+    uses_guest_numa: bool = False
+    tee_provider: object = None
+
+    def __post_init__(self):
+        if self.tee_provider is None:
+            from chutes_cvm.guest.tee import TdxTeeProvider
+
+            self.tee_provider = TdxTeeProvider()

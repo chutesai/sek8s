@@ -35,6 +35,7 @@ from chutes_cvm.guest.qemu import (
     build_network,
     build_pci_topology,
 )
+from chutes_cvm.guest.tee import TeeProvider, provider_for_cpu_vendor
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
@@ -393,6 +394,34 @@ class HostProfile:
         """The ``-cpu`` string this host launches with, from the QEMU version it reports."""
         return self.CPU_ARGS_BY_QEMU.get(self.qemu_version, GUEST_CPU_ARGS)
 
+    def verify_environment(self) -> None:
+        """Raise unless this host's environment can run the guest this profile describes.
+
+        Host readiness asked OF the profile rather than re-derived beside it. The platform
+        follows from the captured CPU vendor, and the provider knows both which kvm parameter
+        reports it enabled and what an operator should change when it is not -- so nothing
+        else grows a second way to look at a host.
+
+        Named for the environment rather than the launch on purpose: a profile describes a
+        machine and knows nothing about booting a guest. It delegates to the provider method
+        of the same name, which is the whole of the check today.
+        """
+        self.tee_provider.verify_environment()
+
+    @property
+    def tee_provider(self) -> TeeProvider:
+        """The confidential-computing platform this host class runs.
+
+        Derived from the CPU vendor, not detected: a class is Intel or AMD silicon, so the
+        profile already determines the TEE, the firmware it boots and the guest object it
+        launches with. Nothing needs to be passed in or re-detected alongside the profile.
+
+        This is the class's identity, NOT whether the platform is enabled on the machine in
+        front of you -- SEV-SNP can be off in BIOS on AMD silicon. The provider answers that
+        separately (``TeeProvider.verify_environment``) and reports it as a host problem.
+        """
+        return provider_for_cpu_vendor(self.cpu.vendor)
+
     def qemu_command(
         self,
         *,
@@ -423,10 +452,9 @@ class HostProfile:
         # pins the emulated devices to pcie.0 slots 0x2-0x7, below the PXB bridges at 0x18+.
         pinning = PcieRootPinning(numa)
         cmd = build_base_cmd(
-            mem=self.mem,
-            smp_topology=self.smp_topology,
+            self,
             process_name=process_name,
-            cpu_args=cpu_args if cpu_args is not None else self.cpu_args,
+            cpu_args=cpu_args,
             firmware=firmware,
             img_path=img_path,
             foreground=foreground,

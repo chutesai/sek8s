@@ -1,9 +1,9 @@
 """The low-level TDX VM boot primitive — the raw QEMU boot with GPU-passthrough sizing.
 
-This is not a CLI command. The end-to-end orchestrator (`chutes-cvm guest launch`,
-`chutes_cvm.guest.launch`) calls ``main()`` here as its final step via a Python import,
-passing an assembled argv. It remains runnable as ``python -m chutes_cvm.guest`` for
-low-level debugging, but miners always use `chutes-cvm guest launch`.
+Not a CLI command. Two entry points converge on ``launch_vm(args, host)``: `chutes-cvm guest
+launch` calls it with the profile it already read and had preflight sign, and
+``python -m chutes_cvm.guest`` runs ``main()`` for debugging, which reads the host itself.
+Miners always use `chutes-cvm guest launch`.
 """
 
 import argparse
@@ -60,23 +60,24 @@ def stop_existing_vm():
         pass
 
 
-def launch_vm(args) -> int:
+def launch_vm(args, host: "HostProfile") -> int:
 
-    print("Starting TDX VM...")
+    print("Starting confidential VM...")
 
     # Fail early if the host QEMU isn't the one baselined for its OS (moves RTMR0).
     verify_host_qemu_supported()
 
-    # One reading of this host, by discover-profile.sh -- the same reading the submitted profile
-    # and the generated measurement are built from, so the guest cannot launch with a shape the
-    # measurement was not generated for. Read unconditionally: every value below comes from it,
-    # and --no-gpus means "do not bind the GPUs", not "invent a different guest".
-    host = HostProfile.from_host()
+    # The platform follows from the profile's CPU vendor. Whether it is switched on is a
+    # separate live question the provider answers, naming the BIOS setting rather than
+    # failing opaquely inside QEMU -- and catching a profile captured on other hardware.
+    tee = host.tee_provider
+    tee.verify_environment()
 
-    # The CPU facts hold either way -- guest NUMA is a property of the host's nodes and -cpu of
-    # its QEMU version; neither involves a GPU.
+    # Guest NUMA is a property of the host's nodes, not of any GPU. Only the value the
+    # launcher itself needs (for PCIe pinning and the node list) is taken here; -cpu,
+    # -smp and the memory size are read off the profile inside build_base_cmd, so there
+    # is no second copy of them to drift.
     numa_active = host.uses_guest_numa
-    cpu_args = host.cpu_args
 
     # Guest RAM already fits: HostProfile sizes it to aggregate VRAM clamped by what this host
     # can back, so there is nothing left to refuse here. A host too small for the full VRAM gets
@@ -85,9 +86,10 @@ def launch_vm(args) -> int:
     # whose guest nothing has measured.
     mem = host.mem
     vcpus = str(host.vcpus)
-    smp_topology = host.smp_topology
 
-    firmware = firmware_path()
+    # Firmware is a property of the platform, not the GPU profile: TDX boots the pinned
+    # TDVF, SNP the AMD OVMF build. Both are measured, so both are pinned in the repo.
+    firmware = firmware_path(tee.default_firmware)
 
     if host.gpus:
         profile = host.gpu_profile
@@ -105,10 +107,11 @@ def launch_vm(args) -> int:
             "  No GPUs on this host: debug guest, sized from the host; it cannot attest."
         )
 
-    print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
+    print(f"Launching confidential VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
     pci_pinning = PcieRootPinning(numa_active)
+    print(f"TEE: {tee.label} ({tee.guest_id})")
     print(f"Firmware: {firmware}")
 
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
@@ -119,10 +122,8 @@ def launch_vm(args) -> int:
     print(f"Direct boot: kernel={kernel_path} cmdline={cmdline!r}")
 
     qemu_cmds = build_base_cmd(
-        mem=mem,
-        smp_topology=smp_topology,
+        host,
         process_name=PROCESS_NAME,
-        cpu_args=cpu_args,
         firmware=firmware,
         img_path=args.image,
         foreground=args.foreground,
@@ -181,6 +182,7 @@ def launch_vm(args) -> int:
         launch_prefix = ["numactl", f"--interleave={interleave}"]
 
     print("Launching QEMU...")
+
     result = proc.run(
         launch_prefix + qemu_cmds.to_args(),
         stderr=proc.STDOUT,
@@ -211,7 +213,12 @@ def launch_vm(args) -> int:
     return 0
 
 
-def main(argv: "list[str] | None" = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The boot primitive's flags.
+
+    Exposed so `guest launch` gets argparse's defaults filled; a hand-built Namespace silently
+    drops any flag it forgets, and the miss surfaces as an AttributeError mid-launch.
+    """
     parser = argparse.ArgumentParser(
         prog="python -m chutes_cvm.guest",
         description="Low-level TDX VM boot primitive (driven by `chutes-cvm guest launch`).",
@@ -245,7 +252,16 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Virtio-net multiqueue count for TAP mode (default: 4)",
     )
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    """Standalone entry point (``python -m chutes_cvm.guest``), for low-level debugging.
+
+    Reads the host itself because nothing handed it one. `guest launch` does not come through
+    here -- it calls ``launch_vm`` directly with the profile it already took.
+    """
+    args = build_parser().parse_args(argv)
 
     try:
         stop_existing_vm()
@@ -259,7 +275,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print("Error: --image is required")
         return 1
 
-    return launch_vm(args)
+    host = HostProfile.from_host()
+    return launch_vm(args, host)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from chutes_cvm.guest.qemu import (
     build_base_cmd,
     build_network,
 )
+from chutes_cvm.guest.tee import TdxTeeProvider
 
 
 def _empty_cmd() -> QemuCommand:
@@ -52,10 +53,13 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
     cmd = build_base_cmd(
-        mem="1024G",
-        smp_topology="188,sockets=2,cores=94,threads=1",
+        known.QemuProfileStub(
+            mem="1024G",
+            smp_topology="188,sockets=2,cores=94,threads=1",
+            cpu_args="host,-avx10",
+            uses_guest_numa=True,
+        ),
         process_name="chutes-td",
-        cpu_args="host,-avx10",
         firmware="/tmp/TDVF.fd",
         img_path=str(img),
         foreground=True,
@@ -87,10 +91,13 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
     cmd = build_base_cmd(
-        mem="512G",
-        smp_topology="94,sockets=1,cores=94,threads=1",
+        known.QemuProfileStub(
+            mem="512G",
+            smp_topology="94,sockets=1,cores=94,threads=1",
+            cpu_args="host,-avx10",
+            uses_guest_numa=False,
+        ),
         process_name="chutes-td",
-        cpu_args="host,-avx10",
         firmware="/tmp/TDVF.fd",
         img_path=str(img),
         foreground=True,
@@ -113,7 +120,7 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
 
 def test_append_numa_memory_splits_remainder_on_last_node():
     cmd = _empty_cmd()
-    _append_numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1])
+    _append_numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1], tee=TdxTeeProvider())
     assert "size=768M" in " ".join(cmd.objects)
     assert "size=769M" in " ".join(cmd.objects)
 
@@ -122,10 +129,13 @@ def test_direct_boot_emits_kernel_initrd_append_and_drops_bootindex(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
     cmd = build_base_cmd(
-        mem="512G",
-        smp_topology="94,sockets=1,cores=94,threads=1",
+        known.QemuProfileStub(
+            mem="512G",
+            smp_topology="94,sockets=1,cores=94,threads=1",
+            cpu_args="host,-avx10",
+            uses_guest_numa=False,
+        ),
         process_name="chutes-td",
-        cpu_args="host,-avx10",
         firmware="/tmp/TDVF.fd",
         img_path=str(img),
         foreground=True,
@@ -223,10 +233,13 @@ def test_generation_command_carries_a_launch_emulated_device_set():
     host = HostProfile(known.rtx_numa_doc())
     pinning = PcieRootPinning(True)  # one object across every builder, as __main__ does
     launch = build_base_cmd(
-        mem="1128G",
-        smp_topology="124,sockets=2,cores=62,threads=1",
+        known.QemuProfileStub(
+            mem="1128G",
+            smp_topology="124,sockets=2,cores=62,threads=1",
+            cpu_args="host,-avx10",
+            uses_guest_numa=True,
+        ),
         process_name="chutes-td",
-        cpu_args="host,-avx10",
         firmware="/f",
         img_path="/root.qcow2",
         foreground=False,

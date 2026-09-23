@@ -21,11 +21,17 @@ import glob
 import json
 import os
 import sys
+from typing import TYPE_CHECKING
 
 from chutes_cvm import proc
 from chutes_cvm.guest import image_set
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
+
+if (
+    TYPE_CHECKING
+):  # the host-specific chain is imported lazily; this is annotation-only.
+    from chutes_cvm.guest.host_profile import HostProfile
 
 _PROCESS_NAME_CHUTES_TD = "chutes-td"
 
@@ -60,29 +66,6 @@ def _chutes_td_running() -> bool:
     return False
 
 
-def _tdx_active() -> "tuple[bool, str]":
-    """Return (active, source). Check sysfs first (survives dmesg rollover), then /proc/cpuinfo,
-    then dmesg as a last resort — matching the former quick-launch Step 0."""
-    try:
-        with open("/sys/module/kvm_intel/parameters/tdx") as f:
-            if f.read().strip() == "Y":
-                return True, "sysfs (/sys/module/kvm_intel/parameters/tdx=Y)"
-    except OSError:
-        pass
-    try:
-        with open("/proc/cpuinfo") as f:
-            if "tdx" in f.read():
-                return True, "/proc/cpuinfo"
-    except OSError:
-        pass
-    dmesg = proc.run(["sudo", "dmesg"], capture_output=True, text=True).stdout
-    if any(
-        "module initialized" in ln for ln in dmesg.splitlines() if "tdx" in ln.lower()
-    ):
-        return True, "dmesg"
-    return False, ""
-
-
 def _ensure_numa_zone_reclaim() -> None:
     """Ensure vm.zone_reclaim_mode=0 (cross-node allocation for QEMU/KVM); fix if not."""
     current = proc.run(
@@ -94,12 +77,17 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
-def _launchable(config_path: str, base_image: str, force: bool) -> bool:
+def _launchable(
+    config_path: str, base_image: str, force: bool, host_profile: "HostProfile"
+) -> bool:
     """Return True if launch may proceed: the control plane confirms an image of THIS host's
     ``(version, rc)`` will attest here. Mirrors `chutes-cvm host verify`'s API check — read the
     image's (version, rc) from its manifest, capture + sign the host profile, and ask
     POST /servers/tdx/preflight. Without a launchable verdict the VM would boot and then fail
     attestation, so refuse early (return False) unless ``force`` overrides with a warning.
+
+    ``host_profile`` is the reading Step 0 took and the boot primitive will build from, so the
+    verdict is about the shape that actually launches rather than a second, independent read.
     """
     # Deferred: preflight pulls substrateinterface (signing) — only needed for an actual launch,
     # not `guest launch --help` or the early config path.
@@ -135,6 +123,7 @@ def _launchable(config_path: str, base_image: str, force: bool) -> bool:
             version=version,
             rc=rc,
             api_base=api_base,
+            host_profile=host_profile,
         )
         launchable = bool(resp.get("launchable"))
         fingerprint = resp.get("fingerprint", "?")
@@ -613,22 +602,27 @@ def main(argv: "list[str] | None" = None) -> int:
 
     if not args.force and _chutes_td_running():
         print(
-            f"Error: a TDX VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
+            f"Error: a confidential VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
             "  Stop it first: chutes-cvm guest down  (or pass --force to override — not recommended).",
             file=sys.stderr,
         )
         return 1
 
     print("Step 0: Verifying host configuration...")
-    active, source = _tdx_active()
-    if not active:
-        print(
-            "✗ TDX does not appear active (checked sysfs, /proc/cpuinfo, dmesg). Enable TDX in "
-            "BIOS + kernel and reboot; verify with `cat /sys/module/kvm_intel/parameters/tdx`.",
-            file=sys.stderr,
-        )
+    # Deferred like the boot primitive below: HostProfile pulls the host-specific chain
+    # (detection/gpu/qemu) that only an actual launch needs, so `guest launch --help` stays light.
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    # THE reading of this host for this launch. discover-profile.sh is the single reader --
+    # preflight signs this profile and the boot primitive builds the command from it, so both
+    # see the same hardware. A second read could disagree with the one the API approved.
+    host = HostProfile.from_host()
+    try:
+        host.verify_environment()
+    except RuntimeError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
         return 1
-    print(f"✓ TDX active (via {source})")
+    print(f"✓ {host.tee_provider.label} active")
     _ensure_numa_zone_reclaim()
 
     # The gate is a launch-readiness check: does a published measurement for THIS image's
@@ -643,6 +637,7 @@ def main(argv: "list[str] | None" = None) -> int:
             args.config_file or default_config_path(),
             config.vm.base_image,
             args.force,
+            host,
         ):
             return 1
 
@@ -685,7 +680,7 @@ def main(argv: "list[str] | None" = None) -> int:
                 print("\nStep 5b: Installing benchmark network logging...")
                 _install_benchmark_netlog(config)
 
-        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus)
+        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus, host)
     except LaunchError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -709,12 +704,13 @@ def _boot(
     net_iface: str,
     benchmark: bool,
     pass_gpus: bool,
+    host: "HostProfile",
 ) -> int:
-    """Assemble the boot-primitive argument list and call the QEMU primitive in-process."""
+    """Assemble the boot-primitive arguments and call the QEMU primitive in-process."""
     # Deferred import: the boot primitive pulls the heavy, host-specific chain
     # (detection/gpu/qemu/passthrough) that only an actual boot needs — importing it here keeps
     # `guest launch --help` and the early config/gate paths light.
-    from chutes_cvm.guest.__main__ import main as launch_vm_main
+    from chutes_cvm.guest.__main__ import build_parser, launch_vm
 
     launch_args = ["--image", vm_image, "--network-type", config.network.type]
     if pass_gpus:
@@ -734,7 +730,12 @@ def _boot(
         launch_args.append("--foreground")
 
     print("\nLaunching Chutes VM...")
-    return launch_vm_main(launch_args)
+    # Straight to the execution path, not back through the primitive's main(): that one reads the
+    # host itself, which is the second reading this flow exists to avoid. The parser is still used
+    # so argparse fills every default — a hand-built Namespace silently drops any flag not set
+    # here, and the miss surfaces as an AttributeError mid-launch.
+    args = build_parser().parse_args(launch_args)
+    return launch_vm(args, host)
 
 
 if __name__ == "__main__":

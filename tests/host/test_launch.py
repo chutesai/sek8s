@@ -6,7 +6,7 @@ precedence itself (CLI > env > YAML > defaults) lives in the LaunchConfig model 
 test_config.py. All privileged steps (volumes/network/boot) and host probes are mocked here.
 """
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.guest import launch
@@ -138,34 +138,42 @@ def test_boot_standard_args():
         network_type="tap",
         foreground=True,
     )
-    with patch("chutes_cvm.guest.__main__.main", return_value=0) as lv:
-        rc = _boot(cfg, "/img.qcow2", "tap0", benchmark=False, pass_gpus=True)
+    host = _fake_host()
+    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+        rc = _boot(
+            cfg, "/img.qcow2", "tap0", benchmark=False, pass_gpus=True, host=host
+        )
     assert rc == 0
-    a = lv.call_args.args[0]
-    assert a[:2] == ["--image", "/img.qcow2"]
-    assert "--pass-gpus" in a
-    assert a[a.index("--net-iface") + 1] == "tap0"
-    assert "--cache-volume" in a and "--foreground" in a
-    assert "--ssh" not in a
+    # The primitive receives a parsed Namespace and the caller's profile -- not an argv list
+    # it has to re-parse, and not a profile it reads for itself.
+    a, passed_host = lv.call_args.args
+    assert passed_host is host
+    assert a.image == "/img.qcow2"
+    assert a.pass_gpus is True
+    assert a.net_iface == "tap0"
+    assert a.cache_volume == "ca.raw" and a.foreground is True
+    assert a.ssh is False
 
 
 def test_boot_benchmark_omits_cache_adds_ssh():
+    host = _fake_host()
     cfg = _cfg(config_volume="c", storage_volume="s", network_type="tap")
-    with patch("chutes_cvm.guest.__main__.main", return_value=0) as lv:
-        _boot(cfg, "/img", "tap0", benchmark=True, pass_gpus=False)
+    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+        _boot(cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=host)
     a = lv.call_args.args[0]
-    assert "--ssh" in a
-    assert "--cache-volume" not in a
-    assert "--pass-gpus" not in a
+    assert a.ssh is True
+    assert a.cache_volume is None
+    assert a.pass_gpus is False
 
 
 def test_boot_user_network_omits_net_iface():
+    host = _fake_host()
     cfg = _cfg(
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
-    with patch("chutes_cvm.guest.__main__.main", return_value=0) as lv:
-        _boot(cfg, "/img", "", benchmark=False, pass_gpus=True)
-    assert "--net-iface" not in lv.call_args.args[0]
+    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+        _boot(cfg, "/img", "", benchmark=False, pass_gpus=True, host=host)
+    assert lv.call_args.args[0].net_iface is None
 
 
 # ── main() orchestration (all steps + probes mocked) ─────────────────────────────
@@ -183,15 +191,28 @@ _STD_ARGV = [
 ]
 
 
+def _fake_host(label="Intel TDX", raises=None):
+    """A stand-in HostProfile: verify_environment() is the whole surface Step 0 touches."""
+    host = MagicMock()
+    host.tee_provider.label = label
+    host.verify_environment.side_effect = raises
+    return host
+
+
 def _happy(**over):
     """ExitStack of patches for a passing host; `over` overrides individual return values."""
     from contextlib import ExitStack
 
     stack = ExitStack()
+    # Step 0 now takes THE reading of this host and asks the profile whether it can launch,
+    # so the seam under test is from_host() rather than a launcher-local probe.
+    host = over.pop("host", None) or _fake_host()
+    stack.enter_context(
+        patch("chutes_cvm.guest.host_profile.HostProfile.from_host", return_value=host)
+    )
     defaults = {
         "_resolve_public_iface": "eth0",
         "_chutes_td_running": False,
-        "_tdx_active": (True, "sysfs"),
         "_launchable": True,
         "_prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
@@ -259,15 +280,20 @@ def test_main_debug_image_is_still_gated():
 
 
 def test_launchable_true_when_measurement_covers(capsys):
+    host = _fake_host()
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
         "chutes_cvm.guest.preflight.run_preflight",
         return_value={"launchable": True, "fingerprint": "abc", "detail": "covers"},
     ):
-        assert launch._launchable("/cfg.yaml", "/base", force=False) is True
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
+            is True
+        )
     assert "covers" in capsys.readouterr().out
 
 
 def test_launchable_false_refuses_but_force_overrides(capsys):
+    host = _fake_host()
     resp = {
         "launchable": False,
         "fingerprint": "abc",
@@ -276,50 +302,104 @@ def test_launchable_false_refuses_but_force_overrides(capsys):
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
         "chutes_cvm.guest.preflight.run_preflight", return_value=resp
     ):
-        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
-        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
+            is False
+        )
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
+            is True
+        )
     err = capsys.readouterr().err
     assert "Refusing to launch" in err
     assert "submit-profile" in err
 
 
 def test_launchable_passes_image_version_rc_to_preflight():
+    host = _fake_host()
     # The manifest's (version, rc) must be what's joined against — a debug image asks about rc:true.
     with patch(f"{P}.image_set.version_and_rc", return_value=("2.0.0", True)), patch(
         "chutes_cvm.guest.preflight.run_preflight",
         return_value={"launchable": True, "fingerprint": "abc", "detail": "ok"},
     ) as rp:
-        assert launch._launchable("/cfg.yaml", "/base", force=False) is True
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
+            is True
+        )
     assert rp.call_args.kwargs["version"] == "2.0.0"
     assert rp.call_args.kwargs["rc"] is True
 
 
 def test_launchable_fails_closed_on_api_error():
+    host = _fake_host()
     from chutes_cvm.guest.preflight import PreflightError
 
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
         "chutes_cvm.guest.preflight.run_preflight",
         side_effect=PreflightError("API unreachable"),
     ):
-        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
-        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
+            is False
+        )
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
+            is True
+        )
 
 
 def test_launchable_blocks_on_unreadable_manifest(capsys):
+    host = _fake_host()
     # Can't read the image version → can't know what we're booting → fail closed (force overrides).
     with patch(
         f"{P}.image_set.version_and_rc", side_effect=FileNotFoundError("no manifest")
     ):
-        assert launch._launchable("/cfg.yaml", "/base", force=False) is False
-        assert launch._launchable("/cfg.yaml", "/base", force=True) is True
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
+            is False
+        )
+        assert (
+            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
+            is True
+        )
     assert "image version" in capsys.readouterr().err
 
 
-def test_main_blocks_when_tdx_inactive(capsys):
-    with _happy(_tdx_active=(False, "")):
+def test_main_blocks_when_the_platform_is_not_enabled(capsys):
+    """A host whose platform is off in BIOS cannot launch a confidential guest. The message
+    comes from the provider, so it names THIS host's platform and its remedy."""
+    host = _fake_host(
+        raises=RuntimeError(
+            "This host profile is AMD SEV-SNP, but the machine reports ..."
+        )
+    )
+    with _happy(host=host):
         rc = launch.main(_STD_ARGV)
     assert rc == 1
-    assert "TDX" in capsys.readouterr().err
+    assert "AMD SEV-SNP" in capsys.readouterr().err
+
+
+def test_main_launches_on_an_amd_host():
+    """The gate is the profile's own platform, not whether it is Intel."""
+    with _happy(host=_fake_host(label="AMD SEV-SNP")), patch(
+        f"{P}._boot", return_value=0
+    ):
+        rc = launch.main(_STD_ARGV)
+    assert rc == 0
+
+
+def test_main_signs_and_boots_one_single_reading_of_the_host():
+    """discover-profile.sh runs once per launch. The profile preflight signs -- and gets a
+    launchable verdict for -- must be the same object the boot primitive builds the command
+    from, or the control plane can approve a shape that never boots."""
+    host = _fake_host()
+    with _happy(host=host), patch(f"{P}._boot", return_value=0) as boot, patch(
+        f"{P}._launchable", return_value=True
+    ) as launchable:
+        assert launch.main(_STD_ARGV) == 0
+
+    assert boot.call_args.args[-1] is host
+    assert launchable.call_args.args[-1] is host
 
 
 def test_main_missing_creds_is_error(capsys):
