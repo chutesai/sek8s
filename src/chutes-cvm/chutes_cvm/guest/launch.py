@@ -19,10 +19,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from typing import Literal, get_args, get_origin
 
 from chutes_cvm import proc
 from chutes_cvm.guest import image_set
-from chutes_cvm.guest.config import ConfigError, LaunchConfig
+from chutes_cvm.guest.config import ConfigError, LaunchConfig, cli_fields
 from chutes_cvm.guest.context import GuestContext
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.images import prepare_vm_image
@@ -160,37 +161,15 @@ def _launchable(
 
 # ── Argument parsing + config precedence ─────────────────────────────────────────
 
-# CLI value flag (argparse dest) → its (section, key) in the nested LaunchConfig. Deeper volume
-# fields are handled separately below. store_true flags are handled separately too.
-_CLI_TO_SECTION = {
-    "hostname": ("vm", "hostname"),
-    "base_image": ("vm", "base_image"),
-    "vm_image_dir": ("vm", "vm_image_directory"),
-    "miner_ss58": ("miner", "ss58"),
-    "miner_seed": ("miner", "seed"),
-    "vm_ip": ("network", "vm_ip"),
-    "bridge_ip": ("network", "bridge_ip"),
-    "vm_dns": ("network", "dns"),
-    "public_iface": ("network", "public_interface"),
-    "network_type": ("network", "type"),
-    "ssh_port": ("network", "ssh_port"),
-    "docker_hub_username": ("docker_hub", "username"),
-    "docker_hub_token": ("docker_hub", "token"),
-}
-
-# CLI volume flags → (volumes subsection, key).
-_CLI_TO_VOLUME = {
-    "cache_size": ("cache", "size"),
-    "cache_volume": ("cache", "path"),
-    "storage_size": ("storage", "size"),
-    "storage_volume": ("storage", "path"),
-    "config_volume": ("config", "path"),
-}
-
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="chutes-cvm guest launch",
+        # No prefix matching. With it on, a removed or mistyped flag silently resolves to
+        # whatever it is a prefix of -- `--config` became `--config-volume`, so a launch config
+        # path was read as a config VOLUME path. It also means adding a flag can break existing
+        # automation by making an abbreviation it relied on ambiguous.
+        allow_abbrev=False,
         description="End-to-end TEE VM launch: verify host, prepare volumes and network, boot.",
         epilog=(
             "Related commands (formerly flags of this orchestrator): `chutes-cvm config init` "
@@ -198,31 +177,36 @@ def _build_parser() -> argparse.ArgumentParser:
             "`chutes-cvm guest down` / `stop` (tear down)."
         ),
     )
+    # Positional only. There was a `--config` sharing this dest, and it never worked: an
+    # optional positional applies its default even when it matches zero arguments, so it
+    # clobbered whatever the flag had set and the launch silently fell back to the default
+    # config path. An inert flag that looks like it is doing something is worse than no flag.
     p.add_argument(
         "config_file", nargs="?", help="Launch config.yaml (CLI flags override it)"
     )
-    p.add_argument("--config", dest="config_file", help="config.yaml path (explicit)")
-    p.add_argument("--hostname")
-    p.add_argument("--base-image", dest="base_image")
-    p.add_argument("--vm-image-dir", dest="vm_image_dir")
-    p.add_argument("--miner-ss58", dest="miner_ss58")
-    p.add_argument("--miner-seed", dest="miner_seed")
-    p.add_argument("--vm-ip", dest="vm_ip")
-    p.add_argument("--bridge-ip", dest="bridge_ip")
-    p.add_argument("--vm-dns", dest="vm_dns")
-    p.add_argument("--public-iface", dest="public_iface")
-    p.add_argument("--cache-size", dest="cache_size")
-    p.add_argument("--cache-volume", dest="cache_volume")
-    p.add_argument("--storage-size", dest="storage_size")
-    p.add_argument("--storage-volume", dest="storage_volume")
-    p.add_argument("--config-volume", dest="config_volume")
-    p.add_argument("--ssh-port", dest="ssh_port", type=int)
-    p.add_argument("--network-type", dest="network_type", choices=["tap", "user"])
-    p.add_argument("--docker-hub-username", dest="docker_hub_username")
-    p.add_argument("--docker-hub-token", dest="docker_hub_token")
+    # Every flag that maps to a config setting comes from the model, which owns its YAML key,
+    # env var, default, description and flag together. Declaring them here as well is what let
+    # `network.ssh_port` exist on both sides and be plumbed on neither.
+    for flag, path, annotation in cli_fields():
+        # No explicit dest: argparse derives `--vm-dns` -> `vm_dns`, which is exactly what the
+        # hand-written flags set, so every existing `args.<name>` reference keeps working.
+        kwargs: dict = {"default": None}
+        if annotation is bool:
+            # store_true with default=None: absent stays None, so it cannot overwrite a YAML
+            # true with False the way argparse's own default would.
+            kwargs["action"] = "store_true"
+        elif get_origin(annotation) is Literal:
+            kwargs["choices"] = list(get_args(annotation))
+        elif annotation is int:
+            kwargs["type"] = int
+        p.add_argument(flag, **kwargs)
+
+    # Not derived from the model. --benchmark/--ephemeral/--no-gpus/--force pick the shape of
+    # the launch and are returned alongside the config rather than folded into it; --config-file
+    # says where to read it from; --skip-bind is the one config flag that names the NEGATION of
+    # its field (devices.bind_devices), so it cannot be "that field's flag".
     p.add_argument("--skip-bind", action="store_true", default=None)
     p.add_argument("--no-gpus", action="store_true", default=None)
-    p.add_argument("--foreground", action="store_true", default=None)
     p.add_argument("--ephemeral", action="store_true", default=None)
     p.add_argument("--benchmark", action="store_true", default=None)
     p.add_argument("--force", action="store_true", default=None)
@@ -243,16 +227,14 @@ def _resolve_config(
 
     # Build nested CLI overrides (only flags the user set) — the highest-precedence source.
     overrides: dict = {}
-    for dest, (section, key) in _CLI_TO_SECTION.items():
-        val = getattr(args, dest)
-        if val is not None:
-            overrides.setdefault(section, {})[key] = val
-    for dest, (sub, key) in _CLI_TO_VOLUME.items():
-        val = getattr(args, dest)
-        if val is not None:
-            overrides.setdefault("volumes", {}).setdefault(sub, {})[key] = val
-    if args.foreground:
-        overrides.setdefault("runtime", {})["foreground"] = True
+    for flag, path, _annotation in cli_fields():
+        val = getattr(args, flag.lstrip("-").replace("-", "_"), None)
+        if val is None:
+            continue
+        node = overrides
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+        node[path[-1]] = val
     if args.skip_bind:
         overrides.setdefault("devices", {})["bind_devices"] = False
 

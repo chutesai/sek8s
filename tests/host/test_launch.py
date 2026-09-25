@@ -246,6 +246,20 @@ def _happy(**over):
     return stack
 
 
+def test_removed_and_abbreviated_flags_are_rejected():
+    """`--config` shared the positional's dest and never worked -- an optional positional applies
+    its default even when it matches zero args, so it clobbered the flag and the launch silently
+    used the default config path. Removing it was not enough on its own: argparse prefix matching
+    then resolved `--config` to `--config-volume`, reading a launch config path as a config VOLUME
+    path. Abbreviations are off, so both are now errors instead of quiet misreads."""
+    parser = launch._build_parser()
+    for argv in (["--config", "x.yaml"], ["--vm-d", "1.1.1.1"], ["--bench"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
+
+    assert parser.parse_args(["x.yaml"]).config_file == "x.yaml"
+
+
 def test_main_happy_path_user_network():
     with _happy(), patch(f"{P}._boot", return_value=0) as boot:
         rc = launch.main(_STD_ARGV)
