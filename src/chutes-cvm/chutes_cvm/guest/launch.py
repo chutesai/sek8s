@@ -17,8 +17,6 @@ orchestration runs with the bundled scripts dir as its working directory.
 from __future__ import annotations
 
 import argparse
-import glob
-import json
 import os
 import sys
 
@@ -27,9 +25,17 @@ from chutes_cvm.guest import image_set
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
 from chutes_cvm.guest.context import GuestContext
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.images import prepare_vm_image
+from chutes_cvm.guest.network import (
+    install_benchmark_netlog,
+    resolve_public_iface,
+    setup_bridge,
+)
 from chutes_cvm.guest.preflight import DEFAULT_API_BASE, PreflightError, run_preflight
+from chutes_cvm.guest.privileged import LaunchError
 from chutes_cvm.guest.qemu import GuestNetwork, GuestVolumes
 from chutes_cvm.guest.vm import launch_vm
+from chutes_cvm.guest.volumes import ensure_raw_volume, setup_config_volume
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
 _PROCESS_NAME_CHUTES_TD = "chutes-td"
@@ -149,256 +155,7 @@ def _launchable(
     return False
 
 
-def _resolve_public_iface(configured: str) -> str:
-    """Return the public interface: the configured one if it exists, else the default-route dev.
-
-    Warns (but does not fail) when a configured name is missing — a stale NIC name after an OS
-    upgrade is caught here rather than producing broken iptables rules.
-    """
-    if configured and _iface_exists(configured):
-        return configured
-    detected = _default_route_iface()
-    if not detected:
-        raise LaunchError(
-            "could not determine the public interface — auto-detection found no default "
-            "route. Set network.public_interface in config.yaml or pass --public-iface."
-        )
-    if configured:
-        print(
-            f"⚠ configured public interface '{configured}' not found; auto-detected "
-            f"'{detected}' from the default route (update network.public_interface to silence)."
-        )
-    return detected
-
-
-def _iface_exists(name: str) -> bool:
-    return proc.run(["ip", "link", "show", name], capture_output=True).returncode == 0
-
-
-def _default_route_iface() -> str:
-    """The interface of the default route (empty if none)."""
-    out = proc.run(
-        ["ip", "-j", "route", "show", "default"], capture_output=True, text=True
-    ).stdout.strip()
-    try:
-        routes = json.loads(out) if out else []
-    except json.JSONDecodeError:
-        return ""
-    return routes[0].get("dev", "") if routes else ""
-
-
-class LaunchError(Exception):
-    """A launch precondition failed (message is user-facing)."""
-
-
 # ── Privileged steps (bash helpers own the actual system mutations) ──────────────
-
-
-def _helper(*parts: str) -> str:
-    return str(SCRIPTS_DIR.joinpath(*parts))
-
-
-def _volume_path(vol: str) -> str:
-    """Resolve a (possibly relative) volume path the way the bash helper will — relative names
-    live in the scripts working directory (SCRIPTS_DIR), matching the former quick-launch cwd.
-    """
-    return vol if os.path.isabs(vol) else str(SCRIPTS_DIR / vol)
-
-
-def _ensure_raw_volume(vol: str, size: str, label: str, kind: str) -> None:
-    """Create a raw LUKS volume via volumes/create-cache.sh unless it already exists.
-
-    ``kind`` is only for messages. qcow2 volumes are never created (only reused if present).
-    """
-    path = _volume_path(vol)
-    if os.path.exists(path):
-        print(f"✓ Using existing {kind} volume: {vol}")
-        return
-    if vol.endswith(".qcow2"):
-        raise LaunchError(
-            f"qcow2 volumes cannot be created — use .raw for a new {kind} volume "
-            f"(e.g. {kind}-<hostname>.raw). Existing qcow2 volumes are reused if present."
-        )
-    print(f"Creating {kind} volume at: {vol} ({size})")
-    _run([_helper("volumes", "create-cache.sh"), vol, size, label])
-
-
-def _setup_config_volume(config: LaunchConfig, benchmark: bool) -> None:
-    """Create/refresh the config volume via volumes/create-config.sh.
-
-    Benchmark passes hostname + network positionally with empty miner creds; production passes
-    every value by NAME through the environment (create-config.sh reads those), so long/optional
-    fields (docker creds, operator key) stay off the command line.
-    """
-    vol = config.volumes.config.path
-    action = "Refreshing existing" if os.path.exists(_volume_path(vol)) else "Creating"
-    print(f"{action} config volume: {vol}")
-    gateway = config.network.bridge_ip.split("/")[0]
-    helper = _helper("volumes", "create-config.sh")
-    if benchmark:
-        _run(
-            [
-                "sudo",
-                helper,
-                vol,
-                config.vm.hostname,
-                "",
-                "",
-                config.network.vm_ip,
-                gateway,
-                config.network.dns,
-            ]
-        )
-    else:
-        _run(
-            [
-                "sudo",
-                f"HOSTNAME={config.vm.hostname}",
-                f"MINER_SS58={config.miner.ss58}",
-                f"MINER_SEED={config.miner.seed}",
-                f"VM_IP={config.network.vm_ip}",
-                f"VM_GATEWAY={gateway}",
-                f"VM_DNS={config.network.dns}",
-                f"DOCKER_HUB_USER={config.docker_hub.username}",
-                f"DOCKER_HUB_TOKEN={config.docker_hub.token}",
-                helper,
-                vol,
-            ]
-        )
-
-
-_DIRECT_BOOT_SIDECARS = ("vmlinuz", "initrd", "cmdline")
-
-
-def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
-    """Verify the image set and instantiate the per-VM copy; return the per-VM image path.
-
-    The per-VM image is a full copy of the base qcow2 (not an overlay): luksRemoveKey later
-    destroys the old key slot in-place on the only copy, matching the storage/cache volumes.
-
-    Python owns the decisions/data — verify the set against its manifest and resolve the qcow2 +
-    its manifest sha256 (image_set.resolve), derive the per-VM name, and pick which stale copies
-    to reap. The file mutations are privileged (the image dir is root-owned under /var/lib/chutes),
-    so each runs via sudo, matching the per-step-sudo pattern the rest of launch uses.
-    """
-    try:
-        qcow2, sha256 = image_set.resolve(base_image, full=False)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
-        raise LaunchError(f"image set verification failed: {exc}") from exc
-    print(
-        f"Verified image set via manifest: {qcow2} (sha256={sha256})", file=sys.stderr
-    )
-
-    if not os.path.isdir(vm_image_dir):
-        _run(["sudo", "mkdir", "-p", vm_image_dir])
-
-    vm_image = os.path.join(vm_image_dir, f"tdx-{hostname}-{sha256[:16]}.qcow2")
-
-    # Reap stale per-VM images (and their sidecars) from previous base versions for this host.
-    for stale in sorted(
-        glob.glob(os.path.join(vm_image_dir, f"tdx-{hostname}-*.qcow2"))
-    ):
-        if stale == vm_image:
-            continue
-        print(f"Removing stale VM image: {stale}", file=sys.stderr)
-        stale_base = stale[: -len(".qcow2")]
-        _run(
-            ["sudo", "rm", "-f", stale]
-            + [f"{stale_base}.{ext}" for ext in _DIRECT_BOOT_SIDECARS]
-        )
-
-    if os.path.exists(vm_image):
-        print(f"Using existing VM image: {vm_image}", file=sys.stderr)
-    else:
-        print(f"Copying base image to per-VM image: {vm_image}", file=sys.stderr)
-        _run(["sudo", "cp", qcow2, vm_image])
-
-    # Direct-boot sidecars must travel with the per-VM copy the launcher boots (it resolves
-    # <image-base>.{vmlinuz,initrd,cmdline} next to that copy). Re-sync unconditionally so a
-    # reused per-VM image also refreshes. Missing base sidecars are fatal — no direct boot.
-    base_no_ext, vm_no_ext = qcow2[: -len(".qcow2")], vm_image[: -len(".qcow2")]
-    for ext in _DIRECT_BOOT_SIDECARS:
-        src = f"{base_no_ext}.{ext}"
-        if not os.path.isfile(src):
-            raise LaunchError(
-                f"direct-boot artifact missing next to base image: {src} — the image must ship "
-                "with .vmlinuz/.initrd/.cmdline (stage-boot-artifacts, published with the qcow2)"
-            )
-        _run(["sudo", "cp", src, f"{vm_no_ext}.{ext}"])
-
-    return vm_image
-
-
-def _setup_bridge(config: LaunchConfig) -> str:
-    """Set up TAP bridge networking via network/setup-bridge.sh; return the TAP interface name."""
-    result = proc.run(
-        [
-            _helper("network", "setup-bridge.sh"),
-            "--bridge-ip",
-            config.network.bridge_ip,
-            "--vm-ip",
-            f"{config.network.vm_ip}/24",
-            "--vm-dns",
-            config.network.dns,
-            "--public-iface",
-            config.network.public_interface,
-            "--multi-queue",
-        ],
-        cwd=str(SCRIPTS_DIR),
-        capture_output=True,
-        text=True,
-    )
-    sys.stdout.write(result.stdout)
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        raise LaunchError("bridge setup failed")
-    for line in result.stdout.splitlines():
-        if line.startswith("Network interface:"):
-            return line.split(":", 1)[1].strip()
-    raise LaunchError("could not extract the TAP interface from setup-bridge output")
-
-
-def _install_benchmark_netlog(config: LaunchConfig) -> None:
-    """Install + (re)start the benchmark network-logging service from the bundled network/ files."""
-    net = SCRIPTS_DIR / "network"
-    srcs = {
-        "benchmark-netlog.sh": ("/usr/local/bin/benchmark-netlog.sh", "0755"),
-        "benchmark-netlog.service": (
-            "/etc/systemd/system/benchmark-netlog.service",
-            "0644",
-        ),
-        "benchmark-netlog.logrotate": (
-            "/etc/logrotate.d/benchmark-netlog",
-            "0644",
-        ),
-    }
-    for name, (dst, mode) in srcs.items():
-        src = net / name
-        if not src.exists():
-            raise LaunchError(f"benchmark netlog source missing: {src}")
-        _run(["sudo", "install", "-m", mode, str(src), dst])
-
-    env_file = "/etc/chutes/benchmark-netlog.env"
-    if not os.path.exists(env_file):
-        _run(["sudo", "mkdir", "-p", "/etc/chutes"])
-        content = f"BRIDGE_SUBNET={config.network.bridge_ip}\nNETLOG_DIR=/var/log/chutes/benchmark-netlog\n"
-        proc.run(
-            ["sudo", "tee", env_file],
-            input=content.encode(),
-            stdout=proc.DEVNULL,
-            check=True,
-        )
-    _run(["sudo", "systemctl", "daemon-reload"])
-    proc.run(["sudo", "systemctl", "enable", "benchmark-netlog"], check=False)
-    _run(["sudo", "systemctl", "restart", "benchmark-netlog"])
-    print("✓ benchmark-netlog service installed and running")
-
-
-def _run(cmd: "list[str]") -> None:
-    """Run a privileged step from the scripts working directory; raise LaunchError on failure."""
-    print(f"  $ {' '.join(cmd)}")
-    if proc.run(cmd, cwd=str(SCRIPTS_DIR)).returncode != 0:
-        raise LaunchError(f"command failed: {' '.join(cmd)}")
 
 
 # ── Argument parsing + config precedence ─────────────────────────────────────────
@@ -575,7 +332,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         config, benchmark, pass_gpus, ephemeral = _resolve_config(args)
-        config.network.public_interface = _resolve_public_iface(
+        config.network.public_interface = resolve_public_iface(
             config.network.public_interface
         )
         _apply_derived_defaults(config, benchmark, ephemeral)
@@ -635,7 +392,7 @@ def main(argv: "list[str] | None" = None) -> int:
     try:
         if not benchmark:
             print("\nStep 2: Preparing cache volume...")
-            _ensure_raw_volume(
+            ensure_raw_volume(
                 config.volumes.cache.path,
                 config.volumes.cache.size,
                 "tdx-cache",
@@ -643,7 +400,7 @@ def main(argv: "list[str] | None" = None) -> int:
             )
 
         print("\nStep 3: Preparing storage volume...")
-        _ensure_raw_volume(
+        ensure_raw_volume(
             config.volumes.storage.path,
             config.volumes.storage.size,
             "storage",
@@ -651,21 +408,21 @@ def main(argv: "list[str] | None" = None) -> int:
         )
 
         print("\nStep 4: Setting up config volume...")
-        _setup_config_volume(config, benchmark)
+        setup_config_volume(config, benchmark)
 
         print("\nStep 4b: Preparing VM image (verify set + per-VM copy)...")
-        vm_image = _prepare_vm_image(
+        vm_image = prepare_vm_image(
             config.vm.base_image, config.vm.hostname, config.vm.vm_image_directory
         )
 
         net_iface = ""
         if config.network.type == "tap":
             print("\nStep 5: Setting up bridge networking...")
-            net_iface = _setup_bridge(config)
+            net_iface = setup_bridge(config)
             print(f"✓ Bridge configured (TAP: {net_iface})")
             if benchmark:
                 print("\nStep 5b: Installing benchmark network logging...")
-                _install_benchmark_netlog(config)
+                install_benchmark_netlog(config)
 
         rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus, host)
     except LaunchError as exc:

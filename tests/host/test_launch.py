@@ -9,7 +9,7 @@ test_config.py. All privileged steps (volumes/network/boot) and host probes are 
 from unittest.mock import MagicMock, patch
 
 import pytest
-from chutes_cvm.guest import launch
+from chutes_cvm.guest import images, launch
 from chutes_cvm.guest.config import LaunchConfig
 from chutes_cvm.guest.launch import (
     LaunchError,
@@ -21,6 +21,7 @@ from chutes_cvm.guest.launch import (
 )
 
 P = "chutes_cvm.guest.launch"
+IMAGES = "chutes_cvm.guest.images"
 
 
 # Convenience: build a LaunchConfig from flat kwargs (mapped to the model's nested fields).
@@ -228,18 +229,18 @@ def _happy(**over):
         patch("chutes_cvm.guest.host_profile.HostProfile.from_host", return_value=host)
     )
     defaults = {
-        "_resolve_public_iface": "eth0",
+        "resolve_public_iface": "eth0",
         "_chutes_td_running": False,
         "_launchable": True,
-        "_prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
+        "prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
     defaults.update(over)
     for name, ret in defaults.items():
         stack.enter_context(patch(f"{P}.{name}", return_value=ret))
     for name in (
         "_ensure_numa_zone_reclaim",
-        "_ensure_raw_volume",
-        "_setup_config_volume",
+        "ensure_raw_volume",
+        "setup_config_volume",
     ):
         stack.enter_context(patch(f"{P}.{name}"))
     return stack
@@ -448,9 +449,9 @@ def test_prepare_vm_image_resolves_in_python_then_copies_via_sudo(tmp_path):
     calls: list[list[str]] = []
 
     with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)) as res, patch(
-        f"{P}._run", side_effect=lambda cmd, **k: calls.append(cmd)
+        f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)
     ):
-        out = launch._prepare_vm_image(set_dir, "h", str(vm_dir))
+        out = images.prepare_vm_image(set_dir, "h", str(vm_dir))
 
     res.assert_called_once_with(set_dir, full=False)
     vm_image = str(vm_dir / f"tdx-h-{sha}.qcow2")
@@ -473,9 +474,9 @@ def test_prepare_vm_image_reaps_stale_versions(tmp_path):
     calls: list[list[str]] = []
 
     with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)), patch(
-        f"{P}._run", side_effect=lambda cmd, **k: calls.append(cmd)
+        f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)
     ):
-        launch._prepare_vm_image(set_dir, "h", str(vm_dir))
+        images.prepare_vm_image(set_dir, "h", str(vm_dir))
 
     rms = [c for c in calls if c[:2] == ["sudo", "rm"]]
     assert len(rms) == 1
@@ -492,12 +493,12 @@ def test_prepare_vm_image_missing_sidecar_raises(tmp_path):
     vm_dir = tmp_path / "vm"
     vm_dir.mkdir()
     with patch(f"{P}.image_set.resolve", return_value=(str(qcow2), "abc123def456abcd")):
-        with patch(f"{P}._run"):
+        with patch(f"{IMAGES}.run"):
             with pytest.raises(LaunchError, match="direct-boot artifact missing"):
-                launch._prepare_vm_image(str(base), "h", str(vm_dir))
+                images.prepare_vm_image(str(base), "h", str(vm_dir))
 
 
 def test_prepare_vm_image_surfaces_verification_failure():
     with patch(f"{P}.image_set.resolve", side_effect=ValueError("manifest mismatch")):
         with pytest.raises(LaunchError, match="image set verification failed"):
-            launch._prepare_vm_image("/base/set", "h", "/vm")
+            images.prepare_vm_image("/base/set", "h", "/vm")
