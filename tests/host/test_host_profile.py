@@ -206,6 +206,32 @@ def test_guest_numa_needs_exactly_two_host_nodes():
     assert HostProfile(b300).uses_guest_numa is True
 
 
+def _amd(doc):
+    doc["cpu"] = {
+        **doc["cpu"],
+        "vendor": "AuthenticAMD",
+        "processor_id": "110fa100fffba91f",
+    }
+    return doc
+
+
+def test_guest_numa_also_needs_a_platform_that_can_boot_it():
+    """Two host nodes are necessary, not sufficient. The same 2-node shape runs NUMA on TDX
+    and flat on SEV-SNP, whose guests wedge when a page conversion spans two backends.
+    """
+    assert HostProfile(document()).uses_guest_numa is True
+    amd = HostProfile(_amd(document()))
+    assert amd.numa_node_count == 2
+    assert amd.uses_guest_numa is False
+
+
+def test_snp_class_on_a_numa_host_is_labelled_flat():
+    """The variant label follows the path actually taken, so an AMD 2-node class is
+    fingerprinted as the flat guest it boots, not the NUMA guest it cannot."""
+    assert HostProfile(document()).variant_label.startswith("numa-")
+    assert HostProfile(_amd(document())).variant_label.startswith("flat-")
+
+
 def test_nvswitches_attach_only_when_the_profile_says_so():
     assert len(HostProfile(document()).attached_nvswitches) == 4
     # RTX never passes NVSwitches through, even on a host that reports them.

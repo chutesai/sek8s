@@ -15,6 +15,8 @@ What genuinely differs:
 * SNP takes the C-bit position; TDX has no equivalent
 * SNP has no quote-generation socket — the PSP answers guest requests directly,
   so there is no host daemon to reach over vsock
+* SNP guests run flat even on 2-node hosts, until QEMU can convert memory across
+  guest_memfd backends (``supports_guest_numa``)
 """
 
 import os
@@ -127,6 +129,11 @@ class TeeProvider(ABC):
     #: Extra backend options the platform requires (SNP needs share=on).
     memory_backend_opts: "tuple[str, ...]" = ()
 
+    #: Whether a guest on this platform can be given the 2-node guest-NUMA topology. A
+    #: platform fact rather than a host one: the host can offer the nodes and the guest
+    #: still fail to boot on them. ``HostProfile.uses_guest_numa`` combines the two.
+    supports_guest_numa: bool
+
     #: kvm module parameter that reports this platform enabled on the running host.
     kvm_param: str
 
@@ -204,6 +211,7 @@ class TdxTeeProvider(TeeProvider):
     default_firmware = "OVMF.inteltdx.fd"
     label = "Intel TDX"
     memory_backend_type = "memory-backend-ram"
+    supports_guest_numa = True
     kvm_param = KVM_INTEL_TDX
     enablement_hint = (
         "Either the profile was captured on other hardware, or Intel TDX is not "
@@ -254,6 +262,16 @@ class SnpTeeProvider(TeeProvider):
     label = "AMD SEV-SNP"
     memory_backend_type = "memory-backend-memfd"
     memory_backend_opts = ("share=on",)
+    # Flat until QEMU can convert a range that spans two guest_memfd backends. SNP accepts
+    # every page through a hypervisor Page State Change, and the kernel extends each accept
+    # one 2 MB unit past a unit-aligned end, so accepting the last unit of node 0 also
+    # converts the first unit of node 1. KVM hands QEMU that 4 MB as one range and
+    # kvm_convert_memory() rejects it ("ram_block_attributes_state_change, invalid range"),
+    # wedging the guest during NUMA init. TDX accepts pages inside the TDX module without
+    # an exit, so it never reaches that path. Fixed upstream by "accel/kvm: Fix
+    # kvm_convert_memory() calls crossing memory regions" (not in QEMU 10.2.1); flip this
+    # back once the pinned QEMU carries it.
+    supports_guest_numa = False
     kvm_param = KVM_AMD_SEV_SNP
     enablement_hint = (
         "Either the profile was captured on other hardware, or SEV-SNP is not enabled "

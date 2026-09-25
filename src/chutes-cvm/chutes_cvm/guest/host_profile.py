@@ -265,8 +265,12 @@ class HostProfile:
         The GPU model has no say. ``GpuProfile.enable_numa_topology`` used to gate this, but it
         recorded a host fact ("2 nodes, GPUs split 4+4, confirmed on <hostname>") on a GPU class,
         left over from when GpuProfile was the host profile.
+
+        The platform does: the host offering two nodes is necessary, not sufficient. SEV-SNP
+        guests cannot boot on per-node backends yet (see ``SnpTeeProvider.supports_guest_numa``),
+        so an AMD class of the same shape takes the flat path.
         """
-        return self.numa_node_count == 2
+        return self.numa_node_count == 2 and self.tee_provider.supports_guest_numa
 
     @cached_property
     def attached_nvswitches(self) -> tuple[NvSwitchDevice, ...]:

@@ -104,6 +104,12 @@ def test_each_provider_carries_its_own_parameter_and_remedy():
     assert "SMEE" not in TdxTeeProvider.enablement_hint
 
 
+def test_only_tdx_supports_guest_numa():
+    """SNP stays flat until the pinned QEMU converts memory across guest_memfd backends."""
+    assert TdxTeeProvider.supports_guest_numa is True
+    assert SnpTeeProvider.supports_guest_numa is False
+
+
 def test_module_param_enabled_reads_y(tmp_path):
     param = tmp_path / "sev_snp"
     param.write_text("Y\n")

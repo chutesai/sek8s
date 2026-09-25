@@ -142,6 +142,15 @@
 - `guest launch` no longer accepts abbreviated flags (`allow_abbrev=False`). With prefix matching
   on, a mistyped or removed flag silently resolves to whatever it is a prefix of, and adding a
   flag can break automation by making an abbreviation it relied on ambiguous.
+- SEV-SNP guests launch flat (one memory backend, no `-numa`, no PXB grouping, no vCPU pinning)
+  even on 2-node hosts. `HostProfile.uses_guest_numa` now also requires
+  `TeeProvider.supports_guest_numa`, which is false for SNP: under SNP every memory accept is a
+  hypervisor page-state change, the kernel extends an accept one 2 MB unit past a node's end,
+  and QEMU 10.2.1's `kvm_convert_memory()` rejects a conversion spanning two guest_memfd
+  backends, wedging the guest during NUMA init. Reproduced on a 2-socket EPYC 7763 host at
+  every node size tried. TDX is unaffected (it accepts pages without a hypervisor exit) and
+  keeps guest NUMA. AMD 2-node classes are fingerprinted `flat-…` accordingly. To be lifted once
+  the pinned QEMU carries "accel/kvm: Fix kvm_convert_memory() calls crossing memory regions".
 
 ### Removed
 
