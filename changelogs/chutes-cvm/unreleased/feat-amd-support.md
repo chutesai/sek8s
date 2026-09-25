@@ -42,6 +42,26 @@
   debug launch passes an empty set: the GPUs stay on their host driver, so naming them would
   build a command QEMU refuses. A value rather than a boolean because the launch set will not
   always equal the profile's — with IB passthrough a launch attaches the VFs binding creates.
+- `QemuCommandBuilder` + `LaunchCommandBuilder` / `MeasurementCommandBuilder`
+  (`guest/qemu.py`) — one traversal builds both commands. The base owns the walk, its order and
+  its single `PcieRootPinning`; subclasses choose only what string goes in each slot. Both sit in
+  one file so the seven differences between a launch and a measurement are diffable without
+  opening another.
+- `guest/context.py` — `GuestContext`: what one launch materialized (per-VM image copy, tap
+  device, resolved volume paths, launch options). The host half is `HostProfile`; these are the
+  two arguments `QemuCommand.create` takes.
+- A byte-exact regression lock on measurement generation: `tests/measurement/golden/` (8 hardware
+  classes x `launch_args` + `measure_args` + `metadata`) with
+  `scripts/update_measurement_golden.py` to regenerate deliberately. `metadata` is the COMPLETE
+  input to the tdx-measure fork, so an unchanged dict proves MRTD and RTMR0 cannot have moved —
+  without the fork or Docker. Regeneration is a script, never a side effect of running tests.
+- `guest/privileged.py`, `guest/volumes.py`, `guest/images.py`, `guest/network.py` — stage 3 of a
+  launch, one module per resource it materializes. `launch.py` drops from 742 lines to the four
+  stages plus config resolution.
+- `config.cli_fields()` — the config model owns each setting's CLI flag via
+  `json_schema_extra={"cli": "--flag"}`, so the parser arguments and the CLI-over-YAML overlay are
+  both derived from it. Shared sub-models name their children's flags on the parent, because
+  `VolumeSpec` is used by both cache and storage and the flag is a function of (parent, field).
 
 ### Changed
 
@@ -93,6 +113,25 @@
   placement — port, slot and function allocation, identical whatever is being placed — while what
   gets placed is the caller's. The BDF was never enough for both: a `pci-bar-stub` is built from
   the device's vendor, class and captured BARs, and the BDF is meaningless on the generating box.
+- **The offline measurement command is built, not rewritten.** `ImageConfig` used to take a
+  launch-shaped command and substitute seven things over it (220 lines); it now renders an
+  already dump-shaped one (67). The old direction was brittle one way only, and it was the
+  dangerous way: anything added to the launch command that `ImageConfig` did not know to strip
+  silently entered the bytes the fork hashes. Deriving the `iommufd` object did exactly that, and
+  only the golden lock caught it.
+- `guest/__main__.py` renamed to `guest/vm.py`. `__main__.py` is a magic filename meaning "what
+  `python -m` runs"; once that stopped being true, the QEMU process's start/kill/status had no
+  business living there.
+- `QemuCommand.serial` is a rendered field and `tee_object` is nullable, so a command can express
+  a null serial and no confidential guest — what the dump machine needs, and what `ImageConfig`
+  used to hardcode.
+- `PciTopologyState.add_device()` takes the endpoint string rather than a host BDF. It owns
+  placement (port, slot, function — identical whatever is placed); what gets placed is the
+  caller's. The BDF was never enough for both: a `pci-bar-stub` is built from the device's vendor,
+  class and captured BARs, and the BDF is meaningless on the generating box.
+- `guest launch` no longer accepts abbreviated flags (`allow_abbrev=False`). With prefix matching
+  on, a mistyped or removed flag silently resolves to whatever it is a prefix of, and adding a
+  flag can break automation by making an abbreviation it relied on ambiguous.
 
 ### Removed
 
@@ -113,6 +152,21 @@
 - `cpu_args` override. `build_base_cmd` accepted one and no production caller passed it; the
   profile is the authority, resolved from the QEMU version. A test existed asserting the launcher
   never used it, which is a parameter whose coverage is "assert it is never passed".
+- `guest/__main__.py`'s `main()`, its argparse parser, and the `--clean`/`--ssh` flags that
+  existed only for them. That was the interface the former quick-launch.sh called across the
+  bash->Python boundary; the shim now forwards to the CLI, so it had no callers left — and it was
+  a second way to boot a guest that skipped the preflight attestation gate and force-killed a
+  running VM without asking. `chutes-cvm guest launch` is now the only path to a guest.
+- `guest launch --config`. It shared the positional's dest and never worked: an optional
+  positional applies its default even when it matches zero arguments, so it clobbered whatever
+  the flag set and the launch silently fell back to the default config path. Use the positional
+  (`chutes-cvm guest launch config.yaml`), which is what the docs and ansible already use.
+- `ImageConfig._endpoint_for` / `_swap_endpoint` and their regexes, `_reserve_off`, `_bars_arg`,
+  and the five module-level command builders. `_endpoint_for` was 35 lines parsing `rp3` back
+  into "the third GPU" to recover BARs the builder was holding all along — constructing forward
+  never loses them.
+- `_CLI_TO_SECTION` / `_CLI_TO_VOLUME`, and the 18 `add_argument` calls they shadowed. Every flag
+  was declared twice, so one added to the parser and forgotten in a table silently did nothing.
 
 ### Fixed
 
@@ -128,3 +182,7 @@
   default (10022) won and an operator's setting was silently ignored for user-mode networking.
   `GuestContext` carries it by construction. Tap-mode launches are unaffected, and nothing
   measured changes — netdevs are not PCI devices and do not reach the DSDT.
+- **The measurement command was invalid.** It emitted `vfio-pci` endpoints carrying
+  `iommufd=iommufd0` while declaring no such object — a command QEMU refuses. It survived only
+  because `ImageConfig` replaced every endpoint with a `pci-bar-stub` before anything ran it. The
+  object is now derived from the passthrough set, so the two cannot be set apart.
