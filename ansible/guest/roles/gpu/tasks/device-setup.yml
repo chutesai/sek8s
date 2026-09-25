@@ -485,17 +485,18 @@
       install nvidia /sbin/modprobe ecdsa_generic; /sbin/modprobe ecdh; /sbin/modprobe --ignore-install nvidia
   notify: update initramfs
   
-- name: Add nvidia-tdx systemd unit
+# Platform-neutral: marks the CC GPUs ready for workloads on TDX and SEV-SNP alike.
+- name: Add nvidia-tee systemd unit
   block:
-    - name: Ensure nvidia-tdx.service is present
+    - name: Ensure nvidia-tee.service is present
       ansible.builtin.copy:
-        dest: /lib/systemd/system/nvidia-tdx.service
+        dest: /lib/systemd/system/nvidia-tee.service
         owner: root
         group: root
         mode: '0644'
         content: |
           [Unit]
-          Description=TDX GPU setup
+          Description=TEE GPU setup
           After=nvidia-persistenced.service
 
           [Service]
@@ -504,9 +505,9 @@
           [Install]
           WantedBy=multi-user.target
 
-    - name: Enable nvidia-tdx service for first-boot (do not start now)
+    - name: Enable nvidia-tee service for first-boot (do not start now)
       ansible.builtin.systemd:
-        name: nvidia-tdx
+        name: nvidia-tee
         enabled: true
         state: stopped
 

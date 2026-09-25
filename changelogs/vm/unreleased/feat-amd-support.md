@@ -19,6 +19,9 @@
   when the VM starts. TDX keeps its fail-closed behaviour, and a guest with *neither*
   device still fails closed, so a TDX guest whose module failed to load cannot be
   mistaken for SNP and let through unmeasured.
+- `nvidia-tdx.service` is renamed `nvidia-tee.service` ("TEE GPU setup"). It only runs
+  `nvidia-smi conf-compute -srs 1` to mark the CC GPUs ready, which works unchanged
+  under SEV-SNP (verified on 8x RTX PRO 6000).
 
 ### Fixed
 
