@@ -40,6 +40,11 @@
 # Hardware RTMR3 is read from a fresh TDX attestation quote (primary) or the
 # tsm-mr sysfs attribute (fallback for kernels that expose it as readable).
 # Any unrecoverable error also triggers a forced poweroff.
+#
+# TDX only. The platform gate mirrors the initramfs rtmr3-measure exactly: a TDX
+# guest is verified; an SEV-SNP guest has no runtime measurement register (nothing
+# was extended at init-bottom, so there is nothing to compare against) and is
+# skipped; a guest with neither device is not a confidential VM and fails closed.
 
 import os
 import subprocess
@@ -54,6 +59,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, "/usr/local/lib/sek8s")
 from rtmr3 import Rtmr3Error, compute_rtmr3  # noqa: E402
 
+TDX_GUEST_DEVICE = Path("/dev/tdx_guest")
+SEV_GUEST_DEVICE = Path("/dev/sev-guest")
 CONF             = Path("/etc/tdx-measure.conf")
 SYSFS_RTMR3      = "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384"
 QUOTE_GENERATOR  = Path("/usr/bin/tdx-quote-generator")
@@ -92,6 +99,20 @@ def fatal(msg: str) -> None:
     time.sleep(POWEROFF_DELAY)
     os.system("systemctl poweroff --force")
     sys.exit(1)
+
+
+# ── platform ─────────────────────────────────────────────────────────────────
+
+def has_rtmr3() -> bool:
+    """Whether this guest has an RTMR3 to verify. Same decision as initramfs rtmr3-measure."""
+    if TDX_GUEST_DEVICE.is_char_device():
+        return True
+    if SEV_GUEST_DEVICE.is_char_device():
+        print("rtmr3-verify: skipped — AMD SEV-SNP has no runtime measurement register")
+        _kmsg("SKIPPED: SEV-SNP guest, no RTMR equivalent")
+        return False
+    fatal(f"TDX device ({TDX_GUEST_DEVICE}) not available — not running in a TDX guest")
+    return False  # reached only in debug mode, where fatal() warns instead of powering off
 
 
 # ── measurement ──────────────────────────────────────────────────────────────
@@ -181,6 +202,9 @@ def read_hardware_rtmr3() -> bytes:
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    if not has_rtmr3():
+        sys.exit(0)
+
     print("rtmr3-verify: measuring via tdx-measure ...")
     expected, files = measure()
     print(f"rtmr3-verify: measured {len(files)} files")

@@ -20,6 +20,14 @@
   device still fails closed, so a TDX guest whose module failed to load cannot be
   mistaken for SNP and let through unmeasured.
 
+### Fixed
+
+- `rtmr3-verify` now gates on the TEE exactly as `rtmr3-measure` does: verify on TDX,
+  skip on SEV-SNP, fail closed with neither device. Only the initramfs half had the
+  gate, so an SNP guest reached the TDX quote path, found no RTMR3, and failed (a
+  production build would power itself off; a debug build crashed on `None.hex()`).
+  Either way the unit failed, and k3s — which `Requires=` it — never started.
+
 ### Notes
 
 - The skip above is a real reduction in what a SEV-SNP guest attests: the runtime file
