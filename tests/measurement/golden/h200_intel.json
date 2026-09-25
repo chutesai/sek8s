@@ -17,6 +17,8 @@
     "memory-backend-ram,id=mem-node0,size=577536M,host-nodes=0,policy=bind",
     "-object",
     "memory-backend-ram,id=mem-node1,size=577536M,host-nodes=1,policy=bind",
+    "-object",
+    "iommufd,id=iommufd0",
     "-numa",
     "node,nodeid=0,memdev=mem-node0",
     "-numa",

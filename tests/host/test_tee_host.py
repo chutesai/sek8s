@@ -1,6 +1,6 @@
 import pytest
 from chutes_cvm.guest import tee as tee_module
-from chutes_cvm.guest.qemu import PcieRootPinning, build_base_cmd
+from chutes_cvm.guest.qemu import PcieRootPinning, QemuCommand, build_base_cmd
 from chutes_cvm.guest.tee import (
     DEFAULT_CBITPOS,
     DEFAULT_REDUCED_PHYS_BITS,
@@ -290,8 +290,9 @@ def test_derived_platform_selects_its_own_firmware():
 
 def test_qemu_command_uses_the_derived_platform(tmp_path):
     """The command a host launches with carries its own platform's guest object."""
-    intel = _profile("GenuineIntel").qemu_command(firmware=str(tmp_path / "f.fd"))
-    amd = _profile("AuthenticAMD").qemu_command(firmware=str(tmp_path / "f.fd"))
+    fw = str(tmp_path / "f.fd")
+    intel = QemuCommand.for_measurement(_profile("GenuineIntel"), firmware=fw)
+    amd = QemuCommand.for_measurement(_profile("AuthenticAMD"), firmware=fw)
 
     assert "tdx-guest" in intel.tee_object
     assert "sev-snp-guest" in amd.tee_object

@@ -7,7 +7,6 @@ from chutes_cvm.guest.detection import detect_infiniband_vfs
 from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import QemuCommand, build_pci_topology
 from chutes_cvm.paths import SCRIPTS_DIR
 from chutes_cvm.vfio import (
     bind_explicit_devices_to_vfio,
@@ -291,26 +290,3 @@ def bind_passthrough(host: HostProfile) -> None:
     print(f"  Mode: {profile.describe_mode(total_gpus)}")
 
     _prepare_devices(gpus, nvswitches, ib_devices, profile)
-
-
-def attach_passthrough(cmd: QemuCommand, host: HostProfile) -> None:
-    """Add this host's passthrough devices to the command. Pure -- no device is touched.
-
-    Must run after ``bind_passthrough`` on a launch, matching the order the two halves ran in
-    when they were one function: slot and bus assignment land in the DSDT and so in RTMR0.
-
-    Which NVSwitches reach the guest is decided once, by ``HostProfile.attached_nvswitches``,
-    which the topology builder reads -- the host's full inventory is needed for binding, not
-    for the guest.
-    """
-    if not host.gpus:
-        return
-
-    cmd.objects.append("iommufd,id=iommufd0")
-    build_pci_topology(
-        cmd,
-        gpus=host.gpus,
-        nvswitches=host.attached_nvswitches,
-        ib_devices=host.attached_ib,
-        guest_numa=host.uses_guest_numa,
-    )

@@ -9,6 +9,7 @@ tdx-measure container, not here.
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.measurement.image_config import ImageConfig
 
 _FW = "/opt/ovmf/OVMF.fd"
@@ -16,9 +17,7 @@ _FW = "/opt/ovmf/OVMF.fd"
 
 def _md(doc, **kw):
     host = HostProfile(doc)
-    cmd = host.qemu_command(
-        firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
-    )
+    cmd = QemuCommand.for_measurement(host, firmware=_FW)
     return ImageConfig(cmd, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
@@ -117,7 +116,7 @@ def test_endpoint_without_captured_bars_raises():
         )
     )
     md = ImageConfig(
-        host.qemu_command(firmware=_FW, cpu_args="host"),
+        QemuCommand.for_measurement(host, firmware=_FW),
         host,
         acpi_tables="/out/a.bin",
     )

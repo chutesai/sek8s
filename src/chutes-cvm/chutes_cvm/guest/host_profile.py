@@ -26,15 +26,6 @@ from chutes_cvm import proc
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
 from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, HOST_RESERVED_CPUS, GpuProfile
-from chutes_cvm.guest.qemu import (
-    PcieRootPinning,
-    QemuCommand,
-    add_volumes,
-    add_vsock,
-    build_base_cmd,
-    build_network,
-    build_pci_topology,
-)
 from chutes_cvm.guest.tee import TeeProvider, provider_for_cpu_vendor
 from chutes_cvm.paths import SCRIPTS_DIR
 
@@ -421,74 +412,6 @@ class HostProfile:
         separately (``TeeProvider.verify_environment``) and reports it as a host problem.
         """
         return provider_for_cpu_vendor(self.cpu.vendor)
-
-    def qemu_command(
-        self,
-        *,
-        firmware: str,
-        cpu_args: "str | None" = None,
-        img_path: str = "root.qcow2",
-        process_name: str = "chutes-td",
-        foreground: bool = False,
-        pidfile: str = "/dev/null",
-        logfile: str = "/dev/null",
-        kernel_path: str = "/dev/null",
-        initrd_path: str = "/dev/null",
-        cmdline: str = "",
-    ) -> QemuCommand:
-        """The QEMU command this host launches with.
-
-        Native throughout: the endpoints carry the devices' real BDFs and ``-cpu`` is the launch
-        form, because this is the command a launch would run. The measurement adapter makes its
-        own substitutions afterwards -- swapping each ``vfio-pci`` endpoint for a
-        ``pci-bar-stub`` and pinning the CPU identity -- so nothing offline leaks in here.
-
-        Root ports are numbered per kind in device order -- ``rp1..rpN`` for GPUs, then
-        ``rp_nvsw*``, then ``rp_ib*`` -- and chassis numbers run across all of them, which is the
-        ordering the guest PXB grouping and therefore RTMR0 depend on.
-        """
-        numa = self.uses_guest_numa
-        # One pinning object across every builder, as a launch does: when guest NUMA is active it
-        # pins the emulated devices to pcie.0 slots 0x2-0x7, below the PXB bridges at 0x18+.
-        pinning = PcieRootPinning(numa)
-        cmd = build_base_cmd(
-            self,
-            process_name=process_name,
-            cpu_args=cpu_args,
-            firmware=firmware,
-            img_path=img_path,
-            foreground=foreground,
-            pidfile=pidfile,
-            logfile=logfile,
-            host_nodes=[0, 1] if numa else [],
-            kernel_path=kernel_path,
-            initrd_path=initrd_path,
-            cmdline=cmdline,
-            pci_pinning=pinning,
-        )
-        # The emulated devices a launch places on pcie.0. They occupy slots, and slot layout
-        # lands in the DSDT and so in RTMR0, so the measurement command has to carry them --
-        # image_config substitutes backing-free fillers at the same slots before the dump.
-        build_network(
-            cmd, network_type="tap", net_iface=None, ssh_port=0, pci_pinning=pinning
-        )
-        add_volumes(
-            cmd,
-            config_volume="config.qcow2",
-            cache_volume="cache.raw",
-            storage_volume="storage.raw",
-            pci_pinning=pinning,
-        )
-        add_vsock(cmd, pci_pinning=pinning)
-
-        build_pci_topology(
-            cmd,
-            gpus=self.gpus,
-            nvswitches=self.attached_nvswitches,
-            ib_devices=self.attached_ib,
-            guest_numa=numa,
-        )
-        return cmd
 
     # ── serialisation ───────────────────────────────────────────────────────
     @classmethod

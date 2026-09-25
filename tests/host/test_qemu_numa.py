@@ -56,7 +56,6 @@ def test_build_base_cmd_numa_adds_per_node_backends(tmp_path):
         known.QemuProfileStub(
             mem="1024G",
             smp_topology="188,sockets=2,cores=94,threads=1",
-            cpu_args="host,-avx10",
             uses_guest_numa=True,
         ),
         process_name="chutes-td",
@@ -94,7 +93,6 @@ def test_build_base_cmd_pins_smbios_identity(tmp_path):
         known.QemuProfileStub(
             mem="512G",
             smp_topology="94,sockets=1,cores=94,threads=1",
-            cpu_args="host,-avx10",
             uses_guest_numa=False,
         ),
         process_name="chutes-td",
@@ -132,7 +130,6 @@ def test_direct_boot_emits_kernel_initrd_append_and_drops_bootindex(tmp_path):
         known.QemuProfileStub(
             mem="512G",
             smp_topology="94,sockets=1,cores=94,threads=1",
-            cpu_args="host,-avx10",
             uses_guest_numa=False,
         ),
         process_name="chutes-td",
@@ -236,7 +233,6 @@ def test_generation_command_carries_a_launch_emulated_device_set():
         known.QemuProfileStub(
             mem="1128G",
             smp_topology="124,sockets=2,cores=62,threads=1",
-            cpu_args="host,-avx10",
             uses_guest_numa=True,
         ),
         process_name="chutes-td",
@@ -263,7 +259,7 @@ def test_generation_command_carries_a_launch_emulated_device_set():
     )
     add_vsock(launch, pci_pinning=pinning)
 
-    generated = host.qemu_command(firmware="/f", cpu_args="host,-avx10")
+    generated = QemuCommand.for_measurement(host, firmware="/f")
 
     def kinds(cmd):
         return [

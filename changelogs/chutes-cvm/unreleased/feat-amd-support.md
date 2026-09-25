@@ -27,6 +27,22 @@
   EPYC values. QEMU validates this against the host and fails loudly with the real
   value, so a stale default cannot silently weaken anything.
 
+- `QemuCommand.create()` / `.for_measurement()` — one factory assembles the whole command from
+  resolved inputs, owning the `PcieRootPinning` allocator so its five slot claims run in a fixed
+  order no caller can reach. Slot layout lands in the DSDT and so in RTMR0; it used to depend on
+  two hand-written call sites invoking four builders in the same order, with a parity test as the
+  only thing holding them in step. `create()` has no optional parameters: a default would be one
+  of the two shapes standing in for the other.
+- `GuestContext` (`guest/context.py`) — what one launch materialized: the per-VM image copy, the
+  tap device, the resolved volume paths, and the launch options. `LaunchConfig` is declared
+  intent; this is materialized fact. `launch_vm(guest, host)` now takes it alongside the profile,
+  so the two halves of a launch — what this machine IS and what this guest NEEDS — are the two
+  arguments.
+- `PassthroughSet` — the devices a command names, defaulting to the profile's. A `--no-gpus`
+  debug launch passes an empty set: the GPUs stay on their host driver, so naming them would
+  build a command QEMU refuses. A value rather than a boolean because the launch set will not
+  always equal the profile's — with IB passthrough a launch attaches the VFs binding creates.
+
 ### Changed
 
 - `paths.firmware_path()` takes an optional firmware filename instead of hardcoding the
@@ -65,6 +81,19 @@
   reads the host itself, because nothing handed it one. `build_parser()` is exposed so the
   orchestrator still gets argparse's defaults filled rather than hand-building a Namespace.
 
+- **The argv round-trip is gone.** `_boot()` used to flatten a resolved `LaunchConfig` into
+  `["--image", ...]` purely so the boot primitive's argparse could parse it straight back into a
+  Namespace. It now builds a `GuestContext` and calls `launch_vm` directly.
+- `iommufd` is derived from the passthrough set rather than appended separately. Every endpoint
+  `build_pci_topology` emits carries `iommufd=iommufd0`, so a command with passthrough devices and
+  no such object is one QEMU refuses — the two are one decision. This also fixes a latent bug: the
+  *measurement* command emitted endpoints referencing an object it never declared, surviving only
+  because `ImageConfig` swaps every `vfio-pci` for a `pci-bar-stub` before anything runs it.
+- `PciTopologyState.add_device()` takes the endpoint string rather than a host BDF. It owns
+  placement — port, slot and function allocation, identical whatever is being placed — while what
+  gets placed is the caller's. The BDF was never enough for both: a `pci-bar-stub` is built from
+  the device's vendor, class and captured BARs, and the BDF is meaningless on the generating box.
+
 ### Removed
 
 - `launch._tee_active()`. A third, weaker copy of the platform check: it hardcoded the two kvm
@@ -81,6 +110,10 @@
 - `get_tee_provider()`. Detection-based provider selection with no production caller,
   left over from before the platform was derived from the profile's CPU vendor.
 
+- `cpu_args` override. `build_base_cmd` accepted one and no production caller passed it; the
+  profile is the authority, resolved from the QEMU version. A test existed asserting the launcher
+  never used it, which is a parameter whose coverage is "assert it is never passed".
+
 ### Fixed
 
 - `build-firmware.sh` reached `edksetup.sh` with the caller's positional parameters still
@@ -90,3 +123,8 @@
   only the no-argument default ever worked.
 - The "no confidential-computing platform enabled" error listed the AMD BIOS switches
   even when it fired on an Intel host. The per-platform remedy now lives on the provider.
+- **`network.ssh_port` never reached the boot primitive.** It is a config field and a
+  `--ssh-port` flag, but `_boot`'s argv carried no `--ssh-port`, so the primitive's own parser
+  default (10022) won and an operator's setting was silently ignored for user-mode networking.
+  `GuestContext` carries it by construction. Tap-mode launches are unaffected, and nothing
+  measured changes — netdevs are not PCI devices and do not reach the DSDT.

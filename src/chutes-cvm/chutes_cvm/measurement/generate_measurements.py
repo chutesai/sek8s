@@ -60,6 +60,7 @@ from pathlib import Path
 import yaml
 from chutes_cvm import proc
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.measurement import ccel_replay as cc
 from chutes_cvm.measurement.image_config import ImageConfig
 from chutes_cvm.measurement.runtime_rtmr import (
@@ -326,9 +327,8 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
     """
 
     def fork_rtmr0(host: HostProfile):
-        cmd = host.qemu_command(
-            firmware=str(Path(args.bios_dir) / GUEST_FIRMWARE),
-            process_name="chutes-measure",
+        cmd = QemuCommand.for_measurement(
+            host, firmware=str(Path(args.bios_dir) / GUEST_FIRMWARE)
         )
         with tempfile.TemporaryDirectory() as td:
             meta = ImageConfig(

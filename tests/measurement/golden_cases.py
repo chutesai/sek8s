@@ -16,11 +16,11 @@ from unittest.mock import patch
 import topology_fixtures as known
 from chutes_cvm.guest import tee as tee_module
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.measurement.image_config import ImageConfig
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
 FIRMWARE = "/opt/ovmf/OVMF.fd"
-CPU_ARGS = "host,-avx10"
 
 
 def _amd(doc):
@@ -53,9 +53,7 @@ def snapshot(name: str) -> dict:
         lambda: (tee_module.DEFAULT_CBITPOS, tee_module.DEFAULT_REDUCED_PHYS_BITS),
     ):
         host = HostProfile(CASES[name]())
-        cmd = host.qemu_command(
-            firmware=FIRMWARE, cpu_args=CPU_ARGS, process_name="chutes-measure"
-        )
+        cmd = QemuCommand.for_measurement(host, firmware=FIRMWARE)
         return {
             "args": cmd.to_args(),
             "metadata": ImageConfig(cmd, host, acpi_tables="/out/acpi.bin").to_dict(),

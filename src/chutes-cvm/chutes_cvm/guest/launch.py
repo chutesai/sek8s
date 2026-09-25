@@ -6,7 +6,7 @@ duplicate chutes-td, then perform each privileged step — invoking the bundled 
 owns it for the ones whose logic *is* a sequence of special-tool calls (volumes via
 cryptsetup/nbd, config volume, bridge via ip/iptables), or doing it in-process where it is plain
 file work (the per-VM image copy + sidecar staging, as `sudo cp`/`mkdir`/`rm`) — and finally boot
-via the QEMU boot primitive (``chutes_cvm.guest.__main__``). Per AGENT.md's bash-vs-Python rule,
+via the QEMU boot primitive (``chutes_cvm.guest.vm``). Per AGENT.md's bash-vs-Python rule,
 Python owns the decisions and bash still owns the tool-sequence system mutations.
 
 The privileged helpers create volumes with relative default names (``cache-<host>.raw`` …) and
@@ -21,17 +21,16 @@ import glob
 import json
 import os
 import sys
-from typing import TYPE_CHECKING
 
 from chutes_cvm import proc
 from chutes_cvm.guest import image_set
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
+from chutes_cvm.guest.context import GuestContext
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.preflight import DEFAULT_API_BASE, PreflightError, run_preflight
+from chutes_cvm.guest.qemu import GuestNetwork, GuestVolumes
+from chutes_cvm.guest.vm import launch_vm
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
-
-if (
-    TYPE_CHECKING
-):  # the host-specific chain is imported lazily; this is annotation-only.
-    from chutes_cvm.guest.host_profile import HostProfile
 
 _PROCESS_NAME_CHUTES_TD = "chutes-td"
 
@@ -89,14 +88,6 @@ def _launchable(
     ``host_profile`` is the reading Step 0 took and the boot primitive will build from, so the
     verdict is about the shape that actually launches rather than a second, independent read.
     """
-    # Deferred: preflight pulls substrateinterface (signing) — only needed for an actual launch,
-    # not `guest launch --help` or the early config path.
-    from chutes_cvm.guest.preflight import (
-        DEFAULT_API_BASE,
-        PreflightError,
-        run_preflight,
-    )
-
     try:
         version, rc = image_set.version_and_rc(base_image)
     except (FileNotFoundError, ValueError, OSError) as exc:
@@ -609,10 +600,6 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
 
     print("Step 0: Verifying host configuration...")
-    # Deferred like the boot primitive below: HostProfile pulls the host-specific chain
-    # (detection/gpu/qemu) that only an actual launch needs, so `guest launch --help` stays light.
-    from chutes_cvm.guest.host_profile import HostProfile
-
     # THE reading of this host for this launch. discover-profile.sh is the single reader --
     # preflight signs this profile and the boot primitive builds the command from it, so both
     # see the same hardware. A second read could disagree with the one the API approved.
@@ -704,38 +691,31 @@ def _boot(
     net_iface: str,
     benchmark: bool,
     pass_gpus: bool,
-    host: "HostProfile",
+    host: HostProfile,
 ) -> int:
-    """Assemble the boot-primitive arguments and call the QEMU primitive in-process."""
-    # Deferred import: the boot primitive pulls the heavy, host-specific chain
-    # (detection/gpu/qemu/passthrough) that only an actual boot needs — importing it here keeps
-    # `guest launch --help` and the early config/gate paths light.
-    from chutes_cvm.guest.__main__ import build_parser, launch_vm
-
-    launch_args = ["--image", vm_image, "--network-type", config.network.type]
-    if pass_gpus:
-        launch_args.append("--pass-gpus")
-    if config.network.type == "tap":
-        launch_args += ["--net-iface", net_iface]
-    if benchmark:
-        # Benchmark: no cache volume (partner manages storage); config volume carries only
-        # hostname + network; --ssh shows the login hint.
-        launch_args += ["--ssh", "--config-volume", config.volumes.config.path]
-        launch_args += ["--storage-volume", config.volumes.storage.path]
-    else:
-        launch_args += ["--config-volume", config.volumes.config.path]
-        launch_args += ["--cache-volume", config.volumes.cache.path]
-        launch_args += ["--storage-volume", config.volumes.storage.path]
-    if config.runtime.foreground:
-        launch_args.append("--foreground")
+    """Build this guest's context and call the QEMU primitive in-process."""
+    guest = GuestContext(
+        image=vm_image,
+        volumes=GuestVolumes(
+            config=config.volumes.config.path,
+            # Benchmark guests have no cache volume: the partner manages storage.
+            cache=None if benchmark else config.volumes.cache.path,
+            storage=config.volumes.storage.path,
+        ),
+        network=GuestNetwork(
+            network_type=config.network.type,
+            # Only tap mode has one; user mode forwards a port instead.
+            net_iface=net_iface or None,
+            ssh_port=config.network.ssh_port,
+        ),
+        pass_gpus=pass_gpus,
+        foreground=config.runtime.foreground,
+        # Benchmark guests print the login hint.
+        show_ssh=benchmark,
+    )
 
     print("\nLaunching Chutes VM...")
-    # Straight to the execution path, not back through the primitive's main(): that one reads the
-    # host itself, which is the second reading this flow exists to avoid. The parser is still used
-    # so argparse fills every default — a hand-built Namespace silently drops any flag not set
-    # here, and the miss surfaces as an AttributeError mid-launch.
-    args = build_parser().parse_args(launch_args)
-    return launch_vm(args, host)
+    return launch_vm(guest, host)
 
 
 if __name__ == "__main__":

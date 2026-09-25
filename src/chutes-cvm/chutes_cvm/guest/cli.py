@@ -10,7 +10,7 @@ the CLI's noun/verb pattern. Dispatched via the top-level ``guest`` passthrough 
 
 GPU/PCI hardware ops (`reset-gpus`, `vfio-wedged`) live under the ``host`` noun: they act on
 host hardware and are useful with or without a running guest. The low-level QEMU-boot primitive
-(``chutes_cvm.guest.__main__``) is not a CLI command either — ``guest launch`` reaches it via a
+(``chutes_cvm.guest.vm``) is not a CLI command either — ``guest launch`` reaches it via a
 Python import, not the CLI.
 """
 
@@ -77,7 +77,7 @@ def _shutdown_guest(config: "str | None", cfg_ok: bool, force: bool) -> int:
     `down` adds the bridge/dependency teardown afterward — that extra cleanup is the only difference.
     """
     if force:
-        from chutes_cvm.guest.__main__ import stop_existing_vm
+        from chutes_cvm.guest.vm import stop_existing_vm
 
         stop_existing_vm()
         return 0

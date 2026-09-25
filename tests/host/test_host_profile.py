@@ -13,6 +13,7 @@ import json
 import pytest
 from chutes_cvm.guest.gpu.profiles import HOST_RESERVED_CPUS
 from chutes_cvm.guest.host_profile import VM_MEM_RESERVE_GB, HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
 
 H200_BARS = [
     {"index": 0, "size_mb": 16, "kind": "p64"},
@@ -363,7 +364,7 @@ def test_stored_profile_builds_the_command_generation_measures():
     """The stand-in addresses never reach the measurement: every endpoint is swapped for a
     pci-bar-stub keyed on its root port."""
     back = HostProfile.from_api_profile(HostProfile(document()).to_api_profile())
-    cmd = back.qemu_command(firmware="/opt/ovmf/OVMF.fd", cpu_args="host,-avx10")
+    cmd = QemuCommand.for_measurement(back, firmware="/opt/ovmf/OVMF.fd")
     vfio = [d for d in cmd.devices if d.startswith("vfio-pci")]
     assert len(vfio) == 12  # 8 GPUs + 4 NVSwitches
     assert all("bus=rp" in d for d in vfio)
@@ -402,7 +403,7 @@ def test_flat_topology_shape():
 
     flat = HostProfile(document(numa={"node_count": 4}))
     assert flat.uses_guest_numa is False
-    cmd = flat.qemu_command(firmware="/opt/ovmf/OVMF.fd", cpu_args="host,-avx10")
+    cmd = QemuCommand.for_measurement(flat, firmware="/opt/ovmf/OVMF.fd")
     assert cmd.numa == []
     assert "memory-backend=mem0" in cmd.machine
     assert not any("pxb-pcie" in d for d in cmd.devices)

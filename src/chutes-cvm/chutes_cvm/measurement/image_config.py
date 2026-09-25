@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from chutes_cvm.guest.devices import PciBar, PciDevice
 from chutes_cvm.guest.gpu.profiles import PassthroughDevice
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.guest.qemu import IOMMUFD_ID, QemuCommand
 
 # The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
 # container QEMU has no confidential-guest support.
@@ -83,9 +83,20 @@ class ImageConfig:
 
     @property
     def objects(self) -> list[str]:
-        # Only the memory-backends (cmd.objects); the confidential-guest object
-        # lives in cmd.tee_object and is simply not carried over.
-        return [_reserve_off(o) for o in self.cmd.objects]
+        """The memory-backends, and only those.
+
+        The confidential-guest object lives in ``cmd.tee_object`` and is simply not carried over.
+        The iommufd object is dropped here: it exists for the ``vfio-pci`` endpoints that
+        reference it by id, and ``devices`` has just replaced every one of them with a
+        ``pci-bar-stub``. Carrying a host-side IOMMU handle that now backs nothing would put it in
+        the dump machine's command -- and in the bytes the fork hashes -- for no guest-visible
+        effect, changing every published measurement.
+        """
+        return [
+            _reserve_off(o)
+            for o in self.cmd.objects
+            if not o.startswith(f"iommufd,id={IOMMUFD_ID}")
+        ]
 
     @property
     def devices(self) -> list[str]:

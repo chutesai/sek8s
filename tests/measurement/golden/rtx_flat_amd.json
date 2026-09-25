@@ -15,6 +15,8 @@
     "sev-snp-guest,id=snp0,cbitpos=51,reduced-phys-bits=1,policy=0x30000,kernel-hashes=on",
     "-object",
     "memory-backend-memfd,id=mem0,size=768G,share=on",
+    "-object",
+    "iommufd,id=iommufd0",
     "-machine",
     "q35,kernel_irqchip=split,confidential-guest-support=snp0,vmport=off,memory-backend=mem0",
     "-bios",

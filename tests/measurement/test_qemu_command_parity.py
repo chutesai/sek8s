@@ -11,20 +11,14 @@ the endpoint device type is settled here.
 
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import build_pci_topology
+from chutes_cvm.guest.qemu import QemuCommand, build_pci_topology
 
 _FW = "OVMF.inteltdx.fd"
 
 
 def _synth(doc):
     """The measurement command, built from a HostProfile over the captured device lists."""
-    return (
-        HostProfile(doc)
-        .qemu_command(
-            firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
-        )
-        .to_args()
-    )
+    return QemuCommand.for_measurement(HostProfile(doc), firmware=_FW).to_args()
 
 
 def _topology_args(cmd):
@@ -122,12 +116,12 @@ def test_pci_topology_takes_the_decision_it_is_given():
         gpus=host.gpus, nvswitches=host.attached_nvswitches, ib_devices=host.attached_ib
     )
 
-    flat = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
+    flat = QemuCommand.for_measurement(host, firmware=_FW)
     flat.devices = []
     build_pci_topology(flat, **devices, guest_numa=False)
     assert not any("pxb-pcie" in d for d in flat.devices)
 
-    numa = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
+    numa = QemuCommand.for_measurement(host, firmware=_FW)
     numa.devices = []
     build_pci_topology(numa, **devices, guest_numa=True)
     assert any("pxb-pcie" in d for d in numa.devices)

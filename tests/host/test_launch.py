@@ -139,31 +139,48 @@ def test_boot_standard_args():
         foreground=True,
     )
     host = _fake_host()
-    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+    with patch(f"{P}.launch_vm", return_value=0) as lv:
         rc = _boot(
             cfg, "/img.qcow2", "tap0", benchmark=False, pass_gpus=True, host=host
         )
     assert rc == 0
-    # The primitive receives a parsed Namespace and the caller's profile -- not an argv list
-    # it has to re-parse, and not a profile it reads for itself.
-    a, passed_host = lv.call_args.args
+    # The primitive receives a GuestContext and the caller's profile -- not an argv list it has
+    # to re-parse, and not a profile it reads for itself.
+    guest, passed_host = lv.call_args.args
     assert passed_host is host
-    assert a.image == "/img.qcow2"
-    assert a.pass_gpus is True
-    assert a.net_iface == "tap0"
-    assert a.cache_volume == "ca.raw" and a.foreground is True
-    assert a.ssh is False
+    assert guest.image == "/img.qcow2"
+    assert guest.pass_gpus is True
+    assert guest.network.net_iface == "tap0"
+    assert guest.volumes.cache == "ca.raw" and guest.foreground is True
+    assert guest.show_ssh is False
+
+
+def test_boot_plumbs_the_configured_ssh_port():
+    """`network.ssh_port` is a config field and a CLI flag, and it never reached the primitive:
+    _boot assembled an argv list with no --ssh-port, so the boot parser's own default (10022)
+    won and an operator's setting was silently ignored. A context carries it by construction.
+    """
+    cfg = _cfg(
+        config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
+    )
+    cfg.network.ssh_port = 2222
+    host = _fake_host()
+
+    with patch(f"{P}.launch_vm", return_value=0) as lv:
+        _boot(cfg, "/img", "", benchmark=False, pass_gpus=False, host=host)
+
+    assert lv.call_args.args[0].network.ssh_port == 2222
 
 
 def test_boot_benchmark_omits_cache_adds_ssh():
     host = _fake_host()
     cfg = _cfg(config_volume="c", storage_volume="s", network_type="tap")
-    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+    with patch(f"{P}.launch_vm", return_value=0) as lv:
         _boot(cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=host)
-    a = lv.call_args.args[0]
-    assert a.ssh is True
-    assert a.cache_volume is None
-    assert a.pass_gpus is False
+    guest = lv.call_args.args[0]
+    assert guest.show_ssh is True
+    assert guest.volumes.cache is None
+    assert guest.pass_gpus is False
 
 
 def test_boot_user_network_omits_net_iface():
@@ -171,9 +188,9 @@ def test_boot_user_network_omits_net_iface():
     cfg = _cfg(
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
-    with patch("chutes_cvm.guest.__main__.launch_vm", return_value=0) as lv:
+    with patch(f"{P}.launch_vm", return_value=0) as lv:
         _boot(cfg, "/img", "", benchmark=False, pass_gpus=True, host=host)
-    assert lv.call_args.args[0].net_iface is None
+    assert lv.call_args.args[0].network.net_iface is None
 
 
 # ── main() orchestration (all steps + probes mocked) ─────────────────────────────
@@ -282,7 +299,7 @@ def test_main_debug_image_is_still_gated():
 def test_launchable_true_when_measurement_covers(capsys):
     host = _fake_host()
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        "chutes_cvm.guest.preflight.run_preflight",
+        f"{P}.run_preflight",
         return_value={"launchable": True, "fingerprint": "abc", "detail": "covers"},
     ):
         assert (
@@ -300,7 +317,7 @@ def test_launchable_false_refuses_but_force_overrides(capsys):
         "detail": "no measurement for 1.4.0",
     }
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        "chutes_cvm.guest.preflight.run_preflight", return_value=resp
+        f"{P}.run_preflight", return_value=resp
     ):
         assert (
             launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
@@ -319,7 +336,7 @@ def test_launchable_passes_image_version_rc_to_preflight():
     host = _fake_host()
     # The manifest's (version, rc) must be what's joined against — a debug image asks about rc:true.
     with patch(f"{P}.image_set.version_and_rc", return_value=("2.0.0", True)), patch(
-        "chutes_cvm.guest.preflight.run_preflight",
+        f"{P}.run_preflight",
         return_value={"launchable": True, "fingerprint": "abc", "detail": "ok"},
     ) as rp:
         assert (
@@ -335,7 +352,7 @@ def test_launchable_fails_closed_on_api_error():
     from chutes_cvm.guest.preflight import PreflightError
 
     with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        "chutes_cvm.guest.preflight.run_preflight",
+        f"{P}.run_preflight",
         side_effect=PreflightError("API unreachable"),
     ):
         assert (

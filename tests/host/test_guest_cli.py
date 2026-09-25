@@ -33,7 +33,7 @@ def test_stop_is_graceful_by_default():
     # `guest stop` asks the guest to power off via the API — no force-kill, no bridge teardown.
     with patch(
         "chutes_cvm.guest.shutdown.graceful_shutdown", return_value="192.168.100.2"
-    ) as graceful, patch("chutes_cvm.guest.__main__.stop_existing_vm") as kill, patch(
+    ) as graceful, patch("chutes_cvm.guest.vm.stop_existing_vm") as kill, patch(
         "chutes_cvm.guest.cli._run_script", return_value=0
     ) as run:
         assert guestcli.main(["stop", "--config", "/nope/config.yaml"]) == 0
@@ -43,7 +43,7 @@ def test_stop_is_graceful_by_default():
 
 
 def test_stop_force_kills_without_teardown():
-    with patch("chutes_cvm.guest.__main__.stop_existing_vm") as kill, patch(
+    with patch("chutes_cvm.guest.vm.stop_existing_vm") as kill, patch(
         "chutes_cvm.guest.cli._run_script", return_value=0
     ) as run:
         assert guestcli.main(["stop", "--force"]) == 0
