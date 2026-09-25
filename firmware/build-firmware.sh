@@ -11,6 +11,10 @@ set -euo pipefail
 #   ./build-firmware.sh                  # Config-B → firmware/OVMF.inteltdx.fd
 #   ./build-firmware.sh --secure-boot    # Config-A → firmware/OVMF.inteltdx.ms.fd
 #   ./build-firmware.sh --amd-sev        # AmdSevX64 → firmware/OVMF.amdsev.fd
+#
+# The toolchain is part of the output: a different GCC yields different bytes, and so a
+# different measurement. Build in the pinned image PROVENANCE.md records, e.g.
+#   docker run --rm -v "$PWD/firmware:/fw" ubuntu:26.04@sha256:<digest> /fw/build-firmware.sh --amd-sev
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDK2_TAG="edk2-stable202605"
@@ -34,7 +38,8 @@ for arg in "$@"; do
             echo "against firmware/PROVENANCE.md before replacing a committed file."
             echo ""
             echo "Environment:"
-            echo "  EDK2_DIR        Build directory (default: /tmp/edk2-tdvf-build)"
+            echo "  EDK2_DIR        Build directory (default: /tmp/edk2-tdvf-build). Changing it"
+            echo "                  changes the output bytes -- keep the default to reproduce."
             exit 0
             ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
@@ -42,18 +47,25 @@ for arg in "$@"; do
 done
 
 # --- Install build prerequisites ---
-PACKAGES=(uuid-dev nasm iasl build-essential git)
-if [[ $AMD_SEV -eq 1 ]]; then
-    # grub.sh shells out to these to assemble the embedded GRUB image.
-    PACKAGES+=(grub-efi-amd64-bin mtools dosfstools)
-fi
+PACKAGES=(uuid-dev nasm iasl build-essential git python3)
 if [[ $SECURE_BOOT -eq 1 ]]; then
     PACKAGES+=(python3-virt-firmware)
 fi
 
+# Root in the build container has no sudo, and needs none.
+SUDO=""
+if [[ $(id -u) -ne 0 ]]; then SUDO="sudo"; fi
+
 echo "--- Installing build prerequisites ---"
-sudo apt-get update -qq
-sudo apt-get install -y -qq "${PACKAGES[@]}"
+${SUDO} apt-get update -qq
+DEBIAN_FRONTEND=noninteractive ${SUDO} apt-get install -y -qq "${PACKAGES[@]}"
+
+if [[ "${EDK2_DIR}" != "/tmp/edk2-tdvf-build" ]]; then
+    # Module paths under the build directory end up in the image, so the same source built
+    # elsewhere is different bytes -- a different measurement, not a reproduction.
+    echo "WARNING: EDK2_DIR=${EDK2_DIR} is not the default; the output will NOT match the" >&2
+    echo "         digests in PROVENANCE.md even though the source is identical." >&2
+fi
 
 echo "=== Building TDVF firmware from ${EDK2_TAG} ==="
 echo "    Secure Boot: $([ $SECURE_BOOT -eq 1 ] && echo 'yes' || echo 'no')"
@@ -66,6 +78,9 @@ if [[ ! -d "${EDK2_DIR}/.git" ]]; then
 fi
 
 cd "${EDK2_DIR}"
+# An earlier --amd-sev run leaves its .dsc edit in this reused tree; drop it so the
+# checkout below is clean and the edit is applied to pristine upstream every time.
+git checkout -- OvmfPkg/AmdSev/AmdSevX64.dsc
 git fetch --tags
 git checkout "${EDK2_TAG}"
 git submodule update --init --recursive
@@ -85,23 +100,42 @@ source ./edksetup.sh
 set -u
 
 if [[ $AMD_SEV -eq 1 ]]; then
-    # AmdSevX64.dsc embeds a GRUB (one that can unlock a LUKS volume from a
-    # SEV-injected secret); its helper must run before the firmware build or the .dsc
-    # cannot resolve the Grub FV. We do not use that boot flow -- we direct-boot with
-    # kernel-hashes=on and take the LUKS key from attestation in initramfs -- but the
-    # distro binary this replaces is built from this same .dsc, so keep the parity.
-    # NOT VALIDATED on Debian/Ubuntu: grub.sh asks grub-mkimage for `linuxefi.mod`,
-    # which Fedora/RHEL ship and Debian/Ubuntu do not, so it fails here. Run this on a
-    # Fedora-ish host or in a container until that is sorted. The committed
-    # OVMF.amdsev.fd is the distro binary meanwhile -- see PROVENANCE.md.
-    #
     # It must be AmdSevX64.dsc and not OvmfPkgX64.dsc: only the former pulls in
     # BlobVerifierLibSevHashes, which is what makes the firmware VERIFY the loaded
     # kernel/initrd against the SNP hashes page. OvmfPkgX64 uses BlobVerifierLibNull and
     # would load whatever QEMU hands it, turning kernel-hashes=on from an enforced
     # guarantee into a recorded intention.
-    echo "--- Building embedded GRUB for AmdSev ---"
-    bash OvmfPkg/AmdSev/Grub/grub.sh
+    #
+    # Two deviations from upstream AmdSevX64.dsc, both explained in PROVENANCE.md:
+    #
+    # 1. PcdUse1GPageTable=TRUE. Without it PlatformInitLib clamps the guest physical
+    #    address width to 40 bits, so any 64-bit PCI window above 1 TiB falls outside the
+    #    GCD map and PciHostBridgeDxe asserts -- a silent hang in a RELEASE build. Guest RAM
+    #    near 768G already pushes the window there, before a single 128G GPU BAR is placed.
+    #    OvmfPkgX64.dsc sets it; AmdSevX64.dsc does not (checked through edk2 master).
+    echo "--- Enabling 1G page tables in AmdSevX64.dsc ---"
+    python3 - <<'PY'
+path = "OvmfPkg/AmdSev/AmdSevX64.dsc"
+with open(path, newline="") as f:
+    dsc = f.read()
+eol = "\r\n" if "\r\n" in dsc else "\n"  # edk2 keeps CRLF in-tree; preserve it
+section = "[PcdsFixedAtBuild]" + eol
+if dsc.count(section) != 1:
+    raise SystemExit(f"expected exactly one {section.strip()} section in {path}")
+if "PcdUse1GPageTable" in dsc:
+    raise SystemExit(f"{path} already sets PcdUse1GPageTable -- re-check this edit")
+dsc = dsc.replace(section, section + "  gEfiMdeModulePkgTokenSpaceGuid.PcdUse1GPageTable|TRUE" + eol)
+with open(path, "w", newline="") as f:
+    f.write(dsc)
+PY
+
+    # 2. No embedded GRUB. That GRUB exists only for the SEV launch-secret LUKS flow; we
+    #    direct-boot with kernel-hashes=on and take the LUKS key from attestation in
+    #    initramfs, so it never runs. Building it needs grub's linuxefi.mod and
+    #    sevsecret.mod, which Fedora/RHEL patch in and Debian/Ubuntu do not ship. An empty
+    #    placeholder lets the .fdf resolve the file; a guest started without -kernel then
+    #    has nothing to boot and fails closed, rather than reaching an unverified loader.
+    : > OvmfPkg/AmdSev/Grub/grub.efi
 
     echo "--- Building AmdSevX64.dsc ---"
     build -p OvmfPkg/AmdSev/AmdSevX64.dsc -a X64 -t GCC -b RELEASE
@@ -144,5 +178,6 @@ echo "    Output: ${DEST}"
 echo "    Size:   $(wc -c < "${DEST}") bytes"
 echo "    SHA256: $(sha256sum "${DEST}" | awk '{print $1}')"
 echo "    Source: ${EDK2_TAG} ($(git rev-parse HEAD))"
+echo "    GCC:    $(gcc -dumpfullversion)"
 echo ""
 echo "    Ready to commit: git add ${DEST}"

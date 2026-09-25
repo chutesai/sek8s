@@ -5,6 +5,16 @@
   --amd-sev` to rebuild it from edk2. The SEV-SNP launch measurement is a hash of
   these exact bytes, so resolving firmware from `/usr/share/ovmf` would let a distro
   package update silently invalidate every published measurement.
+- `OVMF.amdsev.fd` is built from source (edk2-stable202605, `AmdSevX64.dsc`) in a
+  digest-pinned `ubuntu:26.04` image, reproducibly, with two deviations from upstream:
+  `PcdUse1GPageTable|TRUE`, without which the firmware clamps guests to 40 address bits
+  and hangs silently whenever the 64-bit PCI window lands above 1 TiB (any GPU passthrough
+  with ~768 GB of guest RAM), and an empty embedded-GRUB placeholder, since the GRUB serves
+  a launch-secret flow we do not use and cannot be built on Ubuntu (`linuxefi.mod`,
+  `sevsecret.mod`). The firmware now sizes the MMIO window itself, so no
+  `X-PciMmio64Mb` hint is needed. Verified with 8x RTX PRO 6000 passed through under
+  SEV-SNP. Replaces the vendored Ubuntu `ovmf-amdsev` binary; changes the SNP launch
+  digest (none published yet).
 - `chutes_cvm.guest.tee`: host-side TEE abstraction covering the QEMU arguments that
   actually differ between Intel TDX and AMD SEV-SNP — the confidential-guest object,
   the memory backend type, the machine flags, the SMBIOS product string and the
