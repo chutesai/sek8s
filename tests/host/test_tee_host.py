@@ -1,6 +1,13 @@
 import pytest
 from chutes_cvm.guest import tee as tee_module
-from chutes_cvm.guest.qemu import PcieRootPinning, QemuCommand, build_base_cmd
+from chutes_cvm.guest.qemu import (
+    DirectBoot,
+    GuestNetwork,
+    GuestVolumes,
+    PassthroughSet,
+    ProcessBundle,
+    QemuCommand,
+)
 from chutes_cvm.guest.tee import (
     DEFAULT_CBITPOS,
     DEFAULT_REDUCED_PHYS_BITS,
@@ -9,6 +16,16 @@ from chutes_cvm.guest.tee import (
     TdxTeeProvider,
     detect_host_tee,
     sev_cbit_parameters,
+)
+
+# create() defaults none of the values that differ between a launch and a measurement, so the
+# launch-shaped ones are named once here.
+_LAUNCH = dict(
+    boot=DirectBoot(kernel="/dev/null", initrd="/dev/null", cmdline=""),
+    net=GuestNetwork(network_type="user", ssh_port=0),
+    volumes=GuestVolumes(),
+    process=ProcessBundle(name="chutes-td"),
+    passthrough=PassthroughSet(),
 )
 
 
@@ -185,52 +202,38 @@ def test_sev_cbit_parameters_reads_cpuid(monkeypatch, tmp_path):
 def _base_cmd(tee, tmp_path, host_nodes=()):
     import topology_fixtures as known
 
-    return build_base_cmd(
+    return QemuCommand.create(
         known.QemuProfileStub(
             mem="8G",
             smp_topology="cpus=4,sockets=1,cores=2,threads=2",
             uses_guest_numa=len(host_nodes) >= 2,
             tee_provider=tee,
         ),
-        process_name="chutes-td",
         firmware=str(tmp_path / "OVMF.fd"),
         img_path=str(tmp_path / "root.qcow2"),
-        foreground=False,
-        pidfile="/dev/null",
-        logfile="/dev/null",
         host_nodes=list(host_nodes),
-        kernel_path="/dev/null",
-        initrd_path="/dev/null",
-        cmdline="",
-        pci_pinning=PcieRootPinning(len(host_nodes) >= 2),
+        **_LAUNCH,
     )
 
 
-def test_build_base_cmd_with_tdx_provider(tmp_path):
+def test_launch_command_with_tdx_provider(tmp_path):
     args = " ".join(_base_cmd(TdxTeeProvider(), tmp_path).to_args())
     assert "tdx-guest" in args
     assert "memory-backend-ram,id=mem0" in args
     assert "product=TDX-VM" in args
 
 
-def test_build_base_cmd_refuses_host_nodes_that_contradict_the_profile(tmp_path):
+def test_launch_command_refuses_host_nodes_that_contradict_the_profile(tmp_path):
     """One source of truth for guest shape. A host whose live NUMA disagrees with its
     captured profile would otherwise get PXB bridges pinned from the profile and flat
     memory args derived from sysfs -- a command no measurement was generated for."""
     with pytest.raises(ValueError, match="does not match the profile"):
-        build_base_cmd(
+        QemuCommand.create(
             _tdx_stub(uses_guest_numa=True),
-            process_name="chutes-td",
             firmware=str(tmp_path / "OVMF.fd"),
             img_path=str(tmp_path / "root.qcow2"),
-            foreground=False,
-            pidfile="/dev/null",
-            logfile="/dev/null",
             host_nodes=[],  # profile says NUMA, the machine reports one node
-            kernel_path="/dev/null",
-            initrd_path="/dev/null",
-            cmdline="",
-            pci_pinning=PcieRootPinning(True),
+            **_LAUNCH,
         )
 
 
@@ -242,7 +245,7 @@ def _tdx_stub(**over):
     )
 
 
-def test_build_base_cmd_with_snp_provider(tmp_path):
+def test_launch_command_with_snp_provider(tmp_path):
     args = " ".join(_base_cmd(SnpTeeProvider(cbitpos=51), tmp_path).to_args())
     assert "sev-snp-guest,id=snp0" in args
     assert "memory-backend-memfd,id=mem0,size=8G,share=on" in args
@@ -252,7 +255,7 @@ def test_build_base_cmd_with_snp_provider(tmp_path):
     assert "tdx-guest" not in args
 
 
-def test_build_base_cmd_snp_numa_backends_are_memfd(tmp_path):
+def test_launch_command_snp_numa_backends_are_memfd(tmp_path):
     cmd = _base_cmd(SnpTeeProvider(), tmp_path, host_nodes=[0, 1])
     backends = [o for o in cmd.objects if o.startswith("memory-backend")]
     assert len(backends) == 2
@@ -288,15 +291,26 @@ def test_derived_platform_selects_its_own_firmware():
     assert _profile("AuthenticAMD").tee_provider.default_firmware == "OVMF.amdsev.fd"
 
 
-def test_qemu_command_uses_the_derived_platform(tmp_path):
-    """The command a host launches with carries its own platform's guest object."""
-    fw = str(tmp_path / "f.fd")
-    intel = QemuCommand.for_measurement(_profile("GenuineIntel"), firmware=fw)
-    amd = QemuCommand.for_measurement(_profile("AuthenticAMD"), firmware=fw)
+def test_launch_command_uses_the_derived_platform(tmp_path):
+    """The command a host launches with carries its own platform's guest object and flags."""
+    intel = _base_cmd(TdxTeeProvider(), tmp_path)
+    amd = _base_cmd(SnpTeeProvider(), tmp_path)
 
     assert "tdx-guest" in intel.tee_object
     assert "sev-snp-guest" in amd.tee_object
     assert "vmport=off" in amd.machine and "vmport=off" not in intel.machine
+
+
+def test_measurement_command_declares_no_confidential_guest(tmp_path):
+    """The dump runs plain q35: its QEMU has no confidential-guest support, so the command must
+    name neither a guest object nor a CC machine -- on either platform."""
+    for vendor in ("GenuineIntel", "AuthenticAMD"):
+        cmd = QemuCommand.for_measurement(
+            _profile(vendor), firmware=str(tmp_path / "f.fd")
+        )
+        assert cmd.tee_object is None
+        assert "confidential-guest-support" not in cmd.machine
+        assert "vmport=off" not in cmd.machine
 
 
 def test_unknown_vendor_has_no_platform():

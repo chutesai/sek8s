@@ -1,63 +1,32 @@
-"""The ``ImageConfig`` handed to tdx-measure, built from a QemuCommand.
+"""The ``ImageConfig`` handed to tdx-measure: a rendering of an already dump-shaped command.
 
-``HostProfile.qemu_command`` yields the QEMU command a launch would run. The
-offline path needs a slightly different one that yields the **same measured ACPI**
-without hardware. ``ImageConfig`` is a view over that ``QemuCommand`` reading its
-fields directly — no command re-parsing, so it cannot drift from the builder — and
-applies the substitutions the fork needs:
+``QemuCommand.for_measurement`` (``MeasurementCommandBuilder``) builds a command whose machine,
+memory backends, emulated devices, endpoints, serial and ``-cpu`` are already what the dumper
+needs. This only renders it as the metadata JSON.
 
-  - **machine**: run plain q35 (``smm=off,pic=off``); drop the tdx-guest object
-    (not carried over — the dumper QEMU has no confidential-guest support).
-  - **memory**: ``reserve=off`` on every backend (maps any-size guest RAM on a
-    small host without allocating it) and strip host-nodes/policy binding.
-  - **emulated devices**: replace each with a backing-free filler at the slot the
-    command gave it, so the same pcie.0 slots populate the DSDT without real drives.
-  - **passthrough**: swap each ``vfio-pci`` endpoint for a ``pci-bar-stub``
-    carrying that device's own captured BAR layout, reproducing the MMIO windows
-    the real BARs would create.
-  - **serial**: attach one so COM1 appears in the DSDT.
-  - **cpu**: pin the guest's CPU identity (``vendor=``) so a generating box reproduces the
-    production guest's CPU rather than its own.
+It used to *rewrite* a launch-shaped command instead -- seven substitutions over something it was
+handed -- which was brittle in one direction only, and the dangerous one: anything added to the
+launch command that this did not know to strip silently entered the bytes the fork hashes,
+changing every published measurement. Deriving the ``iommufd`` object did exactly that, and only
+a byte-exact golden caught it. Building each command for its purpose removes the failure mode
+rather than guarding it, and takes the endpoint reverse-lookup with it -- ``_endpoint_for`` used
+to regex ``rp3`` back into "the third GPU" to recover BARs the builder was holding all along.
 
-tdx-measure does the dumping itself inside its container; this only produces its
-input. Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no
-GPU present (validated against box-028).
+tdx-measure does the dumping itself inside its container; this only produces its input.
+Reproduces a real launch's measured ``etc/acpi/tables`` byte-for-byte with no GPU present
+(validated against box-028).
 """
 
-import re
 from dataclasses import dataclass
 
-from chutes_cvm.guest.devices import PciBar, PciDevice
-from chutes_cvm.guest.gpu.profiles import PassthroughDevice
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import IOMMUFD_ID, QemuCommand
-
-# The dumper runs plain q35 (no TDX): the ACPI tables are identical, and the
-# container QEMU has no confidential-guest support.
-_DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
-
-
-def _bars_arg(bars: list[PciBar]) -> str:
-    """Format a BAR layout as the pci-bar-stub ``bars=`` value (``;``-separated)."""
-    return ";".join(b.as_stub_arg() for b in bars)
-
-
-def _reserve_off(backend: str) -> str:
-    """Strip host-NUMA binding and add reserve=off to a memory-backend object."""
-    backend = re.sub(r",host-nodes=\d+", "", backend)
-    backend = backend.replace(",policy=bind", "")
-    if "reserve=" not in backend:
-        backend += ",reserve=off"
-    return backend
+from chutes_cvm.guest.qemu import QemuCommand
 
 
 @dataclass
 class ImageConfig:
-    """The ``ImageConfig`` tdx-measure consumes to reproduce a launch's ACPI.
-
-    Build from the host's own ``QemuCommand`` + its ``HostProfile``; ``to_dict()``
-    is the metadata JSON. Reads the shared ``QemuCommand``'s structured fields —
-    no re-parsing — so it stays tied to the real launch command.
+    """Build from ``QemuCommand.for_measurement`` + the same ``HostProfile``; ``to_dict()`` is the
+    metadata JSON. Reads the command's structured fields -- no re-parsing, no substitution.
     """
 
     cmd: QemuCommand
@@ -65,134 +34,8 @@ class ImageConfig:
     acpi_tables: str
     with_smbios: bool = True
 
-    @property
-    def cpu_args(self) -> str:
-        """The launch ``-cpu`` plus an explicit CPU identity.
-
-        ``vendor`` fixes the SRAT memory hole (AMD-guest-gated); the SMBIOS Type-4 Processor ID
-        is patched separately by tdx-measure from ``processor_id`` -- so BOTH must be set, and a
-        host with neither captured is refused rather than measured as the generating host's CPU.
-        """
-        if not self.host.cpu.vendor or self.host.cpu.processor_id is None:
-            raise ValueError(
-                f"host class {self.host.variant_label!r} has no captured CPU model "
-                f"(processor_id is None); offline RTMR0 would be generated for the generating "
-                f"host's CPU. Re-register from a host of this class with a current chutes-cvm."
-            )
-        return f"{self.cmd.cpu_args},vendor={self.host.cpu.vendor}"
-
-    @property
-    def objects(self) -> list[str]:
-        """The memory-backends, and only those.
-
-        The confidential-guest object lives in ``cmd.tee_object`` and is simply not carried over.
-        The iommufd object is dropped here: it exists for the ``vfio-pci`` endpoints that
-        reference it by id, and ``devices`` has just replaced every one of them with a
-        ``pci-bar-stub``. Carrying a host-side IOMMU handle that now backs nothing would put it in
-        the dump machine's command -- and in the bytes the fork hashes -- for no guest-visible
-        effect, changing every published measurement.
-        """
-        return [
-            _reserve_off(o)
-            for o in self.cmd.objects
-            if not o.startswith(f"iommufd,id={IOMMUFD_ID}")
-        ]
-
-    @property
-    def devices(self) -> list[str]:
-        """Every device the launch declares, made reproducible without hardware.
-
-        The launch's emulated devices (boot disk, NIC, three volumes, vsock) each reference a
-        drive or netdev the dump has no backing for, but their pcie.0 slots land in the DSDT and
-        so in RTMR0. Each is replaced by a backing-free filler **in place**, keeping the address
-        the command assigned it -- explicit when ``PcieRootPinning`` pinned it below the PXB
-        bridges, absent when it did not, in which case QEMU auto-assigns here exactly as it does
-        at launch. The slot rule lives in the builder; this only preserves its output.
-        """
-        out = []
-        for dev in self.cmd.devices:
-            if dev.startswith("vfio-pci"):
-                out.append(self._swap_endpoint(dev))
-            elif dev.startswith(("pxb-pcie", "pcie-root-port")):
-                out.append(dev)
-            else:
-                addr = re.search(r",addr=0x[0-9a-f]+", dev)
-                out.append(f"virtio-rng-pci,bus=pcie.0{addr.group(0) if addr else ''}")
-        return out
-
-    def _endpoint_for(self, root_port: str) -> PassthroughDevice:
-        """The captured device behind a root port, or the profile's fallback entry.
-
-        ``root_port`` is the QEMU ``pcie-root-port`` id the endpoint hangs off, as it appears in
-        the device's ``bus=`` -- ``rp3`` for the third GPU, ``rp_nvsw1``, ``rp_ib1``.
-
-        Root ports are emitted in device order, so ``rp3`` is the third GPU. Using that device's
-        own geometry rather than one representative per kind is what lets a GPU model be measured
-        from a submitted profile instead of a hand-transcribed table entry -- and it is correct
-        even if two devices ever differ, since OVMF sizes the aperture from what it enumerates.
-        """
-        devices: tuple[PciDevice, ...]
-        if ordinal := re.fullmatch(r"rp(\d+)", root_port):
-            kind, devices = "gpu", self.host.gpus
-        elif ordinal := re.fullmatch(r"rp_nvsw(\d+)", root_port):
-            kind, devices = "nvswitch", self.host.attached_nvswitches
-        elif ordinal := re.fullmatch(r"rp_ib(\d+)", root_port):
-            kind, devices = "ib", self.host.attached_ib
-        else:
-            raise NotImplementedError(f"unrecognized passthrough bus {root_port!r}")
-
-        index = int(ordinal.group(1)) - 1
-        if index < len(devices) and devices[index].bars:
-            device = devices[index]
-            return PassthroughDevice(
-                vendor=int(device.vendor, 16),
-                device_id=device.device_id,
-                pci_class=int(device.pci_class, 16),
-                bars=list(device.bars),
-            )
-
-        raise ValueError(
-            f"no BARs captured for {root_port!r} ({kind}) on a "
-            f"{self.host.gpu_profile.name!r} host. The stub reproduces the guest's MMIO windows "
-            f"from them, so without them the generated RTMR0 matches no real boot. Re-submit "
-            f"this host's profile with a current chutes-cvm."
-        )
-
-    def _swap_endpoint(self, device_arg: str) -> str:
-        """Swap a ``vfio-pci`` endpoint for a ``pci-bar-stub`` carrying that device's BARs.
-
-        ``device_arg`` is the endpoint's whole ``-device`` argument, e.g.
-        ``vfio-pci,host=0000:1b:00.0,bus=rp1``.
-        """
-        bus = re.search(r"bus=([^,]+)", device_arg)
-        if not bus:
-            raise ValueError(f"vfio-pci device without a bus=: {device_arg!r}")
-        root_port = bus.group(1)
-        spec = self._endpoint_for(root_port)
-        return (
-            f"pci-bar-stub,bus={root_port},bars={_bars_arg(spec.bars)},"
-            f"vendor={spec.vendor:#06x},device={int(spec.device_id, 16):#06x},"
-            f"class={spec.pci_class:#06x}"
-        )
-
-    @property
-    def smbios(self) -> list[str]:
-        return self.cmd.smbios if self.with_smbios else []
-
     def to_dict(self) -> dict:
         cmd = self.cmd
-        # Flat topologies wire the guest RAM to a machine-level memory-backend
-        # (`memory-backend=mem0`); NUMA wires per-node memdevs (`-numa … memdev=`)
-        # instead. The dump machine must keep whichever the launch used — without the
-        # flat memory-backend, QEMU falls back to allocating the full pc.ram, which a
-        # small generating host can't back (the mem0 object carries reserve=off).
-        dump_machine = _DUMP_MACHINE
-        mem_backend = next(
-            (p for p in cmd.machine.split(",") if p.startswith("memory-backend=")),
-            None,
-        )
-        if mem_backend:
-            dump_machine = f"{_DUMP_MACHINE},{mem_backend}"
         return {
             "boot_config": {
                 "cpus": int(cmd.smp_topology.split(",", 1)[0]),
@@ -200,21 +43,25 @@ class ImageConfig:
                 "bios": cmd.firmware,
                 "acpi_tables": self.acpi_tables,
                 "qemu": {
-                    "machine": dump_machine,
-                    "cpu": self.cpu_args,
+                    "machine": cmd.machine,
+                    "cpu": cmd.cpu_args,
                     "accel": cmd.accel,
                     "smp": cmd.smp_topology,
-                    "objects": self.objects,
+                    "objects": cmd.objects,
                     "numa": cmd.numa,
-                    "smbios": self.smbios,
-                    "serial": ["null"],  # adds COM1 to the DSDT
-                    "devices": self.devices,
+                    "smbios": cmd.smbios if self.with_smbios else [],
+                    "serial": cmd.serial,
+                    "devices": cmd.devices,
                     "fw_cfg": cmd.fw_cfg,
-                    # Pin the SMBIOS Type-4 Processor ID (#14) to the production
-                    # CPUID; tdx-measure patches it into the dumped SMBIOS (KVM
-                    # can't override the generating host's CPUID). None => unpatched.
+                    # Pin the SMBIOS Type-4 Processor ID (#14) to the production CPUID;
+                    # tdx-measure patches it into the dumped SMBIOS (KVM can't override the
+                    # generating host's CPUID). None => unpatched.
                     "processor_id": self.host.cpu.processor_id,
                 },
             },
-            "direct": {"kernel": "/dev/null", "initrd": "/dev/null", "cmdline": ""},
+            "direct": {
+                "kernel": cmd.kernel,
+                "initrd": cmd.initrd,
+                "cmdline": cmd.append,
+            },
         }

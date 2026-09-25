@@ -6,6 +6,7 @@ configuration, PCI device topology, networking, volumes, and vsock.
 
 import os
 import re
+from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -401,13 +402,9 @@ class QemuCommand:
     logfile: str
     pidfile: str
     accel: str = "kvm"
-    # The confidential-guest -object. Defaults to TDX so anything constructing a
-    # QemuCommand directly (offline measurement included) is unchanged; the launcher
-    # and build_base_cmd set it from the detected platform's TeeProvider.
-    tee_object: str = (
-        '{"qom-type":"tdx-guest","id":"tdx",'
-        '"quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}'
-    )
+    #: The confidential-guest ``-object``, or None for a command that declares none -- the
+    #: offline dump runs plain q35 on a machine with no TEE at all.
+    tee_object: "str | None" = None
     # Direct boot (1.4.0+): OVMF boots these kernel/initrd/cmdline directly,
     # dropping GRUB/shim from the measured boot chain. When set, the qcow2 stays
     # attached as the LUKS root but is no longer the boot device (no bootindex).
@@ -423,113 +420,19 @@ class QemuCommand:
     netdevs: list[str] = field(default_factory=list)
     devices: list[str] = field(default_factory=list)
     fw_cfg: list[str] = field(default_factory=list)
+    #: ``-serial`` values. A launch derives them from ``foreground``/``logfile``; the dump
+    #: attaches ``null`` so COM1 lands in the DSDT.
+    serial: list[str] = field(default_factory=list)
 
     @classmethod
-    def create(
-        cls,
-        profile: HostProfile,
-        *,
-        firmware: str,
-        img_path: str,
-        host_nodes: list[int],
-        boot: DirectBoot,
-        net: GuestNetwork,
-        volumes: GuestVolumes,
-        process: ProcessBundle,
-        passthrough: PassthroughSet,
-    ) -> "QemuCommand":
-        """The whole command, assembled in one place from resolved inputs.
-
-        The five steps below each claim pcie.0 slots from ONE ``PcieRootPinning``, and slot layout
-        lands in the DSDT and so in RTMR0. That allocator is created and consumed here precisely so
-        no caller can run the steps in a different order, or one too many times, and silently shift
-        every published measurement. It used to be four separately callable builders invoked by two
-        hand-written call sites, with a parity test as the only thing holding them in step.
-
-        Pure: reads no live hardware and touches no device, which is what lets offline measurement
-        generation share it. Binding is ``passthrough.bind_passthrough`` and runs before this.
-
-        Nothing is optional. Every argument is a decision that differs between a launch and a
-        measurement, so a default here would be one of the two shapes silently standing in for the
-        other -- which is how the launcher came to pass a bare ``-cpu`` constant while generation
-        used the profile's.
-        """
-        # One instance across every step, as a launch does: under guest NUMA it starts at slot
-        # 0x2 to keep the emulated devices below the PXB bridges at 0x18+.
-        pinning = PcieRootPinning(profile.uses_guest_numa)
-
-        cmd = build_base_cmd(
-            profile,
-            process_name=process.name,
-            firmware=firmware,
-            img_path=img_path,
-            foreground=process.foreground,
-            pidfile=process.pidfile,
-            logfile=process.logfile,
-            host_nodes=host_nodes,
-            kernel_path=boot.kernel,
-            initrd_path=boot.initrd,
-            cmdline=boot.cmdline,
-            pci_pinning=pinning,
-        )
-        build_network(
-            cmd,
-            network_type=net.network_type,
-            net_iface=net.net_iface,
-            ssh_port=net.ssh_port,
-            net_queues=net.net_queues,
-            pci_pinning=pinning,
-        )
-        add_volumes(
-            cmd,
-            config_volume=volumes.config,
-            cache_volume=volumes.cache,
-            storage_volume=volumes.storage,
-            pci_pinning=pinning,
-        )
-        add_vsock(cmd, pci_pinning=pinning)
-        if passthrough.gpus or passthrough.nvswitches or passthrough.ib:
-            # Derived, not passed: every endpoint build_pci_topology emits carries
-            # `iommufd=iommufd0`, so a command with passthrough devices and no such object is
-            # one QEMU refuses. The two are one decision and cannot be set apart.
-            cmd.objects.append(f"iommufd,id={IOMMUFD_ID}")
-        build_pci_topology(
-            cmd,
-            gpus=passthrough.gpus,
-            nvswitches=passthrough.nvswitches,
-            ib_devices=passthrough.ib,
-            guest_numa=profile.uses_guest_numa,
-        )
-        return cmd
+    def create(cls, profile: HostProfile, **inputs) -> "QemuCommand":
+        """The command a launch on ``profile`` runs. See ``LaunchCommandBuilder``."""
+        return LaunchCommandBuilder(profile).build(**inputs)
 
     @classmethod
-    def for_measurement(
-        cls,
-        profile: HostProfile,
-        *,
-        firmware: str,
-    ) -> "QemuCommand":
-        """The same command, built for offline generation rather than a launch.
-
-        Native throughout -- real BDFs, the launch form of ``-cpu`` -- because this IS the command
-        a launch would run; ``ImageConfig`` makes its substitutions afterwards, so nothing offline
-        leaks in here.
-
-        EVERY value that differs from a launch is spelled out here, and ``create`` defaults none of
-        them. That is the point: the measurement shape lives in exactly one place, so a launch
-        cannot inherit a piece of it by forgetting an argument, and a reader can diff the two
-        callers to see the whole divergence.
-
-        - a synthetic node pair, so any box can generate for a guest-NUMA class
-        - the canonical volume and image filenames, whose pcie.0 slots the DSDT records
-        - placeholder boot artifacts: RTMR0 is boot-method independent and the measured tables
-          carry no kernel
-        - the tap shape with no interface: the NIC occupies a measured slot, the netdev backing
-          it is not a PCI device and is not measured
-        - a process that does not exist, which ``ImageConfig.to_dict()`` drops entirely
-        """
-        return cls.create(
-            profile,
+    def for_measurement(cls, profile: HostProfile, *, firmware: str) -> "QemuCommand":
+        """The command offline generation measures. See ``MeasurementCommandBuilder``."""
+        return MeasurementCommandBuilder(profile).build(
             firmware=firmware,
             img_path="root.qcow2",
             host_nodes=[0, 1] if profile.uses_guest_numa else [],
@@ -556,9 +459,9 @@ class QemuCommand:
             f"{self.process_name},process={self.process_name},debug-threads=on",
             "-cpu",
             self.cpu_args,
-            "-object",
-            self.tee_object,
         ]
+        if self.tee_object:
+            args += ["-object", self.tee_object]
         for o in self.objects:
             args += ["-object", o]
         for n in self.numa:
@@ -574,17 +477,11 @@ class QemuCommand:
         ]
         for s in self.smbios:
             args += ["-smbios", s]
-        if self.foreground:
-            args += ["-nographic", "-serial", "mon:stdio"]
-        else:
-            args += [
-                "-nographic",
-                "-serial",
-                f"file:{self.logfile}",
-                "-daemonize",
-                "-pidfile",
-                self.pidfile,
-            ]
+        args.append("-nographic")
+        for sr in self.serial:
+            args += ["-serial", sr]
+        if not self.foreground:
+            args += ["-daemonize", "-pidfile", self.pidfile]
         if self.kernel:
             args += ["-kernel", self.kernel]
         if self.initrd:
@@ -602,189 +499,492 @@ class QemuCommand:
         return args
 
 
-def build_base_cmd(
-    profile: HostProfile,
-    *,
-    process_name: str,
-    firmware: str,
-    img_path: str,
-    foreground: bool,
-    pidfile: str,
-    logfile: str,
-    host_nodes: list[int],
-    kernel_path: str,
-    initrd_path: str,
-    cmdline: str,
-    pci_pinning: PcieRootPinning,
-) -> QemuCommand:
-    """Build the base QEMU command (confidential guest, firmware, CPU, memory, direct boot).
+class QemuCommandBuilder(ABC):
+    """One traversal, two purposes.
 
-    Pure: reads no live hardware. ``host_nodes`` is the explicit guest-NUMA node
-    list, fully resolved by the caller — the launcher from sysfs
-    (``host_numa_nodes()`` gated by ``use_numa_topology``), the measurement
-    adapter from a topology fingerprint. A guest-NUMA topology is built when it
-    names >= 2 nodes; ``[]`` builds a flat guest.
+    ``build`` walks a fixed sequence -- base, network, volumes, vsock, passthrough -- claiming
+    pcie.0 slots from ONE ``PcieRootPinning`` as it goes. Slot layout lands in the DSDT and so in
+    RTMR0, so that walk, its order and its count live here once and subclasses cannot reach them.
+    All a subclass chooses is what string goes in each slot.
 
-    Direct boot (1.4.0+, not optional): OVMF boots ``kernel_path`` / ``initrd_path``
-    with ``cmdline`` directly — no GRUB. The qcow2 stays attached as the LUKS root
-    but is not the boot device (no ``bootindex``). There is deliberately no GRUB
-    fallback: a second boot path would produce a second, network-inconsistent set
-    of measurements. The launcher passes the artifacts published with the image;
-    the offline ACPI-dump path passes placeholders (RTMR0 is boot-method
-    independent and the measured tables don't include the kernel).
+    That is the whole of the launch/measurement difference, and it is expressed by construction
+    rather than by rewriting afterwards. The offline path used to build a launch-shaped command
+    and let ``ImageConfig`` substitute seven things over it, which is brittle in one direction
+    only: anything added to the launch command and not stripped there silently entered the bytes
+    the fork hashes. Here a new emulated device gets a slot in BOTH commands because there is one
+    call site, and the only way to break it is to leave an abstract method unimplemented.
     """
-    # The profile is the single authority on guest shape: memory, -smp, -cpu, the
-    # platform, and whether this class runs a NUMA guest. Deriving NUMA from
-    # len(host_nodes) instead meant two sources of truth -- a host whose live sysfs
-    # disagreed with its captured profile got PXB bridges (pinned from the profile) with
-    # flat memory args (derived from sysfs), a command matching no measurement.
-    numa_enabled = profile.uses_guest_numa
-    tee = profile.tee_provider
-    mem = profile.mem
-    smp_topology = profile.smp_topology
 
-    # host_nodes stays a parameter because it genuinely differs per caller: a launch
-    # binds to this machine's real nodes, while offline generation uses a synthetic pair
-    # so any box can produce the measurement. It must still agree with the profile.
-    if numa_enabled != (len(host_nodes) >= 2):
-        raise ValueError(
-            f"host_nodes {host_nodes} does not match the profile's guest-NUMA setting "
-            f"(uses_guest_numa={numa_enabled}). The profile decides the guest shape; a "
-            "host whose live NUMA disagrees with its captured profile cannot launch a "
-            "guest any measurement was generated for."
+    def __init__(self, profile: HostProfile):
+        self.profile = profile
+
+    # ── the traversal: shared, ordered, and not overridable ─────────────────────────────
+    def build(
+        self,
+        *,
+        firmware: str,
+        img_path: str,
+        host_nodes: list[int],
+        boot: DirectBoot,
+        net: GuestNetwork,
+        volumes: GuestVolumes,
+        process: ProcessBundle,
+        passthrough: PassthroughSet,
+    ) -> QemuCommand:
+        """Assemble the whole command. Pure: reads no live hardware, touches no device."""
+        pinning = PcieRootPinning(self.profile.uses_guest_numa)
+        cmd = self._base(
+            firmware=firmware,
+            img_path=img_path,
+            host_nodes=host_nodes,
+            boot=boot,
+            process=process,
+            pinning=pinning,
         )
-    # A flat guest binds the machine to its single backend; a NUMA guest gets one
-    # backend per node via _append_numa_memory and binds none here.
-    machine = tee.machine(None if numa_enabled else "mem0")
+        self._network(cmd, net, pinning)
+        self._volumes(cmd, volumes, pinning)
+        self._vsock(cmd, pinning)
+        self._passthrough(cmd, passthrough, pinning)
+        return cmd
 
-    cmd = QemuCommand(
-        mem=mem,
-        smp_topology=smp_topology,
-        cpu_args=profile.cpu_args,
-        machine=machine,
-        firmware=firmware,
-        process_name=process_name,
-        foreground=foreground,
-        logfile=logfile,
-        pidfile=pidfile,
-        # Pinned SMBIOS identity so per-server motherboard differences don't
-        # shift RTMR0 within a profile. Single source of truth: the offline
-        # measurement path reads this same builder (HostProfile.qemu_command →
-        # image_config), so launch and measurement can't diverge.
-        tee_object=tee.guest_object(),
-        smbios=[
-            f"type=1,manufacturer=Chutes,product={tee.smbios_product},version=1.0,serial=0,"
-            "uuid=00000000-0000-0000-0000-000000000000",
-            f"type=2,manufacturer=Chutes,product={tee.smbios_product},version=1.0,serial=0",
-            "type=3,manufacturer=Chutes,version=1.0,serial=0",
-        ],
-    )
+    # ── leaves: the only variation ──────────────────────────────────────────────────────
+    @abstractmethod
+    def machine(self, flat_backend: "str | None") -> str:
+        """The ``-machine`` argument. ``flat_backend`` names the single memory backend a flat
+        guest binds, or is None under guest NUMA where per-node memdevs bind instead."""
 
-    if numa_enabled:
-        mem_mib = _parse_mem_mib(mem)
-        _append_numa_memory(cmd, mem_mib, host_nodes, tee)
-        print(
-            f"NUMA: {len(host_nodes)} guest nodes, "
-            f"{mem_mib // len(host_nodes)}M each (approx), host nodes {host_nodes}"
+    @abstractmethod
+    def memory_backend(
+        self, backend_id: str, size: str, host_node: "int | None" = None
+    ) -> str:
+        """One ``-object`` memory backend."""
+
+    @abstractmethod
+    def cpu_args(self) -> str:
+        """The ``-cpu`` string."""
+
+    @abstractmethod
+    def tee_object(self) -> "str | None":
+        """The confidential-guest ``-object``, or None for a command that declares none."""
+
+    @abstractmethod
+    def serial(self, process: ProcessBundle) -> list[str]:
+        """The ``-serial`` values."""
+
+    @abstractmethod
+    def emit(
+        self,
+        cmd: QemuCommand,
+        *,
+        device: str,
+        slot: str,
+        drive: "str | None" = None,
+        opts: str = "",
+    ) -> None:
+        """Place one emulated device at ``slot``, with its backing drive if it has one.
+
+        ``opts`` are device options that must follow the address. QEMU does not care -- device
+        options are comma-separated and order-independent -- but it is the order every published
+        measurement was generated against, so it is preserved rather than tidied.
+        """
+
+    @abstractmethod
+    def endpoint(self, device: PciDevice, rp_id: str) -> str:
+        """The ``-device`` argument for one passthrough endpoint on ``rp_id``."""
+
+    @abstractmethod
+    def wants_iommufd(self) -> bool:
+        """Whether the endpoints this builder emits reference an iommufd object."""
+
+    # ── traversal steps ─────────────────────────────────────────────────────────────────
+    def _base(
+        self,
+        *,
+        firmware: str,
+        img_path: str,
+        host_nodes: list[int],
+        boot: DirectBoot,
+        process: ProcessBundle,
+        pinning: PcieRootPinning,
+    ) -> QemuCommand:
+        """Confidential guest, firmware, CPU, memory, direct boot, and the root disk."""
+        profile = self.profile
+        # The profile is the single authority on guest shape: memory, -smp, -cpu, the platform,
+        # and whether this class runs a NUMA guest. Deriving NUMA from len(host_nodes) instead
+        # meant two sources of truth -- a host whose live sysfs disagreed with its captured
+        # profile got PXB bridges (from the profile) with flat memory args (from sysfs), a
+        # command matching no measurement.
+        numa_enabled = profile.uses_guest_numa
+        if numa_enabled != (len(host_nodes) >= 2):
+            raise ValueError(
+                f"host_nodes {host_nodes} does not match the profile's guest-NUMA setting "
+                f"(uses_guest_numa={numa_enabled}). The profile decides the guest shape; a host "
+                "whose live NUMA disagrees with its captured profile cannot launch a guest any "
+                "measurement was generated for."
+            )
+
+        cmd = QemuCommand(
+            mem=profile.mem,
+            smp_topology=profile.smp_topology,
+            cpu_args=self.cpu_args(),
+            # A flat guest binds the machine to its single backend; a NUMA guest gets one per
+            # node below and binds none here.
+            machine=self.machine(None if numa_enabled else "mem0"),
+            firmware=firmware,
+            process_name=process.name,
+            foreground=process.foreground,
+            logfile=process.logfile,
+            pidfile=process.pidfile,
+            serial=self.serial(process),
+            tee_object=self.tee_object(),
+            # Pinned SMBIOS identity so per-server motherboard differences don't shift RTMR0
+            # within a profile.
+            smbios=self._smbios(),
         )
-    else:
-        cmd.objects.append(tee.memory_backend("mem0", mem))
 
-    # Direct boot (always): OVMF loads the kernel/initrd/cmdline itself. The qcow2
-    # is still the LUKS root, just not the boot device — so no bootindex.
-    cmd.kernel = kernel_path
-    cmd.initrd = initrd_path
-    cmd.append = cmdline
-
-    img_fmt = _block_format(img_path)
-    drive_opts = f"file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}"
-    if img_fmt == "qcow2":
-        drive_opts += ",discard=unmap"
-    elif img_fmt == "raw":
-        drive_opts += ",discard=on,detect-zeroes=on"
-    cmd.drives.append(drive_opts)
-    dev_opts = f"virtio-blk-pci,drive=virtio-disk0{pci_pinning.device_suffix()}"
-    if img_fmt == "raw":
-        dev_opts += ",num-queues=4"
-    cmd.devices.append(dev_opts)
-
-    return cmd
-
-
-def build_network(
-    cmd: QemuCommand,
-    *,
-    network_type: str,
-    net_iface: str | None,
-    ssh_port: int,
-    net_queues: int = 4,
-    pci_pinning: PcieRootPinning,
-):
-    """Add the guest NIC to the QemuCommand.
-
-    A launch always has exactly one NIC, so the device is unconditional; the ``-netdev`` that
-    backs it follows the inputs. In tap mode that needs a host interface -- without one the
-    device is emitted alone, which is what offline measurement generation wants: the device
-    occupies a pcie.0 slot and slot layout is measured into RTMR0, while a netdev is not a PCI
-    device and is not measured.
-
-    Whether an interface SHOULD have been supplied is the caller's question, not this one.
-    """
-    if network_type == "tap":
-        vectors = 2 * net_queues + 2
-        cmd.devices.append(
-            f"virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,vectors={vectors},mrg_rxbuf=on"
-            f"{pci_pinning.device_suffix()}"
-        )
-        if net_iface:
+        if numa_enabled:
+            mem_mib = _parse_mem_mib(profile.mem)
+            self._numa_memory(cmd, mem_mib, host_nodes)
             print(
-                f"Networking: TAP mode (iface={net_iface}, queues={net_queues}, vhost=on)"
+                f"NUMA: {len(host_nodes)} guest nodes, "
+                f"{mem_mib // len(host_nodes)}M each (approx), host nodes {host_nodes}"
             )
-            cmd.netdevs.append(
-                f"tap,id=n0,ifname={net_iface},script=no,downscript=no,"
-                f"vhost=on,queues={net_queues}"
+        else:
+            cmd.objects.append(self.memory_backend("mem0", profile.mem))
+
+        # Direct boot (always): OVMF loads the kernel/initrd/cmdline itself. The qcow2 is still
+        # the LUKS root, just not the boot device -- so no bootindex.
+        cmd.kernel = boot.kernel
+        cmd.initrd = boot.initrd
+        cmd.append = boot.cmdline
+
+        img_fmt = _block_format(img_path)
+        drive = f"file={img_path},if=none,id=virtio-disk0,cache=none,aio=native,format={img_fmt}"
+        if img_fmt == "qcow2":
+            drive += ",discard=unmap"
+        elif img_fmt == "raw":
+            drive += ",discard=on,detect-zeroes=on"
+        self.emit(
+            cmd,
+            device="virtio-blk-pci,drive=virtio-disk0",
+            slot=pinning.device_suffix(),
+            drive=drive,
+            opts=",num-queues=4" if img_fmt == "raw" else "",
+        )
+        return cmd
+
+    def _smbios(self) -> list[str]:
+        product = self.profile.tee_provider.smbios_product
+        return [
+            f"type=1,manufacturer=Chutes,product={product},version=1.0,serial=0,"
+            "uuid=00000000-0000-0000-0000-000000000000",
+            f"type=2,manufacturer=Chutes,product={product},version=1.0,serial=0",
+            "type=3,manufacturer=Chutes,version=1.0,serial=0",
+        ]
+
+    def _numa_memory(
+        self, cmd: QemuCommand, mem_mib: int, host_nodes: list[int]
+    ) -> None:
+        """One memory backend per guest NUMA node, bound to its host node.
+
+        NB: never set prealloc=on. Guest RAM is private memory allocated as the guest accepts
+        pages; preallocating pins a second full copy the guest never uses, roughly doubling host
+        memory use and OOM-killing the host during pod warmup.
+        """
+        num_nodes = len(host_nodes)
+        per_node_mib = mem_mib // num_nodes
+        for i, hnode in enumerate(host_nodes):
+            node_size_mib = (
+                mem_mib - per_node_mib * (num_nodes - 1)
+                if i == num_nodes - 1
+                else per_node_mib
             )
-    else:
-        print("Networking: Canonical user-mode networking")
-        cmd.devices.append(
-            f"virtio-net-pci,netdev=nic0_td{pci_pinning.device_suffix()}"
+            cmd.objects.append(
+                self.memory_backend(
+                    f"mem-node{i}", f"{node_size_mib}M", host_node=hnode
+                )
+            )
+            cmd.numa.append(f"node,nodeid={i},memdev=mem-node{i}")
+            cmd.numa.append(f"cpu,node-id={i},socket-id={i}")
+        if num_nodes == 2:
+            cmd.numa.append("dist,src=0,dst=1,val=21")
+
+    def _network(
+        self, cmd: QemuCommand, net: GuestNetwork, pinning: PcieRootPinning
+    ) -> None:
+        """The guest's one NIC.
+
+        A launch always has exactly one, so the device is unconditional; the ``-netdev`` backing
+        it follows the inputs. In tap mode without a host interface the device is emitted alone,
+        which is what offline generation wants: the device occupies a measured pcie.0 slot, while
+        a netdev is not a PCI device and is not measured.
+        """
+        if net.network_type == "tap":
+            vectors = 2 * net.net_queues + 2
+            self.emit(
+                cmd,
+                device=(
+                    "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56,mq=on,"
+                    f"vectors={vectors},mrg_rxbuf=on"
+                ),
+                slot=pinning.device_suffix(),
+            )
+            if net.net_iface:
+                print(
+                    f"Networking: TAP mode (iface={net.net_iface}, "
+                    f"queues={net.net_queues}, vhost=on)"
+                )
+                cmd.netdevs.append(
+                    f"tap,id=n0,ifname={net.net_iface},script=no,downscript=no,"
+                    f"vhost=on,queues={net.net_queues}"
+                )
+        else:
+            print("Networking: Canonical user-mode networking")
+            self.emit(
+                cmd,
+                device="virtio-net-pci,netdev=nic0_td",
+                slot=pinning.device_suffix(),
+            )
+            cmd.netdevs.append(f"user,id=nic0_td,hostfwd=tcp::{net.ssh_port}-:22")
+
+    def _volumes(
+        self, cmd: QemuCommand, volumes: GuestVolumes, pinning: PcieRootPinning
+    ) -> None:
+        """Config, cache and storage, in that order -- the order assigns their slots."""
+        if volumes.config:
+            self.emit(
+                cmd,
+                device="virtio-blk-pci,drive=virtio-config",
+                slot=pinning.device_suffix(),
+                drive=(
+                    f"file={volumes.config},if=none,id=virtio-config,cache=none,"
+                    "format=qcow2,readonly=on"
+                ),
+            )
+        for path, vol_id in (
+            (volumes.cache, "virtio-cache"),
+            (volumes.storage, "virtio-storage"),
+        ):
+            if not path:
+                continue
+            fmt = _block_format(path)
+            drive = (
+                f"file={path},if=none,id={vol_id},cache=none,aio=native,format={fmt}"
+            )
+            if fmt == "raw":
+                drive += ",discard=on,detect-zeroes=on"
+            self.emit(
+                cmd,
+                device=f"virtio-blk-pci,drive={vol_id}",
+                slot=pinning.device_suffix(),
+                drive=drive,
+                opts=",num-queues=4" if fmt == "raw" else "",
+            )
+
+    def _vsock(self, cmd: QemuCommand, pinning: PcieRootPinning) -> None:
+        self.emit(
+            cmd, device="vhost-vsock-pci,guest-cid=3", slot=pinning.device_suffix()
         )
-        cmd.netdevs.append(f"user,id=nic0_td,hostfwd=tcp::{ssh_port}-:22")
 
+    def _passthrough(
+        self, cmd: QemuCommand, passthrough: PassthroughSet, pinning: PcieRootPinning
+    ) -> None:
+        """Root ports and their endpoints.
 
-def add_volumes(
-    cmd: QemuCommand,
-    *,
-    config_volume: str | None,
-    cache_volume: str | None,
-    storage_volume: str | None,
-    pci_pinning: PcieRootPinning,
-):
-    """Add config, cache, and storage volumes to the QemuCommand."""
-    if config_volume:
-        cmd.drives.append(
-            f"file={config_volume},if=none,id=virtio-config,cache=none,format=qcow2,readonly=on"
+        Each device's NUMA node comes from the capture it was read from -- never from a second
+        read of the live machine, which is how the launch and the measurement came to disagree
+        about where a GPU sat. Root ports are numbered per kind in device order (``rp1..rpN``
+        for GPUs, then ``rp_nvsw*``, then ``rp_ib*``) and chassis numbers run across all of
+        them, which is the ordering the guest PXB grouping and therefore RTMR0 depend on.
+        """
+        devices = (
+            ("rp", passthrough.gpus),
+            ("rp_nvsw", passthrough.nvswitches),
+            ("rp_ib", passthrough.ib),
         )
-        cmd.devices.append(
-            f"virtio-blk-pci,drive=virtio-config{pci_pinning.device_suffix()}"
+        if not any(group for _, group in devices):
+            return
+
+        if self.wants_iommufd():
+            # Every endpoint carries iommufd=<id>, so a command with passthrough devices and no
+            # such object is one QEMU refuses. The two are one decision.
+            cmd.objects.append(f"iommufd,id={IOMMUFD_ID}")
+
+        guest_numa = self.profile.uses_guest_numa
+        topo: "PciTopologyState | NumaPciTopologyState"
+        if guest_numa:
+            print("  PCI topology: NUMA-local PXB-PCIe bridges")
+            topo = NumaPciTopologyState()
+        else:
+            topo = PciTopologyState()
+
+        print(f"  Adding {len(passthrough.gpus)} GPU(s) to PCI topology...")
+        # OVMF sizes the guest's 64-bit MMIO window from the BARs it enumerates; nothing is pinned.
+        print(
+            "    MMIO: OVMF auto-sizes the 64-bit window from the passed-through BARs"
         )
-    for vol_path, vol_id in [
-        (cache_volume, "virtio-cache"),
-        (storage_volume, "virtio-storage"),
-    ]:
-        if not vol_path:
-            continue
-        vol_fmt = _block_format(vol_path)
-        drive_opts = f"file={vol_path},if=none,id={vol_id},cache=none,aio=native,format={vol_fmt}"
-        if vol_fmt == "raw":
-            drive_opts += ",discard=on,detect-zeroes=on"
-        cmd.drives.append(drive_opts)
-        dev_opts = f"virtio-blk-pci,drive={vol_id}{pci_pinning.device_suffix()}"
-        if vol_fmt == "raw":
-            dev_opts += ",num-queues=4"
-        cmd.devices.append(dev_opts)
+        chassis = 0
+        for prefix, group in devices:
+            for ordinal, device in enumerate(group, start=1):
+                chassis += 1
+                rp_id = f"{prefix}{ordinal}"
+                placement = {"numa_node": device.numa_node} if guest_numa else {}
+                topo.add_device(
+                    cmd,
+                    self.endpoint(device, rp_id),
+                    rp_id=rp_id,
+                    chassis=chassis,
+                    **placement,
+                )
+                if guest_numa and device.numa_node >= 0:
+                    print(f"    {device.bdf} -> PXB NUMA node {device.numa_node}")
+        print(
+            f"  Passthrough configured: {len(passthrough.gpus)} GPU(s), "
+            f"{len(passthrough.nvswitches)} NVSwitch(es), {len(passthrough.ib)} IB device(s)"
+        )
 
 
-def add_vsock(cmd: QemuCommand, *, pci_pinning: PcieRootPinning):
-    """Add vhost-vsock device to the QemuCommand."""
-    cmd.devices.append(f"vhost-vsock-pci,guest-cid=3{pci_pinning.device_suffix()}")
+class LaunchCommandBuilder(QemuCommandBuilder):
+    """The command this host actually runs.
+
+    Every leaf comes from the profile's ``TeeProvider`` or the profile itself: the confidential
+    guest, the memory backend type, the SMBIOS product. Nothing here knows about measurement.
+    """
+
+    def machine(self, flat_backend: "str | None") -> str:
+        return self.profile.tee_provider.machine(flat_backend)
+
+    def memory_backend(
+        self, backend_id: str, size: str, host_node: "int | None" = None
+    ) -> str:
+        return self.profile.tee_provider.memory_backend(
+            backend_id, size, host_node=host_node
+        )
+
+    def cpu_args(self) -> str:
+        return self.profile.cpu_args
+
+    def tee_object(self) -> "str | None":
+        return self.profile.tee_provider.guest_object()
+
+    def serial(self, process: ProcessBundle) -> list[str]:
+        return ["mon:stdio"] if process.foreground else [f"file:{process.logfile}"]
+
+    def emit(
+        self,
+        cmd: QemuCommand,
+        *,
+        device: str,
+        slot: str,
+        drive: "str | None" = None,
+        opts: str = "",
+    ) -> None:
+        if drive:
+            cmd.drives.append(drive)
+        cmd.devices.append(f"{device}{slot}{opts}")
+
+    def endpoint(self, device: PciDevice, rp_id: str) -> str:
+        return f"vfio-pci,host={device.bdf},bus={rp_id},addr=0x0,iommufd={IOMMUFD_ID}"
+
+    def wants_iommufd(self) -> bool:
+        return True
+
+
+class MeasurementCommandBuilder(QemuCommandBuilder):
+    """The command offline generation measures, built for that purpose rather than rewritten.
+
+    Every leaf answers "what reproduces the launch's measured ACPI on a box with no TEE, no GPUs
+    and less RAM than the guest". Sits beside ``LaunchCommandBuilder`` on purpose: the seven
+    differences between a launch and a measurement are the seven method bodies, and a reader can
+    diff them without opening another file.
+    """
+
+    #: The dumper runs plain q35: the ACPI tables are identical and the container's QEMU has no
+    #: confidential-guest support at all.
+    DUMP_MACHINE = "q35,kernel_irqchip=split,smm=off,pic=off"
+
+    def machine(self, flat_backend: "str | None") -> str:
+        # A flat topology wires guest RAM to a machine-level backend; without it QEMU falls back
+        # to allocating the full pc.ram, which a small generating host cannot back (the mem0
+        # object carries reserve=off).
+        if flat_backend:
+            return f"{self.DUMP_MACHINE},memory-backend={flat_backend}"
+        return self.DUMP_MACHINE
+
+    def memory_backend(
+        self, backend_id: str, size: str, host_node: "int | None" = None
+    ) -> str:
+        """The launch's backend type, unbound and unreserved.
+
+        ``reserve=off`` maps any-size guest RAM on a small host without allocating it, and the
+        host-NUMA binding is dropped because the generating box's nodes are not the launch host's.
+        """
+        provider = self.profile.tee_provider
+        parts = [provider.memory_backend_type, f"id={backend_id}", f"size={size}"]
+        parts.extend(provider.memory_backend_opts)
+        parts.append("reserve=off")
+        return ",".join(parts)
+
+    def cpu_args(self) -> str:
+        """The launch ``-cpu`` plus an explicit CPU identity.
+
+        ``vendor`` fixes the SRAT memory hole (AMD-guest-gated); the SMBIOS Type-4 Processor ID is
+        patched separately by tdx-measure. BOTH must be set, so a host with neither captured is
+        refused rather than measured as the generating host's CPU.
+        """
+        cpu = self.profile.cpu
+        if not cpu.vendor or cpu.processor_id is None:
+            raise ValueError(
+                f"host class {self.profile.variant_label!r} has no captured CPU model "
+                "(processor_id is None); offline RTMR0 would be generated for the generating "
+                "host's CPU. Re-register from a host of this class with a current chutes-cvm."
+            )
+        return f"{self.profile.cpu_args},vendor={cpu.vendor}"
+
+    def tee_object(self) -> "str | None":
+        return None
+
+    def serial(self, process: ProcessBundle) -> list[str]:
+        return ["null"]  # adds COM1 to the DSDT
+
+    def emit(
+        self,
+        cmd: QemuCommand,
+        *,
+        device: str,
+        slot: str,
+        drive: "str | None" = None,
+        opts: str = "",
+    ) -> None:
+        """A backing-free filler at the slot this device was given.
+
+        The dump has no drives or netdevs to reference, but the slot lands in the DSDT and so in
+        RTMR0 -- so the slot is kept and only the backing goes.
+        """
+        cmd.devices.append(f"virtio-rng-pci{slot}")
+
+    def endpoint(self, device: PciDevice, rp_id: str) -> str:
+        """A ``pci-bar-stub`` carrying this device's own BAR layout.
+
+        The stub reproduces the MMIO windows the real BARs would create, which is what OVMF sizes
+        the guest's 64-bit aperture from. Per-device rather than one representative per kind, so a
+        GPU model is measured from a submitted profile rather than a transcribed table.
+        """
+        if not device.bars:
+            raise ValueError(
+                f"no BARs captured for {rp_id!r} on a "
+                f"{self.profile.gpu_profile.name!r} host. The stub reproduces the guest's MMIO "
+                "windows from them, so without them the generated RTMR0 matches no real boot. "
+                "Re-submit this host's profile with a current chutes-cvm."
+            )
+        bars = ";".join(b.as_stub_arg() for b in device.bars)
+        return (
+            f"pci-bar-stub,bus={rp_id},bars={bars},"
+            f"vendor={int(device.vendor, 16):#06x},"
+            f"device={int(device.device_id, 16):#06x},"
+            f"class={int(device.pci_class, 16):#06x}"
+        )
+
+    def wants_iommufd(self) -> bool:
+        # Nothing in the dump references it: every endpoint is a stub, not a vfio-pci.
+        return False

@@ -6,10 +6,12 @@ launch's measured ACPI. The byte-exact acceptance (== box-028) runs in the
 tdx-measure container, not here.
 """
 
+from dataclasses import replace
+
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.guest.qemu import MeasurementCommandBuilder, QemuCommand
 from chutes_cvm.measurement.image_config import ImageConfig
 
 _FW = "/opt/ovmf/OVMF.fd"
@@ -107,23 +109,18 @@ def test_nvswitch_endpoint_modeled():
 
 
 def test_endpoint_without_captured_bars_raises():
-    # A root port whose device captured no BARs fails loudly (ValueError); an unrecognized bus is
-    # NotImplementedError — never a silent wrong measurement. There is no table to fall back on:
-    # BAR2 is resizable, so only the host knows its own layout.
+    """The stub reproduces the guest's MMIO windows from the captured BARs, so without them the
+    generated RTMR0 matches no real boot -- refuse rather than measure a wrong aperture.
+    """
     host = HostProfile(
         known.host_document(
             "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
         )
     )
-    md = ImageConfig(
-        QemuCommand.for_measurement(host, firmware=_FW),
-        host,
-        acpi_tables="/out/a.bin",
-    )
+    bare = replace(host.gpus[0], bars=[])
+
     with pytest.raises(ValueError, match="no BARs captured"):
-        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
-    with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
-        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")
+        MeasurementCommandBuilder(host).endpoint(bare, "rp_ib1")
 
 
 def test_emulated_slot_fillers_keep_the_slots_the_command_assigned():

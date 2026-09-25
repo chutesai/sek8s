@@ -361,13 +361,17 @@ def test_guest_ram_is_carried_not_recomputed():
 
 
 def test_stored_profile_builds_the_command_generation_measures():
-    """The stand-in addresses never reach the measurement: every endpoint is swapped for a
-    pci-bar-stub keyed on its root port."""
+    """A round-tripped profile still names every endpoint the class attaches.
+
+    The stand-in host addresses never reach the measurement: the measurement builder emits a
+    pci-bar-stub per endpoint, keyed on its root port and carrying that device's own BARs, so a
+    BDF the API never stored is never needed."""
     back = HostProfile.from_api_profile(HostProfile(document()).to_api_profile())
     cmd = QemuCommand.for_measurement(back, firmware="/opt/ovmf/OVMF.fd")
-    vfio = [d for d in cmd.devices if d.startswith("vfio-pci")]
-    assert len(vfio) == 12  # 8 GPUs + 4 NVSwitches
-    assert all("bus=rp" in d for d in vfio)
+    stubs = [d for d in cmd.devices if d.startswith("pci-bar-stub")]
+    assert len(stubs) == 12  # 8 GPUs + 4 NVSwitches
+    assert all("bus=rp" in d for d in stubs)
+    assert not any(d.startswith("vfio-pci") for d in cmd.devices)
 
 
 def test_guest_ram_leaves_the_host_its_reserve():
