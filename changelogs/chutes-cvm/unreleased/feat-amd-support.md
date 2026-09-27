@@ -72,6 +72,14 @@
   `json_schema_extra={"cli": "--flag"}`, so the parser arguments and the CLI-over-YAML overlay are
   both derived from it. Shared sub-models name their children's flags on the parent, because
   `VolumeSpec` is used by both cache and storage and the flag is a function of (parent, field).
+- Offline SEV-SNP launch-measurement generation (`measurement/snp.py`), computed
+  in-house rather than by shelling out to `sev-snp-measure`: the SEV-SNP ABI's PAGE_INFO digest
+  chain over the firmware image, the pages its SEV metadata declares, the kernel/initrd/cmdline
+  hashes page and one VMSA per vCPU. Inputs are the pinned firmware, the image's staged
+  direct-boot artifacts, and the class's vCPU count and CPUID signature (from its fingerprint's
+  `processor_id`). Verified byte-exact against live attestation reports from two hosts that
+  differ in every input: 8x RTX PRO 6000 on EPYC 7763 (252 vCPUs, our firmware) and H100 on
+  EPYC 9124 (28 vCPUs, the Ubuntu firmware); both are pinned as tests.
 
 ### Changed
 
@@ -151,9 +159,37 @@
   every node size tried. TDX is unaffected (it accepts pages without a hypervisor exit) and
   keeps guest NUMA. AMD 2-node classes are fingerprinted `flat-…` accordingly. To be lifted once
   the pinned QEMU carries "accel/kvm: Fix kvm_convert_memory() calls crossing memory regions".
+- `measurements generate` covers both platforms in one pass, since one guest image boots on
+  both. Every version's entry now has a `tdx:` section (`mrtd`, `rtmr1`, `rtmr2`, `rtmr3`,
+  `hardware[].rtmr0`) and an `snp:` section (`hardware[].measurement`), whichever classes the API
+  knows; each class lands in exactly one, by CPU vendor (Intel = TDX, AMD = SEV-SNP). This
+  replaces the flat per-version layout, so consumers of measurements.yaml (chutes-ops
+  `teeMeasurements`, the API) must read the sections. `mrtd` still comes from the per-topology
+  fork runs, so it is empty in a release with no Intel classes.
+- A missing release-level SEV-SNP input (the firmware, or the image's staged direct-boot
+  artifacts) fails `generate`. Loaded once per release, before any class, rather than per class,
+  where it was caught as PENDING for every AMD class and a mixed release published without them
+  and exited 0. A never-measured class missing an input of its own (a null
+  `processor_id`) is still PENDING.
+- The measurement package follows the platforms: `platform.py` holds `PlatformMeasurements` and
+  what both platforms share, `tdx.py` holds `TdxMeasurements` and every TDX register (MRTD and
+  RTMR0 through the fork, RTMR1/2, RTMR3 by mounting the image), and `snp.py` holds
+  `SnpMeasurements` and the launch digest. `generate_measurements.py` is only the run: fetch the
+  API's host classes, dispatch each to its platform, write the file. `runtime_rtmr.py` is gone,
+  and RTMR3 folds through `rtmr3.compute_rtmr3`, the helper the guest runs, instead of a copy.
+- `runtime_rtmr3` in measurements.yaml is now `rtmr3`, the name the API already reads, so the
+  generated file and its consumer agree. Lands in the same rollout as the API side.
 
 ### Removed
 
+- The CCEL splice-and-replay path to RTMR0 (`overrides_from_fork_log`, `mr1_events`,
+  `locate_rtmr0_events`, `replay_with_overrides`, `acpi_digests`, their constants and tests). The
+  fork's full RTMR0 self-generation replaced it; nothing but its own tests called it.
+- `generate_measurements.DEFAULT_API_BASE`, a second copy of `paths.DEFAULT_API_BASE`.
+- `measurements generate --register rtmr0`. Nothing called it: a full `generate` computes RTMR0
+  inline, and the mode survived from the old pipeline, where RTMR0 was a separate step aggregated
+  later. It was a second route to RTMR0 output and the only reason the TDX generator ran without
+  an image. `--register rtmr3` stays; the GPU-VM build uses it.
 - `launch._tee_active()`. A third, weaker copy of the platform check: it hardcoded the two kvm
   parameter paths instead of using the module constants, accepted `"Y"` only for TDX while
   accepting `"Y"` or `"1"` for SNP (so a TDX host reporting `1` was refused at Step 0 and
@@ -189,6 +225,15 @@
 
 ### Fixed
 
+- Measurement reads the staged kernel/initrd/cmdline through the launcher's own reader. The two
+  readers differed: the launcher stripped all surrounding whitespace from the cmdline, the
+  measurement only trailing newlines, so a cmdline file with a trailing space would have booted
+  one cmdline while RTMR2 and the SEV-SNP digest hashed another.
+- `measurements generate` fails when a previously measured host class (the API's
+  `measured: true`) cannot be generated, listing every such class. It was reported PENDING and
+  left out of the release, which exited 0 and left hosts of that class nothing to attest
+  against. PENDING now means only what it means in the API: a class never measured, still in
+  the generator's queue.
 - `build-firmware.sh` reached `edksetup.sh` with the caller's positional parameters still
   set. A sourced script inherits `"$@"`, so any flag passed to `build-firmware.sh` arrived
   at edksetup as an unknown option, whereupon it printed usage and returned *without*

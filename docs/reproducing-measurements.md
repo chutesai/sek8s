@@ -156,14 +156,14 @@ not the test of whether you rebuilt the layer correctly; the guest measurements 
 cat measurements/<version>/measurements.yaml     # relative to your checkout
 ```
 
-Four values matter:
+Four values matter, under the version's `tdx:` section:
 
 | Register | Covers |
 |---|---|
 | `mrtd` | Initial TD memory — the firmware |
 | `rtmr1` | Kernel and boot chain |
 | `rtmr2` | Initramfs, which carries the RTMR3 hash manifest |
-| `runtime_rtmr3` | The measured filesystem — roughly 49,000 files |
+| `rtmr3` | The measured filesystem — roughly 49,000 files |
 
 Compare against the published set:
 

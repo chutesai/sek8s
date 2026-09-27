@@ -1,18 +1,19 @@
-"""Version-level runtime RTMRs (RTMR1/RTMR2/RTMR3), computed offline at build time.
+"""Intel TDX measurements: MRTD and RTMR0-3.
 
-Unlike RTMR0 (firmware + per-topology ACPI; see generate_measurements.py), these are
-**version-level** — identical across GPU topologies — and derive from the built image:
+``TdxMeasurements`` owns every TDX register of a release:
 
-    RTMR1/RTMR2  the direct-boot kernel/initrd/cmdline (via the tdx-measure fork,
-                 --runtime-only). Post-LUKS: LUKS rebuilds the initrd, and RTMR2 measures
-                 that final one.
-    RTMR3        the SHA-384 extension chain over the userspace files named in the image's
-                 /etc/tdx-measure.conf. Content-derived — normally computed PRE-LUKS against the
-                 plaintext root; a re-run against an already-encrypted image unlocks it with the
-                 LUKS passphrase and recomputes fresh (never a cached value).
+    MRTD + RTMR0  per host class. The tdx-measure fork self-generates all 15 RTMR0 events (no
+                  CCEL) from the class's topology (``--platform-only --create-acpi-tables``,
+                  QEMU in Docker); MRTD comes out of the same run.
+    RTMR1/RTMR2   once per release: the staged direct-boot kernel/initrd/cmdline, through the
+                  fork's ``--runtime-only`` mode. Post-LUKS: LUKS rebuilds the initrd, and RTMR2
+                  measures that final one.
+    RTMR3         once per release: the SHA-384 chain over the files the image's
+                  /etc/tdx-measure.conf names. The root is mounted read-only (qemu-nbd, plus
+                  cryptsetup for a LUKS root) and folded by ``rtmr3.compute_rtmr3``, the helper
+                  the guest ships and runs itself.
 
-Both replay exactly what the launcher boots / the guest measures, so the pinned values match
-the running VM by construction. Ports host-tools' former compute-rtmr1-2.sh / compute-rtmr3.sh.
+Offline on any x86-64 Linux: no TDX, no GPUs. The RTMR3 mount needs root.
 """
 
 from __future__ import annotations
@@ -23,25 +24,132 @@ import json
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
 
 from chutes_cvm import proc
-from chutes_cvm.measurement.rtmr3 import Rtmr3Error, fold_chain, measured_hashes
-from chutes_cvm.paths import tdx_measure_script
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.guest.tee import TdxTeeProvider
+from chutes_cvm.measurement import rtmr3
+from chutes_cvm.measurement.image_config import ImageConfig
+from chutes_cvm.measurement.platform import (
+    MeasurementError,
+    PlatformMeasurements,
+    staged_boot_artifacts,
+)
+from chutes_cvm.paths import GUEST_FIRMWARE, tdx_measure_script
 
 
-class MeasurementError(RuntimeError):
-    """A runtime-RTMR computation failed (missing input, tool error, parse failure)."""
+class TdxMeasurements(PlatformMeasurements):
+    """Intel TDX: RTMR0 per class from the topology it describes; MRTD and RTMR1-3 once.
+
+    The tdx-measure fork computes MRTD and RTMR0 together (``--platform-only``) from a class's
+    topology -- all 15 RTMR0 events, no CCEL -- so MRTD is read off those per-class runs.
+    RTMR1-3 depend only on the image, so they are computed up front, before any slow fork run.
+    """
+
+    key = "tdx"
+    provider = TdxTeeProvider
+
+    def __init__(
+        self, *, bios_dir: str, tdx_measure_bin: str, dist: str, image: str
+    ) -> None:
+        super().__init__()
+        self._firmware = str(Path(bios_dir) / GUEST_FIRMWARE)
+        self._tdx_measure_bin = tdx_measure_bin
+        self._dist = dist
+        self._mrtds: set[str] = set()
+        rtmr1, rtmr2 = compute_rtmr1_2(image, tdx_measure_bin=tdx_measure_bin)
+        rtmr3, _ = compute_rtmr3(
+            image, luks_passphrase=os.environ.get("LUKS_PASSPHRASE")
+        )
+        print(
+            f"    RTMR1={rtmr1[:16]}…  RTMR2={rtmr2[:16]}…  RTMR3={rtmr3[:16]}…",
+            file=sys.stderr,
+        )
+        self._registers = {"rtmr1": rtmr1, "rtmr2": rtmr2, "rtmr3": rtmr3}
+
+    def measure(self, host: HostProfile) -> dict:
+        cmd = QemuCommand.for_measurement(host, firmware=self._firmware)
+        with tempfile.TemporaryDirectory() as td:
+            meta = ImageConfig(
+                cmd, host, acpi_tables=str(Path(td) / "acpi.bin")
+            ).to_dict()
+            out = generate_acpi_blobs(
+                meta, Path(td), tdx_measure_bin=self._tdx_measure_bin, dist=self._dist
+            )
+        self._mrtds.add(out.get("mrtd", "").upper())
+        return {"rtmr0": (out.get("rtmr0") or "").upper()}
+
+    @property
+    def mrtd(self) -> str:
+        """Version-level: one TDVF measures identically on every topology of a build. It comes
+        from the fork runs, so it is empty in a release with no Intel classes."""
+        if len(self._mrtds) > 1:
+            raise ValueError(f"MRTD differs across topologies: {sorted(self._mrtds)}")
+        return next(iter(self._mrtds), "")
+
+    def section(self) -> dict:
+        return {"mrtd": self.mrtd, **self._registers, "hardware": self.hardware}
 
 
-def _have(tool: str) -> bool:
-    """True if ``tool`` is on PATH."""
-    return shutil.which(tool) is not None
+# ── MRTD + RTMR0 (per host class) ───────────────────────────────────────────────────────────────
 
 
-# ── RTMR1 / RTMR2 (direct boot; version-level) ─────────────────────────────────
+def generate_acpi_blobs(
+    metadata: dict, out_dir: Path, *, tdx_measure_bin: str, dist: str
+) -> dict:
+    """Run `tdx-measure --create-acpi-tables` to dump the topology's fw_cfg ACPI
+    blobs and its {mrtd, rtmr0}. Mirrors local/scripts/run_validation.sh:43. The
+    generated etc/acpi/* land next to `acpi_tables` in the metadata; we read those
+    for the #11-13 recompute. Returns the parsed tdx-measure JSON ({mrtd, rtmr0}).
+
+    Runs OFFLINE on any x86-64 Linux with Docker + the fork — no TDX, no GPUs. KVM
+    speeds the brief ACPI-gen QEMU run but isn't required; reserve=off (applied by
+    image_config.ImageConfig) lifts the guest-sized-RAM requirement.
+
+    Only the distribution is passed to --create-acpi-tables: the fork pins the exact
+    QEMU source-package version *and* container image digest per dist (qemu_pkg_for),
+    which is what makes the dump reproducible. The QEMU version label (e.g. "10.2.1", from the
+    host profile) is a release label, NOT a Debian package version — forwarding it as the fork's
+    version override lands an unresolvable `pull-lp-source qemu 10.2.1`.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = out_dir / "metadata.json"
+    result_path = out_dir / "result.json"
+    meta_path.write_text(json.dumps(metadata, indent=2))
+    # The metadata positional is placed first: --create-acpi-tables is num_args=1..=2,
+    # so a metadata path immediately after `dist` would be greedily eaten as the version.
+    # Capture the output (the fork's docker build log is very noisy) and, on failure,
+    # raise just the tail — the caller renders it as a one-line PENDING reason.
+    result = proc.run(
+        [
+            tdx_measure_bin,
+            str(meta_path),
+            "--platform-only",
+            "--json-file",
+            str(result_path),
+            "--create-acpi-tables",
+            dist,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        tail = "\n    ".join(
+            (result.stderr or result.stdout or "").strip().splitlines()[-4:]
+        )
+        raise RuntimeError(
+            f"tdx-measure --create-acpi-tables (dist={dist}) failed "
+            f"(exit {result.returncode}):\n    {tail}"
+        )
+    return json.loads(result_path.read_text())
+
+
+# ── RTMR1 / RTMR2 (per release) ─────────────────────────────────────────────────────────────────
 
 _RTMR1_RE = re.compile(r"^RTMR1:\s*([0-9a-fA-F]+)", re.MULTILINE)
 _RTMR2_RE = re.compile(r"^RTMR2:\s*([0-9a-fA-F]+)", re.MULTILINE)
@@ -57,18 +165,7 @@ def compute_rtmr1_2(
     direct-boot mode. Returns bare uppercase hex. Needs the fork on PATH (or an absolute
     ``tdx_measure_bin``); no TDX/GPU/topology input.
     """
-    # Absolute so the paths written into metadata.json resolve correctly — the tdx-measure fork
-    # opens them relative to the metadata file (a temp dir), not this process's cwd.
-    base = os.path.splitext(os.path.abspath(image))[0]
-    kernel, initrd = base + ".vmlinuz", base + ".initrd"
-    cmdline_file = base + ".cmdline"
-    for f in (kernel, initrd, cmdline_file):
-        if not os.path.isfile(f):
-            raise MeasurementError(
-                f"missing direct-boot artifact {f} — run stage-boot-artifacts first"
-            )
-    # $(cat file) semantics: drop trailing newlines from the staged cmdline.
-    cmdline = Path(cmdline_file).read_text().rstrip("\n")
+    kernel, initrd, cmdline = staged_boot_artifacts(image)
 
     metadata = {"direct": {"kernel": kernel, "initrd": initrd, "cmdline": cmdline}}
     with tempfile.TemporaryDirectory() as td:
@@ -94,24 +191,12 @@ def compute_rtmr1_2(
     return m1.group(1).upper(), m2.group(1).upper()
 
 
-# ── RTMR3 (userspace file chain; version-level, LUKS-independent) ──────────────
+# ── RTMR3 (per release) ─────────────────────────────────────────────────────────────────────────
 
 
-def rtmr3_chain(mount_root: str, conf_path: str) -> tuple[str, list[tuple[str, str]]]:
-    """Compute RTMR3 over a mounted root by running the bundled ``tdx-measure``.
-
-    Which files are measured, in what order, and how each is hashed are decided by that
-    script — the same one the guest runs at boot and at verify time — so this cannot
-    predict a value the guest will not reproduce. Only the chain fold happens here,
-    because the hardware does the folding at boot.
-
-    Returns (uppercase hex, [(per-file sha384 hex, root-relative path)]).
-    """
-    try:
-        hashes = measured_hashes(mount_root, conf_path, tdx_measure_script())
-        return fold_chain(hashes), hashes
-    except Rtmr3Error as exc:
-        raise MeasurementError(str(exc)) from exc
+def _have(tool: str) -> bool:
+    """True if ``tool`` is on PATH."""
+    return shutil.which(tool) is not None
 
 
 def _wait_for_path(path: str, timeout: float = 5.0) -> bool:
@@ -312,4 +397,9 @@ def compute_rtmr3(
             raise MeasurementError(
                 "/etc/tdx-measure.conf not found in image — rtmr3-measure did not run"
             )
-        return rtmr3_chain(mnt, conf)
+        # The guest's own helper does the hashing and the fold, so the value is the one the
+        # guest extends at boot and rtmr3-verify recomputes, by construction.
+        try:
+            return rtmr3.compute_rtmr3(mnt, conf, tdx_measure_script())
+        except rtmr3.Rtmr3Error as exc:
+            raise MeasurementError(str(exc)) from exc

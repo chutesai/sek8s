@@ -14,7 +14,12 @@ import os
 import subprocess
 
 import pytest
-from chutes_cvm.measurement.rtmr3 import Rtmr3Error, fold_chain, measured_hashes
+from chutes_cvm.measurement.rtmr3 import (
+    Rtmr3Error,
+    compute_rtmr3,
+    fold_chain,
+    measured_hashes,
+)
 from chutes_cvm.paths import tdx_measure_script
 
 
@@ -281,3 +286,76 @@ def test_overlapping_config_entries_measure_each_file_once(tmp_path):
     assert listed == sorted(set(listed)), f"duplicate entries in the chain: {listed}"
     assert listed.count("/usr/local/bin/cache-rm") == 1
     assert len(listed) == 2
+
+
+# ── the whole fold over a root ─────────────────────────────────────────────────
+
+
+def test_compute_rtmr3_matches_an_independent_reference(tmp_path):
+    """The fold matches an independent reference, and runs the real tdx-measure."""
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/a").write_bytes(b"alpha")
+    (root / "etc/b").write_bytes(b"beta")
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/a\n/etc/b\n")
+
+    rtmr3, per_file = compute_rtmr3(str(root), str(conf), tdx_measure_script())
+
+    # Independent reference: rtmr3 = SHA384(0x00*48 || SHA384(hash-list text)).
+    body = "".join(
+        f"{hashlib.sha384(payload).hexdigest()} {path}\n"
+        for payload, path in ((b"alpha", "/etc/a"), (b"beta", "/etc/b"))
+    ).encode()
+    acc = hashlib.sha384(bytes(48) + hashlib.sha384(body).digest())
+    assert rtmr3 == acc.hexdigest().upper()
+    assert [p[1] for p in per_file] == ["/etc/a", "/etc/b"]
+    assert per_file[0][0] == hashlib.sha384(b"alpha").hexdigest()
+
+
+def test_the_fold_is_order_sensitive():
+    """Reordering the same files changes the register — the chain is not a set hash."""
+    pairs = [
+        (hashlib.sha384(b"x").hexdigest(), "/a"),
+        (hashlib.sha384(b"y").hexdigest(), "/b"),
+    ]
+    assert fold_chain(pairs) != fold_chain(list(reversed(pairs)))
+
+
+def test_measured_files_sorts_filters_and_strips_comments(tmp_path):
+    root = tmp_path / "root"
+    (root / "etc/ssh").mkdir(parents=True)
+    (root / "etc/ssh/sshd_config").write_text("cfg")
+    (root / "etc/hostname").write_text("h")
+    (root / "etc/ssh/link").symlink_to(root / "etc/hostname")  # symlink must be skipped
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/ssh\n/etc/hostname   # inline comment\n# a comment\n\n")
+
+    _, entries = compute_rtmr3(str(root), str(conf), tdx_measure_script())
+    rels = [e[1] for e in entries]
+
+    assert rels == sorted(rels)  # sorted by root-relative path
+    assert "/etc/hostname" in rels  # inline comment stripped, path still resolved
+    assert "/etc/ssh/sshd_config" in rels
+    assert "/etc/ssh/link" not in rels  # symlink inside a measured dir filtered out
+
+
+def test_measured_files_empty_conf_raises(tmp_path):
+    conf = tmp_path / "conf"
+    conf.write_text("# only comments\n\n")
+    with pytest.raises(Rtmr3Error, match="no paths configured"):
+        compute_rtmr3(str(tmp_path), str(conf), tdx_measure_script())
+
+
+def test_symlinked_conf_entry_is_refused(tmp_path):
+    """A conf entry that is itself a symlink used to be followed by the shell walkers
+    and skipped by the Python ones; it is now an error on both sides."""
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/real").write_text("x")
+    (root / "etc/link").symlink_to(root / "etc/real")
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/real\n/etc/link\n")
+
+    with pytest.raises(Rtmr3Error, match="symlink"):
+        compute_rtmr3(str(root), str(conf), tdx_measure_script())
