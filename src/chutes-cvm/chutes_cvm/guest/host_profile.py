@@ -25,7 +25,11 @@ from pathlib import Path
 from chutes_cvm import proc
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, HOST_RESERVED_CPUS, GpuProfile
+from chutes_cvm.guest.gpu.profiles import (
+    HOST_RESERVED_CPUS,
+    GpuProfile,
+    profile_for_device_ids,
+)
 from chutes_cvm.guest.tee import TeeProvider, provider_for_cpu_vendor
 from chutes_cvm.paths import SCRIPTS_DIR
 
@@ -236,17 +240,7 @@ class HostProfile:
         endpoint describes the whole platform. Checked against real per-device data rather than
         assumed from one representative.
         """
-        ids = {g.device_id for g in self.gpus}
-        if len(ids) != 1:
-            raise ValueError(
-                f"expected one GPU model, found {sorted(ids) or 'none'}; "
-                "a host with mixed GPU device ids cannot be profiled"
-            )
-        device_id = ids.pop()
-        for profile in GPU_PROFILES.values():
-            if profile.matches_device_id(device_id):
-                return profile
-        raise ValueError(f"no GPU profile matches device id {device_id}")
+        return profile_for_device_ids({g.device_id for g in self.gpus})
 
     # ── what the launcher will attach ───────────────────────────────────────
     @property

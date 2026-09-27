@@ -19,6 +19,11 @@ CAPTURED_GPU_BARS = {
         {"index": 2, "size_mb": 262144, "kind": "p64"},
         {"index": 4, "size_mb": 32, "kind": "p64"},
     ),
+    "H100_PCIE": (  # 10de:2331 on g3-h100-small-dal-1
+        {"index": 0, "size_mb": 16, "kind": "p64"},
+        {"index": 2, "size_mb": 131072, "kind": "p64"},
+        {"index": 4, "size_mb": 32, "kind": "p64"},
+    ),
     "RTX_PRO_6000": (  # 10de:2bb5 on wsl-pve-2-sn64
         {"index": 0, "size_mb": 64, "kind": "p64"},
         {"index": 2, "size_mb": 131072, "kind": "p64"},

@@ -1,5 +1,11 @@
 ### Added
 
+- `H100PcieProfile` for the H100 PCIe (`10de:2331`): CC mode only (no NVLink fabric to
+  protect, so no PPCIe), 80 GB, and the API's `h100`. BARs captured from g3-h100-small-dal-1,
+  with a measurement golden (`h100_pcie_amd`) for the class it derives there: `flat-28c-80g`
+  under SEV-SNP.
+- `profiles.profile_for_device_ids()`, the one lookup from a host's GPU device ids to its
+  profile. `HostProfile.gpu_profile` and `host reset-gpus` both use it.
 - `firmware/OVMF.amdsev.fd` is pinned in the repo alongside `OVMF.inteltdx.fd`, with
   `firmware/PROVENANCE.md` recording its origin and digest, and `build-firmware.sh
   --amd-sev` to rebuild it from edk2. The SEV-SNP launch measurement is a hash of
@@ -225,6 +231,9 @@
 
 ### Fixed
 
+- `chutes-cvm host reset-gpus` takes the reset mode (CC or PPCIe) from the host's GPU profile,
+  the same `get_sbr_reset_args()` a launch uses. `reset-gpus.sh` kept its own device list and
+  sent every card missing from it to the PPCIe reset; it now runs the arguments it is given.
 - Measurement reads the staged kernel/initrd/cmdline through the launcher's own reader. The two
   readers differed: the launcher stripped all surrounding whitespace from the cmdline, the
   measurement only trailing newlines, so a cmdline file with a trailing space would have booted

@@ -4,9 +4,12 @@
 # Ensures no VM is running before resetting to prevent corrupting active
 # workloads. The VM must be stopped gracefully before running this.
 #
+# Which reset (CC or PPCIe) is the GPU profile's decision, not this script's: run it through
+# `chutes-cvm host reset-gpus`, which passes the profile's nvidia-gpu-tools arguments.
+#
 # Usage:
-#   sudo ./devices/reset-gpus.sh
-#   chutes-cvm host reset-gpus   # via PATH (after host setup)
+#   chutes-cvm host reset-gpus
+#   sudo ./devices/reset-gpus.sh --reset-with-sbr --reset-after-cc-mode-switch
 
 set -euo pipefail
 
@@ -14,9 +17,11 @@ PROCESS_NAME="chutes-td"
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--help]
+Usage: $(basename "$0") <nvidia-gpu-tools SBR args...>
 
 Reset all NVIDIA GPUs via Secondary Bus Reset (SBR) using nvidia-gpu-tools.
+The SBR arguments come from the host's GPU profile; normally run this through
+\`chutes-cvm host reset-gpus\`, which supplies them.
 
 The VM process ($PROCESS_NAME) must not be running during reset.
 SBR resets clear GPU state and fabric configuration, which would
@@ -34,13 +39,12 @@ case "${1:-}" in
         exit 0
         ;;
     "")
-        ;;
-    *)
-        echo "Unknown option: $1"
+        echo "Error: no SBR arguments given."
         usage
         exit 1
         ;;
 esac
+SBR_ARGS=("$@")
 
 # Non-zombie QEMU whose cmdline includes this guest name (-name / process=).
 _live_chutes_td_qemu_running() {
@@ -95,16 +99,7 @@ fi
 
 GPU_TOOLS_TIMEOUT=120
 
-# CC-mode Blackwell / RTX use --reset-after-cc-mode-switch; H200 PPCIe uses ppcie flag.
-if lspci -Dnn 2>/dev/null | grep -qE '10de:(3182|2901|2bb1|2bb5)'; then
-    SBR_ARGS=(--reset-with-sbr --reset-after-cc-mode-switch)
-    SBR_LABEL="CC-mode Blackwell/RTX"
-else
-    SBR_ARGS=(--reset-with-sbr --reset-after-ppcie-mode-switch)
-    SBR_LABEL="PPCIe (H200/H100)"
-fi
-
-echo "Resetting GPUs via Secondary Bus Reset (${SBR_LABEL}, timeout: ${GPU_TOOLS_TIMEOUT}s)..."
+echo "Resetting GPUs via Secondary Bus Reset (${SBR_ARGS[*]}, timeout: ${GPU_TOOLS_TIMEOUT}s)..."
 if ! timeout "$GPU_TOOLS_TIMEOUT" sudo "$CMD" "${SBR_ARGS[@]}"; then
     echo ""
     echo "Error: GPU reset timed out or failed after ${GPU_TOOLS_TIMEOUT}s."

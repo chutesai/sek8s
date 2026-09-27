@@ -8,6 +8,7 @@ reset-gpus / vfio-wedged are host-hardware ops (GPUs, PCI subsystem).
 
 from unittest.mock import patch
 
+import pytest
 from chutes_cvm.host import cli as hostcli
 
 
@@ -99,10 +100,33 @@ def test_setup_forwards_to_setup_main():
     assert sm.call_args.args[0] == ["--noninteractive"]
 
 
-def test_reset_gpus_delegates_to_script():
-    with patch("chutes_cvm.host.cli._run_script", return_value=0) as run:
+@pytest.mark.parametrize(
+    "device_id, sbr_args",
+    [
+        ("2331", ["--reset-with-sbr", "--reset-after-cc-mode-switch"]),  # H100 PCIe
+        ("2bb5", ["--reset-with-sbr", "--reset-after-cc-mode-switch"]),  # RTX PRO 6000
+        ("2335", ["--reset-with-sbr", "--reset-after-ppcie-mode-switch"]),  # H200
+    ],
+)
+def test_reset_gpus_runs_the_reset_the_profile_chooses(device_id, sbr_args):
+    """The CC-vs-PPCIe choice is the profile's, the same one a launch makes; the script only
+    runs it. It used to keep its own device list, which sent any card missing from it to PPCIe.
+    """
+    with patch(
+        "chutes_cvm.guest.detection.detect_gpu_device_ids", return_value={device_id}
+    ), patch("chutes_cvm.host.cli._run_script", return_value=0) as run:
         assert hostcli.main(["reset-gpus"]) == 0
-    assert run.call_args.args[0] == "devices/reset-gpus.sh"
+    assert run.call_args.args == ("devices/reset-gpus.sh", sbr_args)
+
+
+@pytest.mark.parametrize("ids", [set(), {"2331", "2335"}, {"dead"}])
+def test_reset_gpus_refuses_a_host_it_cannot_profile(ids, capsys):
+    with patch(
+        "chutes_cvm.guest.detection.detect_gpu_device_ids", return_value=ids
+    ), patch("chutes_cvm.host.cli._run_script") as run:
+        assert hostcli.main(["reset-gpus"]) == 1
+    run.assert_not_called()
+    assert "reset-gpus" in capsys.readouterr().err
 
 
 def test_vfio_wedged_maps_predicate_to_exit_code():

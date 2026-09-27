@@ -116,6 +116,24 @@ def _lspci_lines(vendor: str) -> list[str]:
     return [line for line in output.decode().splitlines() if vendor in line]
 
 
+# PCI class 0302 = 3D controller, 0300 = VGA: every NVIDIA datacenter GPU is one or the other.
+# NVSwitches (bridge, 0680) and IB are excluded by class; a BMC's VGA (e.g. ASPEED) by vendor.
+_NVIDIA_GPU_LINE = re.compile(r"\[(?:0302|0300)\]: .*\[10de:([0-9a-fA-F]{4})\]")
+
+
+def detect_gpu_device_ids() -> set[str]:
+    """PCI device ids of this host's NVIDIA GPUs.
+
+    From ``lspci -Dnn`` -- the name-and-id listing, with no config-space reads -- so it stays
+    safe on a host whose GPUs are wedged, which is when ``host reset-gpus`` runs.
+    """
+    return {
+        m.group(1).lower()
+        for line in _lspci_lines(_NVIDIA_VENDOR)
+        if (m := _NVIDIA_GPU_LINE.search(line))
+    }
+
+
 # PCI class 0207 = InfiniBand controller. Excludes Ethernet [0200], DMA [0801], etc.
 _PCI_CLASS_INFINIBAND = "0207"
 

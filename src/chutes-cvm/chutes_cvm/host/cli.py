@@ -170,8 +170,21 @@ def _cmd_restore(args: argparse.Namespace) -> int:
 
 
 def _cmd_reset_gpus(args: argparse.Namespace) -> int:
-    """Reset all host GPUs via nvidia-gpu-tools SBR (delegates to devices/reset-gpus.sh)."""
-    return _run_script("devices/reset-gpus.sh", [])
+    """Reset all host GPUs via nvidia-gpu-tools SBR.
+
+    Whether that is the CC or the PPCIe reset is the GPU profile's call
+    (``GpuProfile.get_sbr_reset_args``), the same one a launch makes when it escalates to SBR;
+    devices/reset-gpus.sh runs it behind its safety checks.
+    """
+    from chutes_cvm.guest.detection import detect_gpu_device_ids
+    from chutes_cvm.guest.gpu.profiles import profile_for_device_ids
+
+    try:
+        profile = profile_for_device_ids(detect_gpu_device_ids())
+    except ValueError as exc:
+        print(f"chutes-cvm host reset-gpus: {exc}", file=sys.stderr)
+        return 1
+    return _run_script("devices/reset-gpus.sh", profile.get_sbr_reset_args())
 
 
 def _cmd_vfio_wedged(args: argparse.Namespace) -> int:

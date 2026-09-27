@@ -324,12 +324,67 @@ class RTXPro6000Profile(GpuProfile):
         return "CC mode (RTX Pro 6000)"
 
 
+class H100PcieProfile(GpuProfile):
+    """H100 PCIe (GH100), CC mode.
+
+    The PCIe card, not the SXM part: no NVLink and no NVSwitch, so CC mode is the only mode --
+    PPCIe exists to protect an NVLink fabric this card does not have.
+    """
+
+    pci_device_id = "2331"  # GH100 [H100 PCIe]
+    display_name = "1xh100"
+    expected_gpus = [
+        "h100"
+    ]  # the API's "h100" is this card (model_name_check "H100.*PCIe")
+
+    @property
+    def name(self) -> str:
+        return "H100_PCIE"
+
+    @property
+    def vram_gb(self) -> int:
+        return 80  # HBM2e
+
+    # Host: 1x EPYC 9124 (Genoa, 16C/32T) with one GPU, so no cross-socket split to model.
+    # From discover-profile.sh on g3-h100-small-dal-1.
+
+    def get_cc_mode_args(self, total_gpus: int) -> list[list[str]]:
+        return [["--set-cc-mode=on", "--reset-after-cc-mode-switch"]]
+
+    def should_passthrough_nvswitches(self, total_gpus: int) -> bool:
+        return False
+
+    def describe_mode(self, total_gpus: int) -> str:
+        return "CC mode (H100 PCIe)"
+
+
 GPU_PROFILES: dict[str, GpuProfile] = {
     "B200": B200Profile(),
     "B300": B300Profile(),
+    "H100_PCIE": H100PcieProfile(),
     "H200": H200Profile(),
     "RTX_PRO_6000": RTXPro6000Profile(),
 }
+
+
+def profile_for_device_ids(device_ids: "set[str]") -> GpuProfile:
+    """The one ``GpuProfile`` a set of GPU PCI device ids selects, or raise.
+
+    All GPUs must be one model: a profile carries a single device id, and one passthrough
+    endpoint describes the whole platform. Every place that turns a host's GPUs into a profile
+    goes through here, so the launch, measurement and reset paths cannot disagree about a card.
+    """
+    ids = {d.lower() for d in device_ids}
+    if len(ids) != 1:
+        raise ValueError(
+            f"expected one GPU model, found {sorted(ids) or 'none'}; "
+            "a host with mixed GPU device ids cannot be profiled"
+        )
+    (device_id,) = ids
+    for profile in GPU_PROFILES.values():
+        if profile.matches_device_id(device_id):
+            return profile
+    raise ValueError(f"no GPU profile matches device id {device_id}")
 
 
 def resolve_profile(gpu_models: dict[str, str]) -> GpuProfile:

@@ -51,6 +51,17 @@ CASES = {
     "rtx_numa_amd": lambda: _amd(known.rtx_numa_doc()),
     "rtx_flat_amd": lambda: _amd(known.rtx_flat_doc()),
     "b300_amd": lambda: _amd(_b300_doc()),
+    # g3-h100-small-dal-1 as captured: one socket, one NUMA node, one H100 PCIe.
+    "h100_pcie_amd": lambda: known.host_document(
+        "H100_PCIE",
+        vcpus=28,
+        gpu_nodes=(0,),
+        sockets=1,
+        cpu_vendor="AuthenticAMD",
+        cpu_processor_id="110fa100fffba91f",
+        host_mem_gb=187,
+        numa_node_count=1,
+    ),
 }
 
 #: A launch's resolved inputs. Fixed so the snapshot is about the command, not the paths.
