@@ -169,6 +169,27 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_platform(args: argparse.Namespace) -> int:
+    """Print this host's confidential-computing platform (tdx / snp), from its CPU vendor.
+
+    ``--check`` also verifies the platform is switched on -- the kvm module parameter its provider
+    owns, the same check a launch makes -- and fails with that platform's remedy if it is not.
+    """
+    from chutes_cvm.guest.detection import detect_cpu_vendor
+    from chutes_cvm.guest.tee import provider_for_cpu_vendor, tee_for_cpu_vendor
+
+    vendor = detect_cpu_vendor()
+    try:
+        provider = provider_for_cpu_vendor(vendor)
+        if args.check:
+            provider.verify_environment()
+    except (ValueError, RuntimeError) as exc:
+        print(f"chutes-cvm host platform: {exc}", file=sys.stderr)
+        return 1
+    print(tee_for_cpu_vendor(vendor))
+    return 0
+
+
 def _cmd_reset_gpus(args: argparse.Namespace) -> int:
     """Reset all host GPUs via nvidia-gpu-tools SBR.
 
@@ -233,7 +254,7 @@ def main(argv: "list[str] | None" = None) -> int:
     sub.add_parser(
         "setup",
         add_help=False,
-        help="Provision this TDX host (args forwarded; `chutes-cvm host setup --help`).",
+        help="Provision this TDX or SEV-SNP host (args forwarded; `chutes-cvm host setup --help`).",
     )
 
     verify = sub.add_parser(
@@ -289,6 +310,21 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Restore host CPU settings saved by `host tune` (no-op if never tuned).",
     )
     restore.set_defaults(func=_cmd_restore)
+
+    platform = sub.add_parser(
+        "platform",
+        help="Print this host's confidential-computing platform: tdx or snp.",
+        description=(
+            "Print the platform this host's CPU runs (Intel = tdx, AMD = snp). With --check, also "
+            "verify it is enabled, as a launch would, and exit 1 with the remedy if not."
+        ),
+    )
+    platform.add_argument(
+        "--check",
+        action="store_true",
+        help="also verify the platform is enabled (exit 1 with the BIOS/kernel remedy if not)",
+    )
+    platform.set_defaults(func=_cmd_platform)
 
     reset = sub.add_parser(
         "reset-gpus",

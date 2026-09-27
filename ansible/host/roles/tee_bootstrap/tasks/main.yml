@@ -1,0 +1,63 @@
+---
+# Provision this host for its confidential-computing platform, reboot into the result if needed,
+# and prove the platform is on. Platform-agnostic: `chutes-cvm host setup` picks TDX or SEV-SNP
+# from the CPU vendor, and `chutes-cvm host platform --check` verifies it, so nothing here assumes
+# Intel. Records `host_tee` (tdx / snp) for the roles after it.
+
+- name: Run host setup (idempotent — installs packages, kernel, repos, tools for this platform)
+  ansible.builtin.command:
+    argv:
+      - chutes-cvm
+      - host
+      - setup
+      - "--noninteractive"
+  register: host_setup
+  changed_when: host_setup.rc == 0
+
+- name: Check if reboot is required (apt flag)
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_required
+
+- name: Check if running kernel matches GRUB saved entry
+  ansible.builtin.shell: |
+    set -euo pipefail
+    running=$(uname -r)
+    grub_entry=$(grub-editenv /boot/grub/grubenv list 2>/dev/null | grep '^saved_entry=' || true)
+    if [ -n "$grub_entry" ] && ! echo "$grub_entry" | grep -qF "$running"; then
+      echo "mismatch"
+    else
+      echo "match"
+    fi
+  args:
+    executable: /bin/bash
+  register: kernel_grub_check
+  changed_when: false
+
+- name: Set reboot trigger fact
+  ansible.builtin.set_fact:
+    host_reboot_needed: >-
+      {{ reboot_required.stat.exists
+         or kernel_grub_check.stdout | trim == 'mismatch' }}
+
+- name: Reboot host and wait
+  ansible.builtin.reboot:
+    reboot_timeout: 1800
+  when: host_reboot_needed | bool
+
+# The same check a launch makes: the platform's kvm module parameter (kvm_intel tdx / kvm_amd
+# sev_snp), failing with that platform's remedy (its BIOS switches). This replaced a dmesg grep for
+# the TDX module, which failed every AMD host.
+- name: Verify the host's confidential-computing platform is enabled
+  ansible.builtin.command:
+    argv:
+      - chutes-cvm
+      - host
+      - platform
+      - --check
+  register: host_platform
+  changed_when: false
+
+- name: Record the host's platform (tdx / snp) for the roles that follow
+  ansible.builtin.set_fact:
+    host_tee: "{{ host_platform.stdout | trim }}"

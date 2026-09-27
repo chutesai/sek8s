@@ -1,5 +1,10 @@
 ### Added
 
+- `chutes-cvm host platform [--check]` prints the TEE this host's CPU vendor implies (`tdx` on
+  Intel, `snp` on AMD); `--check` also requires it to be enabled in KVM and exits 1 with the
+  platform's BIOS remedy if not. It is what host automation branches on, so the answer comes from
+  the same provider a launch uses rather than a second probe.
+
 - `H100PcieProfile` for the H100 PCIe (`10de:2331`): CC mode only (no NVLink fabric to
   protect, so no PPCIe), 80 GB, and the API's `h100`. BARs captured from g3-h100-small-dal-1,
   with a measurement golden (`h100_pcie_amd`) for the class it derives there: `flat-28c-80g`
@@ -88,6 +93,16 @@
   EPYC 9124 (28 vCPUs, the Ubuntu firmware); both are pinned as tests.
 
 ### Changed
+
+- `chutes-cvm host setup` is platform-aware. A recipe is now one OS version for one platform:
+  the abstract `Ubuntu2604Recipe` holds what every 26.04 host needs (CUDA repo, QEMU,
+  `nohibernate`, the nouveau blacklist), and `TdxUbuntu2604Recipe` / `SnpUbuntu2604Recipe`
+  extend it. TDX adds the Intel SGX repo, `ovmf-inteltdx`, the PCCS/QGS/QPL attestation
+  packages, `kvm_intel.tdx=1` and the PCCS/QGS/QCNL configuration step (`configure_attestation`,
+  now in `host/tdx_attestation.py`); SEV-SNP adds nothing — Ubuntu 26.04's kernel enables it
+  from BIOS alone. `resolve_recipe` picks by OS version and the CPU vendor's platform, so an
+  unsupported pair fails before setup touches the host. Previously an AMD host was given the
+  full Intel stack.
 
 - `paths.firmware_path()` takes an optional firmware filename instead of hardcoding the
   TDVF. It defaults to `GUEST_FIRMWARE`, so every existing caller is unchanged; the

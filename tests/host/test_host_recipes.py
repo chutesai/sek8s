@@ -7,10 +7,14 @@ orchestration logic (mocking all subprocess/OS calls).
 from unittest.mock import MagicMock, patch
 
 import pytest
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider
 from chutes_cvm.host.recipes import (
     HOST_RECIPES,
     PPA,
+    RECIPES,
     HostRecipe,
+    SnpUbuntu2604Recipe,
+    TdxUbuntu2604Recipe,
     Ubuntu2604Recipe,
     resolve_recipe,
 )
@@ -20,6 +24,19 @@ from chutes_cvm.host.setup import (
     _setup_ntp,
     setup_host,
 )
+
+TDX = TdxTeeProvider()
+SNP = SnpTeeProvider(cbitpos=51, reduced_phys_bits=1)
+
+
+def _ID(recipe):
+    return f"{recipe.tee.__name__}-{recipe.name}"
+
+
+def _for(tee=None, version="26.04"):
+    """Registered recipes for one platform (or all) on one version."""
+    return [r for r in RECIPES if r.name == version and (tee is None or r.tee is tee)]
+
 
 # ---------------------------------------------------------------------------
 # PPA dataclass
@@ -53,9 +70,11 @@ def test_ppa_suite_override():
 
 def test_ppa_signing_key_required():
     """Every PPA in every recipe must declare a signing key."""
-    for version, recipe in HOST_RECIPES.items():
+    for recipe in RECIPES:
         for ppa in recipe.ppas:
-            assert ppa.signing_key, f"{version} PPA {ppa.name} missing signing_key"
+            assert (
+                ppa.signing_key
+            ), f"{recipe.describe()} PPA {ppa.name} missing signing_key"
 
 
 # ---------------------------------------------------------------------------
@@ -63,92 +82,99 @@ def test_ppa_signing_key_required():
 # ---------------------------------------------------------------------------
 
 
-def test_all_registered_profiles_are_host_profile_subclasses():
-    for key, recipe in HOST_RECIPES.items():
-        assert isinstance(recipe, HostRecipe), f"{key} is not a HostRecipe"
+def test_all_registered_recipes_are_host_recipes():
+    for recipe in RECIPES:
+        assert isinstance(recipe, HostRecipe), f"{recipe!r} is not a HostRecipe"
 
 
-def test_registry_keys_match_profile_names():
-    for key, recipe in HOST_RECIPES.items():
-        assert (
-            key == recipe.name
-        ), f"Registry key '{key}' does not match recipe.name '{recipe.name}'"
+def test_registry_is_keyed_by_version_and_platform():
+    assert HOST_RECIPES == {(r.name, r.tee): r for r in RECIPES}
+    assert len(HOST_RECIPES) == len(RECIPES), "two recipes for one (version, platform)"
 
 
-def test_no_duplicate_codenames():
-    codenames = [p.codename for p in HOST_RECIPES.values()]
-    assert len(codenames) == len(set(codenames)), "Duplicate codenames in registry"
+def test_2604_has_a_recipe_for_each_platform():
+    assert isinstance(HOST_RECIPES[("26.04", TdxTeeProvider)], TdxUbuntu2604Recipe)
+    assert isinstance(HOST_RECIPES[("26.04", SnpTeeProvider)], SnpUbuntu2604Recipe)
+
+
+def test_an_os_recipe_is_abstract_until_a_platform_is_chosen():
+    with pytest.raises(TypeError):
+        Ubuntu2604Recipe()  # type: ignore[abstract]
 
 
 # ---------------------------------------------------------------------------
-# All profiles: common contracts
+# All recipes: common contracts
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_every_profile_has_nohibernate(version):
-    """nohibernate must be in every recipe's GRUB cmdline."""
-    recipe = HOST_RECIPES[version]
-    assert "nohibernate" in recipe.grub_cmdline_additions
-
-
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_every_profile_includes_attestation_packages(version):
-    """Attestation is mandatory on every host -- packages must be present."""
-    recipe = HOST_RECIPES[version]
-    required = {"sgx-dcap-pccs", "tdx-qgs", "libsgx-dcap-default-qpl"}
-    assert required.issubset(
-        set(recipe.packages)
-    ), f"{version} missing attestation packages: {required - set(recipe.packages)}"
-
-
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_every_profile_includes_qemu(version):
-    recipe = HOST_RECIPES[version]
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+def test_every_recipe_gets_the_shared_host(recipe):
+    """What the OS recipe declares reaches every platform built on it."""
     assert "qemu-system-x86" in recipe.packages
+    assert {"nohibernate", "modprobe.blacklist=nouveau"} <= set(
+        recipe.grub_cmdline_additions
+    )
+    assert "nvidia-cuda" in {r.name for r in recipe.repos}
 
 
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_describe_contains_version_and_codename(version):
-    recipe = HOST_RECIPES[version]
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+def test_describe_names_platform_version_and_codename(recipe):
     desc = recipe.describe()
+    assert recipe.tee.label in desc
     assert recipe.name in desc
     assert recipe.codename in desc
 
 
-@pytest.mark.parametrize(
-    "recipe_cls",
-    [Ubuntu2604Recipe],
-)
-def test_host_recipes_do_not_include_libvirt(recipe_cls):
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+def test_host_recipes_do_not_include_libvirt(recipe):
     """libvirt is not needed — VFIO prep uses direct PCI remove+rescan."""
-    recipe = recipe_cls()
     assert "libvirt-daemon-system" not in recipe.packages
     assert "libvirt-clients" not in recipe.packages
 
 
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+def test_every_recipe_has_no_kobuk_ppas(recipe):
+    """No recipe should reference kobuk-team PPAs (unreliable, superseded by Intel DCAP)."""
+    assert [p for p in recipe.ppas if "kobuk" in p.team] == []
+
+
 # ---------------------------------------------------------------------------
-# Every recipe: Intel DCAP repo required
+# Per platform
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_every_profile_has_intel_sgx_repo(version):
-    """All supported profiles must source attestation from Intel's DCAP repo."""
-    recipe = HOST_RECIPES[version]
+@pytest.mark.parametrize("recipe", _for(TdxTeeProvider), ids=_ID)
+def test_every_tdx_recipe_gets_the_attestation_stack(recipe):
+    """TDX quotes are made on the host, so its quoting stack is mandatory there."""
+    required = {"sgx-dcap-pccs", "tdx-qgs", "libsgx-dcap-default-qpl"}
+    assert required <= set(recipe.packages)
     intel_repos = [r for r in recipe.repos if r.name == "intel-sgx"]
-    assert len(intel_repos) == 1, f"{version} missing intel-sgx repo"
+    assert len(intel_repos) == 1
     assert "download.01.org" in intel_repos[0].uri
     assert intel_repos[0].components == "main"
     assert intel_repos[0].signing_key_url.endswith("intel-sgx-deb.key")
+    assert "kvm_intel.tdx=1" in recipe.grub_cmdline_additions
 
 
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_every_profile_has_no_kobuk_ppas(version):
-    """No recipe should reference kobuk-team PPAs (unreliable, superseded by Intel DCAP)."""
-    recipe = HOST_RECIPES[version]
-    kobuk_ppas = [p for p in recipe.ppas if "kobuk" in p.team]
-    assert kobuk_ppas == [], f"{version} still has kobuk PPAs: {kobuk_ppas}"
+@pytest.mark.parametrize("recipe", _for(SnpTeeProvider), ids=_ID)
+def test_an_snp_recipe_gets_nothing_intel(recipe):
+    """SNP reports come from the PSP inside the guest: no SGX repo, DCAP stack or TDX kernel
+    parameter belongs on an AMD host."""
+    assert not any(p.startswith(("sgx-", "libsgx-", "tdx-")) for p in recipe.packages)
+    assert "ovmf-inteltdx" not in recipe.packages
+    assert "intel-sgx" not in {r.name for r in recipe.repos}
+    assert not any("tdx" in p for p in recipe.grub_cmdline_additions)
+
+
+@patch("chutes_cvm.host.recipes.tdx_attestation.configure")
+def test_only_tdx_configures_host_attestation(mock_configure, capsys):
+    TdxUbuntu2604Recipe().configure_attestation(noninteractive=True)
+    mock_configure.assert_called_once_with(True)
+
+    mock_configure.reset_mock()
+    SnpUbuntu2604Recipe().configure_attestation(noninteractive=True)
+    mock_configure.assert_not_called()
+    assert "None on AMD SEV-SNP" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -156,32 +182,49 @@ def test_every_profile_has_no_kobuk_ppas(version):
 # ---------------------------------------------------------------------------
 
 
+def test_2604_tdx_host_is_unchanged_by_the_platform_split():
+    """Splitting the recipe per platform moved nothing for an Intel host."""
+    recipe = TdxUbuntu2604Recipe()
+    assert recipe.packages == [
+        "qemu-system-x86",
+        "ovmf-inteltdx",
+        "sgx-dcap-pccs",
+        "tdx-qgs",
+        "libsgx-dcap-default-qpl",
+        "sgx-ra-service",
+        "sgx-pck-id-retrieval-tool",
+    ]
+    assert set(recipe.grub_cmdline_additions) == {
+        "nohibernate",
+        "kvm_intel.tdx=1",
+        "modprobe.blacklist=nouveau",
+    }
+    assert {r.name for r in recipe.repos} == {"intel-sgx", "nvidia-cuda"}
+
+
+def test_2604_snp_host_is_only_the_os():
+    recipe = SnpUbuntu2604Recipe()
+    assert recipe.packages == ["qemu-system-x86"]
+    assert recipe.grub_cmdline_additions == [
+        "nohibernate",
+        "modprobe.blacklist=nouveau",
+    ]
+    assert [r.name for r in recipe.repos] == ["nvidia-cuda"]
+
+
 def test_2604_does_not_need_tdx_release_ppa():
     """26.04 has native TDX kernel/QEMU -- no tdx-release PPA needed."""
-    recipe = Ubuntu2604Recipe()
-    ppa_names = {ppa.name for ppa in recipe.ppas}
-    assert "tdx-release" not in ppa_names
+    assert "tdx-release" not in {ppa.name for ppa in TdxUbuntu2604Recipe().ppas}
 
 
-def test_2604_has_intel_sgx_repo():
-    """26.04 uses Intel's official SGX/DCAP repository (resolute suite)."""
-    recipe = Ubuntu2604Recipe()
-    assert len(recipe.repos) >= 1
-    intel_repos = [r for r in recipe.repos if r.name == "intel-sgx"]
-    assert len(intel_repos) == 1
+def test_2604_tdx_uses_the_resolute_intel_repo():
+    intel_repos = [r for r in TdxUbuntu2604Recipe().repos if r.name == "intel-sgx"]
     assert intel_repos[0].suite == "resolute"
-    assert "download.01.org" in intel_repos[0].uri
 
 
-def test_2604_pins_kernel_package():
-    recipe = Ubuntu2604Recipe()
+@pytest.mark.parametrize("recipe", _for(), ids=_ID)
+def test_2604_pins_kernel_package(recipe):
     assert recipe.kernel_package == "linux-image-7.0.0-31-generic"
-
-
-def test_2604_enables_kvm_intel_tdx():
-    """26.04 requires explicit kvm_intel.tdx=1 kernel param."""
-    recipe = Ubuntu2604Recipe()
-    assert "kvm_intel.tdx=1" in recipe.grub_cmdline_additions
 
 
 # ---------------------------------------------------------------------------
@@ -189,34 +232,31 @@ def test_2604_enables_kvm_intel_tdx():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("version", list(HOST_RECIPES.keys()))
-def test_resolve_recipe_returns_correct_instance(version):
-    recipe = resolve_recipe(version)
-    assert recipe is HOST_RECIPES[version]
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+def test_resolve_recipe_returns_the_platforms_recipe(recipe):
+    tee = TDX if recipe.tee is TdxTeeProvider else SNP
+    assert resolve_recipe(tee, recipe.name) is recipe
 
 
-def test_resolve_recipe_rejects_unsupported_version():
-    with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_recipe("18.04")
-
-
-def test_resolve_recipe_rejects_2510():
-    # 26.04 is the only supported host OS; 25.10 hosts must upgrade first.
-    with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_recipe("25.10")
+@pytest.mark.parametrize("version", ["18.04", "25.10"])
+def test_resolve_recipe_rejects_unsupported_version(version):
+    # 26.04 is the only supported host OS; older hosts must upgrade first.
+    with pytest.raises(
+        ValueError, match=f"Unsupported host: Intel TDX on Ubuntu {version}"
+    ):
+        resolve_recipe(TDX, version)
 
 
 @patch("chutes_cvm.host.recipes.detect_ubuntu_version", return_value="26.04")
 def test_resolve_recipe_auto_detects(mock_detect):
-    recipe = resolve_recipe(None)
-    assert isinstance(recipe, Ubuntu2604Recipe)
+    assert isinstance(resolve_recipe(SNP), SnpUbuntu2604Recipe)
     mock_detect.assert_called_once()
 
 
 @patch("chutes_cvm.host.recipes.detect_ubuntu_version", return_value="99.99")
 def test_resolve_recipe_auto_detect_unsupported(mock_detect):
-    with pytest.raises(ValueError, match="Unsupported Ubuntu version"):
-        resolve_recipe(None)
+    with pytest.raises(ValueError, match="Unsupported host"):
+        resolve_recipe(TDX)
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +278,15 @@ def test_get_kernel_version_rejects_metapackage():
 # ---------------------------------------------------------------------------
 
 
+@patch("chutes_cvm.host.recipes.tdx_attestation.configure")
+@patch("chutes_cvm.host.setup.write_system_file")
 @patch("chutes_cvm.host.setup._ensure_chutes_dirs")
 @patch("chutes_cvm.host.setup._setup_ntp")
 @patch("chutes_cvm.host.setup._add_user_to_kvm")
 @patch("chutes_cvm.host.setup._grub_update_cmdline")
 @patch("chutes_cvm.host.setup._grub_set_kernel")
 @patch("chutes_cvm.host.setup._get_kernel_version", return_value="6.17.0-15-generic")
-@patch("chutes_cvm.host.setup._run")
+@patch("chutes_cvm.host.setup.run")
 @patch("os.geteuid", return_value=0)
 def test_setup_host_calls_all_steps(
     mock_euid,
@@ -255,8 +297,10 @@ def test_setup_host_calls_all_steps(
     mock_kvm,
     mock_ntp,
     mock_dirs,
+    mock_write,
+    mock_attestation,
 ):
-    recipe = Ubuntu2604Recipe()
+    recipe = TdxUbuntu2604Recipe()
     setup_host(recipe)
 
     mock_kver.assert_called_once_with(recipe.kernel_package)
@@ -278,9 +322,8 @@ def test_setup_host_calls_all_steps(
 
 @patch("os.geteuid", return_value=1000)
 def test_setup_host_exits_if_not_root(mock_euid):
-    recipe = Ubuntu2604Recipe()
     with pytest.raises(SystemExit):
-        setup_host(recipe)
+        setup_host(TdxUbuntu2604Recipe())
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +338,8 @@ def test_every_profile_base_packages_include_host_deps(version):
     assert {"chrony", "aria2", "xfsprogs"}.issubset(set(recipe.base_packages))
 
 
-@patch("chutes_cvm.host.setup._run")
-@patch("chutes_cvm.host.setup._write_system_file")
+@patch("chutes_cvm.host.setup.run")
+@patch("chutes_cvm.host.setup.write_system_file")
 @patch("chutes_cvm.host.setup.proc.run", return_value=MagicMock(returncode=0))
 def test_setup_ntp_masks_timesyncd_writes_conf_and_enables_chrony(
     mock_sub, mock_write, mock_run
@@ -317,8 +360,8 @@ def test_setup_ntp_masks_timesyncd_writes_conf_and_enables_chrony(
 
 
 @patch("chutes_cvm.host.setup.proc.run", return_value=MagicMock(returncode=1))
-@patch("chutes_cvm.host.setup._write_system_file")
-@patch("chutes_cvm.host.setup._run")
+@patch("chutes_cvm.host.setup.write_system_file")
+@patch("chutes_cvm.host.setup.run")
 def test_setup_ntp_tolerates_waitsync_failure(mock_run, mock_write, mock_sub):
     # A non-zero waitsync (clock not yet synced) must not raise — setup continues.
     _setup_ntp()  # returncode=1 on the tolerant subprocess calls; no exception
@@ -333,3 +376,74 @@ def test_ensure_chutes_dirs_creates_expected(mock_makedirs, mock_chmod):
     assert "/var/lib/chutes/vm-images" in made
     # created idempotently
     assert all(c.kwargs.get("exist_ok") for c in mock_makedirs.call_args_list)
+
+
+# ---------------------------------------------------------------------------
+# setup_host per platform
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("recipe", RECIPES, ids=_ID)
+@patch("chutes_cvm.host.recipes.tdx_attestation.configure")
+@patch("chutes_cvm.host.setup.write_system_file")
+@patch("chutes_cvm.host.setup._ensure_chutes_dirs")
+@patch("chutes_cvm.host.setup._setup_ntp")
+@patch("chutes_cvm.host.setup._add_user_to_kvm")
+@patch("chutes_cvm.host.setup._grub_update_cmdline")
+@patch("chutes_cvm.host.setup._grub_set_kernel")
+@patch("chutes_cvm.host.setup._get_kernel_version", return_value="7.0.0-31-generic")
+@patch("chutes_cvm.host.setup._add_repo")
+@patch("chutes_cvm.host.setup.run")
+@patch("os.geteuid", return_value=0)
+def test_setup_host_installs_and_configures_only_its_platform(
+    mock_euid,
+    mock_run,
+    mock_add_repo,
+    mock_kver,
+    mock_grub_kernel,
+    mock_grub_cmdline,
+    mock_kvm,
+    mock_ntp,
+    mock_dirs,
+    mock_write,
+    mock_tdx_attestation,
+    recipe,
+):
+    is_tdx = recipe.tee is TdxTeeProvider
+    setup_host(recipe, noninteractive=True)
+
+    installed = {pkg for c in mock_run.call_args_list for pkg in c[0][0]}
+    assert set(recipe.packages) <= installed
+    assert ("tdx-qgs" in installed) is is_tdx
+    assert [c.args[0].name for c in mock_add_repo.call_args_list] == [
+        r.name for r in recipe.repos
+    ]
+    mock_grub_cmdline.assert_called_once_with(recipe.grub_cmdline_additions)
+    assert mock_tdx_attestation.called is is_tdx
+
+
+@pytest.mark.parametrize(
+    "vendor, recipe_cls",
+    [("GenuineIntel", TdxUbuntu2604Recipe), ("AuthenticAMD", SnpUbuntu2604Recipe)],
+)
+@patch("chutes_cvm.host.recipes.detect_ubuntu_version", return_value="26.04")
+def test_setup_main_sets_up_the_platform_the_cpu_runs(_version, vendor, recipe_cls):
+    from chutes_cvm.host import setup as setup_mod
+
+    with patch.object(
+        setup_mod, "detect_cpu_vendor", return_value=vendor
+    ), patch.object(setup_mod, "setup_host") as run:
+        assert setup_mod.main(["--noninteractive"]) == 0
+    assert isinstance(run.call_args.args[0], recipe_cls)
+    assert run.call_args.kwargs == {"noninteractive": True}
+
+
+def test_setup_main_refuses_an_unknown_cpu_before_touching_the_host(capsys):
+    from chutes_cvm.host import setup as setup_mod
+
+    with patch.object(
+        setup_mod, "detect_cpu_vendor", return_value="HygonGenuine"
+    ), patch.object(setup_mod, "setup_host") as run:
+        assert setup_mod.main([]) == 1
+    run.assert_not_called()
+    assert "HygonGenuine" in capsys.readouterr().err

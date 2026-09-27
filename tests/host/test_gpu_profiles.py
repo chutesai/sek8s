@@ -578,3 +578,15 @@ def test_gpu_device_ids_come_from_the_gpu_classes_only():
         "chutes_cvm.guest.detection.proc.check_output", return_value=_LSPCI.encode()
     ):
         assert detect_gpu_device_ids() == {"2331"}
+
+
+def test_cpu_vendor_comes_from_proc_cpuinfo():
+    from unittest.mock import mock_open
+
+    from chutes_cvm.guest.detection import detect_cpu_vendor
+
+    cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\n"
+    with patch("builtins.open", mock_open(read_data=cpuinfo)):
+        assert detect_cpu_vendor() == "AuthenticAMD"
+    with patch("builtins.open", side_effect=OSError):
+        assert detect_cpu_vendor() == ""

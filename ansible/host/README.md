@@ -122,7 +122,7 @@ is what keeps a node from landing on an OS it cannot be provisioned on or launch
 
 To add future upgrade hops (e.g. `26.04 -> 26.10`), add an entry to `os_upgrade_path`.
 
-After each hop the playbook automatically runs `host_prerequisites` and `tdx_bootstrap` (the same roles `setup.yml` uses), leaving the host fully re-provisioned with the correct kernel, Intel DCAP attestation repo, and TDX verified. No manual `setup.yml` re-run is needed. PCCS config and volume directories survive the OS upgrade unchanged.
+After each hop the playbook automatically runs `host_prerequisites` and `tee_bootstrap` (the same roles `setup.yml` uses), leaving the host fully re-provisioned with the correct kernel and its platform's packages, and the platform (TDX or SEV-SNP) verified enabled. No manual `setup.yml` re-run is needed. PCCS config and volume directories survive the OS upgrade unchanged.
 
 **Idempotency and failure recovery:**
 
@@ -132,7 +132,7 @@ The playbook is safe to re-run after most failures:
 |---|---|
 | Pre-hook or `dist-upgrade` | Hop retries from the start; all cleanup steps are idempotent |
 | `do-release-upgrade` fails or is interrupted | Re-run retries `do-release-upgrade`; it is designed to resume partial upgrades |
-| Reboot timeout or `tdx_bootstrap` fails after a successful OS upgrade | The host is already on the new OS version; re-running `upgrade-host.yml` will compute the **next** hop rather than re-provisioning the current one. Run `setup.yml` directly to complete provisioning without triggering another OS upgrade. |
+| Reboot timeout or `tee_bootstrap` fails after a successful OS upgrade | The host is already on the new OS version; re-running `upgrade-host.yml` will compute the **next** hop rather than re-provisioning the current one. Run `setup.yml` directly to complete provisioning without triggering another OS upgrade. |
 
 ---
 

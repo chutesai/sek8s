@@ -134,3 +134,35 @@ def test_vfio_wedged_maps_predicate_to_exit_code():
         assert hostcli.main(["vfio-wedged"]) == 0
     with patch("chutes_cvm.vfio.pci_operations_wedged", return_value=False):
         assert hostcli.main(["vfio-wedged"]) == 1
+
+
+@pytest.mark.parametrize(
+    "vendor, platform", [("GenuineIntel", "tdx"), ("AuthenticAMD", "snp")]
+)
+def test_platform_prints_what_the_cpu_runs(vendor, platform, capsys):
+    with patch("chutes_cvm.guest.detection.detect_cpu_vendor", return_value=vendor):
+        assert hostcli.main(["platform"]) == 0
+    assert capsys.readouterr().out.strip() == platform
+
+
+def test_platform_check_fails_with_the_platforms_remedy(capsys):
+    """Ansible's post-reboot gate: the same check a launch makes, and the per-vendor hint."""
+    with patch(
+        "chutes_cvm.guest.detection.detect_cpu_vendor", return_value="AuthenticAMD"
+    ), patch("chutes_cvm.guest.tee._module_param_enabled", return_value=False):
+        assert hostcli.main(["platform", "--check"]) == 1
+    err = capsys.readouterr().err
+    assert "SEV-SNP" in err and "SMEE" in err
+
+
+def test_platform_check_passes_when_enabled(capsys):
+    with patch(
+        "chutes_cvm.guest.detection.detect_cpu_vendor", return_value="AuthenticAMD"
+    ), patch("chutes_cvm.guest.tee._module_param_enabled", return_value=True):
+        assert hostcli.main(["platform", "--check"]) == 0
+    assert capsys.readouterr().out.strip() == "snp"
+
+
+def test_platform_refuses_an_unknown_cpu(capsys):
+    with patch("chutes_cvm.guest.detection.detect_cpu_vendor", return_value=""):
+        assert hostcli.main(["platform"]) == 1

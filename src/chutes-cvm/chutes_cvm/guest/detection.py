@@ -40,6 +40,23 @@ SUPPORTED_QEMU_BY_OS = {
 GUEST_CPU_ARGS = "host,-avx10"
 
 
+def detect_cpu_vendor() -> str:
+    """The CPUID vendor string (``GenuineIntel`` / ``AuthenticAMD``), from /proc/cpuinfo.
+
+    Which platform a host runs is its silicon's, so this is what host setup is chosen by -- not
+    whether the platform is enabled yet, which setup itself may be what turns on. Empty if it
+    cannot be read; the vendor-to-platform mapping then refuses it.
+    """
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("vendor_id"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
 def detect_os_version() -> str | None:
     """Return the host OS VERSION_ID (e.g. '26.04') from /etc/os-release, or None."""
     try:

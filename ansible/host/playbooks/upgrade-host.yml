@@ -4,8 +4,8 @@
 # or multi-hop to a specific target_version.
 #
 # After each hop the host is automatically re-provisioned via host_prerequisites
-# and tdx_bootstrap (same as setup.yml), leaving it in a consistent state with
-# the correct kernel, Intel DCAP attestation repo, and TDX verified.
+# and tee_bootstrap (same as setup.yml), leaving it in a consistent state with
+# the correct kernel, its platform's packages, and the platform verified enabled.
 #
 # Usage:
 #   # Single hop (e.g. 25.10 -> 26.04):
