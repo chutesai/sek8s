@@ -1,0 +1,9 @@
+---
+# Required, set via `vars:` when including this role:
+#   checkpoint_name     what the checkpoint is, e.g. "base{{ base_image_version }}-gpu"
+#   checkpoint_inputs   the files that decide its contents, relative to ansible/guest: the roles
+#                       that ran to produce it plus any vars files they read
+#   fallback_img_path   the image to start from when there is no checkpoint for these inputs
+checkpoint_name: ""
+checkpoint_inputs: []
+fallback_img_path: ""

@@ -23,8 +23,21 @@
   `nvidia-smi conf-compute -srs 1` to mark the CC GPUs ready, which works unchanged
   under SEV-SNP (verified on 8x RTX PRO 6000).
 
+- `run-vm` boots the `start_img_path` it is given instead of choosing between checkpoints
+  itself, so a playbook's checkpoint rules live in the playbook: `base-image.yml` passes
+  `prepare-image`'s output, and the GPU builds get theirs from `resume-checkpoint`.
+
 ### Fixed
 
+- The guest build's GPU checkpoint is named by a hash of what produced it instead of by guest
+  version. Each playbook declares its checkpoint — a name and the input files (roles, handlers,
+  vars) that decide its contents — to the new `resume-checkpoint` role, which names it
+  `<name>-<inputs hash>.qcow2` and starts the build from it only if one exists for those inputs.
+  Re-running a role on a reused checkpoint only adds, so anything the role stopped installing
+  survived into the image: after the `nvidia-tdx` → `nvidia-tee` rename, rebuilds still shipped
+  `nvidia-tdx.service` until the checkpoint was deleted by hand. `tee-gpu-vm.yml`, whose
+  checkpoint also includes `common`, no longer shares a checkpoint name with
+  `chutes-miner-vm.yml`. Saving a checkpoint removes older ones of the same name.
 - `rtmr3-verify` now gates on the TEE exactly as `rtmr3-measure` does: verify on TDX,
   skip on SEV-SNP, fail closed with neither device. Only the initramfs half had the
   gate, so an SNP guest reached the TDX quote path, found no RTMR3, and failed (a

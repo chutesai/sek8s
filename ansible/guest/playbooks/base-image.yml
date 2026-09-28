@@ -140,6 +140,8 @@
     - name: Boot the build VM
       ansible.builtin.include_role:
         name: run-vm
+      vars:
+        start_img_path: "{{ prepared_start_img_path }}"
 
 - name: Install the common package set
   hosts: vm

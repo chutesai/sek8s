@@ -46,6 +46,15 @@
     - name: Global handlers
       ansible.builtin.import_tasks: "{{ playbook_dir }}/../handlers/main.yml"
   tasks:
+    # This build's GPU checkpoint: the Ubuntu cloud image after common + gpu.
+    - name: Resume from the GPU checkpoint if one exists for these inputs
+      ansible.builtin.include_role:
+        name: resume-checkpoint
+      vars:
+        checkpoint_name: "ubuntu{{ ubuntu_version }}-common-gpu"
+        checkpoint_inputs: [roles/common, roles/gpu, handlers/main.yml, playbooks/group_vars/all.yml]
+        fallback_img_path: "{{ base_img_path }}"
+
     - name: Include run TDX vm role
       ansible.builtin.include_role:
         name: run-vm
@@ -83,10 +92,9 @@
     - checkpoint-gpu
   tasks:
     - name: Save GPU checkpoint
+      # Saves to checkpoint_img_path, as resume-checkpoint named it for this build.
       ansible.builtin.include_role:
         name: save-checkpoint
-      vars:
-        checkpoint_img_path: "{{ gpu_img_path }}"
 
 - name: Install benchmark tools
   hosts: vm

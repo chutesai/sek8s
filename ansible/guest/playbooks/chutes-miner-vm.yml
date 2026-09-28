@@ -113,6 +113,15 @@
         source_image_url: "{{ base_image_url }}"
         source_image_sha256: "{{ base_image_sha256 }}"
 
+    # The GPU checkpoint: the base image after the gpu role. Its driver pins are in all.yml.
+    - name: Resume from the GPU checkpoint if one exists for these inputs
+      ansible.builtin.include_role:
+        name: resume-checkpoint
+      vars:
+        checkpoint_name: "base{{ base_image_version }}-gpu"
+        checkpoint_inputs: [roles/gpu, handlers/main.yml, playbooks/group_vars/all.yml]
+        fallback_img_path: "{{ base_img_path }}"
+
     - name: Boot the build VM
       ansible.builtin.include_role:
         name: run-vm
@@ -139,10 +148,9 @@
     - build
   tasks:
     - name: Save GPU checkpoint
+      # Saves to checkpoint_img_path, as resume-checkpoint named it for this build.
       ansible.builtin.include_role:
         name: save-checkpoint
-      vars:
-        checkpoint_img_path: "{{ gpu_img_path }}"
 
 - name: Setup K3S clusters
   hosts: vm

@@ -66,3 +66,21 @@
       delegate_to: build-node
       become: true
       changed_when: false
+
+# A checkpoint named <name>-<inputs hash>.qcow2 (resume-checkpoint) supersedes every other
+# <name>-*.qcow2: those were built from inputs that no longer exist, and each is tens of GB.
+- name: Find superseded checkpoints
+  ansible.builtin.find:
+    paths: "{{ checkpoint_img_path | dirname }}"
+    patterns: "{{ checkpoint_img_path | basename | regex_replace('-[0-9a-f]{16}\\.qcow2$', '-*.qcow2') }}"
+  register: superseded_checkpoints
+  when: checkpoint_img_path | basename is regex('-[0-9a-f]{16}\\.qcow2$')
+
+- name: Remove superseded checkpoints
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ superseded_checkpoints.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: item.path != checkpoint_img_path
