@@ -29,6 +29,14 @@
 
 ### Fixed
 
+- A guest build always starts from a fresh build VM. `run-vm` used to restart any `tdx-build` VM
+  and disk an earlier run left behind unless `NO_CACHE` was set, so a rerun after a failure carried
+  on from that run's half-applied state instead of from the image the playbook chose. It now
+  discards them and copies the starting image (base image or checkpoint) in every time.
+- Production builds failed on a fresh Ubuntu 26.04 build host at `prepare-boot-image`'s root
+  backup: LUKS encryption copies the root out and back with `rsync`, which the 26.04 server image
+  no longer ships and nothing installed. `virt-host-prereqs` now installs it. Debug builds never
+  reach that step, so a host that had only built debug images never showed it.
 - The guest build's GPU checkpoint is named by a hash of what produced it instead of by guest
   version. Each playbook declares its checkpoint — a name and the input files (roles, handlers,
   vars) that decide its contents — to the new `resume-checkpoint` role, which names it

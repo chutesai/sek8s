@@ -83,4 +83,6 @@
   loop: "{{ superseded_checkpoints.files | default([]) }}"
   loop_control:
     label: "{{ item.path | basename }}"
-  when: item.path != checkpoint_img_path
+  # Compare names: find reports a normalized path, while checkpoint_img_path may carry ../ segments
+  # (checkpoint_dir is built from playbook_dir), so the paths of the same file need not be equal.
+  when: item.path | basename != checkpoint_img_path | basename
