@@ -117,16 +117,19 @@ class VolumesSection(BaseModel):
 
     cache: VolumeSpec = Field(
         default=VolumeSpec(size="5000G"),
+        description="Cache volume",
         json_schema_extra={"cli": {"size": "--cache-size", "path": "--cache-volume"}},
     )
     storage: VolumeSpec = Field(
         default=VolumeSpec(size="500G"),
+        description="Storage volume",
         json_schema_extra={
             "cli": {"size": "--storage-size", "path": "--storage-volume"}
         },
     )
     config: ConfigVolumeSpec = Field(
         default=ConfigVolumeSpec(),
+        description="Config volume",
         json_schema_extra={"cli": {"path": "--config-volume"}},
     )
 
@@ -164,8 +167,8 @@ class DockerHubSection(BaseModel):
 
 def cli_fields(
     model: "type[BaseModel] | None" = None, _prefix: "tuple[str, ...]" = ()
-) -> "list[tuple[str, tuple[str, ...], Any]]":
-    """Every config field that has a CLI flag, as ``(flag, path, annotation)``.
+) -> "list[tuple[str, tuple[str, ...], Any, str]]":
+    """Every config field that has a CLI flag, as ``(flag, path, annotation, help)``.
 
     The model is the single source of truth for a setting: its YAML key, its env var, its default,
     its description AND its flag. There used to be a second table mapping argparse dests onto
@@ -176,9 +179,12 @@ def cli_fields(
     ``json_schema_extra={"cli": "--flag"}`` on a scalar field names its flag. On a field whose type
     is itself a model, ``{"cli": {child: "--flag"}}`` names its children's -- needed because
     ``VolumeSpec`` is shared by cache and storage, so the flag depends on the parent.
+
+    ``help`` is the field's description -- prefixed by the parent's for those parent-named flags,
+    since "Volume size" alone does not say which volume.
     """
     model = model or LaunchConfig
-    out: "list[tuple[str, tuple[str, ...], Any]]" = []
+    out: "list[tuple[str, tuple[str, ...], Any, str]]" = []
     for name, field in model.model_fields.items():
         ann = field.annotation
         extra = field.json_schema_extra
@@ -188,10 +194,13 @@ def cli_fields(
             for child, child_field in ann.model_fields.items():
                 flag = children.get(child)
                 if isinstance(flag, str):
-                    out.append((flag, _prefix + (name, child), child_field.annotation))
+                    help_ = f"{field.description}: {child_field.description}"
+                    out.append(
+                        (flag, _prefix + (name, child), child_field.annotation, help_)
+                    )
             out.extend(cli_fields(ann, _prefix + (name,)))
         elif isinstance(cli, str):
-            out.append((cli, _prefix + (name,), ann))
+            out.append((cli, _prefix + (name,), ann, field.description or ""))
     return out
 
 

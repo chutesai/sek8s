@@ -187,10 +187,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # Every flag that maps to a config setting comes from the model, which owns its YAML key,
     # env var, default, description and flag together. Declaring them here as well is what let
     # `network.ssh_port` exist on both sides and be plumbed on neither.
-    for flag, path, annotation in cli_fields():
+    for flag, path, annotation, help_ in cli_fields():
         # No explicit dest: argparse derives `--vm-dns` -> `vm_dns`, which is exactly what the
         # hand-written flags set, so every existing `args.<name>` reference keeps working.
-        kwargs: dict = {"default": None}
+        kwargs: dict = {"default": None, "help": help_}
         if annotation is bool:
             # store_true with default=None: absent stays None, so it cannot overwrite a YAML
             # true with False the way argparse's own default would.
@@ -205,11 +205,36 @@ def _build_parser() -> argparse.ArgumentParser:
     # the launch and are returned alongside the config rather than folded into it; --config-file
     # says where to read it from; --skip-bind is the one config flag that names the NEGATION of
     # its field (devices.bind_devices), so it cannot be "that field's flag".
-    p.add_argument("--skip-bind", action="store_true", default=None)
-    p.add_argument("--no-gpus", action="store_true", default=None)
-    p.add_argument("--ephemeral", action="store_true", default=None)
-    p.add_argument("--benchmark", action="store_true", default=None)
-    p.add_argument("--force", action="store_true", default=None)
+    p.add_argument(
+        "--skip-bind",
+        action="store_true",
+        default=None,
+        help="Do not bind GPU/NVSwitch to vfio-pci (devices.bind_devices: false)",
+    )
+    p.add_argument(
+        "--no-gpus",
+        action="store_true",
+        default=None,
+        help="Boot without passing any GPUs through (debug)",
+    )
+    p.add_argument(
+        "--ephemeral",
+        action="store_true",
+        default=None,
+        help="Put the per-VM image under /tmp/chutes-vm-images instead of the config's dir",
+    )
+    p.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=None,
+        help="Launch the benchmark image; miner credentials default to placeholders",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        default=None,
+        help="Launch despite a failed pre-launch check (the VM may fail attestation)",
+    )
     return p
 
 
@@ -227,7 +252,7 @@ def _resolve_config(
 
     # Build nested CLI overrides (only flags the user set) — the highest-precedence source.
     overrides: dict = {}
-    for flag, path, _annotation in cli_fields():
+    for flag, path, _annotation, _help in cli_fields():
         val = getattr(args, flag.lstrip("-").replace("-", "_"), None)
         if val is None:
             continue

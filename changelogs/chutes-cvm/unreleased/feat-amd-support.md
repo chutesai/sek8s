@@ -94,6 +94,9 @@
 
 ### Changed
 
+- `chutes-cvm guest launch --help` describes every flag. Config flags take their help from the
+  `LaunchConfig` field descriptions (the cache/storage/config volume flags prefixed with which
+  volume), so a flag and its help cannot drift apart.
 - `chutes-cvm host setup` is platform-aware. A recipe is now one OS version for one platform:
   the abstract `Ubuntu2604Recipe` holds what every 26.04 host needs (CUDA repo, QEMU,
   `nohibernate`, the nouveau blacklist), and `TdxUbuntu2604Recipe` / `SnpUbuntu2604Recipe`
@@ -203,6 +206,8 @@
 
 ### Removed
 
+- `profiles.resolve_profile()`, unused since host profiles and `reset-gpus` resolve through
+  `profile_for_device_ids()`; with one resolver, the test asserting the two agreed went with it.
 - The CCEL splice-and-replay path to RTMR0 (`overrides_from_fork_log`, `mr1_events`,
   `locate_rtmr0_events`, `replay_with_overrides`, `acpi_digests`, their constants and tests). The
   fork's full RTMR0 self-generation replaced it; nothing but its own tests called it.

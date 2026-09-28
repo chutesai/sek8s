@@ -29,6 +29,7 @@ import os
 import sys
 
 from chutes_cvm.guest import image_set
+from chutes_cvm.guest.config import LaunchConfig
 from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS, verify_host_qemu_supported
 from chutes_cvm.guest.preflight import (
     DEFAULT_API_BASE,
@@ -53,8 +54,6 @@ def _image_version_rc(config_path: str, base_image: "str | None") -> "tuple[str,
     base = base_image
     if not base:
         try:
-            from chutes_cvm.guest.config import LaunchConfig
-
             base = LaunchConfig.from_file(
                 config_path if config_path and os.path.exists(config_path) else None
             ).vm.base_image

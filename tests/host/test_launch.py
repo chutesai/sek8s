@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.guest import images, launch
-from chutes_cvm.guest.config import LaunchConfig
+from chutes_cvm.guest.config import LaunchConfig, cli_fields
 from chutes_cvm.guest.launch import (
     LaunchError,
     _apply_derived_defaults,
@@ -516,3 +516,21 @@ def test_prepare_vm_image_surfaces_verification_failure():
     with patch(f"{P}.image_set.resolve", side_effect=ValueError("manifest mismatch")):
         with pytest.raises(LaunchError, match="image set verification failed"):
             images.prepare_vm_image("/base/set", "h", "/vm")
+
+
+def test_every_launch_flag_has_help():
+    """Config flags take their help from the model's field descriptions; a flag without one is
+    a field missing its description."""
+    parser = launch._build_parser()
+    missing = [
+        a.option_strings[0]
+        for a in parser._actions
+        if a.option_strings and a.dest != "help" and not a.help
+    ]
+    assert missing == []
+
+
+def test_shared_volume_flags_say_which_volume():
+    helps = {flag: help_ for flag, _path, _ann, help_ in cli_fields()}
+    assert helps["--cache-size"].startswith("Cache volume")
+    assert helps["--storage-size"].startswith("Storage volume")

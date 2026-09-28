@@ -385,31 +385,3 @@ def profile_for_device_ids(device_ids: "set[str]") -> GpuProfile:
         if profile.matches_device_id(device_id):
             return profile
     raise ValueError(f"no GPU profile matches device id {device_id}")
-
-
-def resolve_profile(gpu_models: dict[str, str]) -> GpuProfile:
-    """Resolve a single GpuProfile from detected GPU models.
-
-    All GPUs must be the same supported model. Raises ValueError on mixed
-    or unsupported types.
-    """
-    model_names = set(gpu_models.values()) - {"default"}
-    if not model_names:
-        raise ValueError(
-            "No supported GPU models detected. "
-            f"Found models: {set(gpu_models.values())}. "
-            f"Supported: {list(GPU_PROFILES.keys())}"
-        )
-    if len(model_names) > 1:
-        raise ValueError(
-            f"Mixed GPU models detected: {model_names}. "
-            "All GPUs must be the same model."
-        )
-    model = model_names.pop()
-    profile = GPU_PROFILES.get(model)
-    if profile is None:
-        raise ValueError(
-            f"Unsupported GPU model: {model}. "
-            f"Supported: {list(GPU_PROFILES.keys())}"
-        )
-    return profile

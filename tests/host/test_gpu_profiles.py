@@ -12,7 +12,6 @@ from chutes_cvm.guest.gpu.profiles import (
     GPU_PROFILES,
     GpuProfile,
     profile_for_device_ids,
-    resolve_profile,
 )
 from chutes_cvm.guest.host_profile import HostProfile
 
@@ -271,57 +270,6 @@ def test_vcpus_divisible_by_sockets(name, host):
 def test_threads_is_one(name, host):
     """threads=1 must always be set (no guest SMT)."""
     assert "threads=1" in host.smp_topology
-
-
-# ---------------------------------------------------------------------------
-# resolve_profile: resolution logic
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
-def test_resolve_profile_returns_correct_type(model_key):
-    models = {"0000:41:00.0": model_key}
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES[model_key]
-
-
-def test_resolve_profile_with_multiple_identical_gpus():
-    models = {f"0000:4{i}:00.0": "RTX_PRO_6000" for i in range(8)}
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES["RTX_PRO_6000"]
-
-
-def test_resolve_profile_filters_out_default_entries():
-    """'default' entries (unrecognized GPUs) are ignored if a real model exists."""
-    models = {
-        "0000:41:00.0": "B200",
-        "0000:42:00.0": "default",
-        "0000:43:00.0": "default",
-    }
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES["B200"]
-
-
-def test_resolve_profile_rejects_mixed_models():
-    models = {
-        "0000:41:00.0": "B200",
-        "0000:42:00.0": "H200",
-    }
-    with pytest.raises(ValueError, match="Mixed GPU models"):
-        resolve_profile(models)
-
-
-def test_resolve_profile_rejects_unsupported_model():
-    models = {"0000:41:00.0": "TITAN_V"}
-    with pytest.raises(ValueError, match="Unsupported GPU model"):
-        resolve_profile(models)
-
-
-def test_resolve_profile_rejects_all_default():
-    """If every GPU is 'default' (unrecognized), resolution must fail."""
-    models = {"0000:41:00.0": "default", "0000:42:00.0": "default"}
-    with pytest.raises(ValueError, match="No supported GPU models"):
-        resolve_profile(models)
 
 
 # ---------------------------------------------------------------------------
