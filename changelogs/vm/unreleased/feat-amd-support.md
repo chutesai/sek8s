@@ -10,10 +10,16 @@
 
 ### Changed
 
-- The initramfs attestation hook detects the TEE and posts its evidence under
-  `tdx_quote` or `snp_quote` accordingly. The TEE check moved from function entry to
-  after network setup, so a guest that cannot reach the API fails with a network
-  error rather than a misleading TEE error.
+- The initramfs detects the TEE and produces its evidence (a TDX quote, or the raw SEV-SNP
+  report through configfs-TSM) in one shared `tee-evidence` library, used by both boot
+  attestation and the init-bottom `/provision` call. Both send it in the API's `quote` field; the
+  API tells the platforms apart by the bytes. `/provision` previously always ran
+  `tdx-quote-generator`, so a production SEV-SNP guest failed it and powered off. The TEE check
+  moved from function entry to after network setup, so a guest that cannot reach the API fails
+  with a network error rather than a misleading TEE error.
+- The initramfs refuses a nonce or certificate hash that is not exactly 64 hex characters
+  before building the report data, instead of cutting the pair to 128 characters, which shifted
+  the certificate hash and left the API to reject the evidence without saying why.
 - `rtmr3-measure` exits successfully on SEV-SNP. RTMR3 is an Intel runtime
   measurement register and SNP has no equivalent — its single launch digest is fixed
   when the VM starts. TDX keeps its fail-closed behaviour, and a guest with *neither*

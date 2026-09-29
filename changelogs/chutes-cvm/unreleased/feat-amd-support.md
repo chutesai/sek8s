@@ -184,12 +184,13 @@
   keeps guest NUMA. AMD 2-node classes are fingerprinted `flat-…` accordingly. To be lifted once
   the pinned QEMU carries "accel/kvm: Fix kvm_convert_memory() calls crossing memory regions".
 - `measurements generate` covers both platforms in one pass, since one guest image boots on
-  both. Every version's entry now has a `tdx:` section (`mrtd`, `rtmr1`, `rtmr2`, `rtmr3`,
-  `hardware[].rtmr0`) and an `snp:` section (`hardware[].measurement`), whichever classes the API
-  knows; each class lands in exactly one, by CPU vendor (Intel = TDX, AMD = SEV-SNP). This
-  replaces the flat per-version layout, so consumers of measurements.yaml (chutes-ops
-  `teeMeasurements`, the API) must read the sections. `mrtd` still comes from the per-topology
-  fork runs, so it is empty in a release with no Intel classes.
+  both. A version's entry has a `tdx:` section (`mrtd`, `rtmr1`, `rtmr2`, `rtmr3`,
+  `hardware[].rtmr0`) and an `snp:` section (`hardware[].measurement`); each class lands in
+  exactly one, by CPU vendor (Intel = TDX, AMD = SEV-SNP). Both platforms are measured every
+  release, but a section is written only when it has classes: the API's TEE config refuses a
+  section with no hardware, and with it the whole file. This replaces the flat per-version
+  layout, so consumers of measurements.yaml (chutes-ops `teeMeasurements`, the API) must read
+  the sections.
 - A missing release-level SEV-SNP input (the firmware, or the image's staged direct-boot
   artifacts) fails `generate`. Loaded once per release, before any class, rather than per class,
   where it was caught as PENDING for every AMD class and a mixed release published without them

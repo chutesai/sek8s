@@ -21,6 +21,11 @@
 # stashed to /run tmpfs by init-premount (read_hotkey), which persists across the invocations.
 . /scripts/hotkey-sign
 
+# TEE detection and evidence generation (detect_tee, generate_evidence), shared with boot
+# attestation in attest-common. This runs in a separate init-bottom invocation, so the TEE is
+# detected again here.
+. /scripts/tee-evidence
+
 # ── Shared globals ────────────────────────────────────────────────────────────
 VM_NAME=""
 HOTKEY=""
@@ -64,7 +69,6 @@ load_vm_data() {
 #   and leaves the response at $PROVISION_RESPONSE for the caller to parse. Returns 0 on 200/201.
 provision_request() {
     local volumes_json="$1"
-    local quote_file="/tmp/luks_quote.bin"
 
     if [ -z "$TDX_BASE_URL" ]; then
         log_failure_msg "TDX_BASE_URL not configured in /etc/tdx-luks.conf"
@@ -94,20 +98,13 @@ provision_request() {
         return 1
     fi
 
-    # RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
-    local report_data
-    report_data=$(echo -n "${quote_nonce}${cert_hash}" | cut -c1-128)
-    log_begin_msg "Generating TDX quote for /provision"
-    if ! /usr/bin/tdx-quote-generator --report-data "$report_data" --hex \
-            -o "$quote_file" 2>/dev/null; then
-        log_end_msg 1
-        log_failure_msg "Failed to generate TDX quote"
+    # On TDX, RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
+    # SNP has no runtime register, so its report carries the launch measurement only.
+    if ! generate_evidence "$quote_nonce" "$cert_hash"; then
+        log_failure_msg "Failed to generate attestation evidence for /provision"
         return 1
     fi
-    local quote_b64
-    quote_b64=$(base64 -w 0 < "$quote_file")
-    rm -f "$quote_file"
-    log_end_msg 0
+    local quote_b64="$QUOTE_B64"
 
     # The exact request body — built once so the hotkey signature hashes the same bytes curl sends.
     local body

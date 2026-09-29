@@ -54,9 +54,6 @@ def attestation_client(monkeypatch, sample_devices):
 
     tdx_provider = MagicMock()
     tdx_provider.get_quote = AsyncMock(return_value=b"fake-quote")
-    # Real value, not a MagicMock: the response field is named from it
-    # (f"{tee_type}_quote"), so a bare mock yields a field no client can read.
-    tdx_provider.tee_type = "tdx"
 
     nvtrust_provider = MagicMock()
     nvtrust_provider.__enter__.return_value = nvtrust_provider
@@ -142,7 +139,8 @@ def test_attest_with_comma_separated_gpu_ids(attestation_client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["tdx_quote"] == "ZmFrZS1xdW90ZQ=="  # base64 of fake quote
+    assert data["quote"] == "ZmFrZS1xdW90ZQ=="  # base64 of fake quote
+    assert "tdx_quote" not in data
     assert (
         data["nvtrust_evidence"]
         == attestation_client.nvtrust_provider.get_evidence.return_value

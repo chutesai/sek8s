@@ -1,0 +1,123 @@
+# /etc/initramfs-tools/scripts/tee-evidence
+#
+# TEE attestation evidence for the initramfs, sourced by attest-common (boot attestation) and
+# provision-common (init-bottom /provision). One guest image boots on both Intel TDX and AMD
+# SEV-SNP hosts, so both callers detect the TEE from the device node its guest driver created
+# and produce the same kind of evidence: a TDX quote, or the raw 1184-byte SNP attestation
+# report. The API tells the two apart from the bytes, so callers send either under one `quote`
+# field.
+#
+#   detect_tee                          sets TEE_TYPE (tdx | snp); returns 1 if neither.
+#   generate_evidence <nonce> <hash>    sets QUOTE_B64 to base64 evidence whose 64-byte report
+#                                       data is nonce || hash (32 bytes each, 64 hex chars each).
+
+TEE_TYPE=""
+QUOTE_B64=""
+
+detect_tee() {
+    if [ -c "/dev/tdx_guest" ]; then
+        TEE_TYPE="tdx"
+        log_success_msg "TEE: Intel TDX"
+        return 0
+    fi
+    if [ -c "/dev/sev-guest" ]; then
+        TEE_TYPE="snp"
+        log_success_msg "TEE: AMD SEV-SNP"
+        return 0
+    fi
+    return 1
+}
+
+# Hex string -> raw bytes. The initramfs has no xxd and no python; GNU printf is
+# present and understands \\xHH, which is enough.
+hex2bin() {
+    /usr/bin/printf "$(printf '%s' "$1" | sed 's/../\\x&/g')"
+}
+
+# 64 lowercase-or-uppercase hex characters, i.e. one 32-byte half of the report data.
+is_hex64() {
+    [ "${#1}" -eq 64 ] && [ -z "$(printf '%s' "$1" | tr -d '0-9a-fA-F')" ]
+}
+
+_generate_tdx_quote() {
+    local report_data="$1"
+    local quote_file="/tmp/tdx_quote.bin"
+    if ! /usr/bin/tdx-quote-generator --report-data "$report_data" --hex -o "$quote_file" 2>/dev/null; then
+        return 1
+    fi
+    if [ ! -f "$quote_file" ]; then
+        return 1
+    fi
+    QUOTE_B64=$(base64 -w 0 < "$quote_file")
+    rm -f "$quote_file"
+    return 0
+}
+
+# SEV-SNP evidence comes straight from the PSP through configfs-TSM — there is no
+# external generator to call, because unlike a TDX quote the report is produced and
+# signed inside the guest request itself. outblob is the bare report; the certificate
+# chain (auxblob) is not sent, since the API fetches the VCEK chain from AMD itself.
+_generate_snp_report() {
+    local report_data="$1"
+    local tsm="/sys/kernel/config/tsm/report"
+    local entry="$tsm/chutes-$$"
+
+    if [ ! -d "$tsm" ]; then
+        log_failure_msg "configfs-TSM not available at $tsm"
+        return 1
+    fi
+
+    rmdir "$entry" 2>/dev/null || true
+    if ! mkdir "$entry" 2>/dev/null; then
+        log_failure_msg "Failed to create $entry"
+        return 1
+    fi
+
+    # report_data is the 64-byte field; write it as raw bytes, not hex.
+    if ! hex2bin "$report_data" > "$entry/inblob" 2>/dev/null; then
+        rmdir "$entry" 2>/dev/null || true
+        log_failure_msg "Failed to write report inblob"
+        return 1
+    fi
+
+    QUOTE_B64=$(base64 -w 0 < "$entry/outblob" 2>/dev/null)
+    # configfs entries persist until removed; leaking one would break the next request.
+    rmdir "$entry" 2>/dev/null || true
+
+    if [ -z "$QUOTE_B64" ]; then
+        log_failure_msg "Empty SEV-SNP attestation report"
+        return 1
+    fi
+    return 0
+}
+
+generate_evidence() {
+    local nonce="$1" cert_hash="$2"
+    local rc=1
+    QUOTE_B64=""
+
+    # Each half must be exactly 32 bytes. Anything else would shift the cert hash out of
+    # the report data, and the API would reject the evidence with no hint as to why.
+    if ! is_hex64 "$nonce"; then
+        log_failure_msg "Nonce is not 64 hex characters (got ${#nonce})"
+        return 1
+    fi
+    if ! is_hex64 "$cert_hash"; then
+        log_failure_msg "Certificate hash is not 64 hex characters (got ${#cert_hash})"
+        return 1
+    fi
+
+    if [ -z "$TEE_TYPE" ] && ! detect_tee; then
+        log_failure_msg "No TEE guest device (/dev/tdx_guest or /dev/sev-guest)"
+        return 1
+    fi
+
+    log_begin_msg "Generating ${TEE_TYPE} attestation evidence"
+    case "$TEE_TYPE" in
+        tdx) _generate_tdx_quote "${nonce}${cert_hash}" && rc=0 ;;
+        snp) _generate_snp_report "${nonce}${cert_hash}" && rc=0 ;;
+        *)   log_failure_msg "Unknown TEE type: ${TEE_TYPE}" ;;
+    esac
+    log_end_msg $rc
+    return $rc
+}

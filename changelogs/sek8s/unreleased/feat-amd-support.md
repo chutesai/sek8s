@@ -13,10 +13,9 @@
 
 ### Changed
 
-- `AttestationResponse` now carries both `tdx_quote` and `snp_quote`, exactly one
-  of which is populated, rather than a single platform-neutral field. The evidence
-  type is named by the field it arrives in, so a verifier can dispatch on the
-  request body without a separate discriminator. Existing TDX verifiers read
-  `tdx_quote` and are unaffected.
+- `AttestationResponse` carries the evidence in `quote` on every platform (a TDX quote or the
+  raw SEV-SNP report), the field the API reads; it tells the platforms apart by the bytes.
+  `tdx_quote` is gone: the API reads it only as a fallback for older VMs, so this release needs
+  an API that reads `quote`.
 - `TdxQuoteProvider` inherits the shared cert-hash and report-data plumbing; its
   quote generation is otherwise unchanged.

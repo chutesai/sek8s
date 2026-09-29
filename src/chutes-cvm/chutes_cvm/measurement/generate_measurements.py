@@ -203,8 +203,10 @@ def _write_output(payload: str, output: str) -> None:
 def _compute_measurements(args: argparse.Namespace) -> dict:
     """Compute a release's whole teeMeasurements entry: both platforms, every host class.
 
-    One guest image boots on both platforms, so every release publishes both sections whatever
-    classes the API knows today. Each platform loads what its classes share first (TDX: RTMR1-3
+    One guest image boots on both platforms, so every release measures both, whatever classes the
+    API knows today; a platform's section is written only when it has classes, since the API
+    refuses a section with no hardware (and with it the whole config). Each platform loads what
+    its classes share first (TDX: RTMR1-3
     from the image; SEV-SNP: firmware and direct-boot artifacts), then each API host class is
     measured on its own platform. Pure data assembly -- no file output; raises ValueError
     (topology/aggregation) or MeasurementError (a missing or unreadable input).
@@ -229,7 +231,10 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
         )
     # Insertion order matches the chutes-ops values.yaml teeMeasurements layout this merges
     # into; sort_keys=False keeps it.
-    return {"version": args.version, **{p.key: p.section() for p in platforms}}
+    return {
+        "version": args.version,
+        **{p.key: p.section() for p in platforms if p.hardware},
+    }
 
 
 def _generate_full(args: argparse.Namespace) -> int:
@@ -249,7 +254,10 @@ def _generate_full(args: argparse.Namespace) -> int:
         {"measurements": [entry]}, sort_keys=False, indent=2, default_flow_style=False
     )
     _write_output(payload, args.output)
-    counts = ", ".join(f"{len(entry[tee]['hardware'])} {tee}" for tee in ("tdx", "snp"))
+    counts = ", ".join(
+        f"{len(entry[tee]['hardware']) if tee in entry else 0} {tee}"
+        for tee in ("tdx", "snp")
+    )
     print(f"measurements.yaml: {counts} hardware entries", file=sys.stderr)
     return 0
 

@@ -76,13 +76,8 @@ class AttestationServer(WebServer):
                 )
 
             encoded_quote = base64.b64encode(quote_content).decode("utf-8")
-            # Named per TEE rather than a tee_type discriminator plus a generic blob:
-            # the field is the type, so evidence cannot be mislabelled. tdx_quote keeps
-            # its original name, so pre-AMD verifiers are unaffected on TDX hosts.
-            quote_field = f"{quote_provider.tee_type}_quote"
             return AttestationResponse(
-                **{quote_field: encoded_quote},
-                nvtrust_evidence=nvtrust_evidence,
+                quote=encoded_quote, nvtrust_evidence=nvtrust_evidence
             )
 
         except NonceError as e:
@@ -133,10 +128,8 @@ class AttestationServer(WebServer):
     ):
         """A nonce-bound quote as bare base64, with no indication of which TEE made it.
 
-        Callers are expected to know the platform already (it is fixed at registration),
-        so the blob is unqualified. If that ever stops holding, this is the place to add
-        an envelope -- /attest already names the platform via its tdx_quote/snp_quote
-        field and is the better model.
+        As with /attest's ``quote``, the blob is unqualified: a TDX quote and an SEV-SNP
+        report are told apart by their bytes.
 
         Intended for periodic health checks. Note what that can mean per platform: a TDX
         runtime quote carries RTMR3 and so can show drift since boot, whereas SEV-SNP has

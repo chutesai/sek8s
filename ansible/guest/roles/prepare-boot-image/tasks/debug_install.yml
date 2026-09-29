@@ -133,6 +133,14 @@
     owner: root
     group: root
 
+- name: Copy shared TEE evidence library (tee-evidence)
+  ansible.builtin.copy:
+    src: files/initramfs/tee-evidence
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/tee-evidence"
+    mode: '0755'
+    owner: root
+    group: root
+
 - name: Copy shared provision library (provision-common)
   ansible.builtin.copy:
     src: files/initramfs/provision-common

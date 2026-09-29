@@ -168,10 +168,11 @@ Four values matter, under the version's `tdx:` section:
 Compare against the published set:
 
 ```bash
-curl -s https://api.chutes.ai/servers/tee/measurements
+curl -s https://api.chutes.ai/servers/tdx/measurements
 ```
 
-All four should match for the version you built.
+All four should match for the version you built. (`/servers/tee/measurements` is the older,
+TDX-only endpoint; it is deprecated.)
 
 ## If they do not match
 

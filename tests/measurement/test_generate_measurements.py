@@ -123,10 +123,10 @@ def test_compute_measurements_assembles_entry(monkeypatch):
     assert tdx["rtmr3"] == "R3HEX"
     assert tdx["hardware"][0]["rtmr0"] == "R0"
     assert tdx["hardware"][0]["fingerprint"] == "a" * 64
-    # Both sections every release: no AMD classes registered still emits the SNP section.
-    assert entry["snp"] == {"hardware": []}
+    # No AMD classes registered: no SNP section. The API refuses one with no hardware.
+    assert "snp" not in entry
     # Key order matches the chutes-ops values.yaml layout it merges into.
-    assert list(entry.keys()) == ["version", "tdx", "snp"]
+    assert list(entry.keys()) == ["version", "tdx"]
     assert list(tdx.keys()) == ["mrtd", "rtmr1", "rtmr2", "rtmr3", "hardware"]
 
 
@@ -143,16 +143,17 @@ def test_compute_measurements_puts_each_class_on_its_own_platform(monkeypatch):
     assert list(entry["snp"].keys()) == ["hardware"]
 
 
-def test_compute_measurements_computes_tdx_registers_every_release(monkeypatch):
-    """The image's TDX registers are computed even when only AMD classes are registered:
-    what a release publishes must not depend on which classes exist when it is built."""
+def test_compute_measurements_writes_no_section_for_a_platform_without_classes(
+    monkeypatch,
+):
+    """With only AMD classes registered there is no TDX section: the API refuses a section with
+    no hardware -- and with it the whole config -- and a TDX section needs an MRTD, which only
+    the per-class fork runs produce. The TDX registers are still computed from the image, so a
+    broken TDX input fails the release either way."""
     entry = _compute(monkeypatch, [_amd_class()])
 
-    assert entry["tdx"]["rtmr1"] == "R1HEX"
-    assert entry["tdx"]["rtmr3"] == "R3HEX"
-    assert entry["tdx"]["hardware"] == []
-    # MRTD comes from the per-topology fork runs, so it is empty with no Intel classes.
-    assert entry["tdx"]["mrtd"] == ""
+    assert "tdx" not in entry
+    assert list(entry.keys()) == ["version", "snp"]
 
 
 def test_compute_measurements_refuses_an_empty_result(monkeypatch):

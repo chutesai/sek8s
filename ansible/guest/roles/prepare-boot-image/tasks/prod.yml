@@ -2,7 +2,7 @@
 # PRODUCTION task set (gated by main.yml: debug_build is false).
 #
 # Encrypts the root filesystem in place (offline, host-side over nbd/chroot) and
-# installs the fail-CLOSED prod initramfs: attest-common + provision-common shared
+# installs the fail-CLOSED prod initramfs: attest-common + provision-common + tee-evidence shared
 # libs, the prod entry scripts (fetch_key_and_unlock, setup_storage), and tdx-luks.conf.
 # All-or-nothing — this is a security-critical set; never gate individual tasks inside it.
 # The debug counterpart (debug.yml) installs a distinct fail-open initramfs and performs

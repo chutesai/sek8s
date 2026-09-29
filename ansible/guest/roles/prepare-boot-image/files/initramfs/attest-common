@@ -22,6 +22,10 @@
 # server-issued nonce.
 . /scripts/hotkey-sign
 
+# TEE detection and evidence generation (detect_tee, generate_evidence), shared with the
+# init-bottom /provision flow in provision-common.
+. /scripts/tee-evidence
+
 # ── Shared globals (attestation) ──────────────────────────────────────────────
 NONCE=""
 CERT_HASH=""
@@ -237,32 +241,6 @@ read_hotkey() {
     return 0
 }
 
-# ── TEE detection ─────────────────────────────────────────────────────────────
-# One guest image boots on both Intel TDX and AMD SEV-SNP hosts, so which TEE this
-# is gets discovered from the device node the guest driver created rather than baked
-# in at build time. TEE_TYPE is sent to the validator so it can pick a verifier.
-TEE_TYPE=""
-
-detect_tee() {
-    if [ -c "/dev/tdx_guest" ]; then
-        TEE_TYPE="tdx"
-        log_success_msg "TEE: Intel TDX"
-        return 0
-    fi
-    if [ -c "/dev/sev-guest" ]; then
-        TEE_TYPE="snp"
-        log_success_msg "TEE: AMD SEV-SNP"
-        return 0
-    fi
-    return 1
-}
-
-# Hex string -> raw bytes. The initramfs has no xxd and no python; GNU printf is
-# present and understands \\xHH, which is enough.
-hex2bin() {
-    /usr/bin/printf "$(printf '%s' "$1" | sed 's/../\\x&/g')"
-}
-
 # ── Nonce + quote ─────────────────────────────────────────────────────────────
 fetch_nonce() {
     local response_file="/tmp/nonce_response"
@@ -304,68 +282,6 @@ fetch_nonce() {
     return $result
 }
 
-generate_tdx_quote() {
-    local quote_file="/tmp/tdx_quote.bin"
-    if ! /usr/bin/tdx-quote-generator --report-data "$REPORTDATA" --hex -o "$quote_file" 2>/dev/null; then
-        return 1
-    fi
-    if [ ! -f "$quote_file" ]; then
-        return 1
-    fi
-    QUOTE_B64=$(base64 -w 0 < "$quote_file")
-    rm -f "$quote_file"
-    return 0
-}
-
-# SEV-SNP evidence comes straight from the PSP through configfs-TSM — there is no
-# external generator to call, because unlike a TDX quote the report is produced and
-# signed inside the guest request itself.
-generate_snp_report() {
-    local tsm="/sys/kernel/config/tsm/report"
-    local entry="$tsm/chutes-boot"
-
-    if [ ! -d "$tsm" ]; then
-        log_failure_msg "configfs-TSM not available at $tsm"
-        return 1
-    fi
-
-    rmdir "$entry" 2>/dev/null || true
-    if ! mkdir "$entry" 2>/dev/null; then
-        log_failure_msg "Failed to create $entry"
-        return 1
-    fi
-
-    # report_data is the 64-byte field; write it as raw bytes, not hex.
-    if ! hex2bin "$REPORTDATA" > "$entry/inblob" 2>/dev/null; then
-        rmdir "$entry" 2>/dev/null || true
-        log_failure_msg "Failed to write report inblob"
-        return 1
-    fi
-
-    QUOTE_B64=$(base64 -w 0 < "$entry/outblob" 2>/dev/null)
-    # configfs entries persist until removed; leaking one would break the next boot.
-    rmdir "$entry" 2>/dev/null || true
-
-    if [ -z "$QUOTE_B64" ]; then
-        log_failure_msg "Empty SEV-SNP attestation report"
-        return 1
-    fi
-    return 0
-}
-
-generate_quote() {
-    local rc=1
-    log_begin_msg "Generating ${TEE_TYPE} attestation evidence"
-    REPORTDATA=$(echo -n "${NONCE}${CERT_HASH}" | cut -c1-128)
-    case "$TEE_TYPE" in
-        tdx) generate_tdx_quote && rc=0 ;;
-        snp) generate_snp_report && rc=0 ;;
-        *)   log_failure_msg "Unknown TEE type: ${TEE_TYPE:-unset}" ;;
-    esac
-    log_end_msg $rc
-    return $rc
-}
-
 # ── Boot attestation POST (fresh nonce + quote per attempt) ───────────────────
 # Sets FETCH_ATTEMPTS to the number of attempts actually made. rc_headers_hook lets
 # the debug entry add the operator-signature header; empty for prod.
@@ -381,7 +297,7 @@ fetch_luks_key() {
             [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ] && sleep 2
             continue
         fi
-        if ! generate_quote; then
+        if ! generate_evidence "$NONCE" "$CERT_HASH"; then
             [ $FETCH_ATTEMPTS -lt $RETRY_COUNT ] && sleep 2
             continue
         fi
@@ -389,10 +305,9 @@ fetch_luks_key() {
         # The exact request body — built once so the hotkey signature hashes the same bytes curl
         # sends (the API hashes the received body; the two must be byte-identical).
         local body
-        # Evidence is sent under a field named for the TEE that produced it
-        # (tdx_quote / snp_quote) rather than a generic blob plus a tee_type
-        # discriminator: the field is the type, so evidence cannot be mislabelled.
-        body="{\"${TEE_TYPE}_quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}"
+        # One `quote` field for both TEEs: the API identifies a TDX quote or an SNP report
+        # from the bytes themselves, so there is no separate type to mislabel.
+        body="{\"quote\":\"$QUOTE_B64\",\"vm_name\":\"$VM_NAME\",\"miner_hotkey\":\"$HOTKEY\",\"first_boot\":${FIRST_BOOT}}"
 
         # Miner-hotkey proof-of-possession: sr25519 over {ss58}:{NONCE}:{sha256(body)}. The
         # X-Chutes-Hotkey and X-Chutes-Nonce headers below carry the other two fields, so the API
