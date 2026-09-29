@@ -14,14 +14,21 @@
 - name: Download artifact only if needed
   when: not ansible_check_mode and (k3s_version_output.rc != 0 or installed_k3s_version is version(k3s_version, '<'))
   block:
+    # The installer at the release tag of the pinned binary, not get.k3s.io: that serves
+    # whatever script is current (so the files it installs varied between builds), and when it
+    # is down every build fails here.
     - name: Download K3s install script
       ansible.builtin.get_url:
-        url: https://get.k3s.io/
+        url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
         timeout: 120
         dest: /usr/local/bin/k3s-install.sh
         owner: root
         group: root
         mode: "0755"
+      register: k3s_install_script
+      until: k3s_install_script is succeeded
+      retries: 5
+      delay: 10
 
     - name: Download K3s binary for single node
       ansible.builtin.command:

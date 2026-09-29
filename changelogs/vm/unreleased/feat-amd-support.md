@@ -39,6 +39,10 @@
 
 ### Fixed
 
+- The k3s role fetches the k3s installer from the k3s release tag matching the pinned binary
+  (`raw.githubusercontent.com/k3s-io/k3s/<k3s_version>/install.sh`) instead of `get.k3s.io`, with
+  retries. `get.k3s.io` serves whatever script is current, so the files it installs could differ
+  between builds, and while it returned HTTP 500 every build failed at the k3s step.
 - A guest build always starts from a fresh build VM. `run-vm` used to restart any `tdx-build` VM
   and disk an earlier run left behind unless `NO_CACHE` was set, so a rerun after a failure carried
   on from that run's half-applied state instead of from the image the playbook chose. It now
