@@ -44,16 +44,30 @@ LOGFILE = "/tmp/tdx-guest-td.log"  # nosec B108
 PROCESS_NAME = "chutes-td"
 
 
-def print_vm_status(ssh_port: int, show_ssh: bool = False):
+def print_vm_status(tee_label: str, ssh_port: int, show_ssh: bool = False):
     try:
         with open(PIDFILE) as pid_file:
             pid = int(pid_file.read())
-            print(f"TDX VM running with PID: {pid}")
+            print(f"{tee_label} VM running with PID: {pid}")
             if show_ssh:
                 print("Login:")
                 print(f"   ssh -p {ssh_port} root@<host-ip>")
     except Exception:  # nosec B110
         pass
+
+
+def host_memory_placement(numa_nodes: "list[int]") -> "tuple[str, str]":
+    """``numactl --interleave`` nodes for a flat guest's memory, and how to describe them.
+
+    A guest without NUMA topology gets one memory backend, so where its memory lands is decided
+    on the host: across the GPUs' NUMA nodes, or across every node when none were detected.
+    """
+    if not numa_nodes:
+        return "all", "interleaved across all host NUMA nodes"
+    nodes = ",".join(str(n) for n in numa_nodes)
+    if len(numa_nodes) == 1:
+        return nodes, f"on the GPUs' host NUMA node {nodes}"
+    return nodes, f"interleaved across the GPUs' host NUMA nodes {nodes}"
 
 
 def stop_existing_vm():
@@ -167,11 +181,8 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
             if guest.pass_gpus
             else []
         )
-        if numa_nodes:
-            interleave = ",".join(str(n) for n in numa_nodes)
-            print(f"  NUMA: interleaving memory across GPU nodes {interleave}")
-        else:
-            interleave = "all"
+        interleave, where = host_memory_placement(numa_nodes)
+        print(f"  Memory: flat guest (no guest NUMA); host memory {where}")
         launch_prefix = ["numactl", f"--interleave={interleave}"]
 
     print("Launching QEMU...")
@@ -202,5 +213,7 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
 
     if not guest.foreground:
         print(f"Log file: {LOGFILE}")
-    print_vm_status(guest.network.ssh_port, show_ssh=guest.show_ssh)
+    print_vm_status(
+        host.tee_provider.label, guest.network.ssh_port, show_ssh=guest.show_ssh
+    )
     return 0

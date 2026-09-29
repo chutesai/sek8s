@@ -151,3 +151,25 @@ def test_launch_refuses_when_the_host_contradicts_the_profile(
             _guest(),
             host,
         )
+
+
+@pytest.mark.parametrize(
+    "nodes, interleave, where",
+    [
+        ([0, 1], "0,1", "interleaved across the GPUs' host NUMA nodes 0,1"),
+        ([0], "0", "on the GPUs' host NUMA node 0"),
+        ([], "all", "interleaved across all host NUMA nodes"),
+    ],
+)
+def test_flat_guest_memory_placement_says_where_it_lands(nodes, interleave, where):
+    """A single node is not "interleaved": the message used to say so on one-node hosts."""
+    assert vm.host_memory_placement(nodes) == (interleave, where)
+
+
+@pytest.mark.parametrize("label", ["Intel TDX", "AMD SEV-SNP"])
+def test_vm_status_names_the_guests_tee(tmp_path, monkeypatch, capsys, label):
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("4242")
+    monkeypatch.setattr(vm, "PIDFILE", str(pidfile))
+    vm.print_vm_status(label, 10022)
+    assert capsys.readouterr().out.strip() == f"{label} VM running with PID: 4242"
