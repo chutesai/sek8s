@@ -18,7 +18,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
-. /scripts/provision-common
+. /scripts/init-bottom-common
 
 # Static, well-known debug k3s secretbox key (base64, decodes to exactly 32 bytes).
 # NOT secret — debug builds are not production-hardened; the goal is code-path parity

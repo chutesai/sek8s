@@ -15,7 +15,7 @@ host on the published image can claim another miner's `(hotkey, vm_name)` pair, 
 passphrase rotation, and permanently brick the victim's VM.
 
 The initramfs already stages `openssl` and uses it for RSA keygen, x509 self-signing, and
-detached signatures (see `attest-common` and `rc-sign`). But sr25519 is Schnorr over
+detached signatures (see `init-premount-common` and `rc-sign`). But sr25519 is Schnorr over
 Ristretto25519, which openssl cannot do, and importing the bittensor/substrate Python stack
 into a busybox initramfs is not viable.
 

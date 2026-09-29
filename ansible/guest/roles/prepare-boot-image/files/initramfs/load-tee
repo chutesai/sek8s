@@ -2,11 +2,11 @@
 # /etc/initramfs-tools/scripts/init-top/load-tee
 #
 # Loads the guest-side TEE driver for whichever platform this VM is running on and
-# makes configfs available, so the boot-attestation flow in attest-common can find a
+# makes configfs available, so the boot-attestation flow in init-premount-common can find a
 # device and produce evidence.
 #
 # Intel and AMD are tried in turn: a guest is one or the other, so order only decides
-# which modprobe runs first. Neither failure is fatal here — attest-common decides what
+# which modprobe runs first. Neither failure is fatal here — init-premount-common decides what
 # to do when no device appears, and on a debug image that path is fail-open.
 PREREQ="udev"
 prereqs() { echo "$PREREQ"; }
@@ -43,7 +43,7 @@ fi
 if [ -n "$loaded" ]; then
     log_success_msg "TEE guest module loaded: $loaded"
 else
-    # Not fatal: attest-common reports the absence with the context to act on, and a
+    # Not fatal: init-premount-common reports the absence with the context to act on, and a
     # debug image continues booting without attestation.
     log_failure_msg "No TEE guest device (tried tdx_guest, sev-guest)"
 fi

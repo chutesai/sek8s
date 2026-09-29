@@ -75,7 +75,7 @@ def test_hex2bin_writes_raw_bytes():
 
 def test_boot_attestation_sends_the_evidence_as_quote():
     """BootAttestationArgs requires `quote`; a platform-named field is a 422 at every boot."""
-    script = (INITRAMFS / "attest-common").read_text()
+    script = (INITRAMFS / "init-premount-common").read_text()
     body = next(
         line for line in script.splitlines() if line.strip().startswith("body=")
     )
@@ -83,7 +83,7 @@ def test_boot_attestation_sends_the_evidence_as_quote():
     assert '_quote\\"' not in body
 
 
-@pytest.mark.parametrize("flow", ["attest-common", "provision-common"])
+@pytest.mark.parametrize("flow", ["init-premount-common", "init-bottom-common"])
 def test_both_flows_generate_evidence_through_tee_evidence(flow):
     """/provision used to call tdx-quote-generator directly, so an SEV-SNP guest failed it and
     powered off. Both flows now share the platform-aware generator."""

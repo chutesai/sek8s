@@ -1,4 +1,4 @@
-# /etc/initramfs-tools/scripts/provision-common
+# /etc/initramfs-tools/scripts/init-bottom-common
 #
 # Shared init-bottom /provision flow, sourced by the prod and debug setup_storage
 # entry scripts. Identical implementation for both: load the VM identity written by
@@ -22,7 +22,7 @@
 . /scripts/hotkey-sign
 
 # TEE detection and evidence generation (detect_tee, generate_evidence), shared with boot
-# attestation in attest-common. This runs in a separate init-bottom invocation, so the TEE is
+# attestation in init-premount-common. This runs in a separate init-bottom invocation, so the TEE is
 # detected again here.
 . /scripts/tee-evidence
 

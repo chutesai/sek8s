@@ -3,7 +3,7 @@
 #
 # PROD: TDX-attested boot -> release the root LUKS key -> unlock -> mandatory root
 # passphrase rotation. The shared boot-attestation flow (CA, config/network, nonce,
-# quote, POST /boot/attestation, /run/chutes state) lives in attest-common and is
+# quote, POST /boot/attestation, /run/chutes state) lives in init-premount-common and is
 # identical to the debug entry; this script adds only the LUKS-specific unlock +
 # rotation and fail-CLOSED cleanup. None of the debug-only signing or
 # boot-through-on-failure logic appears here — it lives in the separate debug entry
@@ -25,7 +25,7 @@ if [ -z "$TDX_BASE_URL" ]; then
 fi
 
 # Shared boot-attestation flow (defines run_boot_attestation + its hooks).
-. /scripts/attest-common
+. /scripts/init-premount-common
 
 DEVICE_PATH="${LUKS_DEVICE:-/dev/vda1}"
 LUKS_NAME="${LUKS_NAME:-encrypted_root}"
@@ -67,7 +67,7 @@ clear_luks_key() {
 # Set up trap to ensure cleanup happens on ANY exit
 trap clear_luks_key EXIT INT TERM
 
-# handle_failure: fail closed. Overrides the attest-common default so the shared flow
+# handle_failure: fail closed. Overrides the init-premount-common default so the shared flow
 # shreds key material before powering off.
 handle_failure() {
     local reason="$1"

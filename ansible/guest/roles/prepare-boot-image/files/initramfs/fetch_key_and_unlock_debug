@@ -1,7 +1,7 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-premount/fetch_key_and_unlock_debug
 #
-# DEBUG IMAGE ONLY. Runs the shared boot-attestation flow (attest-common) to obtain
+# DEBUG IMAGE ONLY. Runs the shared boot-attestation flow (init-premount-common) to obtain
 # ephemeral validator auth and let the validator register the VM root CA, proving hotkey
 # possession over the server nonce (hotkey-sign, shared with prod).
 #
@@ -19,7 +19,7 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 [ -f /etc/tdx-luks.conf ] && . /etc/tdx-luks.conf
-. /scripts/attest-common
+. /scripts/init-premount-common
 
 if [ -z "$TDX_BASE_URL" ]; then
     log_failure_msg "debug attestation: missing TDX configuration (/etc/tdx-luks.conf) — skipping"

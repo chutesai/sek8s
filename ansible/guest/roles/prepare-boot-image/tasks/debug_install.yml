@@ -125,10 +125,10 @@
     owner: root
     group: root
 
-- name: Copy shared boot-attestation library (attest-common)
+- name: Copy shared boot-attestation library (init-premount-common)
   ansible.builtin.copy:
-    src: files/initramfs/attest-common
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/attest-common"
+    src: files/initramfs/init-premount-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount-common"
     mode: '0755'
     owner: root
     group: root
@@ -141,10 +141,10 @@
     owner: root
     group: root
 
-- name: Copy shared provision library (provision-common)
+- name: Copy shared provision library (init-bottom-common)
   ansible.builtin.copy:
-    src: files/initramfs/provision-common
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/provision-common"
+    src: files/initramfs/init-bottom-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom-common"
     mode: '0755'
     owner: root
     group: root

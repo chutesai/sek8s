@@ -1,7 +1,7 @@
 # /etc/initramfs-tools/scripts/tee-evidence
 #
-# TEE attestation evidence for the initramfs, sourced by attest-common (boot attestation) and
-# provision-common (init-bottom /provision). One guest image boots on both Intel TDX and AMD
+# TEE attestation evidence for the initramfs, sourced by init-premount-common (boot attestation) and
+# init-bottom-common (init-bottom /provision). One guest image boots on both Intel TDX and AMD
 # SEV-SNP hosts, so both callers detect the TEE from the device node its guest driver created
 # and produce the same kind of evidence: a TDX quote, or the raw 1184-byte SNP attestation
 # report. The API tells the two apart from the bytes, so callers send either under one `quote`

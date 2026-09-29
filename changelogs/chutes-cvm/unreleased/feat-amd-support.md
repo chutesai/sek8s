@@ -252,6 +252,9 @@
 
 ### Fixed
 
+- `guest launch` names the guest's TEE when it reports the VM running ("AMD SEV-SNP VM running
+  with PID …" rather than "TDX VM" on every host), and describes a flat guest's host memory
+  placement plainly: interleaved across the GPUs' NUMA nodes, or on the one node there is.
 - `chutes-cvm host reset-gpus` takes the reset mode (CC or PPCIe) from the host's GPU profile,
   the same `get_sbr_reset_args()` a launch uses. `reset-gpus.sh` kept its own device list and
   sent every card missing from it to the PPCIe reset; it now runs the arguments it is given.

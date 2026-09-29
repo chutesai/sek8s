@@ -1,4 +1,4 @@
-# /etc/initramfs-tools/scripts/attest-common
+# /etc/initramfs-tools/scripts/init-premount-common
 #
 # Shared boot-attestation flow, sourced by the prod and debug init-premount entry
 # scripts. This is the identical implementation for both — CA generation, config
@@ -17,13 +17,13 @@
 # need, then call run_boot_attestation.
 
 # sr25519 miner-hotkey signer (hotkey_stash_seed / hotkey_sign / hotkey_shred_seed → the
-# X-Chutes-Signature proof). Sourced here so every entry that sources attest-common — and
-# provision-common, which sources it likewise — can prove hotkey possession over each call's
+# X-Chutes-Signature proof). Sourced here so every entry that sources init-premount-common — and
+# init-bottom-common, which sources it likewise — can prove hotkey possession over each call's
 # server-issued nonce.
 . /scripts/hotkey-sign
 
 # TEE detection and evidence generation (detect_tee, generate_evidence), shared with the
-# init-bottom /provision flow in provision-common.
+# init-bottom /provision flow in init-bottom-common.
 . /scripts/tee-evidence
 
 # ── Shared globals (attestation) ──────────────────────────────────────────────

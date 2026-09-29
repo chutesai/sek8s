@@ -1,7 +1,7 @@
 # /etc/initramfs-tools/scripts/hotkey-sign
 #
 # Miner-hotkey proof-of-possession for the boot attestation / provision flow, sourced by the
-# boot-lifecycle initramfs scripts (attest-common, provision-common).
+# boot-lifecycle initramfs scripts (init-premount-common, init-bottom-common).
 #
 # The seed cannot drive the Python substrate stack in a busybox initramfs, so signing uses the
 # staged static /usr/bin/sr25519 (Schnorr/Ristretto, byte-compatible with substrate-interface).

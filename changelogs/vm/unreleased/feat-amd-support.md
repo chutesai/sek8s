@@ -10,6 +10,10 @@
 
 ### Changed
 
+- The shared initramfs libraries are named for the boot phase they serve: `attest-common` is
+  now `init-premount-common` and `provision-common` is `init-bottom-common`. Each is the flow its
+  prod and debug entry scripts share; `tee-evidence` and `hotkey-sign` are the libraries shared
+  between the two phases.
 - The initramfs detects the TEE and produces its evidence (a TDX quote, or the raw SEV-SNP
   report through configfs-TSM) in one shared `tee-evidence` library, used by both boot
   attestation and the init-bottom `/provision` call. Both send it in the API's `quote` field; the
