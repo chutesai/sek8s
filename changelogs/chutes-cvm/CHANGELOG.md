@@ -3,6 +3,18 @@
 The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installable host CLI
 (`pip`/`install.sh`). Versioned with SemVer via `src/chutes-cvm/VERSION`. Run
 `make promote-changelogs` to aggregate fragments into the current version section.
+## [0.2.1] - 2026-10-01
+
+### Fixed
+- 2-node 8x B300 hosts came up with 7 of 8 GPUs (`gpu-verify`: "expected 8 but nvidia-smi sees 7").
+  Since 1.4.x every 2-node host put its GPUs behind per-NUMA-node PXB-PCIe bridges. A B300's 1 TB
+  root-port window does not fit the guest's 64-bit MMIO window once it is split per bridge, so the
+  last GPU's BAR2 went unassigned. B300 now opts out of PXB grouping
+  (`GpuProfile.supports_pxb_grouping`). It keeps guest NUMA memory and vCPUs, with its GPUs laid
+  out flat on `pcie.0` as on the flat path. The variant label for this layout is
+  `numa-flatpci-<vcpus>c-<mem>g`. This changes RTMR0 for 2-node B300 host classes, whose
+  measurements must be regenerated.
+
 ## [0.2.0] - 2026-09-20
 
 ### Changed

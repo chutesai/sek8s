@@ -297,5 +297,5 @@ def setup_passthrough(cmd: QemuCommand, host: HostProfile):
         gpus=host.gpus,
         nvswitches=host.attached_nvswitches,
         ib_devices=host.attached_ib,
-        guest_numa=host.uses_guest_numa,
+        pxb_grouping=host.uses_pxb_grouping,
     )

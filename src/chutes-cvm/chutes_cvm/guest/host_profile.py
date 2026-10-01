@@ -276,6 +276,21 @@ class HostProfile:
         """
         return self.numa_node_count == 2
 
+    @property
+    def uses_pxb_grouping(self) -> bool:
+        """Whether passthrough devices go behind per-node PXB-PCIe bridges rather than flat on
+        pcie.0.
+
+        Needs guest NUMA, because a PXB names a guest NUMA node. Beyond that it is the GPU
+        model's call (``GpuProfile.supports_pxb_grouping``): B300's 1 TB root-port windows do not
+        fit the guest's 64-bit MMIO window once it is split per bridge, so a 2-node B300 host
+        keeps NUMA memory and vCPUs but lays its GPUs out flat. A host with no GPUs has no model
+        to object.
+        """
+        if not self.uses_guest_numa:
+            return False
+        return not self.gpus or self.gpu_profile.supports_pxb_grouping
+
     @cached_property
     def attached_nvswitches(self) -> tuple[NvSwitchDevice, ...]:
         """NVSwitches the launcher passes through -- all of them, or none.
@@ -363,14 +378,20 @@ class HostProfile:
     @property
     def variant_label(self) -> str:
         """Deterministic variant id: ``<path>-<vcpus>c-<mem>g[-devices]``, e.g.
-        ``numa-176c-1944g`` or ``numa-124c-1128g-nvsw-node0``.
+        ``numa-176c-1944g``, ``numa-124c-1128g-nvsw-node0`` or ``numa-flatpci-252c-2304g``.
 
-        On the NUMA path the extra parts carry each device class's node signature; on the flat
-        path only counts matter, because there is no PXB grouping to differ.
+        With PXB grouping the extra parts carry each device class's node signature; with flat
+        PCI (``flat``, or ``numa-flatpci`` for guest NUMA without PXB) only counts matter,
+        because there is no grouping to differ.
         """
-        path = "numa" if self.uses_guest_numa else "flat"
+        if self.uses_pxb_grouping:
+            path = "numa"
+        elif self.uses_guest_numa:
+            path = "numa-flatpci"
+        else:
+            path = "flat"
         parts = [path, f"{self.vcpus}c-{self.guest_mem_gb}g"]
-        if self.uses_guest_numa:
+        if self.uses_pxb_grouping:
             if self.nvswitch_numa_nodes:
                 parts.append("nvsw-" + _node_sig(self.nvswitch_numa_nodes))
             if self.ib_numa_nodes:
@@ -419,9 +440,10 @@ class HostProfile:
         ordering the guest PXB grouping and therefore RTMR0 depend on.
         """
         numa = self.uses_guest_numa
-        # One pinning object across every builder, as a launch does: when guest NUMA is active it
-        # pins the emulated devices to pcie.0 slots 0x2-0x7, below the PXB bridges at 0x18+.
-        pinning = PcieRootPinning(numa)
+        pxb = self.uses_pxb_grouping
+        # One pinning object across every builder, as a launch does: under PXB grouping it pins
+        # the emulated devices to pcie.0 slots 0x2-0x7, below the PXB bridges at 0x18+.
+        pinning = PcieRootPinning(pxb)
         cmd = build_base_cmd(
             mem=self.mem,
             smp_topology=self.smp_topology,
@@ -458,7 +480,7 @@ class HostProfile:
             gpus=self.gpus,
             nvswitches=self.attached_nvswitches,
             ib_devices=self.attached_ib,
-            guest_numa=numa,
+            pxb_grouping=pxb,
         )
         return cmd
 

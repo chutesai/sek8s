@@ -57,7 +57,7 @@ class PcieRootPinning:
 
     One instance is shared across the builders of a single command -- each call takes the next
     slot, so how many devices there are is the callers' business, not this object's. The run
-    starts at 0x1, except under guest NUMA where it starts at 0x2 to keep every emulated device
+    starts at 0x1, except under PXB grouping where it starts at 0x2 to keep every emulated device
     below the PXB bridges. Both match live DSDTs from the two paths on one host:
         NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
         FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
@@ -66,10 +66,10 @@ class PcieRootPinning:
     slot and so changes the DSDT -- and with it every published RTMR0.
     """
 
-    _LAST_SLOT = 0x17  # guest-NUMA PXB bridges start at 0x18
+    _LAST_SLOT = 0x17  # PXB bridges start at 0x18
 
-    def __init__(self, guest_numa: bool):
-        self._next = 0x2 if guest_numa else 0x1
+    def __init__(self, pxb_grouping: bool):
+        self._next = 0x2 if pxb_grouping else 0x1
 
     def device_suffix(self) -> str:
         if self._next > self._LAST_SLOT:
@@ -236,7 +236,7 @@ def build_pci_topology(
     gpus: "Sequence[PciDevice]",
     nvswitches: "Sequence[PciDevice]",
     ib_devices: "Sequence[PciDevice]",
-    guest_numa: bool,
+    pxb_grouping: bool,
 ) -> None:
     """Add every passthrough endpoint to the command's PCI topology.
 
@@ -245,15 +245,16 @@ def build_pci_topology(
     capture it was read from -- never from a second read of the live machine, which is how the
     launch and the measurement came to disagree about where a GPU sat.
 
-    ``guest_numa`` must agree with the memory topology, because PXB bridges name guest NUMA
+    ``pxb_grouping`` requires a guest-NUMA memory topology, because PXB bridges name guest NUMA
     nodes; building them for a guest with no ``-numa`` makes QEMU refuse with "Illegal numa
-    node 0".
+    node 0". The converse is allowed: a NUMA guest may still take flat PCI (see
+    ``GpuProfile.supports_pxb_grouping``).
 
     NB: when IB passthrough is enabled, a launch attaches the SR-IOV VFs it creates, not the PFs
     the profile captured. Nothing passes IB through today, so both are empty and it is open.
     """
     topo: "PciTopologyState | NumaPciTopologyState"
-    if guest_numa:
+    if pxb_grouping:
         print("  PCI topology: NUMA-local PXB-PCIe bridges")
         topo = NumaPciTopologyState()
     else:
@@ -270,7 +271,7 @@ def build_pci_topology(
     ):
         for ordinal, device in enumerate(devices, start=1):
             chassis += 1
-            placement = {"numa_node": device.numa_node} if guest_numa else {}
+            placement = {"numa_node": device.numa_node} if pxb_grouping else {}
             topo.add_device(
                 cmd,
                 host_bdf=device.bdf,
