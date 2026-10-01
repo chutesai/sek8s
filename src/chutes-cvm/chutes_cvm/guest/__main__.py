@@ -108,7 +108,7 @@ def launch_vm(args) -> int:
     print(f"Launching TDX VM: {vcpus} vCPUs, {mem} RAM")
     print(f"Image: {args.image}")
 
-    pci_pinning = PcieRootPinning(numa_active)
+    pci_pinning = PcieRootPinning(host.uses_pxb_grouping)
     print(f"Firmware: {firmware}")
 
     # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping

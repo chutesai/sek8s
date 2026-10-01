@@ -143,3 +143,14 @@ def h200_doc(nvswitch_node=0):
         gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
         nvswitch_nodes=(nvswitch_node,) * 4,
     )
+
+
+def b300_numa_doc():
+    """2-socket Xeon 6 B300 host on two NUMA nodes, GPUs split 4+4 (API class ee4b9ca81f36)."""
+    return host_document(
+        "B300",
+        vcpus=252,
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
+        cpu_processor_id="d1060a00fffba91f",
+        host_mem_gb=3072,
+    )

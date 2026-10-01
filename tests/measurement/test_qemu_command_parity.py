@@ -124,10 +124,33 @@ def test_pci_topology_takes_the_decision_it_is_given():
 
     flat = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
     flat.devices = []
-    build_pci_topology(flat, **devices, guest_numa=False)
+    build_pci_topology(flat, **devices, pxb_grouping=False)
     assert not any("pxb-pcie" in d for d in flat.devices)
 
     numa = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
     numa.devices = []
-    build_pci_topology(numa, **devices, guest_numa=True)
+    build_pci_topology(numa, **devices, pxb_grouping=True)
     assert any("pxb-pcie" in d for d in numa.devices)
+
+
+def test_b300_numa_guest_keeps_flat_pci():
+    """A 2-node B300 host gets guest NUMA memory but no PXB bridges.
+
+    Its 1 TB root-port windows do not fit the guest's 64-bit MMIO window split per bridge, so the
+    devices take the flat path's exact pcie.0 layout: emulated devices from 0x1, root ports from
+    0x8. Only the memory/NUMA objects differ from a flat guest.
+    """
+    host = HostProfile(known.b300_numa_doc())
+    assert host.uses_guest_numa is True
+    assert host.uses_pxb_grouping is False
+
+    cmd = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
+    args = _topology_args(cmd.to_args())
+    assert not any("pxb-pcie" in a for a in args)
+    assert cmd.numa  # guest NUMA nodes are still built
+    assert "memory-backend=mem0" not in cmd.machine
+    assert _slots(args, "virtio-blk-pci")[0] == "0x1"
+    root_ports = [a for a in args if a.startswith("pcie-root-port")]
+    assert len(root_ports) == 8
+    assert all("bus=pcie.0" in a for a in root_ports)
+    assert _slots(args, "pcie-root-port")[0] == "0x8"
