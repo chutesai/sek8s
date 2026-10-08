@@ -44,7 +44,7 @@ The CA does **not exist** when the boot/luks attestation calls run. The sek8s bo
 
 1. `init-premount` (`fetch_key_and_unlock`): generate a **throwaway self-signed** client cert
    (`CN=tdx-vm-<ts>`) → `GET /nonce` → `POST /boot/attestation` → open root LUKS → `luks/confirm`
-2. `init-bottom` `rtmr3-measure`: **extends RTMR3** with real-root file hashes
+2. `init-bottom` `rootfs-measure`: **extends RTMR3** with real-root file hashes
 3. `init-bottom` `setup_storage`: `POST /luks/attest` → rotate storage → `luks/confirm`
    (which then **deletes the ephemeral client cert**)
 4. `init-bottom` `setup_vm_tls`: **generate the VM root CA** (`sek8s-vm-root-ca`, RSA-4096) →

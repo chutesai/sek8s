@@ -1,4 +1,4 @@
-"""Tests for the attestation preflight (chutes_cvm.guest.preflight)."""
+"""Tests for the attestation preflight (chutes_cvm.guest.chutes_api)."""
 
 import hashlib
 import io
@@ -7,9 +7,13 @@ import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
-from chutes_cvm.guest import preflight
+from chutes_cvm.guest import chutes_api
+from chutes_cvm.guest.chutes_api import (
+    ChutesApiError,
+    host_class_status,
+    submit_profile,
+)
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.preflight import PreflightError, run_preflight, submit_profile
 
 
 def _capture(**over):
@@ -64,48 +68,48 @@ def _capture(**over):
 
 
 # What submit-profile sends: the API subset, not the capture.
-SAMPLE_PROFILE = HostProfile(_capture()).to_api_json()
+SAMPLE_PROFILE = HostProfile.from_dict(_capture()).to_api_json()
 
 
 def test_apply_target_os_moves_the_qemu_the_release_ships():
     """The bug this guards: a 25.10 host asking about 26.04 must not register a class built with
     QEMU 10.1.0. The submitted profile carries the QEMU version rather than the release, so that
     version is what has to move."""
-    out = json.loads(preflight._apply_target_os(SAMPLE_PROFILE, "26.04"))
-    assert out["qemu"]["qemu_version"] == preflight.SUPPORTED_QEMU_BY_OS["26.04"]
+    out = json.loads(chutes_api._apply_target_os(SAMPLE_PROFILE, "26.04"))
+    assert out["qemu"]["qemu_version"] == chutes_api.SUPPORTED_QEMU_BY_OS["26.04"]
     assert "host" not in out  # the release itself is not submitted
 
 
 def test_apply_target_os_rejects_unsupported_release():
-    with pytest.raises(PreflightError, match="not supported"):
-        preflight._apply_target_os(SAMPLE_PROFILE, "99.99")
+    with pytest.raises(ChutesApiError, match="not supported"):
+        chutes_api._apply_target_os(SAMPLE_PROFILE, "99.99")
 
 
 def test_apply_target_os_requires_block():
-    with pytest.raises(PreflightError, match="qemu block"):
-        preflight._apply_target_os(json.dumps({"gpu": {}}), "26.04")
+    with pytest.raises(ChutesApiError, match="qemu block"):
+        chutes_api._apply_target_os(json.dumps({"gpu": {}}), "26.04")
 
 
 def test_load_creds_missing(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("miner: {}\n")
-    with pytest.raises(PreflightError, match="ss58 / miner.seed"):
-        preflight._load_miner_creds(str(cfg))
+    with pytest.raises(ChutesApiError, match="ss58 / miner.seed"):
+        chutes_api._load_miner_creds(str(cfg))
 
 
 def test_load_creds_ok(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("miner:\n  ss58: 5ABC\n  seed: '0xdead'\n")
-    assert preflight._load_miner_creds(str(cfg)) == ("5ABC", "0xdead")
+    assert chutes_api._load_miner_creds(str(cfg)) == ("5ABC", "0xdead")
 
 
 def test_sign_message_format_and_headers():
     kp = MagicMock()
     kp.ss58_address = "5HOTKEY"
     kp.sign.return_value = b"\x01\x02\x03"
-    with patch("chutes_cvm.guest.preflight.Keypair") as KP:
+    with patch("chutes_cvm.guest.chutes_api.Keypair") as KP:
         KP.create_from_seed.return_value = kp
-        hotkey, sig = preflight._sign("0xseed", b"body", "1700000000")
+        hotkey, sig = chutes_api._sign("0xseed", b"body", "1700000000")
     assert hotkey == "5HOTKEY"
     assert sig == "010203"
     signed = kp.sign.call_args.args[0]
@@ -118,57 +122,46 @@ def _creds(tmp_path):
     return str(cfg)
 
 
-def test_run_preflight_flow_hits_preflight_endpoint(tmp_path):
-    host = HostProfile(_capture())
+def test_host_class_status_signs_the_given_profile_with_no_version(tmp_path):
+    """Version-free: the class is asked about before any image is on disk."""
+    host = HostProfile.from_dict(_capture())
     with patch(
-        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+        "chutes_cvm.guest.chutes_api._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
-        "chutes_cvm.guest.preflight._post",
-        return_value={"launchable": True, "fingerprint": "fp", "detail": "ok"},
+        "chutes_cvm.guest.chutes_api._post", return_value={"status": "accepted"}
     ) as post:
-        resp = run_preflight(
-            config_path=_creds(tmp_path),
-            version="1.4.0",
-            rc=False,
-            host_profile=host,
-        )
-    assert resp["launchable"] is True
-    # _post(path, api_base, hotkey, nonce, signature, body)
-    path = post.call_args.args[0]
-    assert path.startswith("/servers/tdx/preflight?")
-    assert "version=1.4.0" in path and "rc=false" in path
-    assert b"2335" in post.call_args.args[5]
+        resp = host_class_status(config_path=_creds(tmp_path), host_profile=host)
+    assert resp == {"status": "accepted"}
+    # The API's route, spelled out: it comes from TeeProvider.name, so renaming a provider must
+    # fail here rather than silently call a route the API does not serve.
+    assert post.call_args.args[0] == "/servers/tdx/host_profiles/status"
+    assert post.call_args.args[5] == host.to_api_json().encode()
 
 
-def test_run_preflight_encodes_rc_true(tmp_path):
-    host = HostProfile(_capture())
+def test_an_amd_host_asks_the_snp_route(tmp_path):
+    """Each platform's classes are answered by its own route; the profile says which."""
+    doc = _capture()
+    doc["cpu"]["vendor"] = "AuthenticAMD"
+    host = HostProfile.from_dict(doc)
     with patch(
-        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+        "chutes_cvm.guest.chutes_api._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
-        "chutes_cvm.guest.preflight._post", return_value={"launchable": False}
+        "chutes_cvm.guest.chutes_api._post", return_value={"status": "unknown"}
     ) as post:
-        run_preflight(
-            config_path=_creds(tmp_path),
-            version="2.0.0",
-            rc=True,
-            host_profile=host,
-        )
-    assert "rc=true" in post.call_args.args[0]
+        host_class_status(config_path=_creds(tmp_path), host_profile=host)
+    # The API's route, spelled out (see the TDX case above).
+    assert post.call_args.args[0] == "/servers/snp/host_profiles/status"
 
 
-def test_run_preflight_target_os_override(tmp_path):
-    host = HostProfile(_capture())
+def test_host_class_status_target_os_override(tmp_path):
+    host = HostProfile.from_dict(_capture())
     with patch(
-        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+        "chutes_cvm.guest.chutes_api._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
-        "chutes_cvm.guest.preflight._post", return_value={"launchable": False}
+        "chutes_cvm.guest.chutes_api._post", return_value={"status": "unknown"}
     ) as post:
-        run_preflight(
-            config_path=_creds(tmp_path),
-            version="1.4.0",
-            rc=False,
-            target_os="26.04",
-            host_profile=host,
+        host_class_status(
+            config_path=_creds(tmp_path), target_os="26.04", host_profile=host
         )
     body = json.loads(post.call_args.args[5].decode())
     assert body["qemu"]["qemu_version"] == "10.2.1"  # 26.04's QEMU, not the live 10.1.0
@@ -176,20 +169,21 @@ def test_run_preflight_target_os_override(tmp_path):
 
 
 def test_submit_profile_hits_host_profiles_endpoint(tmp_path):
-    # submit IS the command whose job starts with reading the host, so unlike run_preflight it
-    # takes the reading itself -- via _read_host() -- and the read is what gets stubbed here.
+    # Like every request here, it signs the profile its caller read; it never reads the host.
+    host = HostProfile.from_dict(_capture())
     with patch(
-        "chutes_cvm.guest.preflight.HostProfile.from_host",
-        return_value=HostProfile(_capture()),
+        "chutes_cvm.guest.chutes_api.HostProfile.from_host",
+        side_effect=AssertionError("submit must not read the host itself"),
     ), patch(
-        "chutes_cvm.guest.preflight._sign", return_value=("5HOTKEY", "abcd")
+        "chutes_cvm.guest.chutes_api._sign", return_value=("5HOTKEY", "abcd")
     ), patch(
-        "chutes_cvm.guest.preflight._post",
+        "chutes_cvm.guest.chutes_api._post",
         return_value={"status": "pending", "fingerprint": "fp", "stored": True},
     ) as post:
-        resp = submit_profile(config_path=_creds(tmp_path))
+        resp = submit_profile(config_path=_creds(tmp_path), host_profile=host)
     assert resp["stored"] is True
     assert post.call_args.args[0] == "/servers/tdx/host_profiles"
+    assert post.call_args.args[5] == host.to_api_json().encode()
 
 
 def test_post_http_error_surfaces_detail():
@@ -201,15 +195,15 @@ def test_post_http_error_surfaces_detail():
         io.BytesIO(json.dumps({"detail": "blacklisted"}).encode()),
     )
     with patch("urllib.request.urlopen", side_effect=err):
-        with pytest.raises(PreflightError, match="403.*blacklisted"):
-            preflight._post(
+        with pytest.raises(ChutesApiError, match="403.*blacklisted"):
+            chutes_api._post(
                 "/servers/tdx/preflight", "https://api", "hk", "n", "sig", b"{}"
             )
 
 
 def test_post_unreachable_fails_closed_message():
     with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
-        with pytest.raises(PreflightError, match="unreachable"):
-            preflight._post(
+        with pytest.raises(ChutesApiError, match="unreachable"):
+            chutes_api._post(
                 "/servers/tdx/preflight", "https://api", "hk", "n", "sig", b"{}"
             )

@@ -1,6 +1,6 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-bottom/setup_storage
-PREREQ="rtmr3-measure"
+PREREQ="rootfs-measure"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 

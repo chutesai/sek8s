@@ -95,6 +95,7 @@
         - name: Download keyring
           ansible.builtin.get_url:
             url: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu{{ ubuntu_major }}{{ ubuntu_minor }}/x86_64/cuda-keyring_1.1-1_all.deb
+            checksum: "sha256:{{ cuda_keyring_sha256 }}"
             dest: /tmp/cuda-keyring.deb
             mode: "0644"
             owner: root

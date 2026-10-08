@@ -10,16 +10,16 @@ from dataclasses import replace
 
 import pytest
 import topology_fixtures as known
+from chutes_cvm.guest.context import MeasurementContext
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import MeasurementCommandBuilder, QemuCommand
 from chutes_cvm.measurement.image_config import ImageConfig
 
 _FW = "/opt/ovmf/OVMF.fd"
 
 
 def _md(doc, **kw):
-    host = HostProfile(doc)
-    cmd = QemuCommand.for_measurement(host, firmware=_FW)
+    host = HostProfile.from_dict(doc)
+    cmd = known.measurement_command(host, firmware=_FW)
     return ImageConfig(cmd, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
@@ -112,7 +112,7 @@ def test_endpoint_without_captured_bars_raises():
     """The stub reproduces the guest's MMIO windows from the captured BARs, so without them the
     generated RTMR0 matches no real boot -- refuse rather than measure a wrong aperture.
     """
-    host = HostProfile(
+    host = HostProfile.from_dict(
         known.host_document(
             "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
         )
@@ -120,7 +120,7 @@ def test_endpoint_without_captured_bars_raises():
     bare = replace(host.gpus[0], bars=[])
 
     with pytest.raises(ValueError, match="no BARs captured"):
-        MeasurementCommandBuilder(host).endpoint(bare, "rp_ib1")
+        MeasurementContext.from_host(host, firmware=_FW).endpoint(host, bare, "rp_ib1")
 
 
 def test_emulated_slot_fillers_keep_the_slots_the_command_assigned():

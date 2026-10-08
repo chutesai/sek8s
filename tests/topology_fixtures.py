@@ -120,7 +120,7 @@ def host_document(
         "qemu": {"qemu_version": "10.2.1"},
     }
     # These stand in for from_host's output, which has already resolved guest RAM.
-    doc["memory"]["guest_gb"] = HostProfile(doc)._derived_guest_mem_gb
+    doc["memory"]["guest_gb"] = HostProfile.from_dict(doc)._derived_guest_mem_gb
     return doc
 
 
@@ -152,11 +152,15 @@ def h200_doc(nvswitch_node=0):
     )
 
 
+#: The ACPI hash an SEV-SNP launch fixture carries unless a test names one.
+ACPI_SHA256 = "6a8501a0f92db861ac1f055a4015adc52662da7b760463ec0331e40bb1f5f5a7"
+
+
 @dataclass
 class QemuProfileStub:
-    """The slice of HostProfile that build_base_cmd reads.
+    """The slice of HostProfile that ``QemuCommand.build`` reads.
 
-    build_base_cmd takes the profile because the profile is the single authority on guest
+    The build takes the profile because the profile is the single authority on guest
     shape. Tests that exercise the command assembly itself want to state mem/-smp directly
     rather than reverse-engineer a capture that derives them, so they pass this instead.
     Anything testing the derivation uses a real HostProfile.
@@ -173,3 +177,95 @@ class QemuProfileStub:
             from chutes_cvm.guest.tee import TdxTeeProvider
 
             self.tee_provider = TdxTeeProvider()
+
+    def guest_object(self):
+        """As HostProfile builds it."""
+        return self.tee_provider.guest_object()
+
+
+def fake_image_set(version="1.4.0", rc=False, directory="/base"):
+    """An ImageSet as ``ImageSet.from_dir`` would read it, without files behind it."""
+    from chutes_cvm.guest.image_set import ImageArtifact, ImageSet
+
+    def artifact(role):
+        return ImageArtifact(
+            role=role, path=f"{directory}/x.{role}", sha256="0" * 64, size=1
+        )
+
+    return ImageSet(
+        directory=directory,
+        version=version,
+        rc=rc,
+        qcow2=artifact("qcow2"),
+        vmlinuz=artifact("vmlinuz"),
+        initrd=artifact("initrd"),
+        cmdline=artifact("cmdline"),
+    )
+
+
+def launch_context(
+    host,
+    *,
+    firmware="/f",
+    img_path="/root.qcow2",
+    host_nodes=(),
+    boot=None,
+    net=None,
+    volumes=None,
+    process=None,
+    passthrough=None,
+    pass_gpus=False,
+    acpi_sha256=None,
+):
+    """A launch context for ``host``'s platform from the inputs a launch command takes, with no
+    filesystem or sysfs reads (``LaunchContext.from_host_class`` / ``test_boot`` do those). An
+    SEV-SNP context carries ``acpi_sha256``, defaulting to ``ACPI_SHA256``."""
+    from chutes_cvm.guest.context import (
+        DirectBoot,
+        GuestNetwork,
+        GuestVolumes,
+        LaunchContext,
+        PassthroughSet,
+        ProcessBundle,
+        SnpLaunchContext,
+        TdxLaunchContext,
+    )
+    from chutes_cvm.guest.tee import SnpTeeProvider
+
+    if isinstance(host, QemuProfileStub):
+        snp = isinstance(host.tee_provider, SnpTeeProvider)
+        context_type = SnpLaunchContext if snp else TdxLaunchContext
+    else:
+        context_type = LaunchContext.type_for(host)
+    platform = {}
+    if context_type is SnpLaunchContext:
+        platform["acpi_sha256"] = acpi_sha256 or ACPI_SHA256
+    return context_type(
+        image=img_path,
+        firmware=firmware,
+        host_nodes=tuple(host_nodes),
+        boot=boot or DirectBoot(kernel="/dev/null", initrd="/dev/null", cmdline=""),
+        network=net or GuestNetwork(network_type="user", ssh_port=0),
+        volumes=volumes or GuestVolumes(),
+        process=process or ProcessBundle(name="chutes-td"),
+        passthrough=passthrough or PassthroughSet(),
+        pass_gpus=pass_gpus,
+        **platform,
+    )
+
+
+def launch_command(host, **inputs):
+    """The launch command for ``host`` from a launch's inputs (see ``launch_context``)."""
+    from chutes_cvm.guest.qemu import QemuCommand
+
+    return QemuCommand.build(host, launch_context(host, **inputs))
+
+
+def measurement_command(host, *, firmware):
+    """The offline measurement command for ``host``."""
+    from chutes_cvm.guest.context import MeasurementContext
+    from chutes_cvm.guest.qemu import QemuCommand
+
+    return QemuCommand.build(
+        host, MeasurementContext.from_host(host, firmware=firmware)
+    )

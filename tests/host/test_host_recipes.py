@@ -26,7 +26,7 @@ from chutes_cvm.host.setup import (
 )
 
 TDX = TdxTeeProvider()
-SNP = SnpTeeProvider(cbitpos=51, reduced_phys_bits=1)
+SNP = SnpTeeProvider()
 
 
 def _ID(recipe):

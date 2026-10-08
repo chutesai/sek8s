@@ -8,20 +8,32 @@ from unittest.mock import MagicMock, patch
 import chutes_cvm.guest.tee as tee_module
 import chutes_cvm.guest.vm as vm
 import pytest
-from chutes_cvm.guest.context import GuestContext
+from chutes_cvm.guest.context import (
+    DirectBoot,
+    GuestNetwork,
+    GuestVolumes,
+    LaunchContext,
+    PassthroughSet,
+    ProcessBundle,
+    TdxLaunchContext,
+)
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
-from chutes_cvm.guest.qemu import GuestNetwork, GuestVolumes, QemuCommand
+from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
-def _guest(**over) -> GuestContext:
+def _guest(**over) -> LaunchContext:
     """A user-mode debug guest: the smallest context the primitive accepts."""
-    return GuestContext(
+    return TdxLaunchContext(
         image="/tmp/fake.img",
-        volumes=GuestVolumes(),
+        firmware="/fw/OVMF.fd",
+        host_nodes=(),
+        boot=DirectBoot("/k", "/i", "root=UUID=x ro"),
         network=GuestNetwork(network_type="user", ssh_port=10022),
+        volumes=GuestVolumes(),
+        process=ProcessBundle(name="chutes-td", foreground=True),
+        passthrough=PassthroughSet(),
         pass_gpus=over.get("pass_gpus", False),
-        foreground=True,
     )
 
 
@@ -42,38 +54,29 @@ _FAKE_CMD = QemuCommand(
 # CAPABILITY check is stubbed: it reads this machine's kvm module parameters, which are a
 # property of the box running the tests, not of the code under test.
 @patch("chutes_cvm.guest.tee.TeeProvider.verify_environment")
-@patch(
-    "chutes_cvm.guest.vm.direct_boot_artifacts",
-    return_value=("/k", "/i", "root=UUID=x ro"),
-)
 @patch("chutes_cvm.guest.vm.verify_host_qemu_supported")
 @patch("chutes_cvm.guest.vm.proc.run")
 @patch("chutes_cvm.guest.vm.bind_passthrough")
-@patch("chutes_cvm.guest.vm.QemuCommand.create", return_value=_FAKE_CMD)
+@patch("chutes_cvm.guest.vm.QemuCommand.build", return_value=_FAKE_CMD)
 def test_launch_vm_returns_qemu_nonzero(
     _mock_create,
     _mock_bind,
     mock_run,
     _mock_qemu_check,
-    _mock_stage,
     _mock_tee,
 ):
     import topology_fixtures as known
     from chutes_cvm.guest.host_profile import HostProfile
 
-    host = HostProfile(known.rtx_numa_doc())
+    host = HostProfile.from_dict(known.rtx_numa_doc())
     mock_run.return_value = MagicMock(returncode=1)
     assert vm.launch_vm(_guest(), host) == 1
 
 
-@patch(
-    "chutes_cvm.guest.vm.direct_boot_artifacts",
-    return_value=("/k", "/i", "root=UUID=x ro"),
-)
 @patch("chutes_cvm.guest.vm.verify_host_qemu_supported")
 @patch("chutes_cvm.guest.vm.proc.run")
 @patch("chutes_cvm.guest.vm.bind_passthrough")
-@patch("chutes_cvm.guest.vm.QemuCommand.create", return_value=_FAKE_CMD)
+@patch("chutes_cvm.guest.vm.QemuCommand.build", return_value=_FAKE_CMD)
 # As above: the profile decides the platform; this only stubs the host capability probe.
 @patch("chutes_cvm.guest.tee.TeeProvider.verify_environment")
 def test_launch_takes_cpu_args_from_the_host_profile(
@@ -82,7 +85,6 @@ def test_launch_takes_cpu_args_from_the_host_profile(
     _mock_bind,
     mock_run,
     _mock_qemu_check,
-    _mock_stage,
     monkeypatch,
 ):
     """A launch must pass the -cpu the profile resolves, as generation does.
@@ -99,7 +101,7 @@ def test_launch_takes_cpu_args_from_the_host_profile(
     monkeypatch.setitem(HostProfile.CPU_ARGS_BY_QEMU, "11.0.0", "host,-avx10,-tsx")
     doc = known.rtx_numa_doc()
     doc["qemu"]["qemu_version"] = "11.0.0"
-    host = HostProfile(doc)
+    host = HostProfile.from_dict(doc)
     mock_run.return_value = MagicMock(returncode=0)
 
     vm.launch_vm(
@@ -109,7 +111,7 @@ def test_launch_takes_cpu_args_from_the_host_profile(
 
     # The launcher hands over the profile itself rather than a copy of its -cpu, so the
     # assertion is that the profile reaching the factory resolves the right args. That is
-    # structural -- create() reads them off the profile -- but the launcher could still pass
+    # structural -- build() reads them off the profile -- but the launcher could still pass
     # the wrong profile, which is what this catches.
     passed_profile = mock_create.call_args.args[0]
     assert passed_profile.cpu_args == "host,-avx10,-tsx"
@@ -144,7 +146,7 @@ def test_launch_refuses_when_the_host_contradicts_the_profile(
 
     doc = known.rtx_numa_doc()
     doc["cpu"]["vendor"] = "AuthenticAMD"
-    host = HostProfile(doc)
+    host = HostProfile.from_dict(doc)
 
     with pytest.raises(RuntimeError, match="but the machine reports"):
         vm.launch_vm(

@@ -22,20 +22,25 @@ import sys
 from typing import Literal, get_args, get_origin
 
 from chutes_cvm import proc
-from chutes_cvm.guest import image_set
+from chutes_cvm.guest.chutes_api import DEFAULT_API_BASE, ChutesApiError
 from chutes_cvm.guest.config import ConfigError, LaunchConfig, cli_fields
-from chutes_cvm.guest.context import GuestContext
+from chutes_cvm.guest.context import (
+    GuestNetwork,
+    GuestVolumes,
+    LaunchContext,
+    ProcessBundle,
+)
+from chutes_cvm.guest.host_class import HostClass, MeasuredImage, NotMeasured
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.image_set import ImageSet
 from chutes_cvm.guest.images import prepare_vm_image
 from chutes_cvm.guest.network import (
     install_benchmark_netlog,
     resolve_public_iface,
     setup_bridge,
 )
-from chutes_cvm.guest.preflight import DEFAULT_API_BASE, PreflightError, run_preflight
 from chutes_cvm.guest.privileged import LaunchError
-from chutes_cvm.guest.qemu import GuestNetwork, GuestVolumes
-from chutes_cvm.guest.vm import launch_vm
+from chutes_cvm.guest.vm import LOGFILE, PIDFILE, PROCESS_NAME, launch_vm
 from chutes_cvm.guest.volumes import ensure_raw_volume, setup_config_volume
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
@@ -83,77 +88,80 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
-def _launchable(
-    config_path: str, base_image: str, force: bool, host_profile: "HostProfile"
-) -> bool:
-    """Return True if launch may proceed: the control plane confirms an image of THIS host's
-    ``(version, rc)`` will attest here. Mirrors `chutes-cvm host verify`'s API check — read the
-    image's (version, rc) from its manifest, capture + sign the host profile, and ask
-    POST /servers/tdx/preflight. Without a launchable verdict the VM would boot and then fail
-    attestation, so refuse early (return False) unless ``force`` overrides with a warning.
+def _measured_image(
+    config_path: str, image_set_dir: str, force: bool, host_profile: HostProfile
+) -> "MeasuredImage | None":
+    """Step 1: is this image measured for this host's class? Returns its entry, or None for a
+    test boot.
 
-    ``host_profile`` is the reading Step 0 took and the boot primitive will build from, so the
-    verdict is about the shape that actually launches rather than a second, independent read.
+    Fetches the class (as `chutes-cvm host verify` does) for ``host_profile`` -- the reading Step
+    0 took and the boot builds from -- and looks up the image's ``(version, rc)``. Measured, it
+    launches. Otherwise a debug build or ``--force`` gets a test boot, which boots but cannot
+    attest; a production image is refused here, before any volume or GPU work, because it would
+    boot and then fail attestation. An unreadable manifest or no answer from the API counts as
+    not measured.
     """
     try:
-        version, rc = image_set.version_and_rc(base_image)
+        image_set = ImageSet.from_dir(image_set_dir)
     except (FileNotFoundError, ValueError, OSError) as exc:
-        # Can't read the manifest -> can't know what we're booting. Fail closed unless forced.
-        if force:
-            print(
-                f"⚠ could not read image version from {base_image} ({exc}); proceeding anyway "
-                "(--force) — attestation may fail.",
-                file=sys.stderr,
-            )
-            return True
-        print(
-            f"✗ could not read image version from {base_image}: {exc}\n"
-            "  Refusing to launch. Re-run `chutes-cvm image download`, or pass --force.",
-            file=sys.stderr,
+        # Can't read the manifest -> can't know what we're booting, or whether it is a debug build.
+        _test_boot_or_refuse(
+            f"could not read image version from {image_set_dir}: {exc}",
+            "Re-run `chutes-cvm image download`.",
+            debug=False,
+            force=force,
         )
-        return False
+        return None
 
-    label = f"{version}{' (rc)' if rc else ''}"
     api_base = os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
-        resp = run_preflight(
-            config_path=config_path,
-            version=version,
-            rc=rc,
-            api_base=api_base,
-            host_profile=host_profile,
+        host_class = HostClass.fetch(
+            host_profile, config_path=config_path, api_base=api_base
         )
-        launchable = bool(resp.get("launchable"))
-        fingerprint = resp.get("fingerprint", "?")
-        detail = resp.get("detail", "")
-    except PreflightError as exc:
-        launchable, fingerprint, detail = False, "?", str(exc)
-
-    if launchable:
-        print(f"✓ {detail} (fingerprint {fingerprint})")
-        return True
-
-    problem = f"this host cannot attest {label} yet (fingerprint {fingerprint})." + (
-        f" {detail}" if detail else ""
+    except ChutesApiError as exc:
+        _test_boot_or_refuse(
+            f"could not confirm this host can attest {image_set.label}: {exc}",
+            "Retry once the API is reachable.",
+            debug=image_set.rc,
+            force=force,
+        )
+        return None
+    try:
+        measured = host_class.measured_image(image_set)
+    except NotMeasured:
+        detail = f" {host_class.detail}" if host_class.detail else ""
+        _test_boot_or_refuse(
+            f"this host cannot attest {image_set.label} yet "
+            f"(fingerprint {host_class.fingerprint}).{detail}",
+            "Register this host class with `chutes-cvm host submit-profile`, then retry once "
+            "Chutes\n  publishes the measurement (`chutes-cvm host verify` shows readiness).",
+            debug=image_set.rc,
+            force=force,
+        )
+        return None
+    print(
+        f"✓ {image_set.label} is measured for this host class "
+        f"(fingerprint {host_class.fingerprint})"
     )
-    remedy = (
-        "Register this host class with `chutes-cvm host submit-profile`, then retry once Chutes\n"
-        "  publishes the measurement (`chutes-cvm host verify` shows readiness)."
-    )
-    if force:
+    return measured
+
+
+def _test_boot_or_refuse(
+    problem: str, remedy: str, *, debug: bool, force: bool
+) -> None:
+    """Allow a test boot for a debug build or ``--force``, with a warning; otherwise raise
+    ``LaunchError``."""
+    if debug or force:
+        reason = "debug build" if debug else "--force"
         print(
-            f"⚠ {problem}\n  Proceeding anyway (--force) — the VM will fail attestation if this "
-            "image is truly unmeasured for this host.",
+            f"⚠ {problem}\n  Test boot ({reason}): the VM boots but will not attest.",
             file=sys.stderr,
         )
-        return True
-    print(
-        f"✗ {problem}\n"
-        "  Refusing to launch: the VM would boot but fail attestation.\n"
-        f"  {remedy} Pass --force to launch anyway.",
-        file=sys.stderr,
+        return None
+    raise LaunchError(
+        f"{problem}\n  Refusing to launch: the VM would boot but fail attestation.\n"
+        f"  {remedy} Pass --force to launch anyway."
     )
-    return False
 
 
 # ── Privileged steps (bash helpers own the actual system mutations) ──────────────
@@ -376,20 +384,20 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"✓ {host.tee_provider.label} active")
     _ensure_numa_zone_reclaim()
 
-    # The gate is a launch-readiness check: does a published measurement for THIS image's
-    # (version, rc) cover this host class? Benchmark VMs use dummy creds and aren't attested, so
-    # they skip it; a debug (RC) image is not special-cased — its rc:true measurement must be
-    # published just like a production image's, which the (version, rc) join checks directly.
-    if benchmark:
-        pass
-    else:
+    # Benchmark VMs use dummy creds and aren't attested, so they test boot without asking. A debug
+    # (RC) image is gated like any other: a published rc:true measurement launches it measured.
+    measured: "MeasuredImage | None" = None
+    if not benchmark:
         print("\nStep 1: Confirming this host can attest the image...")
-        if not _launchable(
-            args.config_file or default_config_path(),
-            config.vm.base_image,
-            args.force,
-            host,
-        ):
+        try:
+            measured = _measured_image(
+                args.config_file or default_config_path(),
+                config.vm.base_image,
+                bool(args.force),
+                host,
+            )
+        except LaunchError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
             return 1
 
     orig_cwd = os.getcwd()
@@ -431,7 +439,7 @@ def main(argv: "list[str] | None" = None) -> int:
                 print("\nStep 5b: Installing benchmark network logging...")
                 install_benchmark_netlog(config)
 
-        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus, host)
+        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus, host, measured)
     except LaunchError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -456,26 +464,32 @@ def _boot(
     benchmark: bool,
     pass_gpus: bool,
     host: HostProfile,
+    measured: "MeasuredImage | None",
 ) -> int:
-    """Build this guest's context and call the QEMU primitive in-process."""
-    guest = GuestContext(
+    """Build this guest's context and call the QEMU primitive in-process. ``measured`` is Step
+    1's entry for this image; None is a test boot."""
+    volumes = GuestVolumes(
+        config=config.volumes.config.path,
+        # Benchmark guests have no cache volume: the partner manages storage.
+        cache=None if benchmark else config.volumes.cache.path,
+        storage=config.volumes.storage.path,
+    )
+    network = GuestNetwork(
+        network_type=config.network.type,
+        # Only tap mode has one; user mode forwards a port instead.
+        net_iface=net_iface or None,
+        ssh_port=config.network.ssh_port,
+    )
+    process = ProcessBundle(PROCESS_NAME, config.runtime.foreground, PIDFILE, LOGFILE)
+    guest = LaunchContext.from_host(
+        host,
+        measured,
         image=vm_image,
-        volumes=GuestVolumes(
-            config=config.volumes.config.path,
-            # Benchmark guests have no cache volume: the partner manages storage.
-            cache=None if benchmark else config.volumes.cache.path,
-            storage=config.volumes.storage.path,
-        ),
-        network=GuestNetwork(
-            network_type=config.network.type,
-            # Only tap mode has one; user mode forwards a port instead.
-            net_iface=net_iface or None,
-            ssh_port=config.network.ssh_port,
-        ),
+        volumes=volumes,
+        network=network,
+        process=process,
         pass_gpus=pass_gpus,
-        foreground=config.runtime.foreground,
-        # Benchmark guests print the login hint.
-        show_ssh=benchmark,
+        show_ssh=benchmark,  # benchmark guests print the login hint
     )
 
     print("\nLaunching Chutes VM...")

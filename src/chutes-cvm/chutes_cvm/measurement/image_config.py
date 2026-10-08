@@ -1,6 +1,6 @@
 """The ``ImageConfig`` handed to tdx-measure: a rendering of an already dump-shaped command.
 
-``QemuCommand.for_measurement`` (``MeasurementCommandBuilder``) builds a command whose machine,
+``QemuCommand.build`` with a ``MeasurementContext`` builds a command whose machine,
 memory backends, emulated devices, endpoints, serial and ``-cpu`` are already what the dumper
 needs. This only renders it as the metadata JSON.
 
@@ -25,8 +25,9 @@ from chutes_cvm.guest.qemu import QemuCommand
 
 @dataclass
 class ImageConfig:
-    """Build from ``QemuCommand.for_measurement`` + the same ``HostProfile``; ``to_dict()`` is the
-    metadata JSON. Reads the command's structured fields -- no re-parsing, no substitution.
+    """Build from the measurement command (``MeasurementContext``) + the same ``HostProfile``;
+    ``to_dict()`` is the metadata JSON. Reads the command's structured fields -- no re-parsing, no
+    substitution.
     """
 
     cmd: QemuCommand

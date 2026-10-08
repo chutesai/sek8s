@@ -60,17 +60,28 @@ class PlatformMeasurements(ABC):
         """This platform's section of the version entry."""
 
     def add(self, host: HostProfile, fingerprint: str) -> dict:
-        """Measure one class and record its entry. The API's fingerprint is carried through
-        (never recomputed) so the reconciler can join it to the submitted host profile.
+        """Measure one class and record it. The API's fingerprint is carried through (never
+        recomputed) so the reconciler can join it to the submitted host profile.
+
+        Distinct classes can measure identically; one entry then lists every class's
+        fingerprint, since the API refuses a measurement on two entries.
         """
         profile, gpu_count = host.gpu_profile, host.gpu_count
         measured = self.measure(host)
+        for entry in self.hardware:
+            if {k: entry[k] for k in measured} == measured:
+                entry["fingerprints"].append(fingerprint)
+                print(
+                    f"    {entry['name']}  fp={fingerprint[:12]}…  (same as above)",
+                    file=sys.stderr,
+                )
+                return entry
         entry = {
             "name": f"{profile.display_name} [{host.qemu_version}, {host.variant_label}]",
             "description": (
                 f"{gpu_count}x {profile.expected_gpus[0].upper()} GPU configuration"
             ),
-            "fingerprint": fingerprint,
+            "fingerprints": [fingerprint],
             "expected_gpus": list(profile.expected_gpus),
             "gpu_count": gpu_count,
             **measured,

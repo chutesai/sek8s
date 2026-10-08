@@ -227,10 +227,10 @@ def _sample_hosts():
     from chutes_cvm.guest.host_profile import HostProfile
 
     return [
-        ("h200-nvsw0", HostProfile(known.h200_doc())),
-        ("h200-nvsw1", HostProfile(known.h200_doc(nvswitch_node=1))),
-        ("rtx-numa", HostProfile(known.rtx_numa_doc())),
-        ("rtx-flat", HostProfile(known.rtx_flat_doc())),
+        ("h200-nvsw0", HostProfile.from_dict(known.h200_doc())),
+        ("h200-nvsw1", HostProfile.from_dict(known.h200_doc(nvswitch_node=1))),
+        ("rtx-numa", HostProfile.from_dict(known.rtx_numa_doc())),
+        ("rtx-flat", HostProfile.from_dict(known.rtx_flat_doc())),
     ]
 
 
@@ -360,7 +360,7 @@ def test_nvswitch_requiring_profile_refuses_a_host_with_none():
     doc = tf.h200_doc()
     doc["nvswitches"] = []
     with pytest.raises(ValueError, match="requires NVSwitches"):
-        HostProfile(doc).attached_nvswitches
+        HostProfile.from_dict(doc).attached_nvswitches
 
 
 @pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
@@ -469,7 +469,7 @@ def test_the_h100_box_derives_the_class_its_vm_boots_as():
     """g3-h100-small-dal-1 as discover-profile.sh captured it: 1x EPYC 9124, 32 threads, 187 GB,
     one H100 PCIe. These are the vCPU count and signature its live SEV-SNP report was taken at
     (tests/measurement/test_snp.py::test_h100_genoa_report_is_reproduced)."""
-    host = HostProfile(
+    host = HostProfile.from_dict(
         known.host_document(
             "H100_PCIE",
             vcpus=28,

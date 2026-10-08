@@ -144,7 +144,7 @@ def test_compute_rtmr3_plaintext_needs_no_cryptsetup(tmp_path):
     img.write_bytes(b"x")
     root = tmp_path / "mnt"
     (root / "etc").mkdir(parents=True)
-    (root / "etc/tdx-measure.conf").write_text("/etc/hostname\n")
+    (root / "etc/tee-measure.conf").write_text("/etc/hostname\n")
     (root / "etc/hostname").write_text("h")
 
     ok = MagicMock(returncode=0, stdout="", stderr="")
@@ -174,20 +174,44 @@ def test_compute_rtmr3_plaintext_needs_no_cryptsetup(tmp_path):
 
 def test_mrtd_must_agree_across_topologies(tdx_platform):
     """One TDVF measures identically on every topology of a build; disagreement is corruption."""
-    mrtds = iter(["AAAA", "BBBB"])
+    blobs = iter([{"rtmr0": "R0", "mrtd": "AAAA"}, {"rtmr0": "R1", "mrtd": "BBBB"}])
     hosts = [
         HostProfile.from_api_profile(tf.h200_doc(nvswitch_node=0)),
         HostProfile.from_api_profile(tf.rtx_flat_doc()),
     ]
     with patch.object(
-        tdx,
-        "generate_acpi_blobs",
-        side_effect=lambda *a, **k: {"rtmr0": "R0", "mrtd": next(mrtds)},
+        tdx, "generate_acpi_blobs", side_effect=lambda *a, **k: next(blobs)
     ):
         for i, host in enumerate(hosts):
             tdx_platform.add(host, str(i) * 64)
     with pytest.raises(ValueError, match="MRTD differs"):
         tdx_platform.mrtd
+
+
+def _add_all(platform, docs, rtmr0s):
+    blobs = iter({"rtmr0": r0, "mrtd": "M"} for r0 in rtmr0s)
+    with patch.object(
+        tdx, "generate_acpi_blobs", side_effect=lambda *a, **k: next(blobs)
+    ):
+        return [
+            platform.add(HostProfile.from_api_profile(d), str(i) * 64)
+            for i, d in enumerate(docs)
+        ]
+
+
+def test_classes_that_measure_the_same_share_one_entry(tdx_platform):
+    """The API refuses a measurement on two entries; one lists every class's fingerprint."""
+    _add_all(tdx_platform, [tf.h200_doc(), tf.h200_doc()], ["R0", "R0"])
+    (entry,) = tdx_platform.hardware
+    assert entry["fingerprints"] == ["0" * 64, "1" * 64]
+
+
+def test_classes_that_measure_differently_get_their_own_entries(tdx_platform):
+    _add_all(tdx_platform, [tf.h200_doc(), tf.h200_doc()], ["R0", "R1"])
+    assert [e["fingerprints"] for e in tdx_platform.hardware] == [
+        ["0" * 64],
+        ["1" * 64],
+    ]
 
 
 def test_rtmr0_and_mrtd_come_from_one_fork_run_per_class(tdx_platform):

@@ -7,24 +7,24 @@ hardware -- and what will let offline measurement generation share the same buil
 """
 
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.passthrough import bind_passthrough
-from chutes_cvm.guest.qemu import (
+from chutes_cvm.guest.context import (
     IOMMUFD_ID,
     DirectBoot,
     GuestNetwork,
     GuestVolumes,
     PassthroughSet,
     ProcessBundle,
-    QemuCommand,
 )
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.passthrough import bind_passthrough
+from chutes_cvm.guest.qemu import QemuCommand
 
 P = "chutes_cvm.guest.passthrough"
 
 
 def _create_args() -> dict:
-    """The inputs create() requires. Spelled out rather than defaulted: create() deliberately
-    defaults none of the values that differ between a launch and a measurement."""
+    """A launch's inputs, spelled out rather than defaulted: none of the values that differ
+    between a launch and a measurement may come from a default."""
     return dict(
         firmware="/x",
         img_path="/i",
@@ -66,7 +66,7 @@ def test_bind_passthrough_prepares_the_profile_devices(monkeypatch):
             gpus=gpus, nvswitches=nvswitches, ib=ib_devices
         ),
     )
-    host = HostProfile(known.h200_doc())
+    host = HostProfile.from_dict(known.h200_doc())
 
     bind_passthrough(host)
 
@@ -77,15 +77,15 @@ def test_bind_passthrough_prepares_the_profile_devices(monkeypatch):
 
 
 def test_iommufd_follows_the_passthrough_set():
-    """Every endpoint build_pci_topology emits carries `iommufd=iommufd0`, so the object is not a
+    """Every passthrough endpoint a launch emits carries `iommufd=iommufd0`, so the object is not a
     separate decision: a command with passthrough devices and no such object is one QEMU refuses,
     and one with the object and no devices declares a handle nothing uses."""
-    host = HostProfile(known.h200_doc())
+    host = HostProfile.from_dict(known.h200_doc())
 
-    with_devices = QemuCommand.create(
+    with_devices = known.launch_command(
         host, **_create_args(), passthrough=PassthroughSet.from_profile(host)
     )
-    without = QemuCommand.create(host, **_create_args(), passthrough=PassthroughSet())
+    without = known.launch_command(host, **_create_args(), passthrough=PassthroughSet())
 
     assert f"iommufd,id={IOMMUFD_ID}" in with_devices.objects
     assert all(
@@ -101,9 +101,9 @@ def test_create_attaches_topology_without_touching_a_device(monkeypatch):
     monkeypatch.setattr(
         P + "._prepare_devices", lambda *a, **k: called.append("prepare")
     )
-    host = HostProfile(known.h200_doc())
+    host = HostProfile.from_dict(known.h200_doc())
 
-    cmd = QemuCommand.create(
+    cmd = known.launch_command(
         host, **_create_args(), passthrough=PassthroughSet.from_profile(host)
     )
 
@@ -113,8 +113,8 @@ def test_create_attaches_topology_without_touching_a_device(monkeypatch):
 
 def test_create_with_an_empty_passthrough_set_names_no_devices():
     """`--no-gpus` leaves the GPUs on their host driver, so the command must not name them."""
-    host = HostProfile(known.h200_doc())
+    host = HostProfile.from_dict(known.h200_doc())
 
-    cmd = QemuCommand.create(host, **_create_args(), passthrough=PassthroughSet())
+    cmd = known.launch_command(host, **_create_args(), passthrough=PassthroughSet())
 
     assert not any("vfio-pci" in d or "pxb-pcie" in d for d in cmd.devices)

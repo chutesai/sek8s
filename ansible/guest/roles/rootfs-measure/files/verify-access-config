@@ -31,7 +31,7 @@ from typing import Optional
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MEASURE_CONF = Path("/etc/tdx-measure.conf")
+MEASURE_CONF = Path("/etc/tee-measure.conf")
 TDX_QUOTE_GENERATOR = Path("/usr/bin/tdx-quote-generator")
 
 # TDX quote v4 binary layout offsets (td_report_body_t starts at byte 48)
@@ -75,7 +75,7 @@ def _err(msg: str) -> None:
 # ── Config parsing ───────────────────────────────────────────────────────────
 
 def load_measure_paths(conf: Path) -> list[str]:
-    """Return the list of paths from tdx-measure.conf (comments stripped)."""
+    """Return the list of paths from tee-measure.conf (comments stripped)."""
     paths: list[str] = []
     if not conf.exists():
         return paths
@@ -452,12 +452,12 @@ def main() -> int:
 
     if not MEASURE_CONF.exists():
         _err(f"Measurement config not found: {MEASURE_CONF}")
-        _err("This image may not have been built with the rtmr3-measure role.")
+        _err("This image may not have been built with the rootfs-measure role.")
         return 2
 
     cfg_paths = load_measure_paths(MEASURE_CONF)
     if not cfg_paths:
-        _warn("No paths configured in tdx-measure.conf — RTMR3 is all-zeros")
+        _warn("No paths configured in tee-measure.conf — RTMR3 is all-zeros")
         return 2
 
     print(f"\n  Configured measurement paths ({len(cfg_paths)}):")

@@ -9,8 +9,11 @@ test_config.py. All privileged steps (volumes/network/boot) and host probes are 
 from unittest.mock import MagicMock, patch
 
 import pytest
-from chutes_cvm.guest import images, launch
+import topology_fixtures as known
+from chutes_cvm.guest import image_set, images, launch
+from chutes_cvm.guest.chutes_api import ChutesApiError
 from chutes_cvm.guest.config import LaunchConfig, cli_fields
+from chutes_cvm.guest.host_class import HostClassStatus, MeasuredImage, TdxHostClass
 from chutes_cvm.guest.launch import (
     LaunchError,
     _apply_derived_defaults,
@@ -131,6 +134,44 @@ def test_validate_rejects_bad_network_type():
 # ── launch-vm argument assembly ──────────────────────────────────────────────────
 
 
+def _boot_context(cfg, vm_image, net_iface, *, benchmark, pass_gpus, host):
+    """Run a test boot through _boot with the factory and the boot primitive faked; return the
+    factory's keyword arguments, after checking the primitive got exactly what it built.
+    """
+    with patch(f"{P}.LaunchContext.from_host", return_value="ctx") as from_host, patch(
+        f"{P}.launch_vm", return_value=0
+    ) as lv:
+        rc = _boot(
+            cfg,
+            vm_image,
+            net_iface,
+            benchmark=benchmark,
+            pass_gpus=pass_gpus,
+            host=host,
+            measured=None,
+        )
+    assert rc == 0
+    # The primitive receives the context and the caller's profile -- not an argv list it has to
+    # re-parse, and not a profile it reads for itself.
+    assert lv.call_args.args == ("ctx", host)
+    assert from_host.call_args.args == (host, None)
+    return from_host.call_args.kwargs
+
+
+def test_boot_hands_step_1_s_entry_to_the_context():
+    entry = MeasuredImage("1.4.0", False)
+    host = _fake_host()
+    cfg = _cfg(
+        config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
+    )
+    with patch(f"{P}.LaunchContext.from_host", return_value="ctx") as from_host, patch(
+        f"{P}.launch_vm", return_value=0
+    ) as lv:
+        assert _boot(cfg, "/img", "", False, True, host, entry) == 0
+    assert from_host.call_args.args == (host, entry)
+    assert lv.call_args.args == ("ctx", host)
+
+
 def test_boot_standard_args():
     cfg = _cfg(
         config_volume="c.qcow2",
@@ -139,21 +180,14 @@ def test_boot_standard_args():
         network_type="tap",
         foreground=True,
     )
-    host = _fake_host()
-    with patch(f"{P}.launch_vm", return_value=0) as lv:
-        rc = _boot(
-            cfg, "/img.qcow2", "tap0", benchmark=False, pass_gpus=True, host=host
-        )
-    assert rc == 0
-    # The primitive receives a GuestContext and the caller's profile -- not an argv list it has
-    # to re-parse, and not a profile it reads for itself.
-    guest, passed_host = lv.call_args.args
-    assert passed_host is host
-    assert guest.image == "/img.qcow2"
-    assert guest.pass_gpus is True
-    assert guest.network.net_iface == "tap0"
-    assert guest.volumes.cache == "ca.raw" and guest.foreground is True
-    assert guest.show_ssh is False
+    got = _boot_context(
+        cfg, "/img.qcow2", "tap0", benchmark=False, pass_gpus=True, host=_fake_host()
+    )
+    assert got["image"] == "/img.qcow2"
+    assert got["pass_gpus"] is True
+    assert got["network"].net_iface == "tap0"
+    assert got["volumes"].cache == "ca.raw" and got["process"].foreground is True
+    assert got["show_ssh"] is False
 
 
 def test_boot_plumbs_the_configured_ssh_port():
@@ -165,33 +199,30 @@ def test_boot_plumbs_the_configured_ssh_port():
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
     cfg.network.ssh_port = 2222
-    host = _fake_host()
-
-    with patch(f"{P}.launch_vm", return_value=0) as lv:
-        _boot(cfg, "/img", "", benchmark=False, pass_gpus=False, host=host)
-
-    assert lv.call_args.args[0].network.ssh_port == 2222
+    got = _boot_context(
+        cfg, "/img", "", benchmark=False, pass_gpus=False, host=_fake_host()
+    )
+    assert got["network"].ssh_port == 2222
 
 
 def test_boot_benchmark_omits_cache_adds_ssh():
-    host = _fake_host()
     cfg = _cfg(config_volume="c", storage_volume="s", network_type="tap")
-    with patch(f"{P}.launch_vm", return_value=0) as lv:
-        _boot(cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=host)
-    guest = lv.call_args.args[0]
-    assert guest.show_ssh is True
-    assert guest.volumes.cache is None
-    assert guest.pass_gpus is False
+    got = _boot_context(
+        cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=_fake_host()
+    )
+    assert got["show_ssh"] is True
+    assert got["volumes"].cache is None
+    assert got["pass_gpus"] is False
 
 
 def test_boot_user_network_omits_net_iface():
-    host = _fake_host()
     cfg = _cfg(
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
-    with patch(f"{P}.launch_vm", return_value=0) as lv:
-        _boot(cfg, "/img", "", benchmark=False, pass_gpus=True, host=host)
-    assert lv.call_args.args[0].network.net_iface is None
+    got = _boot_context(
+        cfg, "/img", "", benchmark=False, pass_gpus=True, host=_fake_host()
+    )
+    assert got["network"].net_iface is None
 
 
 # ── main() orchestration (all steps + probes mocked) ─────────────────────────────
@@ -231,12 +262,15 @@ def _happy(**over):
     defaults = {
         "resolve_public_iface": "eth0",
         "_chutes_td_running": False,
-        "_launchable": True,
+        "_measured_image": MeasuredImage("1.4.0", False),
         "prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
     defaults.update(over)
     for name, ret in defaults.items():
-        stack.enter_context(patch(f"{P}.{name}", return_value=ret))
+        if isinstance(ret, Exception):
+            stack.enter_context(patch(f"{P}.{name}", side_effect=ret))
+        else:
+            stack.enter_context(patch(f"{P}.{name}", return_value=ret))
     for name in (
         "_ensure_numa_zone_reclaim",
         "ensure_raw_volume",
@@ -281,120 +315,109 @@ def test_main_force_overrides_duplicate_guard():
     boot.assert_called_once()
 
 
-def test_main_refuses_when_not_launchable():
-    # No published measurement for this image x host class → stop before any GPU/volume work.
-    with _happy(_launchable=False), patch(f"{P}._boot") as boot:
+_REFUSED = LaunchError("this host cannot attest 1.4.0 yet")
+
+
+def test_main_refuses_when_step_1_refuses():
+    # No published measurement for this production image x host class → stop before any
+    # GPU/volume work.
+    with _happy(_measured_image=_REFUSED), patch(f"{P}._boot") as boot:
         rc = launch.main(_STD_ARGV)
     assert rc == 1
     boot.assert_not_called()
 
 
-def test_main_benchmark_skips_launch_gate():
+def test_main_benchmark_test_boots_without_asking():
     # Benchmark VMs use dummy creds and aren't attested, so a failing gate must not block them.
     argv = ["--hostname", "h", "--benchmark", "--network-type", "user", "--no-gpus"]
-    with _happy(_launchable=False), patch(f"{P}._boot", return_value=0) as boot:
+    with _happy(_measured_image=_REFUSED) as _, patch(
+        f"{P}._boot", return_value=0
+    ) as boot:
         rc = launch.main(argv)
+        launch._measured_image.assert_not_called()
     assert rc == 0
-    boot.assert_called_once()
+    assert boot.call_args.args[-1] is None  # a test boot
 
 
-def test_main_debug_image_is_still_gated():
-    # A debug (RC) image is NOT special-cased: its rc:true measurement must be published just like
-    # a production image's, so a non-launchable debug image is refused (no more blanket skip).
-    argv = _STD_ARGV + ["--base-image", "/base/tdx-guest-debug"]
-    with _happy(_launchable=False), patch(f"{P}._boot") as boot:
-        rc = launch.main(argv)
-    assert rc == 1
-    boot.assert_not_called()
+# ── Step 1: measured, test boot, or refused ──────────────────────────────────────
 
 
-# ── the launch gate itself (mirrors host verify's API check) ─────────────────────
+def _host_class(*measured):
+    return TdxHostClass(
+        fingerprint="abc",
+        status=HostClassStatus.ACCEPTED,
+        measured=list(measured),
+        detail="no measurement for this image",
+    )
 
 
-def test_launchable_true_when_measurement_covers(capsys):
+def _step_1(image, host_class=None, *, force=False, fetch_error=None):
+    """Run Step 1 against ``image`` (an ImageSet, or an exception reading it) and a class."""
     host = _fake_host()
-    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        f"{P}.run_preflight",
-        return_value={"launchable": True, "fingerprint": "abc", "detail": "covers"},
-    ):
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
-            is True
-        )
-    assert "covers" in capsys.readouterr().out
+    read = (
+        {"side_effect": image}
+        if isinstance(image, Exception)
+        else {"return_value": image}
+    )
+    fetch = (
+        {"side_effect": fetch_error} if fetch_error else {"return_value": host_class}
+    )
+    with patch(f"{P}.ImageSet.from_dir", **read), patch(
+        f"{P}.HostClass.fetch", **fetch
+    ) as fetched:
+        measured = launch._measured_image("/cfg.yaml", "/base", force, host)
+    if not isinstance(image, Exception):
+        assert fetched.call_args.args == (host,)
+    return measured
 
 
-def test_launchable_false_refuses_but_force_overrides(capsys):
-    host = _fake_host()
-    resp = {
-        "launchable": False,
-        "fingerprint": "abc",
-        "detail": "no measurement for 1.4.0",
-    }
-    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        f"{P}.run_preflight", return_value=resp
-    ):
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
-            is False
-        )
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
-            is True
-        )
-    err = capsys.readouterr().err
-    assert "Refusing to launch" in err
-    assert "submit-profile" in err
+def test_a_measured_image_launches_measured(capsys):
+    image = known.fake_image_set("1.4.0")
+    entry = MeasuredImage("1.4.0", False)
+    assert _step_1(image, _host_class(entry)) is entry
+    assert "is measured" in capsys.readouterr().out
 
 
-def test_launchable_passes_image_version_rc_to_preflight():
-    host = _fake_host()
-    # The manifest's (version, rc) must be what's joined against — a debug image asks about rc:true.
-    with patch(f"{P}.image_set.version_and_rc", return_value=("2.0.0", True)), patch(
-        f"{P}.run_preflight",
-        return_value={"launchable": True, "fingerprint": "abc", "detail": "ok"},
-    ) as rp:
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
-            is True
-        )
-    assert rp.call_args.kwargs["version"] == "2.0.0"
-    assert rp.call_args.kwargs["rc"] is True
+def test_an_unmeasured_production_image_is_refused_unless_forced(capsys):
+    image = known.fake_image_set("1.4.0")
+    host_class = _host_class(MeasuredImage("1.4.0", True))
+    with pytest.raises(LaunchError, match="Refusing to launch") as refused:
+        _step_1(image, host_class)
+    assert "submit-profile" in str(refused.value)
+    assert _step_1(image, host_class, force=True) is None
+    assert "Test boot (--force)" in capsys.readouterr().err
 
 
-def test_launchable_fails_closed_on_api_error():
-    host = _fake_host()
-    from chutes_cvm.guest.preflight import PreflightError
-
-    with patch(f"{P}.image_set.version_and_rc", return_value=("1.4.0", False)), patch(
-        f"{P}.run_preflight",
-        side_effect=PreflightError("API unreachable"),
-    ):
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
-            is False
-        )
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
-            is True
-        )
+def test_an_unmeasured_debug_image_test_boots(capsys):
+    """A debug build that is not published boots so it can be tested; it cannot attest."""
+    image = known.fake_image_set("1.4.0", rc=True)
+    assert _step_1(image, _host_class(MeasuredImage("1.4.0", False))) is None
+    assert "Test boot (debug build)" in capsys.readouterr().err
 
 
-def test_launchable_blocks_on_unreadable_manifest(capsys):
-    host = _fake_host()
-    # Can't read the image version → can't know what we're booting → fail closed (force overrides).
-    with patch(
-        f"{P}.image_set.version_and_rc", side_effect=FileNotFoundError("no manifest")
-    ):
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=False, host_profile=host)
-            is False
-        )
-        assert (
-            launch._launchable("/cfg.yaml", "/base", force=True, host_profile=host)
-            is True
-        )
-    assert "image version" in capsys.readouterr().err
+def test_a_published_debug_image_launches_measured():
+    """rc:true is joined like any other version: published, it is a measured launch."""
+    image = known.fake_image_set("1.4.0", rc=True)
+    entry = MeasuredImage("1.4.0", True)
+    assert _step_1(image, _host_class(entry)) is entry
+
+
+def test_no_answer_from_the_api_counts_as_unmeasured():
+    error = ChutesApiError("API unreachable")
+    production, debug = known.fake_image_set("1.4.0"), known.fake_image_set(
+        "1.4.0", rc=True
+    )
+    with pytest.raises(LaunchError, match="API unreachable"):
+        _step_1(production, fetch_error=error)
+    assert _step_1(production, fetch_error=error, force=True) is None
+    assert _step_1(debug, fetch_error=error) is None
+
+
+def test_an_unreadable_manifest_is_refused_unless_forced():
+    # Can't read the image version → can't know what we're booting → fail closed.
+    with pytest.raises(LaunchError, match="image version"):
+        _step_1(FileNotFoundError("no manifest"))
+    assert _step_1(FileNotFoundError("no manifest"), force=True) is None
 
 
 def test_main_blocks_when_the_platform_is_not_enabled(capsys):
@@ -425,13 +448,14 @@ def test_main_signs_and_boots_one_single_reading_of_the_host():
     launchable verdict for -- must be the same object the boot primitive builds the command
     from, or the control plane can approve a shape that never boots."""
     host = _fake_host()
+    entry = MeasuredImage("1.4.0", False)
     with _happy(host=host), patch(f"{P}._boot", return_value=0) as boot, patch(
-        f"{P}._launchable", return_value=True
-    ) as launchable:
+        f"{P}._measured_image", return_value=entry
+    ) as step_1:
         assert launch.main(_STD_ARGV) == 0
 
-    assert boot.call_args.args[-1] is host
-    assert launchable.call_args.args[-1] is host
+    assert boot.call_args.args[-2:] == (host, entry)
+    assert step_1.call_args.args[-1] is host
 
 
 def test_main_missing_creds_is_error(capsys):
@@ -441,55 +465,51 @@ def test_main_missing_creds_is_error(capsys):
     assert "miner.ss58" in capsys.readouterr().err
 
 
-def _stage_image_set(tmp_path, sha):
-    """A base image-set dir with a qcow2 + its 3 direct-boot sidecars; returns (set_dir, qcow2)."""
+def _stage_image_set(tmp_path):
+    """A real base image-set dir: a qcow2, its 3 direct-boot sidecars, and the manifest the
+    build would write. Returns (set_dir, qcow2, the qcow2's manifest sha256)."""
     base = tmp_path / "base"
     base.mkdir()
     qcow2 = base / "x.qcow2"
     qcow2.write_bytes(b"q")
     for ext in ("vmlinuz", "initrd", "cmdline"):
         (base / f"x.{ext}").write_bytes(b"s")
-    return str(base), str(qcow2)
+    image_set.write_manifest(str(qcow2), str(base / "manifest.json"), version="1.4.0")
+    return str(base), str(qcow2), image_set.ImageSet.from_dir(str(base)).qcow2.sha256
 
 
-def test_prepare_vm_image_resolves_in_python_then_copies_via_sudo(tmp_path):
-    """The image set is verified + resolved in Python (image_set.resolve); the privileged file
+def test_prepare_vm_image_verifies_in_python_then_copies_via_sudo(tmp_path):
+    """The image set is read and verified in Python (``ImageSet``); the privileged file
     mutations are done in-process as `sudo cp` (root-owned image dir), not shelled to a script
     that guessed a Python interpreter."""
-    sha = "abc123def456abcd"  # 16 hex → [:16] is itself
-    set_dir, qcow2 = _stage_image_set(tmp_path, sha)
+    set_dir, qcow2, sha = _stage_image_set(tmp_path)
     vm_dir = tmp_path / "vm-images"
     vm_dir.mkdir()
     calls: list[list[str]] = []
 
-    with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)) as res, patch(
-        f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)
-    ):
+    with patch(f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)):
         out = images.prepare_vm_image(set_dir, "h", str(vm_dir))
 
-    res.assert_called_once_with(set_dir, full=False)
-    vm_image = str(vm_dir / f"tdx-h-{sha}.qcow2")
+    vm_image = str(vm_dir / f"tdx-h-{sha[:16]}.qcow2")
     assert out == vm_image
     # qcow2 + 3 sidecars, each copied via `sudo cp`, into the per-VM name.
     cps = [c for c in calls if c[:2] == ["sudo", "cp"]]
     assert cps[0] == ["sudo", "cp", qcow2, vm_image]
     assert [c[-1] for c in cps[1:]] == [
-        str(vm_dir / f"tdx-h-{sha}.{ext}") for ext in ("vmlinuz", "initrd", "cmdline")
+        str(vm_dir / f"tdx-h-{sha[:16]}.{ext}")
+        for ext in ("vmlinuz", "initrd", "cmdline")
     ]
 
 
 def test_prepare_vm_image_reaps_stale_versions(tmp_path):
-    sha = "newnewnewnewnew0"
-    set_dir, qcow2 = _stage_image_set(tmp_path, sha)
+    set_dir, _, _ = _stage_image_set(tmp_path)
     vm_dir = tmp_path / "vm"
     vm_dir.mkdir()
     stale = vm_dir / "tdx-h-oldoldoldoldold0.qcow2"  # a previous version's per-VM copy
     stale.write_bytes(b"old")
     calls: list[list[str]] = []
 
-    with patch(f"{P}.image_set.resolve", return_value=(qcow2, sha)), patch(
-        f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)
-    ):
+    with patch(f"{IMAGES}.run", side_effect=lambda cmd, **k: calls.append(cmd)):
         images.prepare_vm_image(set_dir, "h", str(vm_dir))
 
     rms = [c for c in calls if c[:2] == ["sudo", "rm"]]
@@ -499,23 +519,37 @@ def test_prepare_vm_image_reaps_stale_versions(tmp_path):
     assert str(vm_dir / "tdx-h-oldoldoldoldold0.vmlinuz") in rms[0]
 
 
-def test_prepare_vm_image_missing_sidecar_raises(tmp_path):
-    base = tmp_path / "base"
-    base.mkdir()
-    qcow2 = base / "x.qcow2"
-    qcow2.write_bytes(b"q")  # no sidecars staged
-    vm_dir = tmp_path / "vm"
-    vm_dir.mkdir()
-    with patch(f"{P}.image_set.resolve", return_value=(str(qcow2), "abc123def456abcd")):
-        with patch(f"{IMAGES}.run"):
-            with pytest.raises(LaunchError, match="direct-boot artifact missing"):
-                images.prepare_vm_image(str(base), "h", str(vm_dir))
+def test_prepare_vm_image_refuses_a_set_missing_a_sidecar(tmp_path):
+    set_dir, _, _ = _stage_image_set(tmp_path)
+    (tmp_path / "base" / "x.initrd").unlink()
+    with patch(f"{IMAGES}.run"):
+        with pytest.raises(LaunchError, match="missing initrd"):
+            images.prepare_vm_image(set_dir, "h", str(tmp_path / "vm"))
 
 
-def test_prepare_vm_image_surfaces_verification_failure():
-    with patch(f"{P}.image_set.resolve", side_effect=ValueError("manifest mismatch")):
-        with pytest.raises(LaunchError, match="image set verification failed"):
-            images.prepare_vm_image("/base/set", "h", "/vm")
+def test_prepare_vm_image_surfaces_verification_failure(tmp_path):
+    set_dir, qcow2, _ = _stage_image_set(tmp_path)
+    with open(qcow2, "ab") as f:
+        f.write(b"grown")
+    with pytest.raises(LaunchError, match="image set verification failed"):
+        images.prepare_vm_image(set_dir, "h", str(tmp_path / "vm"))
+
+
+def test_prepare_vm_image_refuses_firmware_the_image_was_not_built_with(
+    tmp_path, monkeypatch
+):
+    """chutes-cvm's firmware ships apart from the image, and the launch measurement covers its
+    bytes: a mismatch would boot a guest that cannot attest."""
+    set_dir, _, _ = _stage_image_set(tmp_path)
+    retired = tmp_path / "retired"
+    retired.mkdir()
+    for name in image_set.FIRMWARE:
+        (retired / name).write_bytes(b"retired firmware")
+    monkeypatch.setenv("CHUTES_CVM_FIRMWARE_DIR", str(retired))
+    with patch(f"{IMAGES}.run") as run:
+        with pytest.raises(LaunchError, match="was built with"):
+            images.prepare_vm_image(set_dir, "h", str(tmp_path / "vm"))
+    run.assert_not_called()
 
 
 def test_every_launch_flag_has_help():

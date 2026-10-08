@@ -2,6 +2,7 @@
 - name: Add Intel SGX repository GPG key
   ansible.builtin.get_url:
     url: https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key
+    checksum: "sha256:{{ intel_sgx_key_sha256 }}"
     dest: /etc/apt/keyrings/intel-sgx-keyring.asc
     mode: '0644'
 

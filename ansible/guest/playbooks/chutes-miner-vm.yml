@@ -65,10 +65,12 @@
     # (ours and third-party reproductions) must use the SAME key. Fetch it from R2 once here, before
     # any consumer (chutes-gpu verifies the helm key against it; signing-keys bakes it). Published
     # to R2 from KMS out-of-band in chutes-ops (make export-signing-keys && make publish-signing-key).
-    # A wrong/missing key fails the build here rather than as an opaque RTMR3 mismatch later.
+    # Pinned by root_signing_key_sha256 (group_vars): a wrong, missing or substituted key fails the
+    # build here rather than being baked in, or surfacing as an opaque RTMR3 mismatch later.
     - name: Fetch root signing public key from R2
       ansible.builtin.get_url:
         url: "{{ root_signing_key_url }}"
+        checksum: "sha256:{{ root_signing_key_sha256 }}"
         dest: "{{ root_signing_key_path }}"
         mode: "0644"
         force: true
@@ -113,13 +115,19 @@
         source_image_url: "{{ base_image_url }}"
         source_image_sha256: "{{ base_image_sha256 }}"
 
-    # The GPU checkpoint: the base image after the gpu role. Its driver pins are in all.yml.
+    # The GPU checkpoint: the base image after the gpu role. Its driver pins are in all.yml;
+    # the base image pins are the files it reads (hashing all.yml covers only the lookup).
     - name: Resume from the GPU checkpoint if one exists for these inputs
       ansible.builtin.include_role:
         name: resume-checkpoint
       vars:
         checkpoint_name: "base{{ base_image_version }}-gpu"
-        checkpoint_inputs: [roles/gpu, handlers/main.yml, playbooks/group_vars/all.yml]
+        checkpoint_inputs:
+          - roles/gpu
+          - handlers/main.yml
+          - playbooks/group_vars/all.yml
+          - BASE_IMAGE_VERSION
+          - BASE_IMAGE_SHA256
         fallback_img_path: "{{ base_img_path }}"
 
     - name: Boot the build VM
@@ -458,7 +466,7 @@
   hosts: vm
   become: true
   tags:
-    - rtmr3-measure
+    - rootfs-measure
     - build
   handlers:
     - name: Global handlers
@@ -466,7 +474,7 @@
   tasks:
     - name: Extend RTMR3 with guest software stack
       ansible.builtin.include_role:
-        name: rtmr3-measure
+        name: rootfs-measure
 
 - name: Cleanup orchestration state
   hosts: vm
@@ -572,6 +580,34 @@
       ansible.builtin.include_role:
         name: stage-boot-artifacts
 
+- name: Stage the published image-set manifest
+  hosts: host
+  become: true
+  tags:
+    - image-manifest
+    - compute-measurements
+  tasks:
+    # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
+    # manifest.json tying them together, all in the set's own <env>/<version>[-debug]/
+    # directory (so prod and debug never share a manifest, and the directory can be copied
+    # straight into /var/lib/chutes/base-images/<variant>/ for testing). chutes_cvm.guest.image_set is the single manifest
+    # generator (also used by publish and the launcher), so the schema never drifts.
+    # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
+    # download, and for whichever variant this build produced (debug or prod) — so the
+    # build (ansible) owns the published sha for both. Depends on the direct-boot sidecars
+    # from stage-boot-artifacts, so it carries the `compute-measurements` tag too — a
+    # `--skip-tags compute-measurements` skips the manifest with them. It also records the guest
+    # firmware the image was built with, which `measurements generate` (next) and the launcher
+    # check against, so it runs before the measurements.
+    - name: Generate manifest.json for the finished image set
+      ansible.builtin.command:
+        chdir: "{{ repo_root }}/host-tools/scripts"
+        argv: >-
+          {{ ['chutes-cvm', 'image', 'manifest', final_img_path,
+              '--version', vm_version]
+             + (['--debug'] if (debug_build | default(false)) else []) }}
+      changed_when: true
+
 # ── Measurement COMPUTE (post-luks) ───────────────────────────────────────────
 # `chutes-cvm measurements generate` computes EVERY register in one call — mrtd + RTMR0
 # (per-topology, the fork) + RTMR1/RTMR2 (the staged direct-boot artifacts) + RTMR3 (mounting the
@@ -620,30 +656,4 @@
     - name: Show measurements build output
       ansible.builtin.debug:
         var: _measurements_build.stderr_lines
-
-- name: Stage the published image-set manifest
-  hosts: host
-  become: true
-  tags:
-    - image-manifest
-    - compute-measurements
-  tasks:
-    # The publishable image is a SET: the finished qcow2 + its direct-boot artifacts + a
-    # manifest.json tying them together, all in the set's own <env>/<version>[-debug]/
-    # directory (so prod and debug never share a manifest, and the directory can be copied
-    # straight into /var/lib/chutes/base-images/<variant>/ for testing). chutes_cvm.guest.image_set is the single manifest
-    # generator (also used by publish and the launcher), so the schema never drifts.
-    # Generated over the FINAL qcow2 so the recorded sha256 matches what miners
-    # download, and for whichever variant this build produced (debug or prod) — so the
-    # build (ansible) owns the published sha for both. Depends on the direct-boot sidecars
-    # from stage-boot-artifacts, so it carries the `compute-measurements` tag too — a
-    # `--skip-tags compute-measurements` skips the manifest with them.
-    - name: Generate manifest.json for the finished image set
-      ansible.builtin.command:
-        chdir: "{{ repo_root }}/host-tools/scripts"
-        argv: >-
-          {{ ['chutes-cvm', 'image', 'manifest', final_img_path,
-              '--version', vm_version]
-             + (['--debug'] if (debug_build | default(false)) else []) }}
-      changed_when: true
 

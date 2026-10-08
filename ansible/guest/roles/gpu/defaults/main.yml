@@ -1,5 +1,9 @@
 ---
 skip_cuda: false # noqa var-naming[no-role-prefix]
+# SHA-256 of NVIDIA's cuda-keyring_1.1-1_all.deb for ubuntu{{ ubuntu_major }}{{ ubuntu_minor }}
+# (group_vars, 24.04): the trust root the CUDA repository's packages are verified against. Bump it
+# with the Ubuntu version.
+cuda_keyring_sha256: d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba # noqa var-naming[no-role-prefix]
 hugepage_size: "1G"
 hugepage_count: 16  # 16 GB reserved — adjust as needed
 blacklist_nvidia_drm: false

@@ -43,34 +43,28 @@
   environment rather than the launch: a profile describes a machine and knows nothing about
   booting a guest. `chutes-cvm guest launch` Step 0 takes THE reading of the host and asks it,
   rather than probing the platform itself.
-- `sev_cbit_parameters()` reads the C-bit position and reduced physical address bits
-  from CPUID `Fn8000_001F` via `/dev/cpu/0/cpuid`, falling back to the documented
-  EPYC values. QEMU validates this against the host and fails loudly with the real
-  value, so a stale default cannot silently weaken anything.
+- The SEV-SNP guest object names the EPYC C-bit constants (`cbitpos=51`,
+  `reduced-phys-bits=1`). QEMU refuses a launch whose `cbitpos` differs from the host's, and
+  neither value is measured: live launches with `reduced-phys-bits` 1 and the hardware's 5
+  measure identically.
 
-- `QemuCommand.create()` / `.for_measurement()` — one factory assembles the whole command from
-  resolved inputs, owning the `PcieRootPinning` allocator so its five slot claims run in a fixed
-  order no caller can reach. Slot layout lands in the DSDT and so in RTMR0; it used to depend on
-  two hand-written call sites invoking four builders in the same order, with a parity test as the
-  only thing holding them in step. `create()` has no optional parameters: a default would be one
-  of the two shapes standing in for the other.
-- `GuestContext` (`guest/context.py`) — what one launch materialized: the per-VM image copy, the
-  tap device, the resolved volume paths, and the launch options. `LaunchConfig` is declared
-  intent; this is materialized fact. `launch_vm(guest, host)` now takes it alongside the profile,
-  so the two halves of a launch — what this machine IS and what this guest NEEDS — are the two
-  arguments.
+- `QemuCommand.build(host, context)` — one traversal assembles every command, owning the
+  `PcieRootPinning` allocator so its five slot claims run in a fixed order no caller can reach.
+  Slot layout lands in the DSDT and so in RTMR0; it used to depend on two hand-written call sites
+  invoking four builders in the same order, with a parity test as the only thing holding them in
+  step.
+- `GuestContext` (`guest/context.py`) — everything one guest needs to build its command: image,
+  firmware, guest NUMA nodes, boot artifacts, network, volumes, devices and process, plus the
+  eight environment leaves (machine, memory backend, `-cpu`, guest object, serial, emitted
+  devices, passthrough endpoints, iommufd) that differ between a launch and the offline dump.
+  `LaunchContext` (with `TdxLaunchContext` / `SnpLaunchContext`) is a real guest on the TEE host,
+  built by `LaunchContext.from_host()` from Step 1's measured image (or None for a test boot),
+  the per-VM image copy, the tap device and the resolved volume paths; `MeasurementContext.from_host()` is the dump's placeholder guest. The
+  host half is `HostProfile`, so `launch_vm(guest, host)` takes the two halves of a launch.
 - `PassthroughSet` — the devices a command names, defaulting to the profile's. A `--no-gpus`
   debug launch passes an empty set: the GPUs stay on their host driver, so naming them would
   build a command QEMU refuses. A value rather than a boolean because the launch set will not
   always equal the profile's — with IB passthrough a launch attaches the VFs binding creates.
-- `QemuCommandBuilder` + `LaunchCommandBuilder` / `MeasurementCommandBuilder`
-  (`guest/qemu.py`) — one traversal builds both commands. The base owns the walk, its order and
-  its single `PcieRootPinning`; subclasses choose only what string goes in each slot. Both sit in
-  one file so the seven differences between a launch and a measurement are diffable without
-  opening another.
-- `guest/context.py` — `GuestContext`: what one launch materialized (per-VM image copy, tap
-  device, resolved volume paths, launch options). The host half is `HostProfile`; these are the
-  two arguments `QemuCommand.create` takes.
 - A byte-exact regression lock on measurement generation: `tests/measurement/golden/` (8 hardware
   classes x `launch_args` + `measure_args` + `metadata`) with
   `scripts/update_measurement_golden.py` to regenerate deliberately. `metadata` is the COMPLETE
@@ -131,8 +125,8 @@
   inside preflight, which signed *that* profile and got the launchable verdict for it, and again
   in the boot primitive, which built the QEMU command from a different read. Nothing tied the two
   together, so the control plane could approve a shape that never booted.
-- **The host profile is a required argument, never a default.** `launch_vm`, `run_preflight` and
-  `_signed_profile` all take it; a default would only ever be a second reading that could disagree
+- **The host profile is a required argument, never a default.** `launch_vm` and
+  `_signed_profile` both take it; a default would only ever be a second reading that could disagree
   with the one being signed, so the shape makes that unrepresentable. The commands whose job
   *starts* with reading a host — `host verify`, `host submit-profile` — take their reading at
   their own entry point via `preflight._read_host()`.

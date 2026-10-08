@@ -30,7 +30,7 @@ from chutes_cvm.guest.gpu.profiles import (
     GpuProfile,
     profile_for_device_ids,
 )
-from chutes_cvm.guest.tee import TeeProvider, provider_for_cpu_vendor
+from chutes_cvm.guest.tee import TeeProvider
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
@@ -110,7 +110,11 @@ class HostCpu:
 
 
 class HostProfile:
-    """One host, as captured. Construct from the document ``discover-profile.sh`` emits."""
+    """One host, as captured. Build one with ``from_host``, ``from_dict`` or ``from_api_profile``.
+
+    A host is Intel or AMD silicon, and the captured CPU vendor says which: ``tee_provider`` is that
+    platform. Both platforms capture the same data, so the platform is the only thing that differs.
+    """
 
     #: The guest ``-cpu`` per host QEMU version, in the LAUNCH form -- offline generation adds an
     #: explicit CPU identity on top (see image_config). One entry today: 10.2.1 ships with 26.04,
@@ -119,6 +123,18 @@ class HostProfile:
 
     def __init__(self, raw: dict):
         self.raw = raw
+        #: This host's platform, and its QEMU arguments, from the captured CPU vendor: the host's
+        #: identity, NOT whether the platform is enabled on the machine in front of you -- SEV-SNP
+        #: can be off in BIOS on AMD silicon; the provider answers that separately
+        #: (``verify_environment``). A vendor no platform covers is refused here.
+        self.tee_provider: TeeProvider = TeeProvider.for_cpu_vendor(
+            HostCpu.from_dict(raw["cpu"]).vendor
+        )()
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "HostProfile":
+        """The profile a ``discover-profile.sh`` document describes."""
+        return cls(raw)
 
     @classmethod
     def from_host(cls) -> "HostProfile":
@@ -149,7 +165,7 @@ class HostProfile:
             raw = json.loads(path.read_text())
         finally:
             path.unlink(missing_ok=True)
-        profile = cls(raw)
+        profile = cls.from_dict(raw)
         # The one place guest RAM is derived; everything downstream carries it. The script
         # cannot do it: VRAM is unreadable once the GPUs are bound to vfio-pci, so it comes
         # from the profile.
@@ -397,19 +413,9 @@ class HostProfile:
         """
         self.tee_provider.verify_environment()
 
-    @property
-    def tee_provider(self) -> TeeProvider:
-        """The confidential-computing platform this host class runs.
-
-        Derived from the CPU vendor, not detected: a class is Intel or AMD silicon, so the
-        profile already determines the TEE, the firmware it boots and the guest object it
-        launches with. Nothing needs to be passed in or re-detected alongside the profile.
-
-        This is the class's identity, NOT whether the platform is enabled on the machine in
-        front of you -- SEV-SNP can be off in BIOS on AMD silicon. The provider answers that
-        separately (``TeeProvider.verify_environment``) and reports it as a host problem.
-        """
-        return provider_for_cpu_vendor(self.cpu.vendor)
+    def guest_object(self) -> str:
+        """The ``-object`` argument declaring this host's confidential guest."""
+        return self.tee_provider.guest_object()
 
     # ── serialisation ───────────────────────────────────────────────────────
     @classmethod
@@ -430,7 +436,7 @@ class HostProfile:
         for key in ("gpus", "nvswitches", "ib_devices"):
             for device in doc.get(key) or ():
                 device["bdf"] = f"{next(slots):04x}:00:00.0"
-        return cls(doc)
+        return cls.from_dict(doc)
 
     def to_api_profile(self) -> dict:
         """This host as the API stores it: exactly the RTMR0 determinants.

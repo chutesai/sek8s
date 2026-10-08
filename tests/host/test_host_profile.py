@@ -11,9 +11,10 @@ guest-RAM rule fails these rather than passing with whatever the profile now say
 import json
 
 import pytest
+import topology_fixtures as known
 from chutes_cvm.guest.gpu.profiles import HOST_RESERVED_CPUS
 from chutes_cvm.guest.host_profile import VM_MEM_RESERVE_GB, HostProfile
-from chutes_cvm.guest.qemu import QemuCommand
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider
 
 H200_BARS = [
     {"index": 0, "size_mb": 16, "kind": "p64"},
@@ -89,14 +90,14 @@ def test_devices_are_parsed_and_held_in_bdf_order():
     """Order is significant -- it drives PXB grouping -- so it is an invariant of the list."""
     doc = document()
     doc["gpus"] = list(reversed(doc["gpus"]))
-    profile = HostProfile(doc)
+    profile = HostProfile.from_dict(doc)
     assert [g.bdf for g in profile.gpus] == sorted(g["bdf"] for g in doc["gpus"])
     assert profile.gpu_numa_nodes == (0, 0, 0, 0, 1, 1, 1, 1)
 
 
 def test_gpu_device_id_selects_the_profile():
-    assert HostProfile(document()).gpu_profile.name == "H200"
-    assert HostProfile(
+    assert HostProfile.from_dict(document()).gpu_profile.name == "H200"
+    assert HostProfile.from_dict(
         document(gpus=[gpu("0000:19:00.0", 0, "2bb5")])
     ).gpu_profile.name == ("RTX_PRO_6000")
 
@@ -107,12 +108,12 @@ def test_mixed_gpu_models_are_refused():
         gpus=[gpu("0000:19:00.0", 0, "2335"), gpu("0000:3b:00.0", 0, "2bb5")]
     )
     with pytest.raises(ValueError, match="expected one GPU model"):
-        HostProfile(doc).gpu_profile
+        HostProfile.from_dict(doc).gpu_profile
 
 
 def test_no_gpus_is_refused():
     with pytest.raises(ValueError, match="expected one GPU model"):
-        HostProfile(document(gpus=[])).gpu_profile
+        HostProfile.from_dict(document(gpus=[])).gpu_profile
 
 
 def test_gpu_less_host_sizes_its_guest_from_itself():
@@ -124,7 +125,7 @@ def test_gpu_less_host_sizes_its_guest_from_itself():
     no particular machine and was a second guest shape reachable on production hardware.
     """
     doc = document(gpus=[], nvswitches=[])
-    host = HostProfile(doc)
+    host = HostProfile.from_dict(doc)
 
     assert host.vcpus == host.cpu.count - HOST_RESERVED_CPUS
     assert host._derived_guest_mem_gb == host.host_mem_gb - VM_MEM_RESERVE_GB
@@ -138,12 +139,14 @@ def test_gpu_less_host_sizes_its_guest_from_itself():
 
 def test_unknown_gpu_model_is_refused():
     with pytest.raises(ValueError, match="no GPU profile matches"):
-        HostProfile(document(gpus=[gpu("0000:19:00.0", 0, "dead")])).gpu_profile
+        HostProfile.from_dict(
+            document(gpus=[gpu("0000:19:00.0", 0, "dead")])
+        ).gpu_profile
 
 
 def test_cpu_facts_are_grouped_and_named_for_what_they_are():
     """The wire says cpu.total; a total of what is not obvious, so from_dict renames it."""
-    cpu = HostProfile(document()).cpu
+    cpu = HostProfile.from_dict(document()).cpu
     assert (cpu.count, cpu.sockets) == (128, 2)
     assert cpu.vendor == "GenuineIntel"
     assert cpu.processor_id == "f2060c00fffba91f"
@@ -155,7 +158,7 @@ def test_unreadable_processor_id_stays_none():
     doc = document(
         cpu={"count": 128, "sockets": 2, "vendor": "GenuineIntel", "processor_id": None}
     )
-    assert HostProfile(doc).cpu.processor_id is None
+    assert HostProfile.from_dict(doc).cpu.processor_id is None
 
 
 def test_cpu_block_missing_a_key_is_refused():
@@ -169,7 +172,7 @@ def test_cpu_block_missing_a_key_is_refused():
         }
         del cpu[key]
         with pytest.raises(ValueError, match=f"cpu block missing {key}"):
-            HostProfile(document(cpu=cpu)).cpu
+            HostProfile.from_dict(document(cpu=cpu)).cpu
 
 
 def test_required_document_values_are_never_defaulted():
@@ -184,11 +187,11 @@ def test_required_document_values_are_never_defaulted():
         doc = document()
         del doc[block][key]
         with pytest.raises(KeyError, match=key):
-            getattr(HostProfile(doc), attr)
+            getattr(HostProfile.from_dict(doc), attr)
 
 
 def test_guest_shape_comes_from_the_profile_rule_not_host_capacity():
-    profile = HostProfile(document())
+    profile = HostProfile.from_dict(document())
     assert profile.vcpus == 124  # 128 host CPUs less H200's reserve of 4
     assert profile.guest_mem_gb == 1128  # 8 x 141 GB VRAM, NOT the host's 2048
     assert profile.smp_topology == "124,sockets=2,cores=62,threads=1"
@@ -196,14 +199,18 @@ def test_guest_shape_comes_from_the_profile_rule_not_host_capacity():
 
 
 def test_guest_numa_needs_exactly_two_host_nodes():
-    assert HostProfile(document()).uses_guest_numa is True
-    assert HostProfile(document(numa={"node_count": 4})).uses_guest_numa is False
-    assert HostProfile(document(numa={"node_count": 1})).uses_guest_numa is False
+    assert HostProfile.from_dict(document()).uses_guest_numa is True
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
+    )
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 1})).uses_guest_numa is False
+    )
     # The GPU model is not consulted: a 2-node B300 host gets guest NUMA like any other.
     b300 = document(
         gpus=[gpu(f"0000:{b}:00.0", n, "3182") for b, n in (("19", 0), ("3b", 1))]
     )
-    assert HostProfile(b300).uses_guest_numa is True
+    assert HostProfile.from_dict(b300).uses_guest_numa is True
 
 
 def _amd(doc):
@@ -219,8 +226,8 @@ def test_guest_numa_also_needs_a_platform_that_can_boot_it():
     """Two host nodes are necessary, not sufficient. The same 2-node shape runs NUMA on TDX
     and flat on SEV-SNP, whose guests wedge when a page conversion spans two backends.
     """
-    assert HostProfile(document()).uses_guest_numa is True
-    amd = HostProfile(_amd(document()))
+    assert HostProfile.from_dict(document()).uses_guest_numa is True
+    amd = HostProfile.from_dict(_amd(document()))
     assert amd.numa_node_count == 2
     assert amd.uses_guest_numa is False
 
@@ -228,23 +235,23 @@ def test_guest_numa_also_needs_a_platform_that_can_boot_it():
 def test_snp_class_on_a_numa_host_is_labelled_flat():
     """The variant label follows the path actually taken, so an AMD 2-node class is
     fingerprinted as the flat guest it boots, not the NUMA guest it cannot."""
-    assert HostProfile(document()).variant_label.startswith("numa-")
-    assert HostProfile(_amd(document())).variant_label.startswith("flat-")
+    assert HostProfile.from_dict(document()).variant_label.startswith("numa-")
+    assert HostProfile.from_dict(_amd(document())).variant_label.startswith("flat-")
 
 
 def test_nvswitches_attach_only_when_the_profile_says_so():
-    assert len(HostProfile(document()).attached_nvswitches) == 4
+    assert len(HostProfile.from_dict(document()).attached_nvswitches) == 4
     # RTX never passes NVSwitches through, even on a host that reports them.
     rtx = document(gpus=[gpu(f"0000:{b}:00.0", 0, "2bb5") for b in ("19", "3b")])
-    assert HostProfile(rtx).attached_nvswitches == ()
-    assert HostProfile(rtx).nvswitch_numa_nodes == ()
+    assert HostProfile.from_dict(rtx).attached_nvswitches == ()
+    assert HostProfile.from_dict(rtx).nvswitch_numa_nodes == ()
 
 
 def test_ib_is_not_attached_by_any_current_profile():
     """No shipped profile passes IB through. Taking the raw vector anyway is the bug that built
     14 rp_ib root ports on a B300 for devices the launcher never attaches."""
     doc = document(ib_devices=[ib("0000:15:00.0", 0), ib("0000:16:00.0", 1)])
-    profile = HostProfile(doc)
+    profile = HostProfile.from_dict(doc)
     assert profile.ib_devices  # captured
     assert profile.attached_ib == ()  # but not attached
     assert profile.ib_numa_nodes == ()
@@ -259,7 +266,7 @@ def test_bridge_pfs_and_vfs_are_never_attached(monkeypatch):
             ib("0000:17:00.1", 1, vf=True),
         ]
     )
-    profile = HostProfile(doc)
+    profile = HostProfile.from_dict(doc)
     monkeypatch.setattr(
         type(profile.gpu_profile),
         "should_passthrough_infiniband",
@@ -269,7 +276,9 @@ def test_bridge_pfs_and_vfs_are_never_attached(monkeypatch):
 
 
 def test_variant_label_numa_path_carries_node_signatures():
-    assert HostProfile(document()).variant_label == "numa-124c-1128g-nvsw-node1"
+    assert (
+        HostProfile.from_dict(document()).variant_label == "numa-124c-1128g-nvsw-node1"
+    )
 
 
 def test_variant_label_flat_path_carries_counts():
@@ -286,7 +295,7 @@ def test_variant_label_flat_path_carries_counts():
         numa={"node_count": 4},  # flat: more nodes than the builder can express
         guest_gb=992,
     )
-    profile = HostProfile(doc)
+    profile = HostProfile.from_dict(doc)
     assert profile.uses_guest_numa is False
     assert profile.variant_label == f"flat-252c-{profile.guest_mem_gb}g"
 
@@ -295,12 +304,12 @@ def test_nothing_derivable_is_stored():
     """Counts and id sets are projections of the device lists, never fields beside them."""
     doc = document()
     assert "count" not in doc["gpus"][0]
-    assert len(HostProfile(doc).gpus) == 8
+    assert len(HostProfile.from_dict(doc).gpus) == 8
 
 
 def test_round_trips_through_json():
-    profile = HostProfile(document())
-    again = HostProfile(json.loads(profile.to_json()))
+    profile = HostProfile.from_dict(document())
+    again = HostProfile.from_dict(json.loads(profile.to_json()))
     assert again.gpu_numa_nodes == profile.gpu_numa_nodes
     assert again.variant_label == profile.variant_label
     assert again.gpus[0].bars_arg == "0:16M:p64;2:256G:p64;4:32M:p64"
@@ -316,7 +325,7 @@ def test_api_profile_carries_only_rtmr0_determinants():
     that measure identically differ in the stored row, and the API's first-write-wins silently
     drops one. Host RAM is the worked example -- 2007 GB and 2011 GB are one H200 class.
     """
-    api = HostProfile(document()).to_api_profile()
+    api = HostProfile.from_dict(document()).to_api_profile()
     assert set(api) == {
         "gpus",
         "nvswitches",
@@ -336,7 +345,7 @@ def test_api_profile_does_not_send_host_addresses():
     """A BDF is mandatory on a capture -- it binds the device and orders the list -- but the
     measured command swaps every endpoint for a pci-bar-stub, so it never reaches RTMR0. Sending
     it would split two hosts whose only difference is which slots the cards sit in."""
-    profile = HostProfile(document())
+    profile = HostProfile.from_dict(document())
     assert all(d.bdf for d in profile.gpus)  # required on the capture
     api = profile.to_api_profile()
     assert all("bdf" not in d for d in api["gpus"])
@@ -354,7 +363,7 @@ def test_api_profile_sends_attached_devices_not_inventory():
     devices the launcher never attaches -- 14 rp_ib on a B300 -- so the generated RTMR0 could not
     match a real boot."""
     doc = document(ib_devices=[ib(f"0000:{0x15 + i:02x}:00.0", 0) for i in range(4)])
-    profile = HostProfile(doc)
+    profile = HostProfile.from_dict(doc)
     assert profile.ib_devices  # captured
     assert profile.to_api_profile()["ib_devices"] == []  # no profile passes IB through
 
@@ -362,7 +371,7 @@ def test_api_profile_sends_attached_devices_not_inventory():
 def test_api_profile_round_trips_for_generation():
     """Generation rebuilds a HostProfile from the stored row, through from_api_profile, which
     supplies the positional stand-ins the API does not keep."""
-    src = HostProfile(document())
+    src = HostProfile.from_dict(document())
     back = HostProfile.from_api_profile(src.to_api_profile())
     assert back.gpu_profile.name == src.gpu_profile.name
     assert back.cpu == src.cpu
@@ -377,7 +386,7 @@ def test_guest_ram_is_carried_not_recomputed():
     """The rule is per-GpuProfile, so a later release deriving a different answer would measure
     one guest and file it under a key computed from another. Storage drops the host total it came
     from, which makes re-deriving impossible as well as wrong."""
-    api = HostProfile(document()).to_api_profile()
+    api = HostProfile.from_dict(document()).to_api_profile()
     assert "total_gb" not in api["memory"]
     assert (
         HostProfile.from_api_profile(api).guest_mem_gb
@@ -392,8 +401,10 @@ def test_stored_profile_builds_the_command_generation_measures():
     The stand-in host addresses never reach the measurement: the measurement builder emits a
     pci-bar-stub per endpoint, keyed on its root port and carrying that device's own BARs, so a
     BDF the API never stored is never needed."""
-    back = HostProfile.from_api_profile(HostProfile(document()).to_api_profile())
-    cmd = QemuCommand.for_measurement(back, firmware="/opt/ovmf/OVMF.fd")
+    back = HostProfile.from_api_profile(
+        HostProfile.from_dict(document()).to_api_profile()
+    )
+    cmd = known.measurement_command(back, firmware="/opt/ovmf/OVMF.fd")
     stubs = [d for d in cmd.devices if d.startswith("pci-bar-stub")]
     assert len(stubs) == 12  # 8 GPUs + 4 NVSwitches
     assert all("bus=rp" in d for d in stubs)
@@ -407,7 +418,11 @@ def test_guest_ram_leaves_the_host_its_reserve():
 
     doc = document()
     doc["memory"]["total_gb"] = 1024  # under 8x141 GB of VRAM
-    assert HostProfile(doc)._derived_guest_mem_gb == 960 == 1024 - VM_MEM_RESERVE_GB
+    assert (
+        HostProfile.from_dict(doc)._derived_guest_mem_gb
+        == 960
+        == 1024 - VM_MEM_RESERVE_GB
+    )
 
 
 def test_host_too_small_for_its_gpus_is_refused():
@@ -415,11 +430,11 @@ def test_host_too_small_for_its_gpus_is_refused():
     rather than launched slowly. 8x H200 is 1128G of VRAM; the floor is 70% of that."""
     doc = document()
     doc["memory"]["total_gb"] = 900  # backs 832G, 74% -- allowed
-    assert HostProfile(doc)._derived_guest_mem_gb == 832
+    assert HostProfile.from_dict(doc)._derived_guest_mem_gb == 832
 
     doc["memory"]["total_gb"] = 800  # backs 736G, 65% -- refused
     with pytest.raises(ValueError, match="under the 70% floor"):
-        HostProfile(doc)._derived_guest_mem_gb
+        HostProfile.from_dict(doc)._derived_guest_mem_gb
 
 
 def test_flat_topology_shape():
@@ -429,11 +444,13 @@ def test_flat_topology_shape():
     Pinned because nothing else covers it -- every class with a validated measurement is a NUMA
     class, so this path reaches production unverified.
     """
-    assert HostProfile(document()).uses_guest_numa is True  # 2 nodes -> NUMA path
+    assert (
+        HostProfile.from_dict(document()).uses_guest_numa is True
+    )  # 2 nodes -> NUMA path
 
-    flat = HostProfile(document(numa={"node_count": 4}))
+    flat = HostProfile.from_dict(document(numa={"node_count": 4}))
     assert flat.uses_guest_numa is False
-    cmd = QemuCommand.for_measurement(flat, firmware="/opt/ovmf/OVMF.fd")
+    cmd = known.measurement_command(flat, firmware="/opt/ovmf/OVMF.fd")
     assert cmd.numa == []
     assert "memory-backend=mem0" in cmd.machine
     assert not any("pxb-pcie" in d for d in cmd.devices)
@@ -447,14 +464,54 @@ def test_guest_numa_is_a_cpu_fact_not_a_gpu_one():
     split 4+4, confirmed on <hostname>") on a GPU class, left from when GpuProfile *was* the host
     profile, and it forced two 2-node B300 hosts onto the flat path for no reason.
     """
-    assert HostProfile(document()).uses_guest_numa is True
+    assert HostProfile.from_dict(document()).uses_guest_numa is True
 
     # Same host, every GPU on one node: the vCPUs still want node-local memory.
-    one_node = HostProfile(
+    one_node = HostProfile.from_dict(
         document(gpus=[gpu(f"0000:{0x19 + i:02x}:00.0", 0) for i in range(8)])
     )
     assert one_node.numa_node_count == 2
     assert one_node.uses_guest_numa is True
 
     # Four nodes: more than the builder can express (4 sockets + an NxN SLIT), so flat.
-    assert HostProfile(document(numa={"node_count": 4})).uses_guest_numa is False
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
+    )
+
+
+# ── the platform is chosen once, from the captured CPU vendor ─────────────────────────────
+
+
+def test_a_document_takes_its_platform_from_the_cpu_vendor():
+    assert (
+        type(HostProfile.from_dict(known.rtx_numa_doc()).tee_provider) is TdxTeeProvider
+    )
+    assert type(HostProfile.from_dict(_amd_doc()).tee_provider) is SnpTeeProvider
+
+
+def test_a_profile_for_a_vendor_no_platform_covers_is_refused():
+    """However it is built: the platform is chosen in the constructor."""
+    doc = known.rtx_numa_doc()
+    doc["cpu"]["vendor"] = "HygonGenuine"
+    with pytest.raises(ValueError, match="cannot determine the TEE"):
+        HostProfile(doc)
+
+
+def test_an_api_record_keeps_its_platform():
+    record = HostProfile.from_dict(_amd_doc()).to_api_profile()
+    assert type(HostProfile.from_api_profile(record).tee_provider) is SnpTeeProvider
+
+
+def test_each_platform_builds_its_own_guest_object():
+    assert (
+        '"qom-type":"tdx-guest"'
+        in HostProfile.from_dict(known.rtx_numa_doc()).guest_object()
+    )
+    snp = HostProfile.from_dict(_amd_doc()).guest_object()
+    assert snp.startswith("sev-snp-guest,") and "cbitpos=51" in snp
+
+
+def _amd_doc():
+    return known.host_document(
+        "RTX_PRO_6000", vcpus=124, gpu_nodes=(0,) * 8, cpu_vendor="AuthenticAMD"
+    )

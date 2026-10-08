@@ -7,12 +7,13 @@ tests/measurement/test_tdx.py and test_snp.py cover those.
 
 import argparse
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import topology_fixtures as tf
 import yaml
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.image_set import FIRMWARE, write_manifest
 from chutes_cvm.measurement import generate_measurements as gm
 from chutes_cvm.measurement import snp, tdx
 from chutes_cvm.measurement.platform import MeasurementError
@@ -37,6 +38,15 @@ def test_generate_rtmr3_passes_luks_passphrase_from_env(monkeypatch, capsys):
     assert rc == 0
     assert seen["passphrase"] == "s3cret"
     assert capsys.readouterr().out.strip() == "COMPUTED"
+
+
+@pytest.fixture(autouse=True)
+def _offline_acpi_dump():
+    """Each SNP class's ACPI hash comes from the tdx-measure fork's dump (Docker); fake it."""
+    tables = MagicMock(spec=snp.AcpiTables)
+    tables.sha256.return_value = "a" * 64
+    with patch.object(snp.AcpiTables, "dump", return_value=tables) as dump:
+        yield dump
 
 
 def _gen_args(**over):
@@ -76,7 +86,7 @@ def _patch_tdx_registers(seen):
 
 
 class _FakeSnpImage:
-    def measurement(self, vcpus, processor_id):
+    def measurement(self, vcpus, processor_id, acpi_sha256):
         return "M0"
 
 
@@ -99,14 +109,18 @@ def _amd_class():
     return {"fingerprint": "b" * 64, "profile": doc}
 
 
-def _compute(monkeypatch, records, seen=None):
+def _compute(monkeypatch, records, seen=None, debug=False):
     """Run the whole-release computation with only its I/O edges faked: the API, the fork,
-    the image's RTMR1-3 and the SEV-SNP inputs."""
+    the image's RTMR1-3, the SEV-SNP inputs and the image set (a ``debug`` build or not).
+    """
     monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
     r12, r3 = _patch_tdx_registers({} if seen is None else seen)
     with patch.object(gm, "fetch_host_profiles", return_value=records), patch.object(
         tdx, "generate_acpi_blobs", return_value={"rtmr0": "r0", "mrtd": "mrtdhex"}
-    ), patch.object(snp.SnpImage, "load", return_value=_FakeSnpImage()), r12, r3:
+    ), patch.object(snp.SnpImage, "load", return_value=_FakeSnpImage()), patch.object(
+        gm, "ImageSet"
+    ) as image_set, r12, r3:
+        image_set.from_dir.return_value.rc = debug
         return gm._compute_measurements(_gen_args())
 
 
@@ -122,7 +136,7 @@ def test_compute_measurements_assembles_entry(monkeypatch):
     assert tdx["rtmr2"] == "R2HEX"
     assert tdx["rtmr3"] == "R3HEX"
     assert tdx["hardware"][0]["rtmr0"] == "R0"
-    assert tdx["hardware"][0]["fingerprint"] == "a" * 64
+    assert tdx["hardware"][0]["fingerprints"] == ["a" * 64]
     # No AMD classes registered: no SNP section. The API refuses one with no hardware.
     assert "snp" not in entry
     # Key order matches the chutes-ops values.yaml layout it merges into.
@@ -130,16 +144,26 @@ def test_compute_measurements_assembles_entry(monkeypatch):
     assert list(tdx.keys()) == ["mrtd", "rtmr1", "rtmr2", "rtmr3", "hardware"]
 
 
+def test_a_debug_build_is_written_as_a_release_candidate(monkeypatch):
+    """A debug image (SSH, no LUKS) must never pass as a release: as rc, the API refuses to load
+    it without an authorized_hotkeys allowlist, so a mistaken merge fails loudly."""
+    entry = _compute(monkeypatch, [_intel_class()], debug=True)
+    assert entry["rc"] is True
+    assert list(entry.keys()) == ["version", "rc", "tdx"]
+
+
 def test_compute_measurements_puts_each_class_on_its_own_platform(monkeypatch):
     """One image, one pass, both platforms; a class lands in exactly one section, by vendor."""
     entry = _compute(monkeypatch, [_intel_class(), _amd_class()])
 
-    assert [e["fingerprint"] for e in entry["tdx"]["hardware"]] == ["a" * 64]
-    assert [e["fingerprint"] for e in entry["snp"]["hardware"]] == ["b" * 64]
+    assert [e["fingerprints"] for e in entry["tdx"]["hardware"]] == [["a" * 64]]
+    assert [e["fingerprints"] for e in entry["snp"]["hardware"]] == [["b" * 64]]
     assert entry["tdx"]["hardware"][0]["rtmr0"] == "R0"
     assert "rtmr0" not in entry["snp"]["hardware"][0]
     # SEV-SNP has no version-level values: everything is in each entry's launch digest.
     assert entry["snp"]["hardware"][0]["measurement"] == "M0"
+    # The value an SNP launch of the class puts on its cmdline travels with the measurement.
+    assert entry["snp"]["hardware"][0]["acpi_sha256"] == "a" * 64
     assert list(entry["snp"].keys()) == ["hardware"]
 
 
@@ -237,7 +261,7 @@ _RTX_FLAT_DOC = tf.rtx_flat_doc()
 
 def test_host_profile_reproduces_the_numa_shape_the_host_launches_with():
     """Same values the former hardcoded H200 NVSwitch-node-0 registry entry carried."""
-    host = HostProfile(_H200_DOC)
+    host = HostProfile.from_dict(_H200_DOC)
     assert host.gpu_profile.display_name == "8xh200"
     assert host.qemu_version == "10.2.1"
     assert (host.vcpus, host.guest_mem_gb) == (
@@ -250,7 +274,7 @@ def test_host_profile_reproduces_the_numa_shape_the_host_launches_with():
 
 def test_host_profile_falls_back_to_flat():
     """More than two host NUMA nodes means no guest grouping -- only counts can matter."""
-    host = HostProfile(_RTX_FLAT_DOC)
+    host = HostProfile.from_dict(_RTX_FLAT_DOC)
     assert host.gpu_profile.display_name == "8xpro_6000"
     assert host.uses_guest_numa is False
     assert (len(host.gpus), host.guest_mem_gb) == (
@@ -261,7 +285,7 @@ def test_host_profile_falls_back_to_flat():
 
 def test_host_profile_rejects_unknown_device():
     with pytest.raises(ValueError, match="no GPU profile matches"):
-        HostProfile(
+        HostProfile.from_dict(
             tf.host_document("H200", vcpus=124, gpu_nodes=(0,))
             | {"gpus": [dict(tf.h200_doc()["gpus"][0], device_id="dead")]}
         ).gpu_profile
@@ -321,7 +345,7 @@ def test_measured_entry_carries_the_api_fingerprint(tdx_platform):
         pending = gm.measure_host_classes(records, [tdx_platform])
     assert pending == []
     (entry,) = tdx_platform.hardware
-    assert entry["fingerprint"] == "b" * 64
+    assert entry["fingerprints"] == ["b" * 64]
     assert entry["rtmr0"] == "R0HEX"
     assert tdx_platform.mrtd == "MRTDHEX"
     assert "8xh200" in entry["name"]
@@ -343,7 +367,7 @@ def test_an_unfingerprinted_record_is_pending(tdx_platform):
 class _SnpImageNeedingAProcessorId:
     """Measures like the real SnpImage, failing the same way for an uncaptured CPU."""
 
-    def measurement(self, vcpus, processor_id):
+    def measurement(self, vcpus, processor_id, acpi_sha256):
         if not processor_id:
             raise MeasurementError("fingerprint carries no cpu_processor_id")
         return "S" * 96
@@ -353,7 +377,12 @@ def _snp_platform():
     with patch.object(
         snp.SnpImage, "load", return_value=_SnpImageNeedingAProcessorId()
     ):
-        return snp.SnpMeasurements(bios_dir="/fw", image="/img/final.qcow2")
+        return snp.SnpMeasurements(
+            bios_dir="/fw",
+            image="/img/final.qcow2",
+            tdx_measure_bin="tdx-measure",
+            dist="ubuntu:26.04",
+        )
 
 
 def _amd_record(fingerprint="b" * 64, processor_id="110fa000fffba91f", measured=False):
@@ -378,8 +407,8 @@ def test_each_class_lands_on_its_own_platform(tdx_platform):
     ):
         pending = gm.measure_host_classes(records, [tdx_platform, platform])
     assert pending == []
-    assert [e["fingerprint"] for e in tdx_platform.hardware] == ["a" * 64]
-    assert [e["fingerprint"] for e in platform.hardware] == ["b" * 64]
+    assert [e["fingerprints"] for e in tdx_platform.hardware] == [["a" * 64]]
+    assert [e["fingerprints"] for e in platform.hardware] == [["b" * 64]]
 
 
 def test_a_missing_snp_input_fails_the_release_not_the_class(monkeypatch):
@@ -392,9 +421,32 @@ def test_a_missing_snp_input_fails_the_release_not_the_class(monkeypatch):
         snp.SnpImage, "load", side_effect=MeasurementError("no firmware")
     ), patch.object(
         gm, "fetch_host_profiles", side_effect=AssertionError("measured classes")
+    ), patch.object(
+        gm, "ImageSet"
     ):
         with pytest.raises(MeasurementError, match="no firmware"):
             gm._compute_measurements(_gen_args())
+
+
+def test_only_a_coherent_image_set_is_measured(tmp_path):
+    """The generator verifies the set it measures: here the firmware is not the one the image
+    was built with, so nothing is measured -- a published value would admit that firmware.
+    """
+    qcow2 = tmp_path / "set" / "1.5.0.qcow2"
+    qcow2.parent.mkdir()
+    for ext in ("qcow2", "vmlinuz", "initrd", "cmdline"):
+        qcow2.with_suffix(f".{ext}").write_bytes(ext.encode())
+    write_manifest(str(qcow2), str(qcow2.parent / "manifest.json"), version="1.5.0")
+    retired = tmp_path / "retired"
+    retired.mkdir()
+    for name in FIRMWARE:
+        (retired / name).write_bytes(b"retired firmware")
+
+    with patch.object(
+        gm, "fetch_host_profiles", side_effect=AssertionError("measured")
+    ):
+        with pytest.raises(MeasurementError, match="was built with"):
+            gm._compute_measurements(_gen_args(image=str(qcow2), bios_dir=str(retired)))
 
 
 def test_a_never_measured_class_that_cannot_generate_stays_pending():
@@ -403,7 +455,7 @@ def test_a_never_measured_class_that_cannot_generate_stays_pending():
     platform = _snp_platform()
     records = [_amd_record(), _amd_record(fingerprint="c" * 64, processor_id=None)]
     pending = gm.measure_host_classes(records, [platform])
-    assert [e["fingerprint"] for e in platform.hardware] == ["b" * 64]
+    assert [e["fingerprints"] for e in platform.hardware] == [["b" * 64]]
     assert pending == ["c" * 64]
 
 

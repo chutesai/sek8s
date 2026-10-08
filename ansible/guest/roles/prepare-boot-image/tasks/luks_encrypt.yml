@@ -399,7 +399,7 @@
       exit 0
     fi
     missing=""
-    for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat curl jq openssl base64 cryptsetup blkid ip sr25519; do
+    for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat printf curl jq openssl base64 cryptsetup blkid ip sr25519; do
       grep -qE "(^|/)${b}$" "$tmp" || missing="$missing $b"
     done
     entries=$(wc -l < "$tmp")

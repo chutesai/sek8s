@@ -24,7 +24,7 @@
 - The initramfs refuses a nonce or certificate hash that is not exactly 64 hex characters
   before building the report data, instead of cutting the pair to 128 characters, which shifted
   the certificate hash and left the API to reject the evidence without saying why.
-- `rtmr3-measure` exits successfully on SEV-SNP. RTMR3 is an Intel runtime
+- `rootfs-measure` exits successfully on SEV-SNP. RTMR3 is an Intel runtime
   measurement register and SNP has no equivalent — its single launch digest is fixed
   when the VM starts. TDX keeps its fail-closed behaviour, and a guest with *neither*
   device still fails closed, so a TDX guest whose module failed to load cannot be
@@ -60,7 +60,7 @@
   `nvidia-tdx.service` until the checkpoint was deleted by hand. `tee-gpu-vm.yml`, whose
   checkpoint also includes `common`, no longer shares a checkpoint name with
   `chutes-miner-vm.yml`. Saving a checkpoint removes older ones of the same name.
-- `rtmr3-verify` now gates on the TEE exactly as `rtmr3-measure` does: verify on TDX,
+- `rootfs-verify` now gates on the TEE exactly as `rootfs-measure` does: verify on TDX,
   skip on SEV-SNP, fail closed with neither device. Only the initramfs half had the
   gate, so an SNP guest reached the TDX quote path, found no RTMR3, and failed (a
   production build would power itself off; a debug build crashed on `None.hex()`).

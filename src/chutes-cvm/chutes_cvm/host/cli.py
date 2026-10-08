@@ -77,18 +77,18 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     # profile and POSTs it for baselining. No image / version / readiness gate — that is `host
     # verify`, which needs a downloaded image to know which measurement to check against. A fresh
     # host (no image yet) is exactly when you submit, so requiring the image here was wrong.
+    from chutes_cvm.guest.chutes_api import ChutesApiError, submit_profile
     from chutes_cvm.guest.detection import (
         SUPPORTED_QEMU_BY_OS,
         verify_host_qemu_supported,
     )
-    from chutes_cvm.guest.preflight import PreflightError, submit_profile
 
     print(_color("── chutes-cvm: host class submission ──", "1;36"))
     target_os = getattr(args, "target_os", None)
     if target_os:
         # Register the class this host will BE after the upgrade: the OS release picks the
         # QEMU that generates the measured guest ACPI, so the profile's release, QEMU and
-        # -cpu args are all rewritten together (chutes_cvm.guest.preflight._apply_target_os).
+        # -cpu args are all rewritten together (chutes_cvm.guest.chutes_api._apply_target_os).
         expected = SUPPORTED_QEMU_BY_OS.get(target_os)
         if expected is None:
             print(
@@ -117,18 +117,18 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
             )
             print(_color("\nResult: FAILED", "1;31"))
             return 1
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    try:
+        host = HostProfile.from_host()
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Registration failed: cannot read this host: {exc}")
+        print(_color("\nResult: FAILED", "1;31"))
+        return 1
     if getattr(args, "dry_run", False):
         # Print what WOULD be submitted, without submitting. The document is the whole of what
         # the class is keyed on, so two hosts printing the same document are one class -- which
         # makes this the check for "did my reconciled row match the real host?".
-        from chutes_cvm.guest.host_profile import HostProfile
-
-        try:
-            host = HostProfile.from_host()
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"Registration failed: cannot read this host: {exc}")
-            print(_color("\nResult: FAILED", "1;31"))
-            return 1
         document = host.to_api_profile()
         if target_os:
             document["qemu"]["qemu_version"] = SUPPORTED_QEMU_BY_OS[target_os]
@@ -139,10 +139,11 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     try:
         result = submit_profile(
             config_path=args.config,
+            host_profile=host,
             api_base=args.api,
             target_os=target_os,
         )
-    except PreflightError as exc:
+    except ChutesApiError as exc:
         print(f"Registration failed: {exc}")
         print(_color("\nResult: FAILED", "1;31"))
         return 1
@@ -176,17 +177,16 @@ def _cmd_platform(args: argparse.Namespace) -> int:
     owns, the same check a launch makes -- and fails with that platform's remedy if it is not.
     """
     from chutes_cvm.guest.detection import detect_cpu_vendor
-    from chutes_cvm.guest.tee import provider_for_cpu_vendor, tee_for_cpu_vendor
+    from chutes_cvm.guest.tee import TeeProvider
 
-    vendor = detect_cpu_vendor()
     try:
-        provider = provider_for_cpu_vendor(vendor)
+        provider = TeeProvider.for_cpu_vendor(detect_cpu_vendor())()
         if args.check:
             provider.verify_environment()
     except (ValueError, RuntimeError) as exc:
         print(f"chutes-cvm host platform: {exc}", file=sys.stderr)
         return 1
-    print(tee_for_cpu_vendor(vendor))
+    print(provider.name)
     return 0
 
 

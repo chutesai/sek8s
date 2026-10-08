@@ -8,7 +8,7 @@
 # Boot ordering (generate-admission-cert.service):
 #   After=setup-storage-bind-mounts.service   certs dir + manifests are the
 #                                             storage bind-mount copies
-#   After=rtmr3-verify.service                RTMR3 confirmed against the
+#   After=rootfs-verify.service                RTMR3 confirmed against the
 #                                             *placeholder* manifests first
 #   Before=k3s.service                        inject the real caBundle BEFORE
 #                                             k3s ever applies the webhook
@@ -18,13 +18,13 @@
 #   The webhook manifests are baked with a deterministic placeholder caBundle
 #   (__ADMISSION_CA_BUNDLE__) so the root image — and therefore RTMR3 — is
 #   reproducible across builds.  setup-storage-bind-mounts rsyncs that
-#   placeholder copy into the storage volume on every boot, and rtmr3-verify
+#   placeholder copy into the storage volume on every boot, and rootfs-verify
 #   then confirms the storage copy still matches the measured root copy.  ONLY
 #   AFTER that check passes do we mint an ephemeral CA and substitute the real
 #   base64(ca.crt) into the storage copy — the one k3s actually applies.
 #   setup-storage-bind-mounts has already evicted the k3s addon tracking from
 #   kine, so k3s re-applies the (now real-CA) manifest on start.  Injecting any
-#   earlier would make rtmr3-verify hash a manifest that diverges from the
+#   earlier would make rootfs-verify hash a manifest that diverges from the
 #   measurement and power the VM off.
 #
 # A fresh CA + server key are generated on every boot so no private key material
@@ -52,7 +52,7 @@ WEBHOOK_MANIFESTS=(
 # wired up, so the node must not run workloads. On debug builds
 # (GENERATE_ADMISSION_CERT_DEBUG_MODE=true, set via /etc/default/generate-admission-cert)
 # it logs and RETURNS so the VM stays up for troubleshooting — mirrors
-# rtmr3-verify / gpu-verify.
+# rootfs-verify / gpu-verify.
 fatal() {
     echo "generate-admission-cert: FATAL: $1" >&2
     echo "generate-admission-cert: FATAL: $1" > /dev/kmsg 2>/dev/null || true
@@ -104,7 +104,7 @@ chmod 0644 "${CA_CERT}" "${SERVER_CERT}"
 # ── Inject the matching caBundle into the webhook manifests ───────────────────
 # k8s caBundle is base64(PEM).  The measured root manifest carries only the
 # placeholder; we substitute the real value into the storage (bind-mounted) copy
-# that k3s applies.  The manifest is trusted at this point — rtmr3-verify ran
+# that k3s applies.  The manifest is trusted at this point — rootfs-verify ran
 # first and confirmed it matches the measurement.
 CA_BUNDLE="$(base64 -w0 "${CA_CERT}")"
 
@@ -117,7 +117,7 @@ for manifest in "${WEBHOOK_MANIFESTS[@]}"; do
         # placeholder CA the apiserver can never validate.
         #
         # This is not the build-time path: this script only runs at boot. The
-        # service Requires rtmr3-verify + setup-storage-bind-mounts, neither of
+        # service Requires rootfs-verify + setup-storage-bind-mounts, neither of
         # which is installed yet when the build starts the admission controller
         # for its health check, so generate-admission-cert never fires there.
         fatal "webhook manifest not found: ${manifest}"

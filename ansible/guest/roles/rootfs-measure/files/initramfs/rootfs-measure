@@ -1,17 +1,18 @@
 #!/bin/sh
-# /etc/initramfs-tools/scripts/init-bottom/rtmr3-measure
+# /etc/initramfs-tools/scripts/init-bottom/rootfs-measure
 #
 # Extends TDX RTMR3 with SHA-384 hashes of configured paths on the real
-# root filesystem before pivot_root.
+# root filesystem before pivot_root. On SEV-SNP, which has no RTMR3, the same
+# final hash is compared against the canonical manifest's instead.
 #
-# Reads /etc/tdx-measure.conf (baked into the initramfs, covered by RTMR1)
+# Reads /etc/tee-measure.conf (baked into the initramfs, covered by RTMR1)
 # for the list of paths to measure.  For each path, all regular files are
 # collected and sorted lexicographically to guarantee a deterministic extend
 # chain.  Any offline modification to a measured file will produce a
 # different RTMR3 value that verifiers can detect.
 #
 # For canonical files (e.g. verify-access-config) the build-time SHA-384
-# hash is embedded in /etc/tdx-rtmr3-expected-hashes (also covered by RTMR1).
+# hash is embedded in /etc/rootfs-manifest (also covered by RTMR1).
 # Each such file is verified against its expected hash before RTMR3 is
 # extended.  A mismatch is fatal: the VM powers off.  This means an attacker
 # cannot swap the runtime verification tool without either changing RTMR1
@@ -33,78 +34,83 @@ case $1 in prereqs) prereqs; exit 0;; esac
 
 handle_failure() {
     local reason="$1"
-    log_failure_msg "RTMR3 measurement failed: ${reason}"
-    echo "RTMR3-MEASURE-FAILED: ${reason}" > /dev/kmsg
+    log_failure_msg "root filesystem measurement failed: ${reason}"
+    echo "ROOTFS-MEASURE-FAILED: ${reason}" > /dev/kmsg
     log_failure_msg "VM will shut down in 10 seconds..."
     sleep 10
     poweroff -f
 }
 
-log_begin_msg "RTMR3: measuring configured paths"
+log_begin_msg "rootfs: measuring configured paths"
 
 # ── TEE gate ────────────────────────────────────────────────────────────────
 #
 # RTMR3 is an Intel TDX runtime measurement register. AMD SEV-SNP has no
 # equivalent: its single launch digest is fixed when the VM starts and cannot be
-# extended afterwards, so there is nothing for this script to do on SNP.
-#
-# The skip is a real reduction in what a SEV-SNP guest attests — the runtime file
-# measurements produced here have no SNP counterpart. Closing that gap needs
-# either dm-verity (putting root-filesystem integrity in the launch digest) or a
-# vTPM at VMPL0; both are deliberate design decisions, not something to paper
-# over at boot.
+# extended afterwards. Everything up to the final hash is the same on both; only
+# the last step differs. TDX extends RTMR3 with it and attestation compares it
+# remotely. SNP compares it here, against the hash of the canonical manifest's
+# list -- the manifest is baked into this initramfs, which the SNP launch digest
+# covers (kernel-hashes) -- so a file added, removed or changed offline powers the
+# VM off, as it would fail attestation on TDX.
 #
 # Order matters. TDX is checked first and keeps its original fail-closed
-# behaviour. Only an explicitly detected SNP guest skips; a guest with NEITHER
-# device still fails closed, so a TDX guest whose module failed to load can never
-# be silently mistaken for SNP and let through unmeasured.
+# behaviour. A guest with NEITHER device still fails closed, so a TDX guest whose
+# module failed to load can never be mistaken for SNP.
 
 if [ ! -c /dev/tdx_guest ]; then
     modprobe tdx_guest 2>/dev/null || true
     sleep 1
 fi
 
+SNP=0
 if [ ! -c /dev/tdx_guest ]; then
-    if [ -c /dev/sev-guest ]; then
-        log_success_msg "RTMR3: skipped — AMD SEV-SNP has no runtime measurement register"
-        echo "RTMR3-MEASURE-SKIPPED: SEV-SNP guest, no RTMR equivalent" > /dev/kmsg
-        exit 0
+    if [ ! -c /dev/sev-guest ]; then
+        handle_failure "TDX device (/dev/tdx_guest) not available — not running in a TDX guest"
     fi
-    handle_failure "TDX device (/dev/tdx_guest) not available — not running in a TDX guest"
+    SNP=1
 fi
 
 # ── Read measurement config ──────────────────────────────────────────────────
 
-if [ ! -f /etc/tdx-measure.conf ]; then
-    handle_failure "tdx-measure.conf not found in initramfs"
+if [ ! -f /etc/tee-measure.conf ]; then
+    handle_failure "tee-measure.conf not found in initramfs"
 fi
 
-EXPECTED_HASHES_FILE=/etc/tdx-rtmr3-expected-hashes
+EXPECTED_HASHES_FILE=/etc/rootfs-manifest
+
+# Where the SNP path leaves the verified list digest for rootfs-verify. /run is the tmpfs the
+# initramfs hands to the real root, in encrypted guest memory, written only by this measured script.
+SNP_VERIFIED=/run/sek8s/rootfs-digest
+
+if [ "$SNP" = 1 ] && [ ! -f "$EXPECTED_HASHES_FILE" ]; then
+    handle_failure "SEV-SNP: canonical manifest ${EXPECTED_HASHES_FILE} not in the initramfs"
+fi
 
 # ── Collect and hash every file to measure ──────────────────────────────────
 # Paths in the config are relative to the real root (e.g. /etc/ssh), so they are
 # read from ${rootmnt}/etc/ssh and emitted root-relative.
 #
-# WHICH files, in WHAT ORDER and HOW they are hashed all live in tdx-measure — the
-# same script the build-time manifest generator, rtmr3-verify and the host-side
+# WHICH files, in WHAT ORDER and HOW they are hashed all live in tee-measure — the
+# same script the build-time manifest generator, rootfs-verify and the host-side
 # measurement predictor run. This script owns only what is boot-specific: checking
 # each hash against the canonical manifest and extending the hardware register.
 # Do not re-derive the file list or the hashes here; that is how four walkers came
-# to disagree four ways. tdx-measure sorts under LC_ALL=C, refuses a symlinked conf
+# to disagree four ways. tee-measure sorts under LC_ALL=C, refuses a symlinked conf
 # entry, and exits non-zero if nothing is measurable; its progress goes to stderr,
 # routed here to /dev/kmsg for the miner-visible measurement phase.
 
 measure_start=$(date +%s)
 hash_list=$(mktemp)
 
-if ! tdx-measure hash "${rootmnt}" /etc/tdx-measure.conf \
+if ! tee-measure hash "${rootmnt}" /etc/tee-measure.conf \
         > "$hash_list" 2> /dev/kmsg; then
     rm -f "$hash_list"
-    handle_failure "measured-file enumeration failed — check tdx-measure.conf paths"
+    handle_failure "measured-file enumeration failed — check tee-measure.conf paths"
 fi
 
 collect_elapsed=$(($(date +%s) - measure_start))
-echo "RTMR3: file collection complete in ${collect_elapsed}s" > /dev/kmsg
+echo "rootfs: file collection complete in ${collect_elapsed}s" > /dev/kmsg
 
 # ── Hash each file and extend RTMR3 ─────────────────────────────────────────
 
@@ -118,7 +124,7 @@ total_files=$(wc -l < "$hash_list")
 # Both formats carry the 96-char hash at a fixed end of the line, so paths containing spaces are
 # handled by offset rather than by field splitting: manifest is "<path> <hash>", the hash list is
 # "<hash> <path>".
-echo "RTMR3: verifying ${total_files} files against the canonical manifest..." > /dev/kmsg
+echo "rootfs: verifying ${total_files} files against the canonical manifest..." > /dev/kmsg
 
 if [ -f "$EXPECTED_HASHES_FILE" ]; then
     tampered=$(awk '
@@ -141,18 +147,45 @@ fi
 # SHA384(0^48 || SHA384(hash-list)). Hashing the list text binds the paths too, which the
 # per-file content chain did not. chutes_cvm.measurement.rtmr3.fold_chain computes the same.
 chain_digest=$(sha384sum < "$hash_list" | cut -d' ' -f1)
-rm -f "$hash_list"
 
 if [ -z "$chain_digest" ]; then
+    rm -f "$hash_list"
     handle_failure "could not compute the chain digest"
 fi
 
-if ! tdx-rtmr-extend --index 3 --data "$chain_digest" 2>/dev/null; then
+if [ "$SNP" = 1 ]; then
+    # The manifest is tee-measure's list with the two fields swapped, in the same order, so
+    # swapping them back and hashing gives the final hash this root must have.
+    expected_list=$(mktemp)
+    awk 'substr($0,1,1) != "#" && length($0) >= 98 {
+            print substr($0, length($0)-95) " " substr($0, 1, length($0)-97) }' \
+        "$EXPECTED_HASHES_FILE" > "$expected_list"
+    expected_digest=$(sha384sum < "$expected_list" | cut -d' ' -f1)
+    if [ "$chain_digest" != "$expected_digest" ]; then
+        first=$(awk 'NR==FNR { m[FNR]=$0; n=FNR; next }
+                     m[FNR] != $0 { print "first difference at " substr($0,98); found=1; exit }
+                     END { if (!found && FNR != n) print "the manifest lists " n " files, the root " FNR }' \
+            "$expected_list" "$hash_list")
+        rm -f "$hash_list" "$expected_list"
+        handle_failure "SEV-SNP: root filesystem does not match the canonical manifest (${first})"
+    fi
+    rm -f "$hash_list" "$expected_list"
+    mkdir -p "$(dirname "$SNP_VERIFIED")"
+    echo "$chain_digest" > "$SNP_VERIFIED"
+    chmod 0444 "$SNP_VERIFIED"
+elif ! tdx-rtmr-extend --index 3 --data "$chain_digest" 2>/dev/null; then
+    rm -f "$hash_list"
     handle_failure "failed to extend RTMR3"
 fi
+rm -f "$hash_list"
 
 total_elapsed=$(($(date +%s) - measure_start))
-echo "RTMR3: completed — ${total_files} files measured in ${total_elapsed}s" > /dev/kmsg
-log_success_msg "RTMR3: extended with ${total_files} file measurement(s) in ${total_elapsed}s"
+if [ "$SNP" = 1 ]; then
+    echo "rootfs: SEV-SNP root matches the manifest — ${total_files} files in ${total_elapsed}s" > /dev/kmsg
+    log_success_msg "rootfs: SEV-SNP root verified (${total_files} files) in ${total_elapsed}s"
+else
+    echo "rootfs: RTMR3 extended — ${total_files} files measured in ${total_elapsed}s" > /dev/kmsg
+    log_success_msg "rootfs: RTMR3 extended with ${total_files} file measurement(s) in ${total_elapsed}s"
+fi
 
 exit 0

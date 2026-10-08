@@ -9,7 +9,7 @@
                   fork's ``--runtime-only`` mode. Post-LUKS: LUKS rebuilds the initrd, and RTMR2
                   measures that final one.
     RTMR3         once per release: the SHA-384 chain over the files the image's
-                  /etc/tdx-measure.conf names. The root is mounted read-only (qemu-nbd, plus
+                  /etc/tee-measure.conf names. The root is mounted read-only (qemu-nbd, plus
                   cryptsetup for a LUKS root) and folded by ``rtmr3.compute_rtmr3``, the helper
                   the guest ships and runs itself.
 
@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 from chutes_cvm import proc
+from chutes_cvm.guest.context import MeasurementContext
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.guest.tee import TdxTeeProvider
@@ -40,7 +41,7 @@ from chutes_cvm.measurement.platform import (
     PlatformMeasurements,
     staged_boot_artifacts,
 )
-from chutes_cvm.paths import GUEST_FIRMWARE, tdx_measure_script
+from chutes_cvm.paths import GUEST_FIRMWARE, tee_measure_script
 
 
 class TdxMeasurements(PlatformMeasurements):
@@ -73,7 +74,9 @@ class TdxMeasurements(PlatformMeasurements):
         self._registers = {"rtmr1": rtmr1, "rtmr2": rtmr2, "rtmr3": rtmr3}
 
     def measure(self, host: HostProfile) -> dict:
-        cmd = QemuCommand.for_measurement(host, firmware=self._firmware)
+        cmd = QemuCommand.build(
+            host, MeasurementContext.from_host(host, firmware=self._firmware)
+        )
         with tempfile.TemporaryDirectory() as td:
             meta = ImageConfig(
                 cmd, host, acpi_tables=str(Path(td) / "acpi.bin")
@@ -392,14 +395,14 @@ def compute_rtmr3(
     if not os.path.isfile(image):
         raise MeasurementError(f"image not found: {image}")
     with _mounted_image_root(image, luks_passphrase, root_part) as mnt:
-        conf = os.path.join(mnt, "etc/tdx-measure.conf")
+        conf = os.path.join(mnt, "etc/tee-measure.conf")
         if not os.path.isfile(conf):
             raise MeasurementError(
-                "/etc/tdx-measure.conf not found in image — rtmr3-measure did not run"
+                "/etc/tee-measure.conf not found in image — rootfs-measure did not run"
             )
         # The guest's own helper does the hashing and the fold, so the value is the one the
-        # guest extends at boot and rtmr3-verify recomputes, by construction.
+        # guest extends at boot and rootfs-verify recomputes, by construction.
         try:
-            return rtmr3.compute_rtmr3(mnt, conf, tdx_measure_script())
+            return rtmr3.compute_rtmr3(mnt, conf, tee_measure_script())
         except rtmr3.Rtmr3Error as exc:
             raise MeasurementError(str(exc)) from exc

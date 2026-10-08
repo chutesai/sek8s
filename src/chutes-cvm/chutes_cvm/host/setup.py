@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from chutes_cvm import proc
 from chutes_cvm.guest.detection import detect_cpu_vendor
-from chutes_cvm.guest.tee import provider_for_cpu_vendor
+from chutes_cvm.guest.tee import TeeProvider
 from chutes_cvm.host.recipes import PPA, APTRepo, HostRecipe, resolve_recipe
 from chutes_cvm.host.system import run, write_system_file
 
@@ -754,7 +754,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         # Fails before touching the host if this OS has no recipe for the CPU's platform.
-        recipe = resolve_recipe(provider_for_cpu_vendor(detect_cpu_vendor()))
+        recipe = resolve_recipe(TeeProvider.for_cpu_vendor(detect_cpu_vendor())())
     except (ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
