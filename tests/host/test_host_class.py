@@ -5,17 +5,17 @@ from unittest.mock import patch
 
 import pytest
 import topology_fixtures as known
+from chutes_cvm.guest.chutes_api import ChutesApiError
 from chutes_cvm.guest.host_class import (
-    MeasuredImage,
     HostClass,
     HostClassStatus,
+    MeasuredImage,
     NotMeasured,
-    SnpMeasuredImage,
     SnpHostClass,
+    SnpMeasuredImage,
     TdxHostClass,
 )
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.chutes_api import ChutesApiError
 
 _ACPI = "6a8501a0f92db861ac1f055a4015adc52662da7b760463ec0331e40bb1f5f5a7"
 
@@ -40,16 +40,18 @@ def _response(*measurements, status="accepted"):
 
 
 def test_an_intel_class_parses_tdx_entries():
-    host_class = TdxHostClass.from_response(_response({"version": "1.5.0", "rc": False}))
+    host_class = TdxHostClass.from_response(
+        _response({"version": "1.5.0", "rc": False})
+    )
     assert host_class.fingerprint == "fp"
     assert host_class.status is HostClassStatus.ACCEPTED
-    assert host_class.measured == [
-        MeasuredImage(version="1.5.0", rc=False)
-    ]
+    assert host_class.measured == [MeasuredImage(version="1.5.0", rc=False)]
 
 
 def test_an_amd_class_carries_each_entry_s_acpi_hash():
-    host_class = SnpHostClass.from_response(_response({"version": "1.5.0", "rc": True, "acpi_sha256": _ACPI}))
+    host_class = SnpHostClass.from_response(
+        _response({"version": "1.5.0", "rc": True, "acpi_sha256": _ACPI})
+    )
     assert host_class.measured == [
         SnpMeasuredImage(version="1.5.0", rc=True, acpi_sha256=_ACPI)
     ]
@@ -83,13 +85,17 @@ def test_a_class_with_nothing_published_covers_nothing():
 
 
 def test_an_image_s_entry_is_found_by_version_and_rc():
-    host_class = TdxHostClass.from_response(_response({"version": "1.5.0", "rc": False}, {"version": "1.5.0", "rc": True}))
+    host_class = TdxHostClass.from_response(
+        _response({"version": "1.5.0", "rc": False}, {"version": "1.5.0", "rc": True})
+    )
     found = host_class.measured_image(known.fake_image_set("1.5.0", rc=True))
     assert (found.version, found.rc, found.label) == ("1.5.0", True, "1.5.0 (rc)")
 
 
 def test_an_unpublished_image_is_not_measured():
-    host_class = TdxHostClass.from_response(_response({"version": "1.5.0", "rc": False}))
+    host_class = TdxHostClass.from_response(
+        _response({"version": "1.5.0", "rc": False})
+    )
     debug = known.fake_image_set("1.5.0", rc=True)
     with pytest.raises(NotMeasured, match=r"1\.5\.0 \(rc\)") as raised:
         host_class.measured_image(debug)
@@ -122,6 +128,9 @@ def test_fetch_signs_the_given_profile_and_parses_the_answer():
         )
     assert isinstance(host_class, SnpHostClass)
     status.assert_called_once_with(
-        config_path="/c.yaml", host_profile=host, api_base="https://api", target_os="26.04"
+        config_path="/c.yaml",
+        host_profile=host,
+        api_base="https://api",
+        target_os="26.04",
     )
     assert host_class.measured_image(known.fake_image_set("1.5.0")).acpi_sha256 == _ACPI

@@ -4,7 +4,6 @@ import re
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest import qemu
 from chutes_cvm.guest.context import (
     DirectBoot,
@@ -13,6 +12,7 @@ from chutes_cvm.guest.context import (
     PassthroughSet,
     ProcessBundle,
 )
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import PcieRootPinning, QemuCommand, _parse_mem_mib
 
 # The launch-shaped inputs, named once.

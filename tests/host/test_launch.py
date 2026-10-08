@@ -136,7 +136,8 @@ def test_validate_rejects_bad_network_type():
 
 def _boot_context(cfg, vm_image, net_iface, *, benchmark, pass_gpus, host):
     """Run a test boot through _boot with the factory and the boot primitive faked; return the
-    factory's keyword arguments, after checking the primitive got exactly what it built."""
+    factory's keyword arguments, after checking the primitive got exactly what it built.
+    """
     with patch(f"{P}.LaunchContext.from_host", return_value="ctx") as from_host, patch(
         f"{P}.launch_vm", return_value=0
     ) as lv:
@@ -160,7 +161,9 @@ def _boot_context(cfg, vm_image, net_iface, *, benchmark, pass_gpus, host):
 def test_boot_hands_step_1_s_entry_to_the_context():
     entry = MeasuredImage("1.4.0", False)
     host = _fake_host()
-    cfg = _cfg(config_volume="c", cache_volume="ca", storage_volume="s", network_type="user")
+    cfg = _cfg(
+        config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
+    )
     with patch(f"{P}.LaunchContext.from_host", return_value="ctx") as from_host, patch(
         f"{P}.launch_vm", return_value=0
     ) as lv:
@@ -196,13 +199,17 @@ def test_boot_plumbs_the_configured_ssh_port():
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
     cfg.network.ssh_port = 2222
-    got = _boot_context(cfg, "/img", "", benchmark=False, pass_gpus=False, host=_fake_host())
+    got = _boot_context(
+        cfg, "/img", "", benchmark=False, pass_gpus=False, host=_fake_host()
+    )
     assert got["network"].ssh_port == 2222
 
 
 def test_boot_benchmark_omits_cache_adds_ssh():
     cfg = _cfg(config_volume="c", storage_volume="s", network_type="tap")
-    got = _boot_context(cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=_fake_host())
+    got = _boot_context(
+        cfg, "/img", "tap0", benchmark=True, pass_gpus=False, host=_fake_host()
+    )
     assert got["show_ssh"] is True
     assert got["volumes"].cache is None
     assert got["pass_gpus"] is False
@@ -212,7 +219,9 @@ def test_boot_user_network_omits_net_iface():
     cfg = _cfg(
         config_volume="c", cache_volume="ca", storage_volume="s", network_type="user"
     )
-    got = _boot_context(cfg, "/img", "", benchmark=False, pass_gpus=True, host=_fake_host())
+    got = _boot_context(
+        cfg, "/img", "", benchmark=False, pass_gpus=True, host=_fake_host()
+    )
     assert got["network"].net_iface is None
 
 
@@ -395,7 +404,9 @@ def test_a_published_debug_image_launches_measured():
 
 def test_no_answer_from_the_api_counts_as_unmeasured():
     error = ChutesApiError("API unreachable")
-    production, debug = known.fake_image_set("1.4.0"), known.fake_image_set("1.4.0", rc=True)
+    production, debug = known.fake_image_set("1.4.0"), known.fake_image_set(
+        "1.4.0", rc=True
+    )
     with pytest.raises(LaunchError, match="API unreachable"):
         _step_1(production, fetch_error=error)
     assert _step_1(production, fetch_error=error, force=True) is None
@@ -485,7 +496,8 @@ def test_prepare_vm_image_verifies_in_python_then_copies_via_sudo(tmp_path):
     cps = [c for c in calls if c[:2] == ["sudo", "cp"]]
     assert cps[0] == ["sudo", "cp", qcow2, vm_image]
     assert [c[-1] for c in cps[1:]] == [
-        str(vm_dir / f"tdx-h-{sha[:16]}.{ext}") for ext in ("vmlinuz", "initrd", "cmdline")
+        str(vm_dir / f"tdx-h-{sha[:16]}.{ext}")
+        for ext in ("vmlinuz", "initrd", "cmdline")
     ]
 
 
@@ -523,7 +535,9 @@ def test_prepare_vm_image_surfaces_verification_failure(tmp_path):
         images.prepare_vm_image(set_dir, "h", str(tmp_path / "vm"))
 
 
-def test_prepare_vm_image_refuses_firmware_the_image_was_not_built_with(tmp_path, monkeypatch):
+def test_prepare_vm_image_refuses_firmware_the_image_was_not_built_with(
+    tmp_path, monkeypatch
+):
     """chutes-cvm's firmware ships apart from the image, and the launch measurement covers its
     bytes: a mismatch would boot a guest that cannot attest."""
     set_dir, _, _ = _stage_image_set(tmp_path)

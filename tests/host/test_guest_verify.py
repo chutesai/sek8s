@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 import topology_fixtures as known
 from chutes_cvm.guest import verify
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.chutes_api import ChutesApiError
+from chutes_cvm.guest.host_profile import HostProfile
 
 COVERED = [{"version": "1.4.0", "rc": False}, {"version": "1.4.0", "rc": True}]
 
@@ -205,7 +205,10 @@ def test_blocked_when_the_host_cannot_be_read(capsys):
     ):
         assert verify.verify_host() == verify.BLOCKED
     st.assert_not_called()
-    assert "BLOCKED (host): cannot read this host: lspci missing" in capsys.readouterr().out
+    assert (
+        "BLOCKED (host): cannot read this host: lspci missing"
+        in capsys.readouterr().out
+    )
 
 
 def test_submit_registers_the_reading_the_class_was_fetched_for():

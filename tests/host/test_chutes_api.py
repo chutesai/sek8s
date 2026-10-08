@@ -8,12 +8,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from chutes_cvm.guest import chutes_api
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.chutes_api import (
     ChutesApiError,
     host_class_status,
     submit_profile,
 )
+from chutes_cvm.guest.host_profile import HostProfile
 
 
 def _capture(**over):
@@ -130,9 +130,7 @@ def test_host_class_status_signs_the_given_profile_with_no_version(tmp_path):
     ), patch(
         "chutes_cvm.guest.chutes_api._post", return_value={"status": "accepted"}
     ) as post:
-        resp = host_class_status(
-            config_path=_creds(tmp_path), host_profile=host
-        )
+        resp = host_class_status(config_path=_creds(tmp_path), host_profile=host)
     assert resp == {"status": "accepted"}
     # The API's route, spelled out: it comes from TeeProvider.name, so renaming a provider must
     # fail here rather than silently call a route the API does not serve.

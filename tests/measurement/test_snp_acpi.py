@@ -108,7 +108,8 @@ def _amd_host():
 
 def test_a_class_is_dumped_with_its_own_platform_s_machine_and_hashed(live):
     """``AcpiTables.dump`` runs the RTMR0 dump on the class's measurement command -- whose
-    machine follows the platform -- and the tables it writes hash to the firmware's value."""
+    machine follows the platform -- and the tables it writes hash to the firmware's value.
+    """
     seen = {}
 
     def fake_dump(meta, out_dir, *, tdx_measure_bin, dist):

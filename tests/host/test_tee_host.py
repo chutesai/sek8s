@@ -2,7 +2,6 @@ import os
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.host_class import MeasuredImage, SnpMeasuredImage
 from chutes_cvm.guest import tee as tee_module
 from chutes_cvm.guest.context import (
     DirectBoot,
@@ -14,11 +13,8 @@ from chutes_cvm.guest.context import (
     SnpLaunchContext,
     TdxLaunchContext,
 )
-from chutes_cvm.guest.tee import (
-    TeeProvider,
-    SnpTeeProvider,
-    TdxTeeProvider,
-)
+from chutes_cvm.guest.host_class import MeasuredImage, SnpMeasuredImage
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider, TeeProvider
 
 # The launch-shaped inputs, named once.
 _LAUNCH = dict(
@@ -65,7 +61,10 @@ def test_no_enabled_platform_is_an_error(monkeypatch):
 
 @pytest.mark.parametrize(
     "vendor, provider, name",
-    [("GenuineIntel", TdxTeeProvider, "tdx"), (" AuthenticAMD ", SnpTeeProvider, "snp")],
+    [
+        ("GenuineIntel", TdxTeeProvider, "tdx"),
+        (" AuthenticAMD ", SnpTeeProvider, "snp"),
+    ],
 )
 def test_the_platform_is_the_provider_its_silicon_runs(vendor, provider, name):
     assert TeeProvider.for_cpu_vendor(vendor) is provider
@@ -338,7 +337,9 @@ def test_unknown_vendor_has_no_platform():
 
 
 @pytest.mark.parametrize("vendor", ["GenuineIntel", "AuthenticAMD"])
-def test_the_dump_machine_is_the_launch_machine_without_the_guest_object(vendor, tmp_path):
+def test_the_dump_machine_is_the_launch_machine_without_the_guest_object(
+    vendor, tmp_path
+):
     """Derived, not restated: drop confidential-guest-support, spell out what the platform
     switches off implicitly. Nothing else may differ, or the dumped tables do."""
     profile = _profile(vendor)
@@ -346,7 +347,9 @@ def test_the_dump_machine_is_the_launch_machine_without_the_guest_object(vendor,
     dump = known.measurement_command(profile, firmware=str(tmp_path / "f.fd")).machine
     expected = [o for o in launch if not o.startswith("confidential-guest-support=")]
     expected += profile.tee_provider.implicit_machine_opts
-    assert [o for o in dump.split(",") if not o.startswith("memory-backend=")] == expected
+    assert [
+        o for o in dump.split(",") if not o.startswith("memory-backend=")
+    ] == expected
 
 
 @pytest.mark.parametrize(
@@ -359,7 +362,10 @@ def test_a_launch_context_is_its_host_s_platform(vendor, context_type):
 
 def test_an_snp_launch_carries_the_acpi_value_as_one_parameter():
     compose = SnpLaunchContext.with_acpi
-    assert compose("root=UUID=x ro", "a" * 64) == f"root=UUID=x ro sek8s.acpi_sha256={'a' * 64}"
+    assert (
+        compose("root=UUID=x ro", "a" * 64)
+        == f"root=UUID=x ro sek8s.acpi_sha256={'a' * 64}"
+    )
     # No stray separator: the measured string must be exactly what the launch boots.
     assert compose("", "unverified") == "sek8s.acpi_sha256=unverified"
 
@@ -372,7 +378,11 @@ def test_platform_lookups_search_every_platform_whichever_class_asks():
 def _staged_image(tmp_path):
     image = tmp_path / "vm.qcow2"
     image.write_bytes(b"")
-    for ext, body in (("vmlinuz", b"k"), ("initrd", b"i"), ("cmdline", b"root=UUID=x ro\n")):
+    for ext, body in (
+        ("vmlinuz", b"k"),
+        ("initrd", b"i"),
+        ("cmdline", b"root=UUID=x ro\n"),
+    ):
         (tmp_path / f"vm.{ext}").write_bytes(body)
     return str(image)
 
@@ -389,7 +399,8 @@ def _setup(tmp_path, pass_gpus=True):
 
 
 @pytest.mark.parametrize(
-    "vendor, context_type", [("GenuineIntel", TdxLaunchContext), ("AuthenticAMD", SnpLaunchContext)]
+    "vendor, context_type",
+    [("GenuineIntel", TdxLaunchContext), ("AuthenticAMD", SnpLaunchContext)],
 )
 def test_a_host_s_launch_context_reads_its_image_s_boot_artifacts(
     vendor, context_type, tmp_path, monkeypatch
@@ -429,7 +440,9 @@ def test_an_snp_launch_boots_the_hash_published_for_its_image(tmp_path):
 
 
 def test_an_snp_test_boot_tells_the_firmware_it_is_unverified(tmp_path):
-    context = LaunchContext.from_host(_profile("AuthenticAMD"), None, **_setup(tmp_path))
+    context = LaunchContext.from_host(
+        _profile("AuthenticAMD"), None, **_setup(tmp_path)
+    )
     assert context.kernel_cmdline == "root=UUID=x ro sek8s.acpi_sha256=unverified"
 
 
@@ -438,7 +451,9 @@ def test_a_tdx_launch_boots_the_image_s_own_cmdline(measured, tmp_path):
     """ACPI is attested through RTMR0 on TDX: a measured launch and a test boot are the same
     guest."""
     entry = MeasuredImage(version="1.5.0", rc=False) if measured else None
-    context = LaunchContext.from_host(_profile("GenuineIntel"), entry, **_setup(tmp_path))
+    context = LaunchContext.from_host(
+        _profile("GenuineIntel"), entry, **_setup(tmp_path)
+    )
     assert type(context) is TdxLaunchContext
     assert context.kernel_cmdline == "root=UUID=x ro"
 
@@ -461,6 +476,8 @@ def test_host_numa_nodes_reads_the_online_nodes(tmp_path, monkeypatch):
     monkeypatch.setattr(
         context_module.os,
         "listdir",
-        lambda path: real_listdir(tmp_path) if path == "/sys/devices/system/node" else [],
+        lambda path: (
+            real_listdir(tmp_path) if path == "/sys/devices/system/node" else []
+        ),
     )
     assert context_module.host_numa_nodes() == [0, 1]

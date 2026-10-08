@@ -111,7 +111,8 @@ def _amd_class():
 
 def _compute(monkeypatch, records, seen=None, debug=False):
     """Run the whole-release computation with only its I/O edges faked: the API, the fork,
-    the image's RTMR1-3, the SEV-SNP inputs and the image set (a ``debug`` build or not)."""
+    the image's RTMR1-3, the SEV-SNP inputs and the image set (a ``debug`` build or not).
+    """
     monkeypatch.setenv("LUKS_PASSPHRASE", "s3cret")
     r12, r3 = _patch_tdx_registers({} if seen is None else seen)
     with patch.object(gm, "fetch_host_profiles", return_value=records), patch.object(
@@ -429,7 +430,8 @@ def test_a_missing_snp_input_fails_the_release_not_the_class(monkeypatch):
 
 def test_only_a_coherent_image_set_is_measured(tmp_path):
     """The generator verifies the set it measures: here the firmware is not the one the image
-    was built with, so nothing is measured -- a published value would admit that firmware."""
+    was built with, so nothing is measured -- a published value would admit that firmware.
+    """
     qcow2 = tmp_path / "set" / "1.5.0.qcow2"
     qcow2.parent.mkdir()
     for ext in ("qcow2", "vmlinuz", "initrd", "cmdline"):
@@ -440,7 +442,9 @@ def test_only_a_coherent_image_set_is_measured(tmp_path):
     for name in FIRMWARE:
         (retired / name).write_bytes(b"retired firmware")
 
-    with patch.object(gm, "fetch_host_profiles", side_effect=AssertionError("measured")):
+    with patch.object(
+        gm, "fetch_host_profiles", side_effect=AssertionError("measured")
+    ):
         with pytest.raises(MeasurementError, match="was built with"):
             gm._compute_measurements(_gen_args(image=str(qcow2), bios_dir=str(retired)))
 

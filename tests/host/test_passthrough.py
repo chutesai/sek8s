@@ -7,8 +7,6 @@ hardware -- and what will let offline measurement generation share the same buil
 """
 
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.passthrough import bind_passthrough
 from chutes_cvm.guest.context import (
     IOMMUFD_ID,
     DirectBoot,
@@ -17,9 +15,9 @@ from chutes_cvm.guest.context import (
     PassthroughSet,
     ProcessBundle,
 )
-from chutes_cvm.guest.qemu import (
-    QemuCommand,
-)
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.passthrough import bind_passthrough
+from chutes_cvm.guest.qemu import QemuCommand
 
 P = "chutes_cvm.guest.passthrough"
 

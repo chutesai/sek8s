@@ -10,8 +10,8 @@ from dataclasses import replace
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.context import MeasurementContext
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.measurement.image_config import ImageConfig
 
 _FW = "/opt/ovmf/OVMF.fd"

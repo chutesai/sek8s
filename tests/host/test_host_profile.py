@@ -13,11 +13,8 @@ import json
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest.gpu.profiles import HOST_RESERVED_CPUS
+from chutes_cvm.guest.host_profile import VM_MEM_RESERVE_GB, HostProfile
 from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider
-from chutes_cvm.guest.host_profile import (
-    VM_MEM_RESERVE_GB,
-    HostProfile,
-)
 
 H200_BARS = [
     {"index": 0, "size_mb": 16, "kind": "p64"},
@@ -142,7 +139,9 @@ def test_gpu_less_host_sizes_its_guest_from_itself():
 
 def test_unknown_gpu_model_is_refused():
     with pytest.raises(ValueError, match="no GPU profile matches"):
-        HostProfile.from_dict(document(gpus=[gpu("0000:19:00.0", 0, "dead")])).gpu_profile
+        HostProfile.from_dict(
+            document(gpus=[gpu("0000:19:00.0", 0, "dead")])
+        ).gpu_profile
 
 
 def test_cpu_facts_are_grouped_and_named_for_what_they_are():
@@ -201,8 +200,12 @@ def test_guest_shape_comes_from_the_profile_rule_not_host_capacity():
 
 def test_guest_numa_needs_exactly_two_host_nodes():
     assert HostProfile.from_dict(document()).uses_guest_numa is True
-    assert HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
-    assert HostProfile.from_dict(document(numa={"node_count": 1})).uses_guest_numa is False
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
+    )
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 1})).uses_guest_numa is False
+    )
     # The GPU model is not consulted: a 2-node B300 host gets guest NUMA like any other.
     b300 = document(
         gpus=[gpu(f"0000:{b}:00.0", n, "3182") for b, n in (("19", 0), ("3b", 1))]
@@ -273,7 +276,9 @@ def test_bridge_pfs_and_vfs_are_never_attached(monkeypatch):
 
 
 def test_variant_label_numa_path_carries_node_signatures():
-    assert HostProfile.from_dict(document()).variant_label == "numa-124c-1128g-nvsw-node1"
+    assert (
+        HostProfile.from_dict(document()).variant_label == "numa-124c-1128g-nvsw-node1"
+    )
 
 
 def test_variant_label_flat_path_carries_counts():
@@ -396,7 +401,9 @@ def test_stored_profile_builds_the_command_generation_measures():
     The stand-in host addresses never reach the measurement: the measurement builder emits a
     pci-bar-stub per endpoint, keyed on its root port and carrying that device's own BARs, so a
     BDF the API never stored is never needed."""
-    back = HostProfile.from_api_profile(HostProfile.from_dict(document()).to_api_profile())
+    back = HostProfile.from_api_profile(
+        HostProfile.from_dict(document()).to_api_profile()
+    )
     cmd = known.measurement_command(back, firmware="/opt/ovmf/OVMF.fd")
     stubs = [d for d in cmd.devices if d.startswith("pci-bar-stub")]
     assert len(stubs) == 12  # 8 GPUs + 4 NVSwitches
@@ -411,7 +418,11 @@ def test_guest_ram_leaves_the_host_its_reserve():
 
     doc = document()
     doc["memory"]["total_gb"] = 1024  # under 8x141 GB of VRAM
-    assert HostProfile.from_dict(doc)._derived_guest_mem_gb == 960 == 1024 - VM_MEM_RESERVE_GB
+    assert (
+        HostProfile.from_dict(doc)._derived_guest_mem_gb
+        == 960
+        == 1024 - VM_MEM_RESERVE_GB
+    )
 
 
 def test_host_too_small_for_its_gpus_is_refused():
@@ -433,7 +444,9 @@ def test_flat_topology_shape():
     Pinned because nothing else covers it -- every class with a validated measurement is a NUMA
     class, so this path reaches production unverified.
     """
-    assert HostProfile.from_dict(document()).uses_guest_numa is True  # 2 nodes -> NUMA path
+    assert (
+        HostProfile.from_dict(document()).uses_guest_numa is True
+    )  # 2 nodes -> NUMA path
 
     flat = HostProfile.from_dict(document(numa={"node_count": 4}))
     assert flat.uses_guest_numa is False
@@ -461,14 +474,18 @@ def test_guest_numa_is_a_cpu_fact_not_a_gpu_one():
     assert one_node.uses_guest_numa is True
 
     # Four nodes: more than the builder can express (4 sockets + an NxN SLIT), so flat.
-    assert HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_guest_numa is False
+    )
 
 
 # ── the platform is chosen once, from the captured CPU vendor ─────────────────────────────
 
 
 def test_a_document_takes_its_platform_from_the_cpu_vendor():
-    assert type(HostProfile.from_dict(known.rtx_numa_doc()).tee_provider) is TdxTeeProvider
+    assert (
+        type(HostProfile.from_dict(known.rtx_numa_doc()).tee_provider) is TdxTeeProvider
+    )
     assert type(HostProfile.from_dict(_amd_doc()).tee_provider) is SnpTeeProvider
 
 
@@ -486,7 +503,10 @@ def test_an_api_record_keeps_its_platform():
 
 
 def test_each_platform_builds_its_own_guest_object():
-    assert '"qom-type":"tdx-guest"' in HostProfile.from_dict(known.rtx_numa_doc()).guest_object()
+    assert (
+        '"qom-type":"tdx-guest"'
+        in HostProfile.from_dict(known.rtx_numa_doc()).guest_object()
+    )
     snp = HostProfile.from_dict(_amd_doc()).guest_object()
     assert snp.startswith("sev-snp-guest,") and "cbitpos=51" in snp
 

@@ -9,7 +9,6 @@ import copy
 from pathlib import Path
 
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.context import (
     DirectBoot,
     GuestNetwork,
@@ -17,6 +16,7 @@ from chutes_cvm.guest.context import (
     PassthroughSet,
     ProcessBundle,
 )
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.measurement.image_config import ImageConfig
 
 GOLDEN_DIR = Path(__file__).parent / "golden"

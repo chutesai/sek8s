@@ -504,9 +504,7 @@ def _tee_devices(
     cmd: QemuCommand, host: HostProfile, context: GuestContext, pinning: PcieRootPinning
 ) -> None:
     for device in host.tee_provider.devices():
-        cmd.add_device(
-            context.qemu_device(device=device, slot=pinning.device_suffix())
-        )
+        cmd.add_device(context.qemu_device(device=device, slot=pinning.device_suffix()))
 
 
 def _passthrough(

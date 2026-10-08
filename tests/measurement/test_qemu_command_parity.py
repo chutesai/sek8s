@@ -9,9 +9,9 @@ off each root port is the right one for each purpose -- a ``vfio-pci`` for a lau
 """
 
 import topology_fixtures as known
-from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest import qemu
 from chutes_cvm.guest.context import MeasurementContext, PassthroughSet
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.qemu import PcieRootPinning
 
 _FW = "OVMF.inteltdx.fd"
