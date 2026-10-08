@@ -20,6 +20,7 @@
     - name: Download K3s install script
       ansible.builtin.get_url:
         url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
+        checksum: "sha256:{{ k3s_install_sha256 }}"
         timeout: 120
         dest: /usr/local/bin/k3s-install.sh
         owner: root
@@ -42,16 +43,28 @@
         INSTALL_K3S_VERSION: "{{ k3s_version }}"
       changed_when: true
 
+# The installer checks the binary only against the sha256sum file of the release it downloads
+# from, so pin the binary here too. Unconditional (outside the version-gated block above), so a
+# binary left from an earlier run is checked as well.
+- name: Hash the k3s binary
+  when: not ansible_check_mode
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+    checksum_algorithm: sha256
+  register: k3s_binary
+
+- name: Refuse a k3s binary other than the pinned build
+  when: not ansible_check_mode
+  ansible.builtin.assert:
+    that: k3s_binary.stat.checksum | default('') == k3s_sha256
+    fail_msg: >-
+      /usr/local/bin/k3s is {{ k3s_binary.stat.checksum | default('missing') }}, not the pinned
+      {{ k3s_sha256 }} for {{ k3s_version }}
+
 # Unconditional (outside the version-gated block above): the script may be left over from an
-# earlier run even when this build skipped the download.
-#
-# It is fetched unpinned from get.k3s.io and is only ever used to install k3s, but it lands in
-# /usr/local/bin, which is measured wholesale into RTMR3 — so whatever upstream happened to be
-# serving at build time became part of the image's measurements, and two builds minutes apart
-# produced different RTMR2/RTMR3. Removing it makes the measurement independent of an unpinned
-# remote fetch, and drops a network-sourced script from the shipped image. The k3s BINARY stays
-# version-pinned via INSTALL_K3S_VERSION.
-- name: Remove the k3s install script (unpinned upstream fetch, not needed at runtime)
+# earlier run even when this build skipped the download. It is only ever used to install k3s, but
+# it lands in /usr/local/bin, which is measured wholesale into RTMR3; nothing needs it at runtime.
+- name: Remove the k3s install script (not needed at runtime)
   ansible.builtin.file:
     path: /usr/local/bin/k3s-install.sh
     state: absent

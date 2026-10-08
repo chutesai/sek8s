@@ -64,7 +64,7 @@ load_vm_data() {
 # provision_request <volumes_json>
 #   volumes_json: comma-separated quoted labels, e.g. '"storage","tdx-cache"' for prod,
 #   or '' for debug (register the CA only, no volume secrets). Generates the runtime
-#   quote (RTMR3 extended by rtmr3-measure before this runs) bound to the boot's
+#   quote (RTMR3 extended by rootfs-measure before this runs) bound to the boot's
 #   luks-quote-nonce + cert-hash, adds the miner-hotkey proof header (hotkey_sign), POSTs,
 #   and leaves the response at $PROVISION_RESPONSE for the caller to parse. Returns 0 on 200/201.
 provision_request() {
@@ -98,7 +98,7 @@ provision_request() {
         return 1
     fi
 
-    # On TDX, RTMR3 is fully extended at this point (rtmr3-measure ran before setup_storage).
+    # On TDX, RTMR3 is fully extended at this point (rootfs-measure ran before setup_storage).
     # SNP has no runtime register, so its report carries the launch measurement only.
     if ! generate_evidence "$quote_nonce" "$cert_hash"; then
         log_failure_msg "Failed to generate attestation evidence for /provision"

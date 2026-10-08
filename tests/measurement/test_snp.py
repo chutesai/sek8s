@@ -16,7 +16,7 @@ import hashlib
 import struct
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import topology_fixtures as tf
@@ -32,6 +32,8 @@ _OVMF_UBUNTU = _FIXTURES / "ovmf-amdsev-a2f54fb2.fd"
 _CMDLINE = (
     "root=UUID=9a3e62be-4b82-4a7a-8f47-0b25d728fa3a ro  console=tty1 console=ttyS0"
 )
+# A class's expected ACPI hash, as the offline dump produces it (the 8x RTX PRO 6000 SNP class).
+_ACPI = "6a8501a0f92db861ac1f055a4015adc52662da7b760463ec0331e40bb1f5f5a7"
 _KERNEL_SHA256 = "d5d71ed32239eaa9bcb0528227a7adb62688250ce9f163b3e04e9675ddf86cff"
 
 MILAN_SIG = 0x00A00F11  # EPYC 7763: family 25, model 1, stepping 1
@@ -222,7 +224,7 @@ def test_snp_image_hashes_the_staged_artifacts_once(tmp_path):
         image.cmdline == _CMDLINE
     )  # trailing newline dropped, as the launcher's $(cat) does
 
-    got = image.measurement(4, "110fa000fffba91f")
+    got = image.measurement(4, "110fa000fffba91f", _ACPI)
     assert len(got) == 96 and got == got.upper()
     assert got == (
         snp.launch_digest(
@@ -231,13 +233,32 @@ def test_snp_image_hashes_the_staged_artifacts_once(tmp_path):
             vcpu_signature=MILAN_SIG,
             kernel_sha256=image.kernel_sha256,
             initrd_sha256=image.initrd_sha256,
-            cmdline=_CMDLINE,
+            # The ACPI hash rides the cmdline exactly as an SEV-SNP launch appends it.
+            cmdline=f"{_CMDLINE} sek8s.acpi_sha256={_ACPI}",
         )
         .hex()
         .upper()
     )
     # The class half: same release, different class, different digest.
-    assert image.measurement(4, "110fa100fffba91f") != got
+    assert image.measurement(4, "110fa100fffba91f", _ACPI) != got
+
+
+def test_platform_description_moves_the_digest(tmp_path):
+    """The digest does not cover ACPI directly, so it must through the cmdline: a class whose
+    tables differ (a different expected hash) gets a different measurement."""
+    image = snp.SnpImage.load(_stage(tmp_path), str(_OVMF_OURS))
+    a = image.measurement(4, "110fa000fffba91f", "a" * 64)
+    b = image.measurement(4, "110fa000fffba91f", "b" * 64)
+    assert a != b
+
+
+@pytest.mark.parametrize("bad", ["unverified", "", "A" * 64, "a" * 63, "g" * 64])
+def test_only_a_real_acpi_hash_is_ever_measured(tmp_path, bad):
+    """A published measurement computed with the test-boot sentinel would let a host boot
+    unchecked ACPI and still attest, so the generator cannot produce one."""
+    image = snp.SnpImage.load(_stage(tmp_path), str(_OVMF_OURS))
+    with pytest.raises(MeasurementError, match="real ACPI hash"):
+        image.measurement(4, "110fa000fffba91f", bad)
 
 
 def test_snp_image_needs_the_staged_artifacts(tmp_path):
@@ -267,7 +288,12 @@ def _amd_host(processor_id="110fa000fffba91f"):
 
 def _snp_platform(image):
     with patch.object(snp.SnpImage, "load", return_value=image) as load:
-        platform = snp.SnpMeasurements(bios_dir="/fw", image="/img/final.qcow2")
+        platform = snp.SnpMeasurements(
+            bios_dir="/fw",
+            image="/img/final.qcow2",
+            tdx_measure_bin="/bin/tdx-measure",
+            dist="ubuntu:26.04",
+        )
     return platform, load
 
 
@@ -287,8 +313,22 @@ def test_an_amd_class_is_measured_with_its_own_vcpus_and_signature():
     platform, _ = _snp_platform(image)
     host = _amd_host()
 
-    entry = platform.add(host, "b" * 64)
+    tables = MagicMock(spec=snp.AcpiTables)
+    tables.sha256.return_value = _ACPI
+    with patch.object(snp.AcpiTables, "dump", return_value=tables) as dump:
+        entry = platform.add(host, "b" * 64)
 
-    assert entry["fingerprint"] == "b" * 64
-    assert entry["measurement"] == image.measurement(host.vcpus, "110fa000fffba91f")
+    # The class's ACPI comes from the offline dump, run with the SEV-SNP firmware and the
+    # release's dump tooling, before the digest that depends on it.
+    dump.assert_called_once_with(
+        host,
+        firmware="/fw/OVMF.amdsev.fd",
+        tdx_measure_bin="/bin/tdx-measure",
+        dist="ubuntu:26.04",
+    )
+    assert entry["fingerprints"] == ["b" * 64]
+    assert entry["acpi_sha256"] == _ACPI
+    assert entry["measurement"] == image.measurement(
+        host.vcpus, "110fa000fffba91f", _ACPI
+    )
     assert platform.section() == {"hardware": [entry]}

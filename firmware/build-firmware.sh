@@ -18,6 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EDK2_TAG="edk2-stable202605"
+EDK2_COMMIT="b03a21a63e3bd001f52c527e5a57feddb53a690b"
 EDK2_DIR="${EDK2_DIR:-/tmp/edk2-tdvf-build}"
 SECURE_BOOT=0
 AMD_SEV=0
@@ -78,11 +79,17 @@ if [[ ! -d "${EDK2_DIR}/.git" ]]; then
 fi
 
 cd "${EDK2_DIR}"
-# An earlier --amd-sev run leaves its .dsc edit in this reused tree; drop it so the
-# checkout below is clean and the edit is applied to pristine upstream every time.
-git checkout -- OvmfPkg/AmdSev/AmdSevX64.dsc
+# An earlier --amd-sev run leaves its .dsc edit and source patches in this reused tree;
+# drop them so the checkout below is clean and every edit is applied to pristine upstream
+# every time -- and so a later TDX build never compiles AMD-only patches.
+git checkout -- OvmfPkg
 git fetch --tags
 git checkout "${EDK2_TAG}"
+# A tag can be moved; the commit is what PROVENANCE.md and every measurement record.
+if [[ "$(git rev-parse HEAD)" != "${EDK2_COMMIT}" ]]; then
+    echo "ERROR: ${EDK2_TAG} resolves to $(git rev-parse HEAD), expected ${EDK2_COMMIT}" >&2
+    exit 1
+fi
 git submodule update --init --recursive
 
 echo "--- Building BaseTools ---"
@@ -106,36 +113,25 @@ if [[ $AMD_SEV -eq 1 ]]; then
     # would load whatever QEMU hands it, turning kernel-hashes=on from an enforced
     # guarantee into a recorded intention.
     #
-    # Two deviations from upstream AmdSevX64.dsc, both explained in PROVENANCE.md:
+    # Every deviation from upstream is explained in PROVENANCE.md:
     #
-    # 1. PcdUse1GPageTable=TRUE. Without it PlatformInitLib clamps the guest physical
-    #    address width to 40 bits, so any 64-bit PCI window above 1 TiB falls outside the
-    #    GCD map and PciHostBridgeDxe asserts -- a silent hang in a RELEASE build. Guest RAM
-    #    near 768G already pushes the window there, before a single 128G GPU BAR is placed.
-    #    OvmfPkgX64.dsc sets it; AmdSevX64.dsc does not (checked through edk2 master).
-    echo "--- Enabling 1G page tables in AmdSevX64.dsc ---"
-    python3 - <<'PY'
-path = "OvmfPkg/AmdSev/AmdSevX64.dsc"
-with open(path, newline="") as f:
-    dsc = f.read()
-eol = "\r\n" if "\r\n" in dsc else "\n"  # edk2 keeps CRLF in-tree; preserve it
-section = "[PcdsFixedAtBuild]" + eol
-if dsc.count(section) != 1:
-    raise SystemExit(f"expected exactly one {section.strip()} section in {path}")
-if "PcdUse1GPageTable" in dsc:
-    raise SystemExit(f"{path} already sets PcdUse1GPageTable -- re-check this edit")
-dsc = dsc.replace(section, section + "  gEfiMdeModulePkgTokenSpaceGuid.PcdUse1GPageTable|TRUE" + eol)
-with open(path, "w", newline="") as f:
-    f.write(dsc)
-PY
-
-    # 2. No embedded GRUB. That GRUB exists only for the SEV launch-secret LUKS flow; we
-    #    direct-boot with kernel-hashes=on and take the LUKS key from attestation in
-    #    initramfs, so it never runs. Building it needs grub's linuxefi.mod and
-    #    sevsecret.mod, which Fedora/RHEL patch in and Debian/Ubuntu do not ship. An empty
-    #    placeholder lets the .fdf resolve the file; a guest started without -kernel then
-    #    has nothing to boot and fails closed, rather than reaching an unverified loader.
+    # * No embedded GRUB. That GRUB exists only for the SEV launch-secret LUKS flow; we
+    #   direct-boot with kernel-hashes=on and take the LUKS key from attestation in
+    #   initramfs, so it never runs. Building it needs grub's linuxefi.mod and
+    #   sevsecret.mod, which Fedora/RHEL patch in and Debian/Ubuntu do not ship. An empty
+    #   placeholder lets the .fdf resolve the file; a guest started without -kernel then
+    #   has nothing to boot and fails closed, rather than reaching an unverified loader.
     : > OvmfPkg/AmdSev/Grub/grub.efi
+
+    # * Source patches (patches/amdsev/, the source of truth; see PROVENANCE.md): 1G page
+    #   tables for large PCI windows, then boot restricted to the measured kernel and an
+    #   ACPI integrity check.
+    #   Applied in name order; a patch that no longer applies fails the build rather than
+    #   being skipped -- git apply does no fuzzy matching.
+    for patch in "${SCRIPT_DIR}"/patches/amdsev/*.patch; do
+        echo "--- Applying $(basename "${patch}") ---"
+        git apply --whitespace=nowarn "${patch}"
+    done
 
     echo "--- Building AmdSevX64.dsc ---"
     build -p OvmfPkg/AmdSev/AmdSevX64.dsc -a X64 -t GCC -b RELEASE

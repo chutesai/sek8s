@@ -33,7 +33,8 @@ def _resolve_profile_for_devices(ids):
         }
         for i, did in enumerate(ids)
     ]
-    return HostProfile({"gpus": gpus}).gpu_profile
+    cpu = {"count": 1, "sockets": 1, "vendor": "GenuineIntel", "processor_id": None}
+    return HostProfile({"gpus": gpus, "cpu": cpu}).gpu_profile
 
 
 @pytest.mark.parametrize("name", sorted(GPU_PROFILES))

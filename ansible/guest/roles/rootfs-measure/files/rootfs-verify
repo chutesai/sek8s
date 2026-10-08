@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-# /usr/local/bin/rtmr3-verify
+# /usr/local/bin/rootfs-verify
 #
-# Post-mount RTMR3 integrity check.
+# Post-mount root filesystem integrity check: against hardware RTMR3 on TDX, against
+# the list the initramfs verified on SEV-SNP.
 #
 # Runs once at boot after setup-storage-bind-mounts.service (and therefore
 # after rsync -ac has synced root manifests into the storage volume).
 # Recomputes the full RTMR3 SHA-384 extension chain from the paths listed in
-# /etc/tdx-measure.conf and compares the result to the live hardware RTMR3
+# /etc/tee-measure.conf and compares the result to the live hardware RTMR3
 # obtained from a freshly generated TDX attestation quote.
 #
 # At this point bind-mounts are active, so any path that is backed by the
@@ -17,19 +18,19 @@
 # offline tamper that rsync missed, a sync regression, or a runtime
 # modification — produces a chain mismatch that powers off the VM.
 #
-# This script is measured in RTMR3 itself (see tdx-measure-miner.conf), so it
+# This script is measured in RTMR3 itself (see tee-measure-miner.conf), so it
 # cannot be modified at runtime without the hardware RTMR3 reflecting that
 # change — making any tampered version self-defeating.
 #
-# RTMR3 (mirrors init-bottom rtmr3-measure):
-#   rtmr3 = SHA384(0x00...0 || SHA384(tdx-measure hash output))
+# RTMR3 (mirrors init-bottom rootfs-measure):
+#   rtmr3 = SHA384(0x00...0 || SHA384(tee-measure hash output))
 # One extend over a digest of the whole ordered "<sha384hex> <path>" list, not one per file.
 #
 # WHICH files are measured, in WHAT ORDER, and HOW each one is hashed are NOT
-# decided here: they come from /usr/local/bin/tdx-measure, the same script the
+# decided here: they come from /usr/local/bin/tee-measure, the same script the
 # initramfs measurer runs at boot and the build-time manifest generator runs over
 # the image.  Re-deriving any of that here is exactly what let four independent
-# walkers of tdx-measure.conf disagree four ways.  This script owns only the chain
+# walkers of tee-measure.conf disagree four ways.  This script owns only the chain
 # fold and the comparison against hardware.
 #
 # The helper is loaded from /usr/local/lib/sek8s (RTMR3-measured, like this script)
@@ -41,10 +42,12 @@
 # tsm-mr sysfs attribute (fallback for kernels that expose it as readable).
 # Any unrecoverable error also triggers a forced poweroff.
 #
-# TDX only. The platform gate mirrors the initramfs rtmr3-measure exactly: a TDX
-# guest is verified; an SEV-SNP guest has no runtime measurement register (nothing
-# was extended at init-bottom, so there is nothing to compare against) and is
-# skipped; a guest with neither device is not a confidential VM and fails closed.
+# The platform gate mirrors the initramfs rootfs-measure exactly. A TDX guest is
+# verified against hardware RTMR3. An SEV-SNP guest has no RTMR3: there the
+# initramfs checked the root against the canonical manifest and left the verified
+# list digest in /run (tmpfs, written only by the measured initramfs), and this
+# compares the post-bind-mount list against that instead. A guest with neither
+# device is not a confidential VM and fails closed.
 
 import os
 import subprocess
@@ -57,19 +60,20 @@ from pathlib import Path
 # the NEXT boot. The unit sets PYTHONDONTWRITEBYTECODE too; this covers manual runs.
 sys.dont_write_bytecode = True
 sys.path.insert(0, "/usr/local/lib/sek8s")
-from rtmr3 import Rtmr3Error, compute_rtmr3  # noqa: E402
+from rtmr3 import Rtmr3Error, compute_rtmr3, list_digest, measured_hashes  # noqa: E402
 
 TDX_GUEST_DEVICE = Path("/dev/tdx_guest")
 SEV_GUEST_DEVICE = Path("/dev/sev-guest")
-CONF             = Path("/etc/tdx-measure.conf")
+CONF             = Path("/etc/tee-measure.conf")
 SYSFS_RTMR3      = "/sys/class/misc/tdx_guest/measurements/rtmr3:sha384"
+SNP_VERIFIED     = Path("/run/sek8s/rootfs-digest")
 QUOTE_GENERATOR  = Path("/usr/bin/tdx-quote-generator")
 QUOTE_RTMR3_OFF  = 520
 QUOTE_RTMR3_LEN  = 48
 POWEROFF_DELAY   = 10
 
 # When true: log warnings instead of powering off on any failure or mismatch.
-# Set via RTMR3_VERIFY_DEBUG_MODE=true in /etc/default/rtmr3-verify (debug builds only).
+# Set via RTMR3_VERIFY_DEBUG_MODE=true in /etc/default/rootfs-verify (debug builds only).
 DEBUG_MODE = os.environ.get("RTMR3_VERIFY_DEBUG_MODE", "false").lower() == "true"
 
 
@@ -78,20 +82,20 @@ DEBUG_MODE = os.environ.get("RTMR3_VERIFY_DEBUG_MODE", "false").lower() == "true
 def _kmsg(msg: str) -> None:
     try:
         with open("/dev/kmsg", "w") as fh:
-            fh.write(f"rtmr3-verify: {msg}\n")
+            fh.write(f"rootfs-verify: {msg}\n")
     except OSError:
         pass
 
 
 def fatal(msg: str) -> None:
     if DEBUG_MODE:
-        print(f"rtmr3-verify: WARNING (debug mode — would poweroff): {msg}", file=sys.stderr)
+        print(f"rootfs-verify: WARNING (debug mode — would poweroff): {msg}", file=sys.stderr)
         _kmsg(f"WARNING (debug mode): {msg}")
         return
-    print(f"rtmr3-verify: FATAL: {msg}", file=sys.stderr)
+    print(f"rootfs-verify: FATAL: {msg}", file=sys.stderr)
     _kmsg(f"FATAL: {msg}")
     print(
-        f"rtmr3-verify: powering off in {POWEROFF_DELAY} seconds",
+        f"rootfs-verify: powering off in {POWEROFF_DELAY} seconds",
         file=sys.stderr,
     )
     sys.stderr.flush()
@@ -103,16 +107,34 @@ def fatal(msg: str) -> None:
 
 # ── platform ─────────────────────────────────────────────────────────────────
 
-def has_rtmr3() -> bool:
-    """Whether this guest has an RTMR3 to verify. Same decision as initramfs rtmr3-measure."""
+def platform() -> str | None:
+    """``"tdx"`` or ``"snp"``. Same decision as initramfs rootfs-measure."""
     if TDX_GUEST_DEVICE.is_char_device():
-        return True
+        return "tdx"
     if SEV_GUEST_DEVICE.is_char_device():
-        print("rtmr3-verify: skipped — AMD SEV-SNP has no runtime measurement register")
-        _kmsg("SKIPPED: SEV-SNP guest, no RTMR equivalent")
-        return False
+        return "snp"
     fatal(f"TDX device ({TDX_GUEST_DEVICE}) not available — not running in a TDX guest")
-    return False  # reached only in debug mode, where fatal() warns instead of powering off
+    return None  # reached only in debug mode, where fatal() warns instead of powering off
+
+
+def verify_snp() -> None:
+    """The live root, post-bind-mount, against the list the initramfs verified at boot."""
+    try:
+        recorded = SNP_VERIFIED.read_text().strip()
+    except OSError:
+        fatal(f"SEV-SNP: {SNP_VERIFIED} missing — the initramfs did not verify the root")
+        return
+    try:
+        files = measured_hashes("", CONF)
+    except Rtmr3Error as exc:
+        fatal(str(exc))
+        return
+    if list_digest(files) == recorded:
+        print(f"rootfs-verify: PASS — SEV-SNP root matches the boot-verified list ({len(files)} files)")
+        _kmsg(f"PASS — SEV-SNP root matches the boot-verified list ({len(files)} files)")
+        return
+    _kmsg(f"SEV-SNP list MISMATCH: live={list_digest(files)} boot={recorded}")
+    fatal("SEV-SNP: storage or runtime tampering detected — the root differs from the list verified at boot")
 
 
 # ── measurement ──────────────────────────────────────────────────────────────
@@ -120,7 +142,7 @@ def has_rtmr3() -> bool:
 def measure() -> tuple[bytes, list[tuple[str, str]]]:
     """Return (expected RTMR3, per-file (sha384hex, path)).
 
-    Both the file set and the per-file hashes come from tdx-measure; the fold is
+    Both the file set and the per-file hashes come from tee-measure; the fold is
     `rtmr3 = SHA384(0^48 || SHA384(list))`, the single value the initramfs extends.
     Root is "" because this verifies the live filesystem, post-bind-mount.
     """
@@ -165,7 +187,7 @@ def _read_rtmr3_quote() -> bytes | None:
         )
         if result.returncode != 0:
             print(
-                f"rtmr3-verify: tdx-quote-generator error: "
+                f"rootfs-verify: tdx-quote-generator error: "
                 f"{result.stderr.decode(errors='replace').strip()}",
                 file=sys.stderr,
             )
@@ -173,7 +195,7 @@ def _read_rtmr3_quote() -> bytes | None:
         quote = Path(quote_path).read_bytes()
         if len(quote) < QUOTE_RTMR3_OFF + QUOTE_RTMR3_LEN:
             print(
-                f"rtmr3-verify: quote too short ({len(quote)} bytes)",
+                f"rootfs-verify: quote too short ({len(quote)} bytes)",
                 file=sys.stderr,
             )
             return None
@@ -201,37 +223,42 @@ def read_hardware_rtmr3() -> bytes:
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    if not has_rtmr3():
-        sys.exit(0)
-
-    print("rtmr3-verify: measuring via tdx-measure ...")
+def verify_tdx() -> None:
+    """The live root, post-bind-mount, against hardware RTMR3."""
+    print("rootfs-verify: measuring via tee-measure ...")
     expected, files = measure()
-    print(f"rtmr3-verify: measured {len(files)} files")
+    print(f"rootfs-verify: measured {len(files)} files")
 
-    print("rtmr3-verify: reading hardware RTMR3 ...")
+    print("rootfs-verify: reading hardware RTMR3 ...")
     hardware = read_hardware_rtmr3()
 
     if expected == hardware:
         print(
-            f"rtmr3-verify: PASS — RTMR3 verified "
+            f"rootfs-verify: PASS — RTMR3 verified "
             f"({len(files)} files, {expected.hex()[:16]}...)"
         )
         _kmsg(f"PASS — RTMR3 verified ({len(files)} files)")
-        sys.exit(0)
+        return
 
     # Mismatch: log details then fatal (poweroff in production, warn in debug).
     _kmsg(
         f"RTMR3 MISMATCH: computed={expected.hex()} hardware={hardware.hex()}"
     )
     label = "WARNING (debug mode)" if DEBUG_MODE else "FAIL"
-    print(f"rtmr3-verify: {label} — RTMR3 mismatch", file=sys.stderr)
+    print(f"rootfs-verify: {label} — RTMR3 mismatch", file=sys.stderr)
     print(f"  computed: {expected.hex()}", file=sys.stderr)
     print(f"  hardware: {hardware.hex()}", file=sys.stderr)
-    print("\nrtmr3-verify: per-file hashes (current filesystem):", file=sys.stderr)
+    print("\nrootfs-verify: per-file hashes (current filesystem):", file=sys.stderr)
     for digest, path in files:
         print(f"  {digest}  {path}", file=sys.stderr)
     fatal("storage or runtime tampering detected — RTMR3 does not match expected value")
+
+
+def main() -> None:
+    tee = platform()
+    if tee is not None:  # None only in debug mode, where fatal() warned instead of powering off
+        {"tdx": verify_tdx, "snp": verify_snp}[tee]()
+    sys.exit(0)
 
 
 if __name__ == "__main__":

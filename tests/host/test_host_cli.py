@@ -1,7 +1,7 @@
 """Tests for the `chutes-cvm host <verb>` dispatcher (chutes_cvm.host.cli).
 
 verify runs the read-only gate flow (chutes_cvm.guest.verify.verify_host); submit-profile
-registers the hardware profile directly (chutes_cvm.guest.preflight.submit_profile), independent
+registers the hardware profile directly (chutes_cvm.guest.chutes_api.submit_profile), independent
 of the guest image; tune / restore call the tuning helpers; setup forwards to host.setup;
 reset-gpus / vfio-wedged are host-hardware ops (GPUs, PCI subsystem).
 """
@@ -9,7 +9,20 @@ reset-gpus / vfio-wedged are host-hardware ops (GPUs, PCI subsystem).
 from unittest.mock import patch
 
 import pytest
+import topology_fixtures as known
+from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.host import cli as hostcli
+
+_HOST = HostProfile.from_dict(known.rtx_numa_doc())
+
+
+@pytest.fixture(autouse=True)
+def _this_host():
+    """submit-profile reads the host once; the reading is a property of the test box."""
+    with patch(
+        "chutes_cvm.guest.host_profile.HostProfile.from_host", return_value=_HOST
+    ) as read:
+        yield read
 
 
 def test_verify_runs_gate_without_submit():
@@ -23,19 +36,29 @@ def test_submit_profile_registers_directly_without_image_gate():
     # submit-profile posts the hardware profile directly — no verify_host / image readiness gate,
     # so a fresh host with no image downloaded can still register.
     with patch("chutes_cvm.guest.detection.verify_host_qemu_supported"), patch(
-        "chutes_cvm.guest.preflight.submit_profile",
+        "chutes_cvm.guest.chutes_api.submit_profile",
         return_value={"stored": True, "fingerprint": "fp123"},
     ) as sp, patch("chutes_cvm.guest.verify.verify_host") as vh:
         assert hostcli.main(["submit-profile"]) == 0
-    assert sp.called
+    assert sp.call_args.kwargs["host_profile"] is _HOST
     vh.assert_not_called()  # the image/readiness gate is bypassed for registration
+
+
+def test_submit_profile_fails_when_the_host_cannot_be_read(_this_host, capsys):
+    _this_host.side_effect = RuntimeError("lspci missing")
+    with patch("chutes_cvm.guest.detection.verify_host_qemu_supported"), patch(
+        "chutes_cvm.guest.chutes_api.submit_profile"
+    ) as sp:
+        assert hostcli.main(["submit-profile"]) == 1
+    sp.assert_not_called()
+    assert "cannot read this host: lspci missing" in capsys.readouterr().out
 
 
 def test_submit_profile_forwards_target_os():
     """The pre-upgrade registration: --target-os must reach submit_profile, which rewrites the
     profile's OS/QEMU/-cpu args to the target release rather than the live host's."""
     with patch(
-        "chutes_cvm.guest.preflight.submit_profile",
+        "chutes_cvm.guest.chutes_api.submit_profile",
         return_value={"stored": True, "fingerprint": "fp123"},
     ) as sp:
         assert hostcli.main(["submit-profile", "--target-os", "26.04"]) == 0
@@ -43,14 +66,14 @@ def test_submit_profile_forwards_target_os():
 
 
 def test_submit_profile_rejects_unsupported_target_os():
-    with patch("chutes_cvm.guest.preflight.submit_profile") as sp:
+    with patch("chutes_cvm.guest.chutes_api.submit_profile") as sp:
         assert hostcli.main(["submit-profile", "--target-os", "99.99"]) == 1
     sp.assert_not_called()
 
 
 def test_submit_profile_without_target_os_uses_the_live_host():
     with patch("chutes_cvm.guest.detection.verify_host_qemu_supported"), patch(
-        "chutes_cvm.guest.preflight.submit_profile",
+        "chutes_cvm.guest.chutes_api.submit_profile",
         return_value={"stored": True, "fingerprint": "fp123"},
     ) as sp:
         assert hostcli.main(["submit-profile"]) == 0
@@ -63,7 +86,7 @@ def test_submit_profile_blocks_an_unsupported_live_os(capsys):
     with patch(
         "chutes_cvm.guest.detection.verify_host_qemu_supported",
         side_effect=ValueError("Host OS release '25.10' is not supported"),
-    ), patch("chutes_cvm.guest.preflight.submit_profile") as sp:
+    ), patch("chutes_cvm.guest.chutes_api.submit_profile") as sp:
         assert hostcli.main(["submit-profile"]) == 1
     sp.assert_not_called()
     assert "--target-os" in capsys.readouterr().out  # points at the pre-upgrade path
@@ -75,7 +98,7 @@ def test_submit_profile_with_target_os_skips_the_live_qemu_gate():
         "chutes_cvm.guest.detection.verify_host_qemu_supported",
         side_effect=ValueError("wrong qemu"),
     ), patch(
-        "chutes_cvm.guest.preflight.submit_profile",
+        "chutes_cvm.guest.chutes_api.submit_profile",
         return_value={"stored": True, "fingerprint": "fp123"},
     ) as sp:
         assert hostcli.main(["submit-profile", "--target-os", "26.04"]) == 0

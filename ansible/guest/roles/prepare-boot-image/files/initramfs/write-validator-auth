@@ -12,7 +12,7 @@
 # Security model:
 #   - This script is part of the initramfs and is fully measured into RTMR2.
 #     Any tampering with the write logic is cryptographically detectable.
-#   - validator-auth.env is NOT listed in tdx-measure.conf, so it is NOT
+#   - validator-auth.env is NOT listed in tee-measure.conf, so it is NOT
 #     measured into RTMR3.  The ephemeral SS58 is unique per boot and would
 #     make RTMR3 non-deterministic if measured.
 #   - system-manager.env IS measured (RTMR3).  It no longer contains
@@ -25,8 +25,8 @@
 #   The input (/run/chutes/validator-ss58) is written at init-premount by
 #   fetch_key_and_unlock, which always completes before any init-bottom script
 #   runs (guaranteed by initramfs-tools stage ordering).
-#   The output (/run/chutes/validator-auth.env) is not in tdx-measure.conf so
-#   rtmr3-measure never reads it — ordering relative to that script is irrelevant.
+#   The output (/run/chutes/validator-auth.env) is not in tee-measure.conf so
+#   rootfs-measure never reads it — ordering relative to that script is irrelevant.
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }

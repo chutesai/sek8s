@@ -54,16 +54,16 @@ def gpu_tools_dir() -> Path:
     return SCRIPTS_DIR / "gpu-tools"
 
 
-def tdx_measure_script() -> Path:
-    """The bundled ``tdx-measure``: the single implementation of which files RTMR3
+def tee_measure_script() -> Path:
+    """The bundled ``tee-measure``: the single implementation of which files RTMR3
     measures, in what order, and how each is hashed.
 
-    The identical file is installed into the guest at ``/usr/local/bin/tdx-measure`` by
-    the rtmr3-measure Ansible role, and is run there by the initramfs measurer, the
-    build-time manifest generator and ``rtmr3-verify``. Predicting a measurement on the
+    The identical file is installed into the guest at ``/usr/local/bin/tee-measure`` by
+    the rootfs-measure Ansible role, and is run there by the initramfs measurer, the
+    build-time manifest generator and ``rootfs-verify``. Predicting a measurement on the
     host must run the same script rather than reimplement it — four independent walkers
-    of ``tdx-measure.conf`` used to exist and they disagreed four ways."""
-    return SCRIPTS_DIR / "tdx-measure"
+    of ``tee-measure.conf`` used to exist and they disagreed four ways."""
+    return SCRIPTS_DIR / "tee-measure"
 
 
 def default_config_path() -> str:

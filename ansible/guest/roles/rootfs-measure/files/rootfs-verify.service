@@ -1,6 +1,6 @@
 [Unit]
-Description=RTMR3 post-mount integrity check
-Documentation=file:/usr/local/bin/rtmr3-verify
+Description=Root filesystem post-mount integrity check
+Documentation=file:/usr/local/bin/rootfs-verify
 # Runs after the storage bind-mounts are active so storage-backed paths
 # (e.g. /var/lib/rancher/k3s/server/manifests) can be verified against the
 # root-filesystem measurements extended into RTMR3 at init-bottom.
@@ -12,12 +12,12 @@ Requires=setup-storage-bind-mounts.service
 
 [Service]
 Type=oneshot
-EnvironmentFile=-/etc/default/rtmr3-verify
+EnvironmentFile=-/etc/default/rootfs-verify
 # The rtmr3 helper is imported from /usr/local/lib/sek8s, which is RTMR3-measured;
 # a __pycache__ written beside it would change that tree and power the VM off on
-# the NEXT boot. rtmr3-verify sets sys.dont_write_bytecode too, for manual runs.
+# the NEXT boot. rootfs-verify sets sys.dont_write_bytecode too, for manual runs.
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/usr/local/bin/rtmr3-verify
+ExecStart=/usr/local/bin/rootfs-verify
 RemainAfterExit=yes
 TimeoutStartSec=120
 StandardOutput=journal+console

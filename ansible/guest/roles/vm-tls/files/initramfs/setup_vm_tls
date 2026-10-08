@@ -19,7 +19,7 @@
 # Ordering: PREREQ="setup_storage setup_storage_debug" — runs in init-bottom AFTER
 # whichever storage script this image carries (prod installs setup_storage, debug
 # installs setup_storage_debug; only one is ever present, and an absent PREREQ name
-# is simply ignored by initramfs ordering). Both run after rtmr3-measure and keep the
+# is simply ignored by initramfs ordering). Both run after rootfs-measure and keep the
 # CA in place (they use it as the /provision mTLS client cert and must not delete it),
 # so ca.key is still present when this script runs. This script deletes ca.key before
 # pivot_root; the key never reaches userspace (RTMR2 is the attestation proof).

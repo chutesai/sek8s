@@ -5,7 +5,7 @@
 source of truth), measures each on its own platform, and writes the version's measurements.yaml:
 
     tdx:  mrtd, rtmr1, rtmr2, rtmr3, hardware[].rtmr0      (Intel classes; tdx.TdxMeasurements)
-    snp:  hardware[].measurement                           (AMD classes; snp.SnpMeasurements)
+    snp:  hardware[].measurement, hardware[].acpi_sha256   (AMD classes; snp.SnpMeasurements)
 
 One guest image boots on both platforms, so every release emits both sections. The API's
 fingerprint is carried onto each entry so the reconciler can join a published measurement to the
@@ -35,6 +35,7 @@ from pathlib import Path
 
 import yaml
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.image_set import ImageSet
 from chutes_cvm.measurement.platform import MeasurementError, PlatformMeasurements
 from chutes_cvm.measurement.snp import SnpMeasurements
 from chutes_cvm.measurement.tdx import TdxMeasurements, compute_rtmr3
@@ -91,28 +92,20 @@ def resolve_hardware_names(hardware: list[dict]) -> None:
     A host class is identified by its FINGERPRINT, not its name. Whenever the fingerprint's
     inputs change, every class re-registers under a new fingerprint while the old record stays
     live -- hosts upgrade at different times, so both must remain until the fleet has moved.
-    Those entries resolve to the same display_name + variant_label by construction, so one
-    topology legitimately appears under several fingerprints.
-
-    This used to assert name uniqueness, which turned that expected churn into a hard build
-    failure and stalled releases behind any fingerprint schema change.
+    Classes that measure identically share one entry, which lists all their fingerprints.
 
     Nothing about the NAME is an invariant, so nothing about it is enforced. It is built from
     display_name + qemu + variant_label, a strict subset of what feeds rtmr0 (per-profile
     cpu_vendor / phys_bits / cpu_processor_id all move rtmr0 and appear in none of them), so
     entries may share a name while differing in rtmr0 without anything being wrong -- the label
-    is simply coarser than the measurement. It is safe to leave unconstrained because the API
-    never keys on it: quotes match by MRTD + RTMRs (configs may share an RTMR0) and name reaches
-    the API only as a log label. Colliding labels are suffixed so logs stay readable.
+    is simply coarser than the measurement. The API never keys on it (quotes match by MRTD +
+    RTMRs, or the SEV-SNP digest), so colliding labels are only suffixed to keep logs readable.
 
-    Raises ValueError only on a duplicate fingerprint -- the key repeated, i.e. corrupt input.
+    Raises ValueError only on a fingerprint listed twice -- the key repeated, i.e. corrupt input.
     """
-    fp_counts: dict[str, int] = {}
-    for e in hardware:
-        fp_counts[e["fingerprint"]] = fp_counts.get(e["fingerprint"], 0) + 1
-    dupe_fps = sorted(f for f, c in fp_counts.items() if c > 1)
-    if dupe_fps:
-        raise ValueError(f"duplicate host-profile fingerprints: {dupe_fps}")
+    fingerprints = [fp for e in hardware for fp in e["fingerprints"]]
+    if len(set(fingerprints)) != len(fingerprints):
+        raise ValueError("a host-profile fingerprint is listed more than once")
 
     by_name: dict[str, list[dict]] = {}
     for e in hardware:
@@ -121,7 +114,7 @@ def resolve_hardware_names(hardware: list[dict]) -> None:
     for name, entries in by_name.items():
         if len(entries) > 1:
             for e in entries:
-                e["name"] = f"{name} ({e['fingerprint'][:12]})"
+                e["name"] = f"{name} ({e['fingerprints'][0][:12]})"
 
 
 # ── dispatch: each host class to its own platform ───────────────────────────────────────────
@@ -211,6 +204,13 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
     measured on its own platform. Pure data assembly -- no file output; raises ValueError
     (topology/aggregation) or MeasurementError (a missing or unreadable input).
     """
+    # Measure only a coherent build: the qcow2, its boot files and the firmware must be the ones
+    # the image set's manifest records, or the published values would admit something else.
+    try:
+        image_set = ImageSet.from_dir(os.path.dirname(os.path.abspath(args.image)))
+        image_set.verify(full=True, firmware=args.bios_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise MeasurementError(f"image set of {args.image}: {exc}") from exc
     platforms: list[PlatformMeasurements] = [
         TdxMeasurements(
             bios_dir=args.bios_dir,
@@ -218,7 +218,12 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
             dist=args.dist,
             image=args.image,
         ),
-        SnpMeasurements(bios_dir=args.bios_dir, image=args.image),
+        SnpMeasurements(
+            bios_dir=args.bios_dir,
+            image=args.image,
+            tdx_measure_bin=args.tdx_measure_bin,
+            dist=args.dist,
+        ),
     ]
     records = fetch_host_profiles(args.api_base, args.include_pending)
     pending = measure_host_classes(records, platforms)
@@ -230,9 +235,12 @@ def _compute_measurements(args: argparse.Namespace) -> dict:
             f"generated offline{f' (pending: {pending})' if pending else ''}"
         )
     # Insertion order matches the chutes-ops values.yaml teeMeasurements layout this merges
-    # into; sort_keys=False keeps it.
+    # into; sort_keys=False keeps it. A debug build (SSH, no LUKS) attests only under an rc
+    # entry, which the API refuses to load without an authorized_hotkeys allowlist -- so a
+    # debug file merged by mistake fails loudly rather than admitting debug guests as a release.
     return {
         "version": args.version,
+        **({"rc": True} if image_set.rc else {}),
         **{p.key: p.section() for p in platforms if p.hardware},
     }
 

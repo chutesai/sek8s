@@ -8,6 +8,8 @@ width here rather than trusting every caller to pre-hash its input.
 Distinct from the validator-signature nonce in sek8s_common.auth, which is a Unix timestamp.
 """
 
+import re
+
 from sek8s.exceptions import NonceError
 
 QUOTE_NONCE_HEX_LEN = (
@@ -34,11 +36,8 @@ def validate_quote_nonce(nonce: str) -> str:
             f"(32 bytes), got {len(nonce)} characters"
         )
 
-    try:
-        bytes.fromhex(nonce)
-    except ValueError as e:
-        raise NonceError(
-            f"Nonce must contain only hexadecimal characters (0-9, a-f): {e}"
-        )
+    # Not bytes.fromhex: it skips embedded whitespace, so 64 characters could decode short.
+    if not re.fullmatch(r"[0-9a-fA-F]+", nonce):
+        raise NonceError("Nonce must contain only hexadecimal characters (0-9, a-f)")
 
     return nonce.lower()

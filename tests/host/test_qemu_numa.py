@@ -5,20 +5,17 @@ import re
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import (
+from chutes_cvm.guest import qemu
+from chutes_cvm.guest.context import (
     DirectBoot,
     GuestNetwork,
     GuestVolumes,
-    LaunchCommandBuilder,
     PassthroughSet,
-    PcieRootPinning,
     ProcessBundle,
-    QemuCommand,
-    _parse_mem_mib,
 )
+from chutes_cvm.guest.qemu import PcieRootPinning, QemuCommand, _parse_mem_mib
 
-# create() defaults none of the values that differ between a launch and a measurement, so the
-# launch-shaped ones are named once here.
+# The launch-shaped inputs, named once.
 _LAUNCH = dict(
     boot=DirectBoot(
         kernel="/boot/vmlinuz", initrd="/boot/initrd.img", cmdline="root=UUID=x ro"
@@ -64,7 +61,7 @@ def test_parse_mem_mib_rejects_invalid():
 def test_launch_command_numa_adds_per_node_backends(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
-    cmd = QemuCommand.create(
+    cmd = known.launch_command(
         known.QemuProfileStub(
             mem="1024G",
             smp_topology="188,sockets=2,cores=94,threads=1",
@@ -94,7 +91,7 @@ def test_launch_command_pins_smbios_identity(tmp_path):
     source of truth — the offline measurement path reads it too."""
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
-    cmd = QemuCommand.create(
+    cmd = known.launch_command(
         known.QemuProfileStub(
             mem="512G",
             smp_topology="94,sockets=1,cores=94,threads=1",
@@ -114,17 +111,19 @@ def test_launch_command_pins_smbios_identity(tmp_path):
     assert "type=3,manufacturer=Chutes,version=1.0,serial=0" in flat
 
 
-def _builder(**stub):
-    """A LaunchCommandBuilder over a stub profile, for exercising one traversal step."""
+def _stub(**stub):
+    """A stub profile and a launch context over it, for exercising one traversal step."""
     stub.setdefault("mem", "8G")
     stub.setdefault("smp_topology", "4,sockets=1,cores=4,threads=1")
     stub.setdefault("uses_guest_numa", True)
-    return LaunchCommandBuilder(known.QemuProfileStub(**stub))
+    host = known.QemuProfileStub(**stub)
+    return host, known.launch_context(host)
 
 
 def test_numa_memory_splits_remainder_on_last_node():
     cmd = _empty_cmd()
-    _builder()._numa_memory(cmd, mem_mib=1537, host_nodes=[0, 1])
+    host, context = _stub()
+    qemu._numa_memory(cmd, host, context, mem_mib=1537, host_nodes=[0, 1])
     assert "size=768M" in " ".join(cmd.objects)
     assert "size=769M" in " ".join(cmd.objects)
 
@@ -132,7 +131,7 @@ def test_numa_memory_splits_remainder_on_last_node():
 def test_direct_boot_emits_kernel_initrd_append_and_drops_bootindex(tmp_path):
     img = tmp_path / "disk.qcow2"
     img.write_bytes(b"")
-    cmd = QemuCommand.create(
+    cmd = known.launch_command(
         known.QemuProfileStub(
             mem="512G",
             smp_topology="94,sockets=1,cores=94,threads=1",
@@ -166,7 +165,9 @@ def test_config_volume_uses_explicit_virtio_blk_not_legacy_if_virtio(tmp_path):
     config = tmp_path / "config.qcow2"
     config.write_bytes(b"")
     cmd = _empty_cmd()
-    _builder()._volumes(cmd, GuestVolumes(config=str(config)), PcieRootPinning(True))
+    host = known.QemuProfileStub(mem="8G", smp_topology="4", uses_guest_numa=True)
+    context = known.launch_context(host, volumes=GuestVolumes(config=str(config)))
+    qemu._volumes(cmd, context, PcieRootPinning(True))
     flat = " ".join(cmd.drives + cmd.devices)
     assert "if=virtio" not in flat
     assert "virtio-config" in flat
@@ -193,15 +194,19 @@ def test_network_device_does_not_depend_on_having_a_host_interface():
     No mode flag: same function, different inputs, deterministic output.
     """
     with_iface, without = _empty_cmd(), _empty_cmd()
-    builder = _builder(uses_guest_numa=False)
-    builder._network(
+    host, _ = _stub(uses_guest_numa=False)
+    qemu._network(
         with_iface,
-        GuestNetwork(network_type="tap", net_iface="br0", ssh_port=22),
+        known.launch_context(
+            host, net=GuestNetwork(network_type="tap", net_iface="br0", ssh_port=22)
+        ),
         PcieRootPinning(False),
     )
-    builder._network(
+    qemu._network(
         without,
-        GuestNetwork(network_type="tap", net_iface=None, ssh_port=22),
+        known.launch_context(
+            host, net=GuestNetwork(network_type="tap", net_iface=None, ssh_port=22)
+        ),
         PcieRootPinning(False),
     )
     assert without.devices == with_iface.devices
@@ -225,8 +230,8 @@ def test_measurement_fills_the_same_slots_a_launch_occupies():
     def slots(cmd):
         return [re.search(r"addr=(0x[0-9a-f]+)", d).group(1) for d in emulated(cmd)]
 
-    host = HostProfile(known.rtx_numa_doc())
-    launch = QemuCommand.create(
+    host = HostProfile.from_dict(known.rtx_numa_doc())
+    launch = known.launch_command(
         host,
         firmware="/f",
         img_path="/root.qcow2",
@@ -237,7 +242,7 @@ def test_measurement_fills_the_same_slots_a_launch_occupies():
         process=ProcessBundle(name="chutes-td"),
         passthrough=PassthroughSet.from_profile(host),
     )
-    generated = QemuCommand.for_measurement(host, firmware="/f")
+    generated = known.measurement_command(host, firmware="/f")
 
     # Root disk, NIC, three volumes, vsock -- below the PXB bridges at 0x18+.
     assert slots(launch) == [f"0x{slot:x}" for slot in range(2, 8)]

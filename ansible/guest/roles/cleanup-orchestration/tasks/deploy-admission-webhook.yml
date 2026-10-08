@@ -8,7 +8,7 @@
 # The caBundle is rendered as a deterministic placeholder (__ADMISSION_CA_BUNDLE__)
 # so the measured root image is reproducible across builds. The real per-VM CA is
 # substituted into the storage copy at boot by generate-admission-cert, after
-# rtmr3-verify passes. See generate-admission-cert.sh.
+# rootfs-verify passes. See generate-admission-cert.sh.
 - name: Ensure K3s manifests directory exists
   ansible.builtin.file:
     path: /var/lib/rancher/k3s/server/manifests

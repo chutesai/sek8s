@@ -12,37 +12,21 @@ What genuinely differs:
   ``memory-backend-memfd`` with ``share=on`` because private memory is served
   from guest_memfd
 * ``vmport`` is disabled on SNP per NVIDIA's confidential-computing guide
-* SNP takes the C-bit position; TDX has no equivalent
+* SNP takes the C-bit position (captured with the host profile); TDX has no equivalent
 * SNP has no quote-generation socket — the PSP answers guest requests directly,
-  so there is no host daemon to reach over vsock
+  so there is no host daemon to reach over vsock, and no vsock device
 * SNP guests run flat even on 2-node hosts, until QEMU can convert memory across
   guest_memfd backends (``supports_guest_numa``)
 """
 
 import os
-import struct
 from abc import ABC, abstractmethod
-from enum import Enum
 
 KVM_INTEL_TDX = "/sys/module/kvm_intel/parameters/tdx"
 KVM_AMD_SEV_SNP = "/sys/module/kvm_amd/parameters/sev_snp"
 
-CPUID_DEVICE = "/dev/cpu/0/cpuid"
-# CPUID Fn8000_001F: EBX[5:0] = C-bit position, EBX[11:6] = phys addr bits lost.
-SEV_CPUID_LEAF = 0x8000001F
-# Every SEV-capable EPYC to date places the C-bit at 51 and loses one physical
-# address bit. Used only when /dev/cpu/0/cpuid is unavailable; QEMU validates
-# the value against the host and fails loudly with the real one if it is wrong,
-# so a stale default cannot silently weaken anything.
-DEFAULT_CBITPOS = 51
-DEFAULT_REDUCED_PHYS_BITS = 1
-
-
-class HostTee(str, Enum):
-    """Confidential-computing platform the host provides."""
-
-    TDX = "tdx"
-    SNP = "snp"
+#: The machine every guest runs, launch or offline dump; the platform adds its options to it.
+Q35_MACHINE = "q35,kernel_irqchip=split"
 
 
 def _module_param_enabled(path: str) -> bool:
@@ -54,53 +38,54 @@ def _module_param_enabled(path: str) -> bool:
         return False
 
 
-def detect_host_tee(override: "HostTee | str | None" = None) -> HostTee:
-    """Determine which TEE this host can launch guests under.
-
-    Detection reads the kvm module parameters rather than the CPU vendor: a
-    Genoa host with SEV-SNP disabled in BIOS reports AMD but cannot launch an
-    SNP guest, and failing here is far clearer than failing inside QEMU.
-    """
-    if override is not None:
-        return HostTee(override)
-
-    if _module_param_enabled(KVM_INTEL_TDX):
-        return HostTee.TDX
-
-    if _module_param_enabled(KVM_AMD_SEV_SNP):
-        return HostTee.SNP
-
-    raise RuntimeError(
-        "No confidential-computing platform is enabled on this host: neither "
-        f"{KVM_INTEL_TDX} nor {KVM_AMD_SEV_SNP} reads as enabled. Whether a platform is "
-        "on is a BIOS setting, not a property of the silicon; the per-platform remedy "
-        "is on the provider (TeeProvider.verify_environment)."
-    )
-
-
-def sev_cbit_parameters() -> "tuple[int, int]":
-    """Return ``(cbitpos, reduced_phys_bits)`` for this host.
-
-    Read from CPUID Fn8000_001F via /dev/cpu/0/cpuid when the cpuid module is
-    loaded, falling back to the documented EPYC defaults otherwise.
-    """
-    try:
-        with open(CPUID_DEVICE, "rb") as f:
-            f.seek(SEV_CPUID_LEAF * 16)
-            raw = f.read(16)
-        if len(raw) == 16:
-            _, ebx, _, _ = struct.unpack("<IIII", raw)
-            cbitpos = ebx & 0x3F
-            reduced = (ebx >> 6) & 0x3F
-            if cbitpos:
-                return cbitpos, reduced
-    except OSError:
-        pass
-    return DEFAULT_CBITPOS, DEFAULT_REDUCED_PHYS_BITS
-
-
 class TeeProvider(ABC):
-    """Per-platform QEMU arguments for launching a confidential guest."""
+    """Per-platform QEMU arguments for launching a confidential guest.
+
+    The provider class IS the platform: a host is Intel or AMD silicon, and each subclass declares
+    the CPU vendor that runs it. Nothing else names the platform -- a host profile's platform is its
+    provider, and host setup keys its recipes on the provider class.
+    """
+
+    #: The CPUID vendor string of the silicon that runs this platform.
+    cpu_vendor: str
+
+    #: The short name (``tdx`` / ``snp``): what the CLI prints, and the platform's segment in the
+    #: Chutes API routes (``/servers/<name>/...``).
+    name: str
+
+    @classmethod
+    def for_cpu_vendor(cls, cpu_vendor: str) -> "type[TeeProvider]":
+        """The platform a host's silicon runs, from its CPUID vendor string.
+
+        The identity question, and the one a host profile answers: this silicon runs that TEE.
+        Distinct from ``enabled_on_host``, the capability question (is it switched on right
+        now), which is a BIOS setting rather than a property of the silicon.
+        """
+        vendor = (cpu_vendor or "").strip()
+        for provider_type in TeeProvider.__subclasses__():
+            if provider_type.cpu_vendor == vendor:
+                return provider_type
+        raise ValueError(
+            f"cannot determine the TEE for CPU vendor {cpu_vendor!r}; expected "
+            "GenuineIntel (TDX) or AuthenticAMD (SEV-SNP)"
+        )
+
+    @classmethod
+    def enabled_on_host(cls) -> "type[TeeProvider]":
+        """The platform this host has switched on, from the kvm module parameters.
+
+        Not the CPU vendor: a Genoa host with SEV-SNP disabled in BIOS reports AMD but cannot
+        launch an SNP guest, and failing here is far clearer than failing inside QEMU.
+        """
+        for provider_type in TeeProvider.__subclasses__():
+            if _module_param_enabled(provider_type.kvm_param):
+                return provider_type
+        raise RuntimeError(
+            "No confidential-computing platform is enabled on this host: neither "
+            f"{KVM_INTEL_TDX} nor {KVM_AMD_SEV_SNP} reads as enabled. Whether a platform is "
+            "on is a BIOS setting, not a property of the silicon; the per-platform remedy "
+            "is on the provider (TeeProvider.verify_environment)."
+        )
 
     # Annotated without defaults on purpose: a subclass that forgets one raises
     # AttributeError at first use, instead of silently emitting an empty value
@@ -134,6 +119,14 @@ class TeeProvider(ABC):
     #: still fail to boot on them. ``HostProfile.uses_guest_numa`` combines the two.
     supports_guest_numa: bool
 
+    #: Extra ``-machine`` options this platform's guests launch with.
+    machine_opts: "tuple[str, ...]" = ()
+
+    #: What this platform switches off in the guest whether or not ``-machine`` says so. A fact
+    #: about the platform at runtime; a QEMU with no TEE (the offline dump) needs them spelled out
+    #: to produce the guest's ACPI tables byte for byte.
+    implicit_machine_opts: "tuple[str, ...]"
+
     #: kvm module parameter that reports this platform enabled on the running host.
     kvm_param: str
 
@@ -145,13 +138,19 @@ class TeeProvider(ABC):
     @abstractmethod
     def guest_object(self) -> str:
         """The ``-object`` argument declaring the confidential guest."""
-        ...
+
+    def devices(self) -> "tuple[str, ...]":
+        """Emulated devices this platform's guests need, without a slot (the caller places them).
+
+        None by default: anything attached is a host-controlled channel into the guest.
+        """
+        return ()
 
     def verify_environment(self) -> None:
         """Raise unless THIS provider's platform is switched on for this host.
 
         The capability question, and deliberately not the identity one. The profile says
-        which platform a host class runs (CPU vendor, see ``provider_for_cpu_vendor``);
+        which platform a host class runs (CPU vendor, see ``for_cpu_vendor``);
         only the live kvm module parameter says whether the machine in front of you has
         it turned on. SEV-SNP can be off in BIOS on AMD silicon, and a mismatch equally
         catches a profile captured on different hardware than the one booting it --
@@ -163,7 +162,7 @@ class TeeProvider(ABC):
         if _module_param_enabled(self.kvm_param):
             return
         try:
-            detail = f"{detect_host_tee().value} enabled instead"
+            detail = f"{TeeProvider.enabled_on_host().name} enabled instead"
         except RuntimeError:
             detail = "no confidential-computing platform enabled at all"
         raise RuntimeError(
@@ -192,26 +191,30 @@ class TeeProvider(ABC):
         return ",".join(parts)
 
     def machine(self, memory_backend: "str | None") -> str:
-        """The ``-machine`` argument, optionally bound to a flat memory backend."""
-        machine = f"q35,kernel_irqchip=split,confidential-guest-support={self.guest_id}"
-        machine += self._machine_extra()
+        """The launch ``-machine`` argument, optionally bound to a flat memory backend."""
+        parts = [
+            Q35_MACHINE,
+            f"confidential-guest-support={self.guest_id}",
+            *self.machine_opts,
+        ]
         if memory_backend:
-            machine += f",memory-backend={memory_backend}"
-        return machine
-
-    def _machine_extra(self) -> str:
-        return ""
+            parts.append(f"memory-backend={memory_backend}")
+        return ",".join(parts)
 
 
 class TdxTeeProvider(TeeProvider):
     """Intel TDX."""
 
+    cpu_vendor = "GenuineIntel"
+    name = "tdx"
     guest_id = "tdx"
     smbios_product = "TDX-VM"
     default_firmware = "OVMF.inteltdx.fd"
     label = "Intel TDX"
     memory_backend_type = "memory-backend-ram"
     supports_guest_numa = True
+    # A TD runs with SMM and the legacy PIC off whether or not -machine says so.
+    implicit_machine_opts = ("smm=off", "pic=off")
     kvm_param = KVM_INTEL_TDX
     enablement_hint = (
         "Either the profile was captured on other hardware, or Intel TDX is not "
@@ -219,6 +222,7 @@ class TdxTeeProvider(TeeProvider):
     )
 
     def guest_object(self) -> str:
+        """The ``-object`` argument declaring the confidential guest."""
         # The quote-generation socket reaches qgsd on the host over vsock; TDX
         # quotes are produced outside the guest, unlike SNP reports.
         return (
@@ -226,36 +230,30 @@ class TdxTeeProvider(TeeProvider):
             '"quote-generation-socket":{"type":"vsock","cid":"2","port":"4050"}}'
         )
 
-
-def tee_for_cpu_vendor(cpu_vendor: str) -> str:
-    """Which TEE a hardware class runs, from its CPUID vendor string.
-
-    A hardware class is one vendor's silicon or the other's, never both, so the vendor
-    recorded on its fingerprint is the discriminator -- there is no separate field to
-    keep in sync. Used by offline measurement generation to decide which measurement a
-    given host profile needs.
-    """
-    vendor = (cpu_vendor or "").strip()
-    if vendor == "AuthenticAMD":
-        return "snp"
-    if vendor == "GenuineIntel":
-        return "tdx"
-    raise ValueError(
-        f"cannot determine the TEE for CPU vendor {cpu_vendor!r}; expected "
-        "GenuineIntel (TDX) or AuthenticAMD (SEV-SNP)"
-    )
+    def devices(self) -> "tuple[str, ...]":
+        # The guest end of the vsock the quote-generation socket above dials.
+        return ("vhost-vsock-pci,guest-cid=3",)
 
 
-# The SEV-SNP guest policy bits the launcher sets. Part of the launch measurement
-# input set, so offline generation imports this rather than restating the value --
-# a policy that drifts from the measured one produces a VM that cannot attest.
-#   bit 16 SMT allowed, bit 17 reserved (must be 1). DEBUG (19) deliberately clear.
+# Where SEV puts the C-bit in a guest physical address, and the address bits that costs (CPUID
+# Fn8000_001F EBX[5:0] and [11:6]). Every SNP-capable EPYC so far puts the C-bit at 51, and QEMU
+# refuses a launch whose cbitpos differs from the host's. reduced-phys-bits only needs to be at
+# least 1: neither value is measured, and live launches with 1 and the hardware's 5 measure alike.
+SNP_CBITPOS = 51
+SNP_REDUCED_PHYS_BITS = 1
+
+# The SEV-SNP guest policy bits the launcher sets. NOT a launch-digest input: the policy
+# travels in the attestation report, and the API requires exactly this value there -- a
+# measurement match says nothing about the policy. Change both together.
+#   bit 16 SMT allowed, bit 17 reserved (must be 1); DEBUG (19) and all else clear.
 SNP_DEFAULT_POLICY = 0x30000
 
 
 class SnpTeeProvider(TeeProvider):
     """AMD SEV-SNP."""
 
+    cpu_vendor = "AuthenticAMD"
+    name = "snp"
     guest_id = "snp0"
     smbios_product = "SNP-VM"
     default_firmware = "OVMF.amdsev.fd"
@@ -272,6 +270,11 @@ class SnpTeeProvider(TeeProvider):
     # kvm_convert_memory() calls crossing memory regions" (not in QEMU 10.2.1); flip this
     # back once the pinned QEMU carries it.
     supports_guest_numa = False
+    # NVIDIA's confidential-computing deployment guide specifies vmport=off for SEV-SNP guests.
+    machine_opts = ("vmport=off",)
+    # QEMU switches SMM off for an SEV-ES/SNP guest; the PIC stays. Verified against a live guest:
+    # with SMM left on the dump's FADT carries an SMI_CMD port the guest's does not.
+    implicit_machine_opts = ("smm=off",)
     kvm_param = KVM_AMD_SEV_SNP
     enablement_hint = (
         "Either the profile was captured on other hardware, or SEV-SNP is not enabled "
@@ -279,18 +282,7 @@ class SnpTeeProvider(TeeProvider):
         "is non-trivial (1 leaves zero usable SNP ASIDs), and TSME is off."
     )
 
-    def __init__(
-        self,
-        cbitpos: "int | None" = None,
-        reduced_phys_bits: "int | None" = None,
-        policy: int = SNP_DEFAULT_POLICY,
-        kernel_hashes: bool = True,
-    ):
-        detected_cbitpos, detected_reduced = sev_cbit_parameters()
-        self.cbitpos = cbitpos if cbitpos is not None else detected_cbitpos
-        self.reduced_phys_bits = (
-            reduced_phys_bits if reduced_phys_bits is not None else detected_reduced
-        )
+    def __init__(self, policy: int = SNP_DEFAULT_POLICY, kernel_hashes: bool = True):
         # Bits 16 (SMT allowed) and 17 (reserved, must be 1). Bit 19 (DEBUG) is
         # deliberately clear: with it set the host can decrypt and inspect guest
         # memory, and the report would still carry a valid signature.
@@ -301,37 +293,16 @@ class SnpTeeProvider(TeeProvider):
         self.kernel_hashes = kernel_hashes
 
     def guest_object(self) -> str:
+        """The ``-object`` argument declaring the confidential guest."""
         obj = (
             f"sev-snp-guest,id={self.guest_id},"
-            f"cbitpos={self.cbitpos},"
-            f"reduced-phys-bits={self.reduced_phys_bits},"
+            f"cbitpos={SNP_CBITPOS},"
+            f"reduced-phys-bits={SNP_REDUCED_PHYS_BITS},"
             f"policy={self.policy:#x}"
         )
         if self.kernel_hashes:
             obj += ",kernel-hashes=on"
         return obj
-
-    def _machine_extra(self) -> str:
-        # NVIDIA's confidential-computing deployment guide specifies vmport=off
-        # for SEV-SNP guests.
-        return ",vmport=off"
-
-
-_PROVIDERS = {
-    HostTee.TDX: TdxTeeProvider,
-    HostTee.SNP: SnpTeeProvider,
-}
-
-
-def provider_for_cpu_vendor(cpu_vendor: str) -> TeeProvider:
-    """The TEE provider a host class runs, from its CPU vendor.
-
-    The identity question, and the one a host profile answers: this silicon runs that
-    TEE. Distinct from ``detect_host_tee``, which answers the capability question --
-    whether the platform is switched on right now -- and cannot be derived from a
-    profile because it is a BIOS setting, not a property of the class.
-    """
-    return _PROVIDERS[HostTee(tee_for_cpu_vendor(cpu_vendor))]()
 
 
 def tee_firmware_available(provider: TeeProvider, firmware_dir: str) -> bool:

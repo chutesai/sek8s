@@ -1,6 +1,6 @@
 """The guest VM's QEMU process: start it, force-kill it, report on it.
 
-``launch_vm(guest, host)`` takes the two halves of a launch -- one ``GuestContext`` (what this
+``launch_vm(guest, host)`` takes the two halves of a launch -- one ``LaunchContext`` (what this
 guest needs) and one ``HostProfile`` (what this machine is) -- builds the command and runs it.
 ``stop_existing_vm`` and ``print_vm_status`` operate on the same ``PIDFILE`` afterwards.
 
@@ -21,23 +21,15 @@ import sys
 import time
 
 from chutes_cvm import proc
-from chutes_cvm.guest.context import GuestContext
+from chutes_cvm.guest.context import LaunchContext, host_numa_nodes
 from chutes_cvm.guest.detection import verify_host_qemu_supported
-from chutes_cvm.guest.direct_boot import direct_boot_artifacts
 from chutes_cvm.guest.gpu.profiles import (  # noqa: F401 — available for introspection
     GPU_PROFILES,
 )
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.guest.passthrough import bind_passthrough
 from chutes_cvm.guest.post_launch import apply_post_launch_tuning
-from chutes_cvm.guest.qemu import (
-    DirectBoot,
-    PassthroughSet,
-    ProcessBundle,
-    QemuCommand,
-    host_numa_nodes,
-)
-from chutes_cvm.paths import firmware_path
+from chutes_cvm.guest.qemu import QemuCommand
 
 PIDFILE = "/tmp/tdx-td-pid.pid"  # nosec B108
 LOGFILE = "/tmp/tdx-guest-td.log"  # nosec B108
@@ -82,7 +74,7 @@ def stop_existing_vm():
         pass
 
 
-def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
+def launch_vm(guest: LaunchContext, host: "HostProfile") -> int:
 
     print("Starting confidential VM...")
 
@@ -97,7 +89,7 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
 
     # Guest NUMA is a property of the host's nodes, not of any GPU. Only the value the
     # launcher itself needs (for PCIe pinning and the node list) is taken here; -cpu,
-    # -smp and the memory size are read off the profile inside build_base_cmd, so there
+    # -smp and the memory size are read off the profile inside QemuCommand.build, so there
     # is no second copy of them to drift.
     numa_active = host.uses_guest_numa
 
@@ -108,10 +100,6 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
     # whose guest nothing has measured.
     mem = host.mem
     vcpus = str(host.vcpus)
-
-    # Firmware is a property of the platform, not the GPU profile: TDX boots the pinned
-    # TDVF, SNP the AMD OVMF build. Both are measured, so both are pinned in the repo.
-    firmware = firmware_path(tee.default_firmware)
 
     if host.gpus:
         profile = host.gpu_profile
@@ -133,14 +121,10 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
     print(f"Image: {guest.image}")
 
     print(f"TEE: {tee.label} ({tee.guest_id})")
-    print(f"Firmware: {firmware}")
-
-    # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping
-    # GRUB/shim from the measured chain. These are published with the image (built
-    # once, downloaded from R2) and staged next to it — the same bytes
-    # `measurements generate` measures, so the boot matches the pinned RTMR1/2.
-    kernel_path, initrd_path, cmdline = direct_boot_artifacts(guest.image)
-    print(f"Direct boot: kernel={kernel_path} cmdline={cmdline!r}")
+    print(f"Firmware: {guest.firmware}")
+    # Direct boot (1.4.0+): OVMF boots the image's kernel/initrd directly, dropping GRUB/shim from
+    # the measured chain -- the same bytes `measurements generate` measures.
+    print(f"Direct boot: kernel={guest.boot.kernel} cmdline={guest.kernel_cmdline!r}")
 
     # Validation belongs to the launch, not the command builder: a launch without a host
     # interface is a misconfiguration, while a command built without one is exactly what
@@ -154,21 +138,7 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
     if guest.pass_gpus:
         bind_passthrough(host)
 
-    cmd = QemuCommand.create(
-        host,
-        firmware=firmware,
-        img_path=guest.image,
-        host_nodes=host_numa_nodes() if numa_active else [],
-        boot=DirectBoot(kernel_path, initrd_path, cmdline),
-        net=guest.network,
-        volumes=guest.volumes,
-        process=ProcessBundle(PROCESS_NAME, guest.foreground, PIDFILE, LOGFILE),
-        # --no-gpus leaves the GPUs bound to their host driver, so a command that named them
-        # would be one QEMU refuses.
-        passthrough=(
-            PassthroughSet.from_profile(host) if guest.pass_gpus else PassthroughSet()
-        ),
-    )
+    cmd = QemuCommand.build(host, guest)
 
     # Guest NUMA topology (numa_active) binds memory per node via QEMU
     # memory-backends, so no numactl prefix is needed. Otherwise interleave
@@ -195,7 +165,7 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
         print(f"Error: QEMU failed (exit {result.returncode}).", file=sys.stderr)
         return result.returncode
 
-    if not guest.foreground:
+    if not guest.process.foreground:
         # vCPU thread pinning is gated on the profile enabling NUMA topology
         # (requires dual-socket host with PXB-PCIe grouping active). Host-wide
         # CPU power tuning is separate and operator-driven; see
@@ -211,7 +181,7 @@ def launch_vm(guest: GuestContext, host: "HostProfile") -> int:
                 pin_threads=pin_threads,
             )
 
-    if not guest.foreground:
+    if not guest.process.foreground:
         print(f"Log file: {LOGFILE}")
     print_vm_status(
         host.tee_provider.label, guest.network.ssh_port, show_ssh=guest.show_ssh

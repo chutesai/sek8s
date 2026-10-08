@@ -185,7 +185,7 @@ and a reference names the exact files rather than leaving you to guess:
 
 ```bash
 sudo virt-cat -a guest-tools/image/prod/<version>/<version>.qcow2 \
-    /etc/tdx-rtmr3-expected-hashes > mine.txt
+    /etc/rootfs-manifest > mine.txt
 diff mine.txt reference.txt
 ```
 

@@ -1,23 +1,23 @@
-"""Attestation preflight — ask the control plane whether this exact image can launch here.
+"""Signed requests to the Chutes API about this host's class.
 
-The miner never computes or matches a topology fingerprint: it captures its raw platform
-metadata (``discover-profile.sh``), signs it with the miner hotkey, and POSTs it to
-``api.chutes.ai``. Three of the four host-profile operations live here:
+The miner never computes or matches a topology fingerprint: it signs its ``HostProfile`` with the
+miner hotkey and POSTs it to ``api.chutes.ai``, which owns the fingerprint and every verdict. The
+caller reads the host and passes the profile in, so every request is about the reading the caller
+acts on. Two of the host-profile operations live here:
 
-    run_host_class_status()     — POST /servers/tdx/host_profiles/status: is this topology known,
-                                  and which published images cover it? Version-free, so it answers
-                                  on a host that has downloaded nothing yet -> `host verify`
-    run_preflight(version, rc)  — POST /servers/tdx/preflight: does a published measurement for
-                                  THIS image's (version, rc) cover this host? -> ``launchable`` bool
+    host_class_status()         — POST /servers/{tdx,snp}/host_profiles/status: is this topology
+                                  known, and which published images cover it? Version-free, so it
+                                  answers on a host that has downloaded nothing yet. The profile's
+                                  platform picks the route -> ``HostClass.fetch``
     submit_profile()            — POST /servers/tdx/host_profiles: register an unmeasured class so
                                   Chutes generates its measurements
 
-(The fourth, GET /servers/tdx/host_profiles, is the generator's/third-party listing — not here.)
+(GET /servers/tdx/host_profiles is the generator's/third-party listing — not here.)
 
-The split is the two questions a miner actually asks: `host verify` asks about the HOST ("can this
-box run anything, and what"), which must answer before any image is downloaded; `guest launch` asks
-about the IMAGE ("is the version I hold covered here") and gets one boolean. The API owns the
-fingerprint and both verdicts; if that key ever changes it changes there, not here.
+`host verify` and `guest launch` ask the same question: the class's measured images. Verify asks
+before any image is downloaded; launch then looks up the ``(version, rc)`` it holds
+(``HostClass.measured_image``), and an SEV-SNP launch takes that image's ACPI hash from the answer.
+The API owns the fingerprint; if that key ever changes it changes there, not here.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ import json
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlencode
 
 import yaml
 from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS
@@ -40,8 +39,9 @@ from substrateinterface import Keypair, KeypairType
 FAIL_CLOSED = 1
 
 
-class PreflightError(Exception):
-    """Any failure that prevents getting a verdict (bad config, transport, API error)."""
+class ChutesApiError(Exception):
+    """A request to the Chutes API produced no usable answer: bad config, transport, an API
+    error, or a response missing what the caller needs."""
 
 
 def _load_miner_creds(config_path: str) -> "tuple[str, str]":
@@ -50,12 +50,12 @@ def _load_miner_creds(config_path: str) -> "tuple[str, str]":
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
     except OSError as exc:
-        raise PreflightError(f"cannot read config {config_path}: {exc}") from exc
+        raise ChutesApiError(f"cannot read config {config_path}: {exc}") from exc
     miner = cfg.get("miner") or {}
     ss58 = str(miner.get("ss58") or "").strip()
     seed = str(miner.get("seed") or "").strip()
     if not ss58 or not seed:
-        raise PreflightError(f"{config_path} is missing miner.ss58 / miner.seed")
+        raise ChutesApiError(f"{config_path} is missing miner.ss58 / miner.seed")
     return ss58, seed
 
 
@@ -70,19 +70,19 @@ def _apply_target_os(profile_json: str, target_os: str) -> str:
     """
     qemu_version = SUPPORTED_QEMU_BY_OS.get(target_os)
     if qemu_version is None:
-        raise PreflightError(
+        raise ChutesApiError(
             f"target OS {target_os!r} is not supported {sorted(SUPPORTED_QEMU_BY_OS)}; "
             f"supported releases ship a QEMU whose RTMR0 is baselined."
         )
     try:
         doc = json.loads(profile_json)
     except json.JSONDecodeError as exc:
-        raise PreflightError(
+        raise ChutesApiError(
             f"discover-profile output is not valid JSON: {exc}"
         ) from exc
     qemu = doc.get("qemu")
     if not isinstance(qemu, dict):
-        raise PreflightError("host profile has no qemu block to override")
+        raise ChutesApiError("host profile has no qemu block to override")
     qemu["qemu_version"] = qemu_version
     # Compact separators keep the signed body small; key order is irrelevant to the API.
     return json.dumps(doc, separators=(",", ":"), sort_keys=True)
@@ -98,7 +98,7 @@ def _sign(seed: str, body: bytes, nonce: str) -> "tuple[str, str]":
     try:
         kp = Keypair.create_from_seed(seed, crypto_type=KeypairType.SR25519)
     except Exception as exc:
-        raise PreflightError(f"invalid miner seed: {exc}") from exc
+        raise ChutesApiError(f"invalid miner seed: {exc}") from exc
     body_hash = hashlib.sha256(body).hexdigest()
     signature = kp.sign(f"{kp.ss58_address}:{nonce}:{body_hash}")
     return kp.ss58_address, signature.hex()
@@ -133,25 +133,11 @@ def _post(
             )
         except Exception:  # nosec B110
             pass
-        raise PreflightError(f"API rejected the request ({exc.code}): {detail}")
+        raise ChutesApiError(f"API rejected the request ({exc.code}): {detail}")
     except urllib.error.URLError as exc:
-        raise PreflightError(f"API unreachable at {api_base}: {exc.reason}")
+        raise ChutesApiError(f"API unreachable at {api_base}: {exc.reason}")
     except (ValueError, json.JSONDecodeError) as exc:
-        raise PreflightError(f"API returned an unparseable response: {exc}")
-
-
-def _read_host() -> "HostProfile":
-    """This host, for the commands whose whole job starts with reading it.
-
-    ``host verify`` and ``host submit-profile`` have no earlier reading to be handed, so they take
-    one here -- at the entry point, once, exactly as `guest launch` does in its Step 0. Wrapping
-    the failure keeps "cannot read this host" a PreflightError like every other way these commands
-    fail to reach a verdict.
-    """
-    try:
-        return HostProfile.from_host()
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise PreflightError(f"cannot read this host: {exc}") from exc
+        raise ChutesApiError(f"API returned an unparseable response: {exc}")
 
 
 def _signed_profile(
@@ -187,63 +173,46 @@ def _signed_profile(
     return hotkey, nonce, signature, body
 
 
-def run_preflight(
+def host_class_status(
     config_path: str,
-    version: str,
-    rc: bool,
     host_profile: "HostProfile",
     api_base: str = DEFAULT_API_BASE,
     target_os: "str | None" = None,
 ) -> dict:
-    """Sign this host's profile -> POST /servers/tdx/preflight -> verdict.
+    """Sign ``host_profile`` -> POST its platform's /servers/{tdx,snp}/host_profiles/status -> the
+    raw host class.
 
-    Asks whether a published measurement for an image of ``(version, rc)`` covers this host class.
-    Returns {fingerprint, launchable, detail}; raises PreflightError on any failure to reach a
-    verdict (the caller fails closed)."""
-    hotkey, nonce, signature, body = _signed_profile(
-        config_path, target_os, host_profile
-    )
-    query = urlencode({"version": version, "rc": "true" if rc else "false"})
-    return _post(
-        f"/servers/tdx/preflight?{query}", api_base, hotkey, nonce, signature, body
-    )
-
-
-def run_host_class_status(
-    config_path: str,
-    api_base: str = DEFAULT_API_BASE,
-    target_os: "str | None" = None,
-) -> dict:
-    """Discover -> sign -> POST /servers/tdx/host_profiles/status -> host class verdict.
+    ``HostClass.fetch`` is the caller; it parses the answer into that platform's typed measured
+    images.
 
     The version-free question behind `host verify`: is this topology known, and which published
     images cover it? Deliberately takes no version — a host is verified before it has downloaded
     any image, so nothing here may depend on what is on disk.
 
-    Returns {fingerprint, status, measurements: [{version, rc}, ...], detail}. An empty
-    ``measurements`` means nothing can launch here yet; ``status`` (unknown/pending/accepted) says
-    whether the miner must register the class or simply wait. Raises PreflightError on any failure
-    to reach a verdict.
+    Returns {fingerprint, status, measurements: [{version, rc, ...}, ...], detail}. Raises
+    ChutesApiError on any failure to reach a verdict.
     """
-    host = _read_host()
-    hotkey, nonce, signature, body = _signed_profile(config_path, target_os, host)
-    return _post(
-        "/servers/tdx/host_profiles/status", api_base, hotkey, nonce, signature, body
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, target_os, host_profile
     )
+    path = f"/servers/{host_profile.tee_provider.name}/host_profiles/status"
+    return _post(path, api_base, hotkey, nonce, signature, body)
 
 
 def submit_profile(
     config_path: str,
+    host_profile: "HostProfile",
     api_base: str = DEFAULT_API_BASE,
     target_os: "str | None" = None,
 ) -> dict:
-    """Discover -> sign -> POST /servers/tdx/host_profiles -> register.
+    """Sign ``host_profile`` -> POST /servers/tdx/host_profiles -> register.
 
     Stores this host class so Chutes generates its measurements. Returns
-    {fingerprint, status, stored, detail}; raises PreflightError on failure. Run when the preflight
+    {fingerprint, status, stored, detail}; raises ChutesApiError on failure. Run when the preflight
     reports the class is not yet launchable. ``target_os`` registers the class the host will BE
     after an OS upgrade (target release + the QEMU it ships), not the one it is on now.
     """
-    host = _read_host()
-    hotkey, nonce, signature, body = _signed_profile(config_path, target_os, host)
+    hotkey, nonce, signature, body = _signed_profile(
+        config_path, target_os, host_profile
+    )
     return _post("/servers/tdx/host_profiles", api_base, hotkey, nonce, signature, body)

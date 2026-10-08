@@ -46,7 +46,7 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
   - `ansible/guest/roles/admission-controller/defaults/main.yml`
   - `ansible/guest/roles/admission-controller/templates/opa-config-data.json.j2`
   - `ansible/guest/roles/system-manager/templates/system-manager.env.j2`
-  - `ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf`
+  - `ansible/guest/roles/rootfs-measure/files/tee-measure-miner.conf`
   - `ansible/guest/roles/apparmor-hardening/files/profiles/sek8s.attestation-proxy`
     (new), `apparmor-hardening/tasks/main.yml`, `verify-apparmor-profiles.sh`
   - `src/sek8s/sek8s/system_manager/images/util.py`, `src/sek8s/sek8s/config.py`
@@ -79,7 +79,7 @@ rotated at every reboot, minimising blast radius if a key is ever compromised.
   detectable via attestation.
 
 - **Ordering: after `setup_storage`, using its OWN CA as the client cert**:
-  `setup_storage` runs at `PREREQ="rtmr3-measure"` and, in its
+  `setup_storage` runs at `PREREQ="rootfs-measure"` and, in its
   `confirm_rotation()` step, deletes the ephemeral luks mTLS client cert
   (`/tmp/client_cert.pem`, `/tmp/client_key.pem`, `/run/chutes/cert-hash`) once
   the final `luks/confirm` call completes. `setup_vm_tls` runs after that
@@ -192,7 +192,7 @@ Success =
 - Do not change `CLIENT_CA_PATH` on the attestation proxy — it stays the system
   CA bundle.
 - AppArmor profiles for new components must be added to `apparmor-hardening/`
-  and their installed paths added to `tdx-measure-miner.conf`.
+  and their installed paths added to `tee-measure-miner.conf`.
 - The attestation proxy must host its ports via the shared
   `sek8s_common.server.WebServer` (`serve()` / `run()`) so server config is
   never reimplemented per call site. Do not hand-roll a `uvicorn.Config` that
@@ -207,7 +207,7 @@ Success =
   halts; no cert means no image pulls / no proxy.
 - Proxy certs absent at `/run/chutes/proxy-tls/` → uvicorn fails to load
   `server.key` and the proxy pod crashes; indicates initramfs failure.
-- AppArmor profile added but not measured into RTMR3 via `tdx-measure-miner.conf`
+- AppArmor profile added but not measured into RTMR3 via `tee-measure-miner.conf`
   → policy change is undetected; spec requires the profile path in the conf.
 - `registries.yaml` still contains the `localregistry.chutes.ai` mirror →
   legacy path is used, mTLS bypassed.

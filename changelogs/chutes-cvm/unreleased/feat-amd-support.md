@@ -43,34 +43,28 @@
   environment rather than the launch: a profile describes a machine and knows nothing about
   booting a guest. `chutes-cvm guest launch` Step 0 takes THE reading of the host and asks it,
   rather than probing the platform itself.
-- `sev_cbit_parameters()` reads the C-bit position and reduced physical address bits
-  from CPUID `Fn8000_001F` via `/dev/cpu/0/cpuid`, falling back to the documented
-  EPYC values. QEMU validates this against the host and fails loudly with the real
-  value, so a stale default cannot silently weaken anything.
+- The SEV-SNP guest object names the EPYC C-bit constants (`cbitpos=51`,
+  `reduced-phys-bits=1`). QEMU refuses a launch whose `cbitpos` differs from the host's, and
+  neither value is measured: live launches with `reduced-phys-bits` 1 and the hardware's 5
+  measure identically.
 
-- `QemuCommand.create()` / `.for_measurement()` — one factory assembles the whole command from
-  resolved inputs, owning the `PcieRootPinning` allocator so its five slot claims run in a fixed
-  order no caller can reach. Slot layout lands in the DSDT and so in RTMR0; it used to depend on
-  two hand-written call sites invoking four builders in the same order, with a parity test as the
-  only thing holding them in step. `create()` has no optional parameters: a default would be one
-  of the two shapes standing in for the other.
-- `GuestContext` (`guest/context.py`) — what one launch materialized: the per-VM image copy, the
-  tap device, the resolved volume paths, and the launch options. `LaunchConfig` is declared
-  intent; this is materialized fact. `launch_vm(guest, host)` now takes it alongside the profile,
-  so the two halves of a launch — what this machine IS and what this guest NEEDS — are the two
-  arguments.
+- `QemuCommand.build(host, context)` — one traversal assembles every command, owning the
+  `PcieRootPinning` allocator so its five slot claims run in a fixed order no caller can reach.
+  Slot layout lands in the DSDT and so in RTMR0; it used to depend on two hand-written call sites
+  invoking four builders in the same order, with a parity test as the only thing holding them in
+  step.
+- `GuestContext` (`guest/context.py`) — everything one guest needs to build its command: image,
+  firmware, guest NUMA nodes, boot artifacts, network, volumes, devices and process, plus the
+  eight environment leaves (machine, memory backend, `-cpu`, guest object, serial, emitted
+  devices, passthrough endpoints, iommufd) that differ between a launch and the offline dump.
+  `LaunchContext` (with `TdxLaunchContext` / `SnpLaunchContext`) is a real guest on the TEE host,
+  built by `LaunchContext.from_host()` from Step 1's measured image (or None for a test boot),
+  the per-VM image copy, the tap device and the resolved volume paths; `MeasurementContext.from_host()` is the dump's placeholder guest. The
+  host half is `HostProfile`, so `launch_vm(guest, host)` takes the two halves of a launch.
 - `PassthroughSet` — the devices a command names, defaulting to the profile's. A `--no-gpus`
   debug launch passes an empty set: the GPUs stay on their host driver, so naming them would
   build a command QEMU refuses. A value rather than a boolean because the launch set will not
   always equal the profile's — with IB passthrough a launch attaches the VFs binding creates.
-- `QemuCommandBuilder` + `LaunchCommandBuilder` / `MeasurementCommandBuilder`
-  (`guest/qemu.py`) — one traversal builds both commands. The base owns the walk, its order and
-  its single `PcieRootPinning`; subclasses choose only what string goes in each slot. Both sit in
-  one file so the seven differences between a launch and a measurement are diffable without
-  opening another.
-- `guest/context.py` — `GuestContext`: what one launch materialized (per-VM image copy, tap
-  device, resolved volume paths, launch options). The host half is `HostProfile`; these are the
-  two arguments `QemuCommand.create` takes.
 - A byte-exact regression lock on measurement generation: `tests/measurement/golden/` (8 hardware
   classes x `launch_args` + `measure_args` + `metadata`) with
   `scripts/update_measurement_golden.py` to regenerate deliberately. `metadata` is the COMPLETE
@@ -91,9 +85,79 @@
   `processor_id`). Verified byte-exact against live attestation reports from two hosts that
   differ in every input: 8x RTX PRO 6000 on EPYC 7763 (252 vCPUs, our firmware) and H100 on
   EPYC 9124 (28 vCPUs, the Ubuntu firmware); both are pinned as tests.
+- `measurement.snp.AcpiTables` derives a host class's expected ACPI hash offline, the value the
+  SEV-SNP firmware checks the guest's tables against: SHA-256 over `etc/table-loader` and each
+  blob it allocates, each framed as `name[56] || u64 LE size || bytes`. The tables come from the same
+  `--create-acpi-tables` dump RTMR0 uses. Verified byte for byte against a live 8x RTX PRO 6000
+  SNP guest (pinned as a test).
+- Each SEV-SNP host class is measured with its expected ACPI hash on the cmdline
+  (`sek8s.acpi_sha256=<hash>`, composed by `SnpLaunchContext.with_acpi`), and the
+  generator records it beside `measurement` as `acpi_sha256`. A measurement is only ever computed
+  with a real hash.
+- An SEV-SNP launch boots `sek8s.acpi_sha256=<hash>` on its kernel cmdline: the hash published
+  for its image on this host class (`SnpLaunchContext.acpi_sha256`), so the firmware checks the
+  guest's ACPI tables against it. A test boot passes `unverified` instead, which the firmware (`03-acpi.patch`)
+  accepts without checking the tables. The value is in the measured cmdline, so such a guest
+  matches no published measurement and cannot attest.
+- `guest/host_class.py`: `HostClass` is this host's class as Chutes records it, fetched once
+  from its platform's route (POST /servers/{tdx,snp}/host_profiles/status) and parsed by its
+  platform's subclass:
+  `TdxHostClass` lists `MeasuredImage` entries, `SnpHostClass` lists `SnpMeasuredImage` entries
+  carrying their required `acpi_sha256`. An SNP entry without a valid hash fails at retrieval.
+  `measured_image(image)` is the launchability join against an `ImageSet`, raising `NotMeasured`.
+- `HostProfile.tee_provider` is the host's platform, taken from the captured CPU vendor when the
+  profile is built (an unsupported vendor is refused there); the profile builds its guest object
+  through it (`guest_object()`). The provider class is the platform's only identity:
+  `TeeProvider.for_cpu_vendor()` and `TeeProvider.enabled_on_host()` return provider types, and
+  `host platform` prints the provider's `name`.
 
 ### Changed
 
+- `measurements generate` writes a debug build's entry as `rc: true`, read from the image set's
+  manifest. A debug image (SSH, no LUKS) attests only under an rc entry, and the API refuses to
+  load an rc release without an `authorized_hotkeys` allowlist, so a debug `measurements.yaml`
+  merged by mistake fails loudly instead of admitting debug guests as the release.
+
+- The image-set `manifest.json` records the SHA-256 of the guest firmware the image was built
+  with (`firmware`), and `ImageSet.verify` checks chutes-cvm's firmware against it, so launch
+  (`prepare_vm_image`) and `image verify` refuse any other. `measurements generate` now verifies
+  the image set it measures (`verify(full=True)` against `--bios-dir`) before measuring. The
+  firmware ships with chutes-cvm rather than the image and the launch measurement covers its
+  exact bytes, so a mismatch booted a guest that could not attest, or measured a firmware the
+  release was never built with. Sets from before the field are not checked.
+
+- `measurements generate` emits one hardware entry per measurement, listing every host class
+  that measures that way in `fingerprints: [...]` (was one entry per class with a singular
+  `fingerprint`, suffixing colliding names). The API now refuses a measurement on two entries:
+  a quote matches the first, so the second's GPU rules and rc gate never applied.
+
+- The bundled measured-file walk is `scripts/tee-measure` (`paths.tee_measure_script()`,
+  `rtmr3.TEE_MEASURE`), formerly `tdx-measure`, since it serves both platforms. The `tdx-measure`
+  fork (`--tdx-measure-bin`) is a separate tool and keeps its name.
+- **`guest launch` Step 1 decides measured launch, test boot, or refusal.** It fetches the host
+  class (as `host verify` does) and looks up the image's `(version, rc)`. A measured image launches
+  measured. An unmeasured image -- or no answer from the API, or an unreadable manifest -- is
+  refused if it is a production image, and test-boots (boots, cannot attest) if it is a debug
+  build or `--force` is passed. Behaviour change: an unpublished debug build used to be refused;
+  it now test-boots. A published `rc` build still launches measured. Benchmark launches test-boot
+  without asking.
+
+- `chutes-cvm host verify` reads the typed `HostClass` instead of the raw status response, and
+  reports a host it cannot read as `BLOCKED (host)` rather than as an API failure.
+- `guest/preflight.py` is now `guest/chutes_api.py` and `PreflightError` is `ChutesApiError`: the
+  module holds every signed request to the Chutes API, not just the launch preflight. Requests
+  sign the `HostProfile` their caller read; none reads the host itself, so `host verify`'s class
+  lookup and `--submit` registration describe the same reading.
+- A downloaded base image is an `ImageSet` (`ImageSet.from_dir`): its manifest is read once into
+  the build's `version`/`rc` and its four artifacts, and `verify(full)` replaces
+  `image_set.resolve()`. The launch, `host verify`, per-VM image staging and `image verify` all
+  read it; per-VM staging copies the sidecars from the verified set rather than re-deriving
+  their paths.
+- The offline ACPI dump runs each platform's own machine shape, derived from the launch machine:
+  drop the confidential-guest object, then spell out what the platform switches off implicitly
+  (`TeeProvider.implicit_machine_opts`). TDX dumps with `smm=off,pic=off`; SEV-SNP with
+  `vmport=off,smm=off`, which is what an SNP guest actually boots with. The Intel measurement
+  inputs are unchanged.
 - `chutes-cvm guest launch --help` describes every flag. Config flags take their help from the
   `LaunchConfig` field descriptions (the cache/storage/config volume flags prefixed with which
   volume), so a flag and its help cannot drift apart.
@@ -131,8 +195,8 @@
   inside preflight, which signed *that* profile and got the launchable verdict for it, and again
   in the boot primitive, which built the QEMU command from a different read. Nothing tied the two
   together, so the control plane could approve a shape that never booted.
-- **The host profile is a required argument, never a default.** `launch_vm`, `run_preflight` and
-  `_signed_profile` all take it; a default would only ever be a second reading that could disagree
+- **The host profile is a required argument, never a default.** `launch_vm` and
+  `_signed_profile` both take it; a default would only ever be a second reading that could disagree
   with the one being signed, so the shape makes that unrepresentable. The commands whose job
   *starts* with reading a host — `host verify`, `host submit-profile` — take their reading at
   their own entry point via `preflight._read_host()`.
@@ -207,6 +271,11 @@
 
 ### Removed
 
+- `chutes_api.run_preflight()` (POST /servers/tdx/preflight). The launch reads the class's
+  measured images instead, which is also where an SEV-SNP launch gets its ACPI hash.
+
+- `qemu.read_pci_numa_node()` and `qemu._append_numa_memory()`, unused since the command
+  traversal took over device placement and guest NUMA memory.
 - `profiles.resolve_profile()`, unused since host profiles and `reset-gpus` resolve through
   `profile_for_device_ids()`; with one resolver, the test asserting the two agreed went with it.
 - The CCEL splice-and-replay path to RTMR0 (`overrides_from_fork_log`, `mr1_events`,

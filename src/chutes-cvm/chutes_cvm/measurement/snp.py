@@ -4,13 +4,16 @@ The AMD counterpart to this package's RTMR work, and far smaller. SEV-SNP produc
 launch digest, fixed when the VM starts, covering the firmware image, the pages the firmware's
 SEV metadata declares, a measured page holding the kernel/initrd/cmdline hashes (the launcher
 sets ``kernel-hashes=on``), and one VMSA per vCPU. There is no event log and no runtime
-register, and -- unlike RTMR0 -- no dependence on guest RAM, PCI topology or ACPI content: two
-hardware classes differing only in their GPUs produce the *same* digest. That is expected;
-``expected_gpus``/``gpu_count`` gate policy on the verifier side.
+register, and the digest does not cover guest RAM, PCI topology or the ACPI tables themselves.
+ACPI reaches it through the cmdline: the AmdSev firmware refuses tables whose hash differs from
+``sek8s.acpi_sha256``, so each class is measured with its expected ACPI hash on the cmdline
+(``AcpiTables``), the SNP counterpart of RTMR0. ``expected_gpus``/``gpu_count`` gate GPU policy
+on the verifier side.
 
-The inputs are therefore the firmware bytes, the vCPU count, the vCPU signature and the
-direct-boot artifacts. Guest policy is deliberately NOT among them: it travels in the attestation
-report and is checked there (see the DEBUG bit), but it is not hashed into the launch digest.
+The inputs are therefore the firmware bytes, the vCPU count, the vCPU signature, the
+direct-boot artifacts and the class's ACPI hash. Guest policy is deliberately NOT among them: it
+travels in the attestation report and is checked there (see the DEBUG bit), but it is not hashed
+into the launch digest.
 
 Computed here rather than by shelling out to ``sev-snp-measure``: the algorithm is the SEV-SNP
 ABI's PAGE_INFO chain plus a fixed VMSA layout, small enough to own and test against real
@@ -28,13 +31,20 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import struct
+import tempfile
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from chutes_cvm.guest.context import MeasurementContext, SnpLaunchContext
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.qemu import QemuCommand
 from chutes_cvm.guest.tee import SnpTeeProvider
+from chutes_cvm.measurement import tdx
+from chutes_cvm.measurement.image_config import ImageConfig
 from chutes_cvm.measurement.platform import (
     MeasurementError,
     PlatformMeasurements,
@@ -42,6 +52,7 @@ from chutes_cvm.measurement.platform import (
 )
 
 PAGE_SIZE = 4096
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 FOUR_GIB = 1 << 32
 
 # ── the launch digest (SEV-SNP ABI, SNP_LAUNCH_UPDATE / PAGE_INFO) ─────────────────────────────
@@ -412,8 +423,8 @@ def _sha256_file(path: str) -> bytes:
 class SnpImage:
     """The release half of the SEV-SNP launch digest: firmware and direct-boot artifacts.
 
-    Every AMD class of a release shares these; only the vCPU count and signature differ per
-    class. Loaded once per release -- the initrd alone is ~90 MB -- and loading is where a
+    Every AMD class of a release shares these; the vCPU count, signature and ACPI hash differ
+    per class. Loaded once per release -- the initrd alone is ~90 MB -- and loading is where a
     missing input surfaces, so it fails the release rather than any one class.
     """
 
@@ -432,20 +443,224 @@ class SnpImage:
             cmdline=cmdline,
         )
 
-    def measurement(self, vcpus: int, processor_id: str | None) -> str:
+    def measurement(
+        self, vcpus: int, processor_id: str | None, acpi_sha256: str
+    ) -> str:
         """This image's launch digest on one hardware class, as a measurements.yaml value.
 
-        Bare uppercase hex (96 chars), the same width and shape as an RTMR.
+        ``acpi_sha256`` goes on the cmdline exactly as an SEV-SNP launch appends it
+        (``SnpLaunchContext.with_acpi``), and must be
+        a real hash: a published measurement computed with the test-boot sentinel would let a
+        host boot unchecked ACPI and still attest. Bare uppercase hex (96 chars), the same width
+        and shape as an RTMR.
         """
+        if not _SHA256_HEX.fullmatch(acpi_sha256):
+            raise MeasurementError(
+                f"an SEV-SNP measurement needs a real ACPI hash, got {acpi_sha256!r}"
+            )
         digest = launch_digest(
             self.firmware,
             vcpus=vcpus,
             vcpu_signature=vcpu_signature(processor_id),
             kernel_sha256=self.kernel_sha256,
             initrd_sha256=self.initrd_sha256,
-            cmdline=self.cmdline,
+            cmdline=SnpLaunchContext.with_acpi(self.cmdline, acpi_sha256),
         )
         return digest.hex().upper()
+
+
+# ── ACPI (checked by the firmware, attested through the cmdline) ──────────────────────────────
+
+# The launch digest does not cover ACPI, so the AmdSev firmware verifies the tables itself: it
+# hashes ``etc/table-loader`` and every blob that script allocates -- the same inputs TDX measures
+# into RTMR0 -- and refuses to install them unless the result equals ``sek8s.acpi_sha256`` on the
+# kernel cmdline, which the digest does cover. The framing must match the firmware's
+# (firmware/patches/amdsev/03-acpi.patch): each blob is ``name[56, NUL-padded] || size (u64 LE)
+# || bytes``, the loader first, then every ALLOCATE'd blob in loader order.
+
+ACPI_TABLES_FILE = "etc/acpi/tables"
+ACPI_RSDP_FILE = "etc/acpi/rsdp"
+ACPI_LOADER_FILE = "etc/table-loader"
+
+# QEMU's BIOS linker-loader ABI (hw/acpi/bios-linker-loader.c).
+_FNAME_SIZE = 56
+_ENTRY_SIZE = 128
+_LOADER_SIZE = 4096
+_CMD_ALLOCATE, _CMD_ADD_POINTER, _CMD_ADD_CHECKSUM = 1, 2, 3
+_ZONE_HIGH, _ZONE_FSEG = 1, 2
+_RSDT_HEADER = 36
+
+
+def _fname(name: str) -> bytes:
+    raw = name.encode()
+    if len(raw) >= _FNAME_SIZE:
+        raise MeasurementError(f"fw_cfg file name too long: {name!r}")
+    return raw.ljust(_FNAME_SIZE, b"\0")
+
+
+def _allocate(file: str, alignment: int, zone: int) -> bytes:
+    body = _fname(file) + struct.pack("<IB", alignment, zone)
+    return struct.pack("<I", _CMD_ALLOCATE) + body.ljust(_ENTRY_SIZE - 4, b"\0")
+
+
+def _add_pointer(pointer_file: str, pointee_file: str, offset: int, size: int) -> bytes:
+    body = (
+        _fname(pointer_file) + _fname(pointee_file) + struct.pack("<IB", offset, size)
+    )
+    return struct.pack("<I", _CMD_ADD_POINTER) + body.ljust(_ENTRY_SIZE - 4, b"\0")
+
+
+def _add_checksum(file: str, result_offset: int, start: int, length: int) -> bytes:
+    body = _fname(file) + struct.pack("<III", result_offset, start, length)
+    return struct.pack("<I", _CMD_ADD_CHECKSUM) + body.ljust(_ENTRY_SIZE - 4, b"\0")
+
+
+@dataclass(frozen=True)
+class AcpiTable:
+    """One table's place in ``etc/acpi/tables``."""
+
+    signature: str
+    offset: int
+    length: int
+
+
+@dataclass(frozen=True)
+class AcpiTables:
+    """A host class's ``etc/acpi/tables``, and the ACPI hash its SEV-SNP firmware expects.
+
+    Only the tables come from the dump; ``etc/table-loader`` and ``etc/acpi/rsdp`` are QEMU's
+    deterministic functions of them, rebuilt here the way the tdx-measure fork rebuilds them for
+    its RTMR0 events. All three were checked byte for byte against a live 8-GPU SEV-SNP guest.
+    """
+
+    tables: bytes
+
+    @classmethod
+    def dump(
+        cls, host: HostProfile, *, firmware: str, tdx_measure_bin: str, dist: str
+    ) -> "AcpiTables":
+        """Dump ``host``'s tables offline: the dump RTMR0 already relies on, run on the class's
+        measurement command (``MeasurementContext.from_host``).
+
+        TODO: this runs tdx-measure's full ``--create-acpi-tables`` pass, which also computes MRTD
+        and RTMR0 -- TDX values an SEV-SNP class discards, computed over the AMD firmware. Cheap
+        today; replace with a dump-only mode in the tdx-measure fork so SNP generation runs no TDX
+        code.
+        """
+        cmd = QemuCommand.build(
+            host, MeasurementContext.from_host(host, firmware=firmware)
+        )
+        with tempfile.TemporaryDirectory() as td:
+            tables_path = Path(td) / "acpi_tables.bin"
+            meta = ImageConfig(cmd, host, acpi_tables=str(tables_path)).to_dict()
+            tdx.generate_acpi_blobs(
+                meta, Path(td), tdx_measure_bin=tdx_measure_bin, dist=dist
+            )
+            if not tables_path.is_file():
+                raise MeasurementError(
+                    f"ACPI dump wrote no tables for {host.variant_label}"
+                )
+            return cls(tables_path.read_bytes())
+
+    def listed(self) -> list[AcpiTable]:
+        """Each table in file order, up to the zero padding after the last."""
+        found, off = [], 0
+        while off + 8 <= len(self.tables):
+            sig_end = off + 4
+            sig = self.tables[off:sig_end]
+            if not all(32 <= c < 127 for c in sig):
+                break
+            (length,) = struct.unpack_from("<I", self.tables, off + 4)
+            if length < 8 or off + length > len(self.tables):
+                raise MeasurementError(
+                    f"ACPI table at {off:#x} has invalid length {length}"
+                )
+            found.append(AcpiTable(sig.decode(), off, length))
+            off += length
+        return found
+
+    def _table(self, signature: str) -> AcpiTable:
+        for table in self.listed():
+            if table.signature == signature:
+                return table
+        raise MeasurementError(f"ACPI dump has no {signature} table")
+
+    @property
+    def loader(self) -> bytes:
+        """``etc/table-loader`` as QEMU serves it for these tables.
+
+        The command order is QEMU's ``acpi_build``: allocate RSDP and tables, checksum DSDT, the
+        FADT's FACS/DSDT/X_DSDT pointers and checksum, every other table's checksum in file order,
+        one pointer per RSDT entry, RSDT's checksum, then the RSDP's pointer and checksum.
+        """
+        dsdt, facp, rsdt = self._table("DSDT"), self._table("FACP"), self._table("RSDT")
+        if (rsdt.length - _RSDT_HEADER) % 4:
+            raise MeasurementError(f"malformed RSDT length {rsdt.length}")
+        tables = ACPI_TABLES_FILE
+        cmds = [
+            _allocate(ACPI_RSDP_FILE, 16, _ZONE_FSEG),
+            _allocate(tables, 64, _ZONE_HIGH),
+            _add_checksum(tables, dsdt.offset + 9, dsdt.offset, dsdt.length),
+            _add_pointer(tables, tables, facp.offset + 36, 4),  # FIRMWARE_CTRL -> FACS
+            _add_pointer(tables, tables, facp.offset + 40, 4),  # DSDT
+            _add_pointer(tables, tables, facp.offset + 140, 8),  # X_DSDT
+            _add_checksum(tables, facp.offset + 9, facp.offset, facp.length),
+        ]
+        # FACS has no checksum slot; DSDT, FACP and RSDT are handled on their own.
+        for t in self.listed():
+            if t.signature not in ("FACS", "DSDT", "FACP", "RSDT"):
+                cmds.append(_add_checksum(tables, t.offset + 9, t.offset, t.length))
+        for i in range((rsdt.length - _RSDT_HEADER) // 4):
+            entry = rsdt.offset + _RSDT_HEADER + 4 * i
+            cmds.append(_add_pointer(tables, tables, entry, 4))
+        cmds += [
+            _add_checksum(tables, rsdt.offset + 9, rsdt.offset, rsdt.length),
+            _add_pointer(ACPI_RSDP_FILE, tables, 16, 4),
+            _add_checksum(ACPI_RSDP_FILE, 8, 0, 20),
+        ]
+        loader = b"".join(cmds)
+        if len(loader) > _LOADER_SIZE:
+            raise MeasurementError(f"table-loader overflows {_LOADER_SIZE} bytes")
+        return loader.ljust(_LOADER_SIZE, b"\0")
+
+    @property
+    def rsdp(self) -> bytes:
+        """``etc/acpi/rsdp``: ACPI 1.0, its RSDT address an offset into ``etc/acpi/tables`` until
+        the firmware applies the loader's pointer; the checksum is left for the firmware.
+        """
+        rsdt = self._table("RSDT")
+        return b"RSD PTR " + b"\0" + b"BOCHS " + b"\0" + struct.pack("<I", rsdt.offset)
+
+    def sha256(self) -> str:
+        """The value the firmware checks these tables against (``sek8s.acpi_sha256``)."""
+        return self.framed_sha256(
+            self.loader, {ACPI_TABLES_FILE: self.tables, ACPI_RSDP_FILE: self.rsdp}
+        )
+
+    @staticmethod
+    def framed_sha256(loader: bytes, blobs: Mapping[str, bytes]) -> str:
+        """The firmware's hash over ``loader`` and the fw_cfg ``blobs`` it allocates, framed as
+        the firmware frames them."""
+        if len(loader) % _ENTRY_SIZE:
+            raise MeasurementError("etc/table-loader is not a whole number of entries")
+        h = hashlib.sha256()
+
+        def item(name: str, data: bytes) -> None:
+            h.update(_fname(name) + struct.pack("<Q", len(data)) + data)
+
+        item(ACPI_LOADER_FILE, loader)
+        for off in range(0, len(loader), _ENTRY_SIZE):
+            if struct.unpack_from("<I", loader, off)[0] != _CMD_ALLOCATE:
+                continue
+            name_start = off + 4
+            name_end = name_start + _FNAME_SIZE
+            name = loader[name_start:name_end].split(b"\0", 1)[0].decode()
+            if name not in blobs:
+                raise MeasurementError(
+                    f"table-loader allocates {name!r}, which was not supplied"
+                )
+            item(name, blobs[name])
+        return h.hexdigest()
 
 
 # ── the platform ───────────────────────────────────────────────────────────────────────────────
@@ -454,23 +669,38 @@ class SnpImage:
 class SnpMeasurements(PlatformMeasurements):
     """AMD SEV-SNP: one launch digest per class, over inputs the whole release shares.
 
-    The firmware and the image's direct-boot artifacts are loaded once; each class adds only its
-    vCPU count and signature. The digest does not depend on GPU or memory topology, so two AMD
-    classes differing only in their GPUs legitimately share a measurement.
+    The firmware and the image's direct-boot artifacts are loaded once; each class adds its
+    vCPU count and signature, and its ACPI hash from the same offline dump RTMR0 uses. Classes
+    whose ACPI tables agree (RAM size, for one, does not change them) share a measurement.
     """
 
     key = "snp"
     provider = SnpTeeProvider
 
-    def __init__(self, *, bios_dir: str, image: str) -> None:
+    def __init__(
+        self, *, bios_dir: str, image: str, tdx_measure_bin: str, dist: str
+    ) -> None:
         super().__init__()
-        self._image = SnpImage.load(
-            image, str(Path(bios_dir) / SnpTeeProvider.default_firmware)
-        )
+        self._firmware = str(Path(bios_dir) / SnpTeeProvider.default_firmware)
+        self._image = SnpImage.load(image, self._firmware)
+        self._tdx_measure_bin = tdx_measure_bin
+        self._dist = dist
 
     def measure(self, host: HostProfile) -> dict:
+        # The ACPI value comes first: the dump does not depend on it (the tables are built from
+        # the machine shape, not the cmdline), and the digest does.
+        acpi_sha256 = AcpiTables.dump(
+            host,
+            firmware=self._firmware,
+            tdx_measure_bin=self._tdx_measure_bin,
+            dist=self._dist,
+        ).sha256()
         return {
-            "measurement": self._image.measurement(host.vcpus, host.cpu.processor_id)
+            "measurement": self._image.measurement(
+                host.vcpus, host.cpu.processor_id, acpi_sha256
+            ),
+            # What an SEV-SNP launch of this class puts on its cmdline.
+            "acpi_sha256": acpi_sha256,
         }
 
     def section(self) -> dict:
