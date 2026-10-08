@@ -45,7 +45,7 @@ class PcieRootPinning:
 
     One instance is shared across the builders of a single command -- each call takes the next
     slot, so how many devices there are is the callers' business, not this object's. The run
-    starts at 0x1, except under guest NUMA where it starts at 0x2 to keep every emulated device
+    starts at 0x1, except under PXB grouping where it starts at 0x2 to keep every emulated device
     below the PXB bridges. Both match live DSDTs from the two paths on one host:
         NUMA  _ADR slots [2,3,4,5,6,7, 24,25, 31]
         FLAT  _ADR slots [1,2,3,4,5,6,  8, 9, 31]
@@ -54,10 +54,10 @@ class PcieRootPinning:
     slot and so changes the DSDT -- and with it every published RTMR0.
     """
 
-    _LAST_SLOT = 0x17  # guest-NUMA PXB bridges start at 0x18
+    _LAST_SLOT = 0x17  # PXB bridges start at 0x18
 
-    def __init__(self, guest_numa: bool):
-        self._next = 0x2 if guest_numa else 0x1
+    def __init__(self, pxb_grouping: bool):
+        self._next = 0x2 if pxb_grouping else 0x1
 
     def device_suffix(self) -> str:
         if self._next > self._LAST_SLOT:
@@ -229,7 +229,7 @@ class QemuCommand:
 
         Pure: reads no live hardware, touches no device.
         """
-        pinning = PcieRootPinning(host.uses_guest_numa)
+        pinning = PcieRootPinning(host.uses_pxb_grouping)
         cmd = _base(host, context, pinning)
         _network(cmd, context, pinning)
         _volumes(cmd, context, pinning)
@@ -532,9 +532,11 @@ def _passthrough(
         # such object is one QEMU refuses. The two are one decision.
         cmd.objects.append(f"iommufd,id={IOMMUFD_ID}")
 
-    guest_numa = host.uses_guest_numa
+    # PXB bridges name guest NUMA nodes, so grouping needs guest NUMA; a NUMA guest may still
+    # take flat PCI when its GPU model's windows do not fit per bridge (supports_pxb_grouping).
+    pxb_grouping = host.uses_pxb_grouping
     topo: "PciTopologyState | NumaPciTopologyState"
-    if guest_numa:
+    if pxb_grouping:
         print("  PCI topology: NUMA-local PXB-PCIe bridges")
         topo = NumaPciTopologyState()
     else:
@@ -548,7 +550,7 @@ def _passthrough(
         for ordinal, device in enumerate(group, start=1):
             chassis += 1
             rp_id = f"{prefix}{ordinal}"
-            placement = {"numa_node": device.numa_node} if guest_numa else {}
+            placement = {"numa_node": device.numa_node} if pxb_grouping else {}
             topo.add_device(
                 cmd,
                 context.endpoint(host, device, rp_id),
@@ -556,7 +558,7 @@ def _passthrough(
                 chassis=chassis,
                 **placement,
             )
-            if guest_numa and device.numa_node >= 0:
+            if pxb_grouping and device.numa_node >= 0:
                 print(f"    {device.bdf} -> PXB NUMA node {device.numa_node}")
     print(
         f"  Passthrough configured: {len(passthrough.gpus)} GPU(s), "

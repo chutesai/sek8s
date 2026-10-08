@@ -5,7 +5,7 @@ guest-RAM rule fails these rather than passing with whatever the profile now say
 
     H200  id=2335 reserved=4  numa=True  nvswitch(8)=True   vram=141
     RTX   id=2bb5 reserved=4  numa=True  nvswitch(8)=False  vram=96
-    B300  id=3182 reserved=4  numa=False nvswitch(8)=False  vram=288
+    B300  id=3182 reserved=4  pxb=False  nvswitch(8)=False  vram=288
 """
 
 import json
@@ -462,7 +462,8 @@ def test_guest_numa_is_a_cpu_fact_not_a_gpu_one():
 
     GpuProfile.enable_numa_topology used to gate this. It recorded a host fact ("2 nodes, GPUs
     split 4+4, confirmed on <hostname>") on a GPU class, left from when GpuProfile *was* the host
-    profile, and it forced two 2-node B300 hosts onto the flat path for no reason.
+    profile. What the GPU model does decide is PCI placement -- see
+    test_b300_keeps_guest_numa_but_not_pxb.
     """
     assert HostProfile.from_dict(document()).uses_guest_numa is True
 
@@ -514,4 +515,48 @@ def test_each_platform_builds_its_own_guest_object():
 def _amd_doc():
     return known.host_document(
         "RTX_PRO_6000", vcpus=124, gpu_nodes=(0,) * 8, cpu_vendor="AuthenticAMD"
+    )
+
+
+# ── PCI placement is the GPU model's call ────────────────────────────────────────────
+
+
+def test_b300_keeps_guest_numa_but_not_pxb():
+    """B300 opts out of PXB grouping: its 1 TB root-port windows do not fit the guest's 64-bit
+    MMIO window once split per bridge, which left a 2-node 8x B300 guest with 7 GPUs. Guest NUMA
+    memory still follows the host's nodes; only the devices go flat.
+    """
+    b300 = HostProfile.from_dict(
+        document(
+            gpus=[gpu(f"0000:{0x19 + i:02x}:00.0", i // 4, "3182") for i in range(8)],
+            nvswitches=[],
+            cpu={
+                "count": 256,
+                "sockets": 2,
+                "vendor": "GenuineIntel",
+                "processor_id": "d1060a00fffba91f",
+            },
+            guest_gb=2304,
+        )
+    )
+    assert b300.uses_guest_numa is True
+    assert b300.uses_pxb_grouping is False
+    assert b300.variant_label == "numa-flatpci-252c-2304g"
+
+    cmd = known.measurement_command(b300, firmware="/opt/ovmf/OVMF.fd")
+    assert cmd.numa
+    assert not any("pxb-pcie" in d for d in cmd.devices)
+
+
+def test_pxb_grouping_follows_guest_numa_for_other_profiles():
+    assert HostProfile.from_dict(document()).uses_pxb_grouping is True  # H200, 2 nodes
+    assert (
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_pxb_grouping is False
+    )
+
+
+def test_pxb_grouping_without_gpus_follows_guest_numa():
+    """A GPU-less debug host has no model to object to PXB grouping."""
+    assert (
+        HostProfile.from_dict(document(gpus=[], nvswitches=[])).uses_pxb_grouping is True
     )

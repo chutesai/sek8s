@@ -143,6 +143,18 @@ class GpuProfile(ABC):
         return False
 
     @property
+    def supports_pxb_grouping(self) -> bool:
+        """Whether this GPU can sit behind per-NUMA-node PXB-PCIe bridges under guest NUMA.
+
+        A GPU-model fact, not a host one: it is about whether the model's BARs fit the guest's
+        64-bit MMIO window once that window is split per bridge. Each PXB is its own root bridge
+        and needs its own contiguous, aligned slice of the window; a single flat root bridge packs
+        every root port into one. When this is False the guest still gets NUMA memory and vCPUs,
+        only the passthrough devices are laid out flat on pcie.0.
+        """
+        return True
+
+    @property
     def requires_fabric_manager(self) -> bool:
         """Whether the host Fabric Manager must be running before launch.
 
@@ -247,6 +259,16 @@ class B300Profile(GpuProfile):
     @property
     def requires_fabric_manager(self) -> bool:
         return True
+
+    @property
+    def supports_pxb_grouping(self) -> bool:
+        # Each B300 exposes 64 MB + 512 GB + 32 MB 64-bit prefetchable BARs, so its root-port
+        # window rounds up to 1 TB. Eight fit the firmware's default 64-bit window as one flat
+        # root bridge, but split 4+4 across two PXBs the per-bridge alignment costs a slot and
+        # the last GPU on node 0 gets a 32 GB window (BAR2 unassigned, gpu-verify sees 7/8).
+        # Reported on a 2-node 8x B300 host (2x Xeon 6776P); the same hosts attach all 8 flat.
+        # Flat until the MMIO window is sized explicitly.
+        return False
 
 
 class H200Profile(GpuProfile):

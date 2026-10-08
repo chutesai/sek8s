@@ -170,9 +170,13 @@ class QemuProfileStub:
     smp_topology: str
     cpu_args: str = "host,-avx10"
     uses_guest_numa: bool = False
+    #: Defaults to ``uses_guest_numa``, as for every GPU model but B300.
+    uses_pxb_grouping: "bool | None" = None
     tee_provider: object = None
 
     def __post_init__(self):
+        if self.uses_pxb_grouping is None:
+            self.uses_pxb_grouping = self.uses_guest_numa
         if self.tee_provider is None:
             from chutes_cvm.guest.tee import TdxTeeProvider
 
@@ -268,4 +272,15 @@ def measurement_command(host, *, firmware):
 
     return QemuCommand.build(
         host, MeasurementContext.from_host(host, firmware=firmware)
+    )
+
+
+def b300_numa_doc():
+    """2-socket Xeon 6 B300 host on two NUMA nodes, GPUs split 4+4 (API class ee4b9ca81f36)."""
+    return host_document(
+        "B300",
+        vcpus=252,
+        gpu_nodes=(0, 0, 0, 0, 1, 1, 1, 1),
+        cpu_processor_id="d1060a00fffba91f",
+        host_mem_gb=3072,
     )

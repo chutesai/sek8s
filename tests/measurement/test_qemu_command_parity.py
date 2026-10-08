@@ -124,24 +124,49 @@ def test_pci_topology_takes_the_decision_it_is_given():
     host = HostProfile.from_dict(known.h200_doc())
     passthrough = PassthroughSet.from_profile(host)
 
-    def topology(uses_guest_numa: bool) -> list[str]:
-        """The topology the traversal emits for a profile that says flat or NUMA.
+    def topology(pxb_grouping: bool) -> list[str]:
+        """The topology the traversal emits for a profile that says flat or PXB-grouped.
 
-        ``_passthrough`` reads only ``uses_guest_numa`` off the profile -- which devices reach the
-        guest is the PassthroughSet's business -- so a stub states the one decision directly.
+        ``_passthrough`` reads only ``uses_pxb_grouping`` off the profile -- which devices reach
+        the guest is the PassthroughSet's business -- so a stub states the one decision directly.
         """
         cmd = known.measurement_command(host, firmware=_FW)
         cmd.devices = []
         stub = known.QemuProfileStub(
             mem="8G",
             smp_topology="4,sockets=1,cores=4,threads=1",
-            uses_guest_numa=uses_guest_numa,
+            uses_guest_numa=pxb_grouping,
+            uses_pxb_grouping=pxb_grouping,
             tee_provider=host.tee_provider,
         )
         context = MeasurementContext.from_host(host, firmware=_FW)
         assert context.passthrough == passthrough
-        qemu._passthrough(cmd, stub, context, PcieRootPinning(uses_guest_numa))
+        qemu._passthrough(cmd, stub, context, PcieRootPinning(pxb_grouping))
         return cmd.devices
 
     assert not any("pxb-pcie" in d for d in topology(False))
     assert any("pxb-pcie" in d for d in topology(True))
+
+
+def test_b300_numa_guest_keeps_flat_pci():
+    """A 2-node B300 host gets guest NUMA memory but no PXB bridges.
+
+    Its 1 TB root-port windows do not fit the guest's 64-bit MMIO window split per bridge, so the
+    devices take the flat path's exact pcie.0 layout: emulated devices from 0x1, root ports from
+    0x8. Only the memory/NUMA objects differ from a flat guest.
+    """
+    host = HostProfile.from_dict(known.b300_numa_doc())
+    assert host.uses_guest_numa is True
+    assert host.uses_pxb_grouping is False
+
+    cmd = known.measurement_command(host, firmware=_FW)
+    args = _topology_args(cmd.to_args())
+    assert not any("pxb-pcie" in a for a in args)
+    assert cmd.numa  # guest NUMA nodes are still built
+    assert "memory-backend=mem0" not in cmd.machine
+    # The dump's emulated devices are backing-free fillers at the launch's slots.
+    assert _slots(args, "virtio-")[0] == "0x1"
+    root_ports = [a for a in args if a.startswith("pcie-root-port")]
+    assert len(root_ports) == 8
+    assert all("bus=pcie.0" in a for a in root_ports)
+    assert _slots(args, "pcie-root-port")[0] == "0x8"
