@@ -168,7 +168,7 @@ all:
         # Group-wide: same for all hosts managed by this operator
 
         # Miner hotkey (launch / shutdown / upgrade)
-        # ss58Address and secretSeed are extracted automatically.
+        # ss58Address and privateKey (else secretSeed) are extracted automatically.
         chutes_hotkey_path: ~/.bittensor/wallets/mywallet/hotkeys/myhotkey
 
         # PCCS (setup only) — set BOTH or omit BOTH
