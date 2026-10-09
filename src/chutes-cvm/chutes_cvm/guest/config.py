@@ -19,7 +19,8 @@ import sys
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from chutes_cvm.guest.hotkey import PRIVATE_KEY_HEX_LEN, SEED_HEX_LEN, check_key_hex
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import YamlConfigSettingsSource
 
@@ -57,11 +58,33 @@ class MinerSection(BaseModel):
         description="Miner SS58 credential (required unless --benchmark)",
         json_schema_extra={"cli": "--miner-ss58"},
     )
+    private_key: str = Field(
+        default="",
+        description="Miner hotkey privateKey, 128 hex chars without 0x (set this or seed)",
+        json_schema_extra={"cli": "--miner-private-key"},
+    )
     seed: str = Field(
         default="",
-        description="Miner seed credential (required unless --benchmark)",
+        description="Miner hotkey secretSeed, 64 hex chars without 0x (set this or private_key)",
         json_schema_extra={"cli": "--miner-seed"},
     )
+
+    @field_validator("private_key")
+    @classmethod
+    def _private_key_format(cls, v: str) -> str:
+        return check_key_hex(v, PRIVATE_KEY_HEX_LEN, "miner.private_key") if v else v
+
+    @field_validator("seed")
+    @classmethod
+    def _seed_format(cls, v: str) -> str:
+        return check_key_hex(v, SEED_HEX_LEN, "miner.seed") if v else v
+
+    @model_validator(mode="after")
+    def _one_credential(self) -> "MinerSection":
+        # The VM refuses a config volume carrying both, so refuse before launching.
+        if self.private_key and self.seed:
+            raise ValueError("set miner.private_key or miner.seed, not both")
+        return self
 
 
 class NetworkSection(BaseModel):

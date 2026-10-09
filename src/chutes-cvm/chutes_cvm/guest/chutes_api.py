@@ -31,8 +31,8 @@ import urllib.request
 import yaml
 from chutes_cvm.guest.detection import SUPPORTED_QEMU_BY_OS
 from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.hotkey import HotkeyError, miner_keypair
 from chutes_cvm.paths import DEFAULT_API_BASE
-from substrateinterface import Keypair, KeypairType
 
 # A transport/auth failure (no verdict) fails CLOSED — the boot's LUKS key release needs the API
 # anyway, so refusing to launch when we cannot confirm loses nothing.
@@ -44,8 +44,8 @@ class ChutesApiError(Exception):
     error, or a response missing what the caller needs."""
 
 
-def _load_miner_creds(config_path: str) -> "tuple[str, str]":
-    """(ss58, seed) from the launch config.yaml's ``miner`` block."""
+def _load_miner_creds(config_path: str) -> "tuple[str, str, str]":
+    """(ss58, private_key, seed) from the launch config.yaml's ``miner`` block."""
     try:
         with open(config_path) as f:
             cfg = yaml.safe_load(f) or {}
@@ -53,10 +53,13 @@ def _load_miner_creds(config_path: str) -> "tuple[str, str]":
         raise ChutesApiError(f"cannot read config {config_path}: {exc}") from exc
     miner = cfg.get("miner") or {}
     ss58 = str(miner.get("ss58") or "").strip()
+    private_key = str(miner.get("private_key") or "").strip()
     seed = str(miner.get("seed") or "").strip()
-    if not ss58 or not seed:
-        raise ChutesApiError(f"{config_path} is missing miner.ss58 / miner.seed")
-    return ss58, seed
+    if not ss58 or not (private_key or seed):
+        raise ChutesApiError(
+            f"{config_path} is missing miner.ss58 / miner.private_key or miner.seed"
+        )
+    return ss58, private_key, seed
 
 
 def _apply_target_os(profile_json: str, target_os: str) -> str:
@@ -88,17 +91,18 @@ def _apply_target_os(profile_json: str, target_os: str) -> str:
     return json.dumps(doc, separators=(",", ":"), sort_keys=True)
 
 
-def _sign(seed: str, body: bytes, nonce: str) -> "tuple[str, str]":
+def _sign(
+    ss58: str, private_key: str, seed: str, body: bytes, nonce: str
+) -> "tuple[str, str]":
     """Sign ``{ss58}:{nonce}:{sha256(body)}`` with the miner hotkey (sr25519).
 
-    Returns (ss58, signature_hex). The ss58 is derived from the seed (so it always matches
-    the signature); the API verifies the signature against the hotkey header and confirms
-    the hotkey is registered + un-blacklisted.
+    Returns (ss58, signature_hex). The key must belong to ``ss58``; the API verifies the
+    signature against the hotkey header and confirms the hotkey is registered + un-blacklisted.
     """
     try:
-        kp = Keypair.create_from_seed(seed, crypto_type=KeypairType.SR25519)
-    except Exception as exc:
-        raise ChutesApiError(f"invalid miner seed: {exc}") from exc
+        kp = miner_keypair(ss58, private_key, seed)
+    except HotkeyError as exc:
+        raise ChutesApiError(str(exc)) from exc
     body_hash = hashlib.sha256(body).hexdigest()
     signature = kp.sign(f"{kp.ss58_address}:{nonce}:{body_hash}")
     return kp.ss58_address, signature.hex()
@@ -156,20 +160,13 @@ def _signed_profile(
     one being signed. A launch passes the profile it will boot, which is what makes the verdict
     a verdict about the shape that actually launches.
     """
-    ss58, seed = _load_miner_creds(config_path)
+    ss58, private_key, seed = _load_miner_creds(config_path)
     profile_json = host_profile.to_api_json()
     if target_os:
         profile_json = _apply_target_os(profile_json, target_os)
     body = profile_json.encode()
     nonce = str(int(time.time()))
-    hotkey, signature = _sign(seed, body, nonce)
-    if ss58 and hotkey != ss58:
-        # Non-fatal: the seed is authoritative for the signature, but a mismatch means the
-        # configured ss58 is wrong — surface it so the operator can fix the config.
-        print(
-            f"  warning: config miner.ss58 ({ss58}) does not match the seed's hotkey ({hotkey}); "
-            "signing with the seed's hotkey."
-        )
+    hotkey, signature = _sign(ss58, private_key, seed, body, nonce)
     return hotkey, nonce, signature, body
 
 
