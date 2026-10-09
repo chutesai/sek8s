@@ -289,10 +289,10 @@ confirm_rotation() {
     # and registry leaf certs, and deletes it before pivot_root.
     rm -f /run/chutes/cert-hash
 
-    # Last hotkey-signed API call is done — shred the stashed seed before init-bottom finishes, so
+    # Last hotkey-signed API call is done — shred the stashed key before init-bottom finishes, so
     # it never survives the initramfs /run -> real-root /run move into userspace. Runs on both the
     # success and failure paths below.
-    hotkey_shred_seed
+    hotkey_shred_key
 
     if [ "$http_code" = "200" ]; then
         rm -f "$resp_file"

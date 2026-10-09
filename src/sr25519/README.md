@@ -25,13 +25,16 @@ depends on three small crates.
 ## Usage
 
 ```
-sr25519 address --seed-file <path>
-sr25519 sign    --seed-file <path> (--message <str> | --message-file <path>)
+sr25519 address (--seed-file <path> | --private-key-file <path>)
+sr25519 sign    (--seed-file <path> | --private-key-file <path>) (--message <str> | --message-file <path>)
 sr25519 verify  --address <ss58> --signature <hex> (--message <str> | --message-file <path>)
 ```
 
-The seed is read only from a file — never from argv — so it cannot leak through
-`/proc/<pid>/cmdline`. `--message-file -` reads the message from stdin.
+The key is either the 32-byte seed (64 hex chars) or the 64-byte sr25519 private key (128 hex
+chars, a hotkey file's `privateKey`), for hotkeys whose file has no `secretSeed`. Key hex has no
+`0x` prefix, the same rule `process-config.py` applies to the config volume. Keys are read only
+from a file — never from argv — so they cannot leak through `/proc/<pid>/cmdline`.
+`--message-file -` reads the message from stdin.
 
 Signing the sek8s auth payload from the initramfs looks like:
 
@@ -48,7 +51,7 @@ route rejects its requests.
 
 ## Compatibility contract
 
-Interoperability with `substrateinterface.Keypair` is load-bearing, and all three of these are
+Interoperability with `substrateinterface.Keypair` is load-bearing, and all four of these are
 silent-failure traps if they drift:
 
 1. **Seed expansion** is `MiniSecretKey::expand_to_keypair(ExpansionMode::Ed25519)` —
@@ -58,6 +61,9 @@ silent-failure traps if they drift:
    signatures that never verify.
 3. **SS58** uses network prefix 42 (generic Substrate/Bittensor — this is what makes addresses
    start with `5`) with a blake2b-512 checksum over `"SS58PRE" || payload`.
+4. **Private keys** use schnorrkel's canonical `SecretKey::to_bytes()` layout (scalar || nonce),
+   loaded with `SecretKey::from_bytes`. `from_ed25519_bytes` accepts the same 64 bytes but yields
+   a different public key.
 
 sr25519 signatures are **randomized**: the same message signs to different bytes every time and
 all of them verify. Never assert on signature-byte equality.
@@ -89,7 +95,9 @@ Two layers:
   and a guard asserting that `ExpansionMode::Uniform` would *not* reproduce Alice's address.
 - `tests/rust/test_sr25519.py` — cross-checks the built binary against the real
   `substrate-interface` library in both directions (Rust signs → Python verifies, Python signs
-  → Rust verifies), across several seeds. These skip automatically when the binary has not been
+  → Rust verifies), across several seeds and private keys, including a throwaway Bittensor 11
+  hotkey with and without `secretSeed` (`tests/rust/fixtures/`). They also drive the initramfs
+  `hotkey-sign` wrapper. These skip automatically when the binary has not been
   built.
 
 ## Not yet decided

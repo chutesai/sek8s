@@ -16,7 +16,7 @@
 # Entry scripts source this AFTER /scripts/functions, then override the hooks they
 # need, then call run_boot_attestation.
 
-# sr25519 miner-hotkey signer (hotkey_stash_seed / hotkey_sign / hotkey_shred_seed → the
+# sr25519 miner-hotkey signer (hotkey_stash_key / hotkey_sign / hotkey_shred_key → the
 # X-Chutes-Signature proof). Sourced here so every entry that sources init-premount-common — and
 # init-bottom-common, which sources it likewise — can prove hotkey possession over each call's
 # server-issued nonce.
@@ -221,13 +221,13 @@ read_vm_name() {
 
 read_hotkey() {
     local cfg_mount="/run/tdx-config"
-    log_begin_msg "Deriving miner hotkey from seed"
-    # Stash the seed to /run tmpfs and derive the AUTHORITATIVE ss58 from it. Deriving (rather
+    log_begin_msg "Deriving miner hotkey from its key"
+    # Stash the key to /run tmpfs and derive the AUTHORITATIVE ss58 from it. Deriving (rather
     # than reading the claimed miner-ss58) is the proof-of-possession: the boot API calls sign
-    # each server nonce with this seed, so a caller cannot assert another miner's hotkey.
-    if ! hotkey_stash_seed "$cfg_mount"; then
+    # each server nonce with this key, so a caller cannot assert another miner's hotkey.
+    if ! hotkey_stash_key "$cfg_mount"; then
         log_end_msg 1
-        log_failure_msg "Failed to derive miner hotkey from $cfg_mount/miner-seed"
+        log_failure_msg "Failed to derive miner hotkey: $cfg_mount needs exactly one valid miner-seed or miner-private-key"
         return 1
     fi
     HOTKEY="$(hotkey_ss58)"
@@ -235,7 +235,7 @@ read_hotkey() {
     local claimed
     claimed=$(cat "$cfg_mount/miner-ss58" 2>/dev/null | tr -d '\n\r\t ' | head -c 64)
     if [ -n "$claimed" ] && [ "$claimed" != "$HOTKEY" ]; then
-        log_failure_msg "config miner-ss58 ($claimed) != seed-derived hotkey ($HOTKEY); using the seed's"
+        log_failure_msg "config miner-ss58 ($claimed) != key-derived hotkey ($HOTKEY); using the key's"
     fi
     log_end_msg 0
     return 0
