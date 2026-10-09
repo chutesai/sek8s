@@ -23,7 +23,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 - Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies).
 - Intel PCCS access + API key (for PCK cert registration)
 - The VM image downloaded via `chutes-cvm image download` (requires `aria2`)
-- Miner credentials: SS58 address and secret seed without `0x`
+- Miner credentials: SS58 address and the hotkey's private key (or, for older hotkey files, its secret seed), without `0x`
 - Control node provisioned with the [chutes-miner](https://github.com/chutesai/chutes-miner) Ansible roles
 - `chutes-miner-cli` installed on that control node to manage miner inventory
 - `kubectl` access to the TEE VM's bridged k3s endpoint for verification (Helm **not** required on the TEE node)
@@ -101,7 +101,8 @@ vm:
 
 miner:
   ss58: "<your_ss58>"
-  seed: "<your_seed_no_0x>"
+  private_key: "<hotkey privateKey, no 0x>"
+  # seed: "<secretSeed, no 0x>"  # instead of private_key; newer btcli hotkey files may not include it
 
 # Optional: Docker Hub credentials for authenticated pulls
 # docker_hub:
