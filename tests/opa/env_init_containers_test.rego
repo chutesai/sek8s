@@ -103,3 +103,11 @@ test_deny_forbidden_env_on_a_main_container if {
 	}]})
 	deny[env_denied("chute", "LD_PRELOAD")] with input as {"request": req}
 }
+
+# The miner hotkey credential env vars chutes-miner charts inject (MINER_PRIVATE_KEY for hotkeys
+# without a seed). Today's chart installs are exempt users; a non-exempt path must not deny them.
+test_allow_miner_credential_env_vars if {
+	every var in {"MINER_SS58", "MINER_SEED", "MINER_PRIVATE_KEY"} {
+		not deny[env_denied("cache-init", var)] with input as {"request": env_init([{"name": var, "value": "x"}])}
+	}
+}
