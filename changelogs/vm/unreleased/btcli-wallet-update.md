@@ -9,6 +9,10 @@
   `miner.env`. Only the key the config volume carries is kept: switching keys removes the other's
   copy from the storage-backed credentials dir. Seed-only volumes produce the same files as
   before.
+- The `miner-credentials` secret in `chutes` and `attestation-system` carries `ss58` plus the
+  config volume's one key, `privateKey` or `seed`. `03-k3s-miner-credentials.sh` removes the other
+  key, including the build-time `seed` placeholder the chart creates, so the secret never holds
+  both. Seed-only VMs keep a byte-identical secret.
 
 ### Changed
 
