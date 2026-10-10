@@ -10,6 +10,41 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
+## [0.5.0] - 2026-10-10
+
+### Added
+- `sek8s_common.hotkey.load_miner_keypair(ss58, private_key, seed)`: the miner keypair from the
+  64-byte sr25519 private key when set, else the seed, checked against `MINER_SS58`. Shared by
+  system-manager and the attestation proxy; errors never contain key material.
+- system-manager's `MinerConfig` reads `MINER_PRIVATE_KEY` and signs validator requests with it
+  when set, else with `MINER_SEED`.
+- AMD SEV-SNP attestation support. The attestation service selects its evidence
+  provider at runtime from the guest device node (`/dev/tdx_guest` vs
+  `/dev/sev-guest`) rather than being built for one platform.
+- `SnpQuoteProvider` reads the PSP-signed attestation report through configfs-TSM,
+  falling back to the `/dev/sev-guest` `SNP_GET_REPORT` ioctl on kernels whose
+  sev-guest driver registers no TSM provider. There is no external quote-generation
+  daemon on SNP — the PSP answers guest requests directly — so no vsock socket is
+  involved.
+- `QuoteProvider` base class holding the report-data binding shared by both TEEs:
+  `nonce || sha256(server cert public key)` in the 64-byte report-data field.
+
+### Changed
+- system-manager refuses to sign with a key whose address is not `MINER_SS58`, instead of signing
+  as another hotkey, and `MinerConfig.miner_keypair` returns None when no key is set (it called
+  `create_from_seed(None)` and raised).
+- `AttestationResponse` carries the evidence in `quote` on every platform (a TDX quote or the
+  raw SEV-SNP report), the field the API reads; it tells the platforms apart by the bytes.
+  `tdx_quote` is gone: the API reads it only as a fallback for older VMs, so this release needs
+  an API that reads `quote`.
+- `TdxQuoteProvider` inherits the shared cert-hash and report-data plumbing; its
+  quote generation is otherwise unchanged.
+
+### Fixed
+- Quote nonce validation (`sek8s.nonce`) requires exactly 64 hex characters. It used
+  `bytes.fromhex`, which skips whitespace between byte pairs, so a 64-character nonce with a
+  gap decoded short of 32 bytes (refused downstream regardless).
+
 ## [0.4.0] - 2026-09-14
 
 ### Added
