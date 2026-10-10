@@ -8,10 +8,18 @@
 #   chutes_kubeconfig_path         — controller kubeconfig path (written by sync-kubeconfig)
 #   chutes_miner_api               — miner API URL (default http://127.0.0.1:32000)
 #   chutes_validator_api           — validator API URL
+#   upgrade_pending_timeout_seconds — seconds to wait for the server to leave `pending`
 #   upgrade_drain_timeout_seconds  — seconds to wait for pod drain
 #   upgrade_powerdown_timeout_seconds — seconds to wait for guest power-down
 #   force_upgrade                  — (default false) force-evict all chute pods and proceed
-#                                    even when the validator denies maintenance (e.g. sole_survivor)
+#                                    even when the validator denies maintenance (e.g. no free
+#                                    maintenance slot, or no open upgrade window)
+#
+# Maintenance is a two-step state (chutes-miner >= 0.9.0). A request moves the server to
+# `pending` while any of its instances is the only active one of its chute (a sole survivor):
+# those keep serving, and the validator posts replacement bounties for them. It moves to
+# `maintenance` once they are replaced, or at the validator's pending deadline (3 hours). The
+# guest is only drained and shut down after it reaches `maintenance`.
 
 # Check VM liveness first so all subsequent steps can skip cleanly on re-run
 # when the guest was already shut down by a previous (partial) run.
@@ -38,13 +46,14 @@
   changed_when: false
 
 - name: Set already-in-maintenance fact
+  # `pending` counts: the request was already accepted, and a second one is not needed.
   ansible.builtin.set_fact:
     _already_in_maintenance: >-
       {{
         (_maintenance_status.stdout | from_json).servers
         | selectattr('name', 'equalto', chutes_tee_server_name)
-        | map(attribute='in_maintenance')
-        | first | default(false) | bool
+        | map(attribute='maintenance_status')
+        | first | default('none') in ['pending', 'maintenance']
       }}
 
 # ── Enter maintenance mode ──────────────────────────────────────────────────
@@ -222,6 +231,56 @@
     - not _already_in_maintenance | bool
     - _maintenance_denied | default(false) | bool
     - force_upgrade | default(false) | bool
+
+# ── Wait for maintenance ─────────────────────────────────────────────────────
+# `start-maintenance` exits 0 on `pending` too, so the request succeeding does not mean the
+# guest may go down. Sole survivors are still serving until the server reaches `maintenance`.
+# Not on the force path, which has already evicted everything, and not when the guest is
+# already down (nothing left serving to wait for).
+
+- name: Wait for the server to reach maintenance (sole survivors replaced, or deadline)
+  ansible.builtin.command:
+    argv:
+      - chutes-miner
+      - tee
+      - maintenance-status
+      - --name
+      - "{{ chutes_tee_server_name }}"
+      - --hotkey
+      - "{{ chutes_hotkey_path }}"
+      - --validator-api
+      - "{{ chutes_validator_api }}"
+      - --raw-json
+  delegate_to: localhost
+  become: false
+  register: _server_maintenance
+  until: >-
+    _server_maintenance.rc == 0
+    and (_server_maintenance.stdout | from_json).maintenance_status == 'maintenance'
+  retries: "{{ (upgrade_pending_timeout_seconds | int) // (upgrade_pending_poll_seconds | default(60) | int) }}"
+  delay: "{{ upgrade_pending_poll_seconds | default(60) | int }}"
+  changed_when: false
+  failed_when: false
+  when:
+    - _vm_live_check.rc == 0
+    - not (_maintenance_denied | default(false) | bool)
+
+- name: Fail if the server did not reach maintenance
+  ansible.builtin.fail:
+    msg: >-
+      {{ chutes_tee_server_name }} did not reach maintenance within
+      {{ upgrade_pending_timeout_seconds }}s
+      (last status: {{ (_server_maintenance.stdout | default('{}', true) | from_json).maintenance_status
+      | default('unknown') }}{{ ', ' ~ _server_maintenance.stderr if _server_maintenance.stderr
+      | default('') else '' }}). The guest was not shut down. Check it with
+      `chutes-miner tee maintenance-status --name {{ chutes_tee_server_name }}` and re-run;
+      this needs chutes-miner >= 0.9.0.
+  when:
+    - _vm_live_check.rc == 0
+    - not (_maintenance_denied | default(false) | bool)
+    - not (_server_maintenance.rc | default(1) == 0
+      and (_server_maintenance.stdout | default('{}', true) | from_json).maintenance_status
+      | default('') == 'maintenance')
 
 # ── Drain and shutdown ───────────────────────────────────────────────────────
 # The following steps are only needed when the guest is still running.
