@@ -173,9 +173,14 @@ def find_qemu_process(name: str = PROCESS_NAME) -> QemuProcess | None:
 #      tdx_sept_remove_private_spte -> tdp_mmu_zap_leafs -> kvm_tdp_mmu_unmap_gfn_range
 #      -> __kvm_gmem_invalidate_begin -> kvm_gmem_release -> do_exit
 #
-# AMD SEV-SNP reclaims through its own path (RMP updates, SNP_DECOMMISSION), whose cost we have
-# not measured. Nothing below is TDX-specific: the detection reads ``comm`` and thread state,
-# and the progress counter is KVM's generic ``pages_4k``. Both were verified on an SNP host.
+# AMD SEV-SNP reaches the same state -- a zombie leader with one live thread, holding every
+# device -- but is far cheaper: measured on an 8x RTX PRO 6000 host, 465GB reclaimed in 4m38s
+# (~1.7GB/s), about 25x faster per byte than TDX. It also zeroes ``pages_4k`` the moment the
+# guest powers off and does the real work afterwards, invisible to that counter, so a reading
+# of 0 means "this counter cannot tell you", NOT "finished" and NOT "stalled". Getting that
+# wrong told an operator to treat a reclaim with three minutes left as stuck.
+#
+# The detection is platform-agnostic (``comm`` plus thread state) and is verified on both.
 #
 # On TDX the duration is not something this package can fix. Cost tracks *entry count*, not
 # bytes (4KB per 39us is ~105MB/s against hardware good for tens of GB/s, so it is nearly all
@@ -260,6 +265,11 @@ def read_reclaim(pid: int, sample_secs: float = SAMPLE_SECS) -> Reclaim | None:
     first = _read_counter(path)
     if first is None:
         return None
+    if first == 0:
+        # Nothing left to sample: the page tables are already down and whatever remains is not
+        # visible here (SNP's case, always). Returning now also skips the sample window, which
+        # would otherwise cost a caller polling in a loop ``sample_secs`` per iteration.
+        return Reclaim(pages_remaining=0, pages_per_sec=0.0)
     time.sleep(sample_secs)
     second = _read_counter(path)
     if second is None:
@@ -282,10 +292,17 @@ def _eta_phrase(reclaim: Reclaim | None) -> str:
             "  Progress is unavailable (KVM debugfs not readable), so there is no ETA. "
             "Reclaim takes roughly an hour per TB the guest had faulted in."
         )
+    if reclaim.pages_remaining == 0:
+        return (
+            "  The guest's page tables are already down, and the memory still being handed back "
+            "is not visible in KVM's page counter, so there is no ETA. This is normal and "
+            "usually finishes within minutes -- poll `chutes-cvm host devices-free` until it "
+            "exits 0 rather than using a reset."
+        )
     if reclaim.eta_secs is None:
         return (
             f"  {reclaim.pages_remaining:,} pages ({reclaim.gib_remaining:,.0f} GiB) remain, "
-            "but the counter is not draining -- treat it as stalled."
+            "but the counter did not move while it was sampled -- treat it as stalled."
         )
     return (
         f"  {reclaim.pages_remaining:,} pages ({reclaim.gib_remaining:,.0f} GiB) remain at "

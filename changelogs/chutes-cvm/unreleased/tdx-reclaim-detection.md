@@ -87,3 +87,16 @@
   QEMU counts as no — is the right question for deciding whether to drain pods or skip a
   shutdown step.
 
+- A `pages_4k` reading of 0 was reported as "the counter is not draining -- treat it as
+  stalled". Verified on an 8x RTX PRO 6000 SNP host, that is the normal case there and the
+  advice was backwards: SNP zeroes the counter the moment the guest powers off and then hands
+  the memory back over the next few minutes, invisible to it. An operator was being told to
+  reset a host with three minutes left. Zero now reads as "this counter cannot tell you",
+  with the advice to poll `host devices-free`; "stalled" is reserved for pages that remain
+  and do not move. `read_reclaim` also returns immediately on a zero reading instead of
+  sleeping out its sample window, which a polling caller would otherwise pay per iteration.
+
+  Measured for the record: SNP reclaimed 465GB in 4m38s (~1.7GB/s), roughly 25x faster per
+  byte than TDX, so the hours-long case is TDX-specific. The state itself — a zombie leader
+  with one live thread holding every device — is not, and the detection is verified on both.
+

@@ -631,3 +631,42 @@ def test_stop_does_not_trust_the_pidfile_to_find_the_process(tmp_path, monkeypat
     )
     monkeypatch.setattr(f"{S}.read_reclaim", lambda *a, **k: None)
     assert vm.stop_existing_vm() == 1
+
+
+def test_zero_counter_is_not_a_stall(fake_debugfs, monkeypatch):
+    """SNP zeroes pages_4k the instant the guest powers off and does the real work afterwards,
+    invisible to this counter. Calling that stalled told an operator to reset a host that had
+    three minutes left."""
+    vmdir = fake_debugfs / "497364-16"
+    vmdir.mkdir()
+    (vmdir / "pages_4k").write_text("0\n")
+    slept = []
+    monkeypatch.setattr(vm.time, "sleep", lambda s: slept.append(s))
+
+    r = vm.read_reclaim(497364, sample_secs=10.0)
+
+    assert r == vm.Reclaim(pages_remaining=0, pages_per_sec=0.0)
+    assert slept == []  # no point sampling a counter with nothing in it
+    phrase = vm._eta_phrase(r)
+    assert "stalled" not in phrase
+    assert "no ETA" in phrase and "devices-free" in phrase
+
+
+def test_a_stall_is_still_called_a_stall(fake_debugfs):
+    """Pages remaining but not moving is the genuine stuck case, and must stay distinguishable
+    from the zero reading above."""
+    phrase = vm._eta_phrase(vm.Reclaim(pages_remaining=5000, pages_per_sec=0.0))
+    assert "stalled" in phrase
+
+
+def test_zero_counter_still_blocks(fake_proc, fake_debugfs, monkeypatch):
+    """Whatever the counter says, a process with live threads holds the devices."""
+    _reclaiming(fake_proc, pid=497364)
+    vmdir = fake_debugfs / "497364-16"
+    vmdir.mkdir()
+    (vmdir / "pages_4k").write_text("0\n")
+    monkeypatch.setattr(f"{S}.vfio.pci_operations_wedged", lambda *a, **k: False)
+    (blocker,) = vm.device_blockers()
+    assert blocker.name == "memory-reclaim"
+    assert not blocker.overridable
+    assert blocker.eta_secs is None
