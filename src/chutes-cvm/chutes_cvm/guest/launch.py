@@ -44,7 +44,7 @@ from chutes_cvm.guest.vm import (
     LOGFILE,
     PIDFILE,
     PROCESS_NAME,
-    launch_blockers,
+    device_blockers,
     launch_vm,
 )
 from chutes_cvm.guest.volumes import ensure_raw_volume, setup_config_volume
@@ -344,7 +344,7 @@ def main(argv: "list[str] | None" = None) -> int:
     # One predicate, and --force only reaches the blockers that say it may. A VM that is
     # merely running is the operator's call to override; a reclaim is not, because forcing past
     # it reaches the unbind, and the unbind is what costs the host its ability to reboot.
-    blockers = [b for b in launch_blockers() if not (args.force and b.overridable)]
+    blockers = [b for b in device_blockers() if not (args.force and b.overridable)]
     if blockers:
         for blocker in blockers:
             print(f"Error: {blocker.detail}", file=sys.stderr)

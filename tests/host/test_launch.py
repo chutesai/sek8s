@@ -310,7 +310,7 @@ def _happy(**over):
     )
     defaults = {
         "resolve_public_iface": "eth0",
-        "launch_blockers": [],
+        "device_blockers": [],
         "_measured_image": MeasuredImage("1.4.0", False),
         "prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
@@ -383,14 +383,14 @@ def _reclaiming():
 
 
 def test_main_refuses_duplicate_without_force(capsys):
-    with _happy(**{"launch_blockers": _running()}):
+    with _happy(**{"device_blockers": _running()}):
         rc = launch.main(_STD_ARGV)
     assert rc == 1
     assert "already running" in capsys.readouterr().err
 
 
 def test_main_force_overrides_duplicate_guard():
-    with _happy(**{"launch_blockers": _running()}), patch(
+    with _happy(**{"device_blockers": _running()}), patch(
         f"{P}._boot", return_value=0
     ) as boot:
         rc = launch.main(_STD_ARGV + ["--force"])
@@ -402,7 +402,7 @@ def test_main_refuses_a_reclaiming_qemu_even_with_force(capsys):
     """A VM merely running is the operator's call to override. One still reclaiming the previous
     TD's memory is not: forcing past it reaches the unbind, and the unbind is what costs the
     host its ability to reboot."""
-    with _happy(**{"launch_blockers": _reclaiming()}), patch(f"{P}._boot") as boot:
+    with _happy(**{"device_blockers": _reclaiming()}), patch(f"{P}._boot") as boot:
         rc = launch.main(_STD_ARGV + ["--force"])
     assert rc == 1
     boot.assert_not_called()

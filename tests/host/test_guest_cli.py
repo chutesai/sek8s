@@ -43,7 +43,7 @@ def test_stop_is_graceful_by_default():
 
 
 def test_stop_force_kills_without_teardown():
-    with patch("chutes_cvm.guest.vm.stop_existing_vm") as kill, patch(
+    with patch("chutes_cvm.guest.vm.stop_existing_vm", return_value=0) as kill, patch(
         "chutes_cvm.guest.cli._run_script", return_value=0
     ) as run:
         assert guestcli.main(["stop", "--force"]) == 0
@@ -103,3 +103,18 @@ def test_hardware_verbs_are_not_guest_commands():
             assert exc.code == 2
         else:  # pragma: no cover - argparse always exits on an invalid choice
             raise AssertionError(f"{verb} should no longer be a guest verb")
+
+
+def test_stop_force_propagates_a_failed_kill():
+    """A QEMU that survives SIGKILL still holds the guest image's write lock, so reporting
+    success here would send the caller's relaunch straight into a lock collision."""
+    with patch("chutes_cvm.guest.vm.stop_existing_vm", return_value=1):
+        assert guestcli.main(["stop", "--force"]) == 1
+
+
+def test_down_force_still_delegates_to_teardown():
+    """`down --force` hands the whole job to teardown.sh, which force-kills as its own first
+    step -- so the propagation above is `stop`'s business, not a second kill here."""
+    with patch("chutes_cvm.guest.cli._run_script", return_value=0) as run:
+        assert guestcli.main(["down", "--force", "--config", "/nope/config.yaml"]) == 0
+    assert run.call_args.args[0] == "teardown.sh"

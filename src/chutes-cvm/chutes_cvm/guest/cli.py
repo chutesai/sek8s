@@ -79,8 +79,9 @@ def _shutdown_guest(config: "str | None", cfg_ok: bool, force: bool) -> int:
     if force:
         from chutes_cvm.guest.vm import stop_existing_vm
 
-        stop_existing_vm()
-        return 0
+        # Propagated, not swallowed: a QEMU that survives SIGKILL still holds the guest image's
+        # write lock, and a caller told the stop succeeded will relaunch straight into it.
+        return stop_existing_vm()
 
     from chutes_cvm.guest.shutdown import ShutdownError, graceful_shutdown
 

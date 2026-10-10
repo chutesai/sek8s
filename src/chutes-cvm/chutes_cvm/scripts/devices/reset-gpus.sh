@@ -13,8 +13,6 @@
 
 set -euo pipefail
 
-PROCESS_NAME="chutes-td"
-
 usage() {
     cat <<EOF
 Usage: $(basename "$0") <nvidia-gpu-tools SBR args...>
@@ -23,7 +21,8 @@ Reset all NVIDIA GPUs via Secondary Bus Reset (SBR) using nvidia-gpu-tools.
 The SBR arguments come from the host's GPU profile; normally run this through
 \`chutes-cvm host reset-gpus\`, which supplies them.
 
-The VM process ($PROCESS_NAME) must not be running during reset.
+No VM may be running, and no previous one may still be reclaiming its
+memory, during reset.
 SBR resets clear GPU state and fabric configuration, which would
 corrupt any active workloads.
 
@@ -46,32 +45,23 @@ case "${1:-}" in
 esac
 SBR_ARGS=("$@")
 
-# Non-zombie QEMU whose cmdline includes this guest name (-name / process=).
-_live_chutes_td_qemu_running() {
-    local pid state cmdline
-    while read -r pid; do
-        [[ -z "$pid" ]] && continue
-        [[ -r "/proc/$pid/stat" ]] || continue
-        state=$(ps -p "$pid" -o stat= 2>/dev/null || echo "")
-        [[ "$state" == Z* ]] && continue
-        cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
-        if [[ "$cmdline" != *qemu-system* && "$cmdline" != *qemu-kvm* ]]; then
-            continue
-        fi
-        [[ "$cmdline" == *"$PROCESS_NAME"* ]] || continue
-        return 0
-    done < <(
-        { pgrep -f 'qemu-system' 2>/dev/null || true
-          pgrep -f 'qemu-kvm' 2>/dev/null || true
-        } | sort -un
-    )
-    return 1
-}
+# Whether the GPUs are ours to reset is the same device-ownership question a launch asks, so
+# ask it the same way rather than re-implementing it here. This script used to match /proc/<pid>/cmdline and
+# skip zombies -- both of which miss a QEMU that powered its guest off but is still reclaiming
+# the TD's private memory. That process holds every GPU, and SBR-resetting underneath it is the
+# worst thing this script can do.
+# Fail closed but say so: without the CLI, `if !` below would see exit 127 and refuse with a
+# message about the GPUs being held, which would be a lie.
+if ! command -v chutes-cvm >/dev/null 2>&1; then
+    echo "Error: chutes-cvm not found in PATH; cannot check whether the GPUs are free."
+    echo "Run this via \`chutes-cvm host reset-gpus\`, or add the CLI shim to PATH."
+    exit 1
+fi
 
-if _live_chutes_td_qemu_running; then
-    echo "Error: TDX VM (QEMU, $PROCESS_NAME) is running."
+if ! chutes-cvm host devices-free; then
     echo ""
-    echo "Stop the VM gracefully before resetting GPUs:"
+    echo "Not resetting: something still holds the GPUs (see above)."
+    echo "If a VM is running, stop it gracefully first:"
     echo "  chutes-miner tee shutdown --ip <HOST_IP> --confirm"
     echo "  chutes-miner tee shutdown --name <SERVER_NAME> --confirm"
     exit 1

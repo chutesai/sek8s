@@ -3,6 +3,7 @@
 Not an entry point: `chutes-cvm guest launch` is the only way to a guest, and it calls
 ``launch_vm`` with a context and a profile it has already gated."""
 
+import signal
 from unittest.mock import MagicMock, patch
 
 import chutes_cvm.guest.tee as tee_module
@@ -390,7 +391,7 @@ def test_guidance_for_a_stalled_counter_says_so():
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# launch_blockers(): the one safe-to-launch predicate
+# device_blockers(): may anything touch the passthrough devices?
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -425,8 +426,8 @@ def _found(monkeypatch, qemu, reclaim=None):
 
 
 def test_clear_host_has_no_blockers(clear_host):
-    assert vm.launch_blockers() == []
-    assert vm.safe_to_launch()
+    assert vm.device_blockers() == []
+    assert vm.devices_free()
 
 
 # ---------------------------------------------------------------------------
@@ -440,20 +441,20 @@ def test_reclaim_is_not_overridable_and_carries_its_eta(monkeypatch, clear_host)
         _qemu(tearing_down=True),
         vm.Reclaim(pages_remaining=158197793, pages_per_sec=25780.0),
     )
-    (blocker,) = vm.launch_blockers()
+    (blocker,) = vm.device_blockers()
     assert blocker.name == "td-reclaim"
     assert not blocker.overridable  # forcing past this reaches the unbind
     assert blocker.clears_itself  # so waiting is a real option
     assert blocker.eta_secs == pytest.approx(158197793 / 25780.0)
     assert "102 min" in blocker.summary
     assert "sysrq-trigger" in blocker.detail
-    assert not vm.safe_to_launch()
+    assert not vm.devices_free()
 
 
 def test_reclaim_without_progress_still_blocks(monkeypatch, clear_host):
     # debugfs unreadable -> no ETA, but the refusal must not depend on having one.
     _found(monkeypatch, _qemu(tearing_down=True), None)
-    (blocker,) = vm.launch_blockers()
+    (blocker,) = vm.device_blockers()
     assert blocker.name == "td-reclaim"
     assert blocker.eta_secs is None
     assert "duration unknown" in blocker.summary
@@ -467,7 +468,7 @@ def test_reclaim_without_progress_still_blocks(monkeypatch, clear_host):
 
 def test_running_vm_is_overridable_and_needs_a_human(monkeypatch, clear_host):
     _found(monkeypatch, _qemu(pid=4100, tearing_down=False))
-    (blocker,) = vm.launch_blockers()
+    (blocker,) = vm.device_blockers()
     assert blocker.name == "qemu-running"
     assert blocker.overridable  # the operator's call
     assert not blocker.clears_itself  # nobody is going to stop it for you
@@ -484,7 +485,7 @@ def test_running_vm_is_overridable_and_needs_a_human(monkeypatch, clear_host):
 
 def test_wedged_pci_blocks_and_warns_against_a_plain_reboot(monkeypatch, clear_host):
     monkeypatch.setattr(f"{S}.vfio.pci_operations_wedged", lambda *a, **k: True)
-    (blocker,) = vm.launch_blockers()
+    (blocker,) = vm.device_blockers()
     assert blocker.name == "pci-wedged"
     assert not blocker.overridable
     assert (
@@ -499,7 +500,7 @@ def test_cause_is_reported_before_symptom(monkeypatch, clear_host):
     first is what makes the pair legible."""
     _found(monkeypatch, _qemu(tearing_down=True), None)
     monkeypatch.setattr(f"{S}.vfio.pci_operations_wedged", lambda *a, **k: True)
-    assert [b.name for b in vm.launch_blockers()] == [
+    assert [b.name for b in vm.device_blockers()] == [
         "td-reclaim",
         "pci-wedged",
     ]
@@ -524,7 +525,7 @@ def test_launch_vm_refuses_before_binding_when_blocked(
     from chutes_cvm.guest.host_profile import HostProfile
 
     monkeypatch.setattr(
-        f"{S}.launch_blockers",
+        f"{S}.device_blockers",
         lambda: [
             vm.Blocker(
                 name="td-reclaim",
@@ -543,3 +544,90 @@ def test_launch_vm_refuses_before_binding_when_blocked(
     mock_run.assert_not_called()
     err = capsys.readouterr().err
     assert "102 min" in err and "sysrq-trigger" in err
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# stop_existing_vm: confirm it is gone, do not assume
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _holder(pid=4100, *, tearing_down=False, threads=("CPU 0/KVM",)):
+    return vm.QemuProcess(pid=pid, leader_zombie=tearing_down, live_threads=threads)
+
+
+def test_stop_reports_success_and_clears_the_pidfile_when_gone(tmp_path, monkeypatch):
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("4100")
+    monkeypatch.setattr(vm, "PIDFILE", str(pidfile))
+    monkeypatch.setattr(f"{S}.find_qemu_process", lambda *a, **k: None)
+    assert vm.stop_existing_vm() == 0
+    assert not pidfile.exists()
+
+
+def test_stop_escalates_to_sigkill_then_confirms(tmp_path, monkeypatch):
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("4100")
+    monkeypatch.setattr(vm, "PIDFILE", str(pidfile))
+    monkeypatch.setattr(f"{S}.find_qemu_process", lambda *a, **k: _holder())
+    sent = []
+    monkeypatch.setattr(f"{S}._signal", lambda pid, sig: sent.append(sig))
+    # Survives the SIGTERM window, gone after the SIGKILL one.
+    waits = iter([_holder(), None])
+    monkeypatch.setattr(f"{S}._wait_for_exit", lambda *a, **k: next(waits))
+
+    assert vm.stop_existing_vm(term_wait=0, kill_wait=0) == 0
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+    assert not pidfile.exists()
+
+
+def test_stop_does_not_claim_success_when_qemu_survives(tmp_path, monkeypatch, capsys):
+    """The caller's next move is qemu-nbd on the guest image, which cannot take the write lock
+    while a QEMU holds it -- so a surviving process must be a failure, and the pidfile must
+    stay as the only record of what holds it."""
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("4100")
+    monkeypatch.setattr(vm, "PIDFILE", str(pidfile))
+    monkeypatch.setattr(f"{S}.find_qemu_process", lambda *a, **k: _holder())
+    monkeypatch.setattr(f"{S}._signal", lambda pid, sig: None)
+    monkeypatch.setattr(f"{S}._wait_for_exit", lambda *a, **k: _holder())
+
+    assert vm.stop_existing_vm(term_wait=0, kill_wait=0) == 1
+    assert pidfile.exists()
+    err = capsys.readouterr().err
+    assert "survived SIGKILL" in err and "write lock" in err
+
+
+def test_stop_reports_a_reclaim_as_a_wait_not_a_failed_kill(
+    tmp_path, monkeypatch, capsys
+):
+    """A reclaiming QEMU cannot be signalled at all -- its leader is already a zombie. Calling
+    that a failed kill would send the operator looking for a process to kill."""
+    pidfile = tmp_path / "pid"
+    pidfile.write_text("56677")
+    monkeypatch.setattr(vm, "PIDFILE", str(pidfile))
+    monkeypatch.setattr(
+        f"{S}.find_qemu_process", lambda *a, **k: _holder(56677, tearing_down=True)
+    )
+    monkeypatch.setattr(
+        f"{S}.read_reclaim",
+        lambda *a, **k: vm.Reclaim(pages_remaining=158197793, pages_per_sec=25780.0),
+    )
+    sent = []
+    monkeypatch.setattr(f"{S}._signal", lambda pid, sig: sent.append(sig))
+
+    assert vm.stop_existing_vm() == 1
+    assert sent == []  # nothing to signal
+    err = capsys.readouterr().err
+    assert "102 min" in err and "sysrq-trigger" in err
+
+
+def test_stop_does_not_trust_the_pidfile_to_find_the_process(tmp_path, monkeypatch):
+    """The shape seen in the field: an earlier run deleted the pidfile while the QEMU it named
+    lived on. Finding by comm means there is no path in which that process goes unnoticed.
+    """
+    monkeypatch.setattr(vm, "PIDFILE", str(tmp_path / "absent"))
+    monkeypatch.setattr(
+        f"{S}.find_qemu_process", lambda *a, **k: _holder(56677, tearing_down=True)
+    )
+    monkeypatch.setattr(f"{S}.read_reclaim", lambda *a, **k: None)
+    assert vm.stop_existing_vm() == 1

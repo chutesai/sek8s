@@ -11,6 +11,8 @@ top-level ``host`` passthrough in ``chutes_cvm.cli``.
   chutes-cvm host tune / restore   # NVIDIA host CPU tuning, and revert
   chutes-cvm host reset-gpus       # reset all GPUs via nvidia-gpu-tools SBR
   chutes-cvm host vfio-wedged      # exit 0 if host PCI passthrough is wedged and needs a reset
+  chutes-cvm host devices-free     # exit 0 if nothing holds the passthrough devices
+                                   #   (note: normal exit sense, unlike vfio-wedged)
 
 reset-gpus / vfio-wedged act on host hardware (GPUs, the PCI subsystem) and are useful with or
 without a running guest, so they live under ``host``, not ``guest``.
@@ -217,6 +219,29 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     return 0 if pci_operations_wedged() else 1
 
 
+def _cmd_devices_free(args: argparse.Namespace) -> int:
+    """Exit 0 if nothing holds this host's passthrough devices, 1 if something does.
+
+    The same ``guest.vm.device_blockers`` a launch checks, exposed because the callers that
+    need it are not all launches: `host reset-gpus` must not SBR devices a QEMU still holds,
+    and host Ansible must not open the guest image while one holds its write lock. Exposing it
+    is what stops those growing their own copy of the detection -- which is how four copies of
+    it came to disagree, every one of them blind to a reclaiming QEMU.
+
+    Note the exit sense is the conventional one: 0 means OK. ``vfio-wedged`` exits 0 when it
+    finds a problem, and reproducing that here would make every `if` around this read backwards.
+    """
+    from chutes_cvm.guest.vm import device_blockers
+
+    blockers = device_blockers()
+    if not blockers:
+        print("Nothing holds this host's passthrough devices.")
+        return 0
+    for blocker in blockers:
+        print(blocker.detail, file=sys.stderr)
+    return 1
+
+
 def _add_api_args(p: argparse.ArgumentParser) -> None:
     # Both default from the environment (resolved at parse time) so miners need no flags:
     # --config from CHUTES_CVM_CONFIG (else ./config.yaml), --api from CHUTES_API_BASE (else prod).
@@ -331,6 +356,13 @@ def main(argv: "list[str] | None" = None) -> int:
         help="Reset all host GPUs via nvidia-gpu-tools SBR (stop any VM first).",
     )
     reset.set_defaults(func=_cmd_reset_gpus)
+
+    safe = sub.add_parser(
+        "devices-free",
+        help="Exit 0 if nothing holds the passthrough devices — no VM running, no previous "
+        "TD still reclaiming its memory, no wedged PCI; 1 otherwise, printing each reason.",
+    )
+    safe.set_defaults(func=_cmd_devices_free)
 
     vfio = sub.add_parser(
         "vfio-wedged",

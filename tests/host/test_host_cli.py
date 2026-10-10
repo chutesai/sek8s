@@ -189,3 +189,62 @@ def test_platform_check_passes_when_enabled(capsys):
 def test_platform_refuses_an_unknown_cpu(capsys):
     with patch("chutes_cvm.guest.detection.detect_cpu_vendor", return_value=""):
         assert hostcli.main(["platform"]) == 1
+
+
+def _blocker(detail="reclaim running; ETA ~102 min"):
+    from chutes_cvm.guest.vm import Blocker
+
+    return Blocker(
+        name="td-reclaim",
+        summary="reclaiming",
+        detail=detail,
+        clears_itself=True,
+        overridable=False,
+    )
+
+
+def test_devices_free_exits_zero_when_nothing_holds_them(capsys):
+    with patch("chutes_cvm.guest.vm.device_blockers", return_value=[]):
+        assert hostcli.main(["devices-free"]) == 0
+    assert "Nothing holds" in capsys.readouterr().out
+
+
+def test_devices_free_exits_nonzero_and_prints_every_reason(capsys):
+    with patch(
+        "chutes_cvm.guest.vm.device_blockers",
+        return_value=[_blocker("reason one"), _blocker("reason two")],
+    ):
+        assert hostcli.main(["devices-free"]) == 1
+    err = capsys.readouterr().err
+    assert "reason one" in err and "reason two" in err
+
+
+def test_devices_free_uses_the_conventional_exit_sense():
+    """vfio-wedged exits 0 when it finds a problem; devices-free exits 0 when it finds none.
+    Getting these the same way round would make every `if` around them read backwards.
+    """
+    with patch("chutes_cvm.guest.vm.device_blockers", return_value=[_blocker()]), patch(
+        "chutes_cvm.vfio.pci_operations_wedged", return_value=True
+    ):
+        assert hostcli.main(["devices-free"]) == 1  # blocked -> nonzero
+        assert hostcli.main(["vfio-wedged"]) == 0  # wedged  -> zero
+
+
+def test_bundled_scripts_do_not_reimplement_qemu_detection():
+    """Four copies of "is a chutes-td QEMU running?" had drifted apart, every one matching
+    /proc/<pid>/cmdline and skipping zombies -- so every one reported the host idle while a
+    QEMU that had powered its guest off still held all twelve devices. reset-gpus.sh acting on
+    that answer SBR-reset GPUs underneath a live process. The answer now has one owner
+    (guest.vm.device_blockers, via `host devices-free`), so a bundled script must not grow its
+    own again."""
+    from chutes_cvm.paths import SCRIPTS_DIR
+
+    offenders = []
+    for script in SCRIPTS_DIR.rglob("*.sh"):
+        text = script.read_text()
+        if "chutes-td" in text and "pgrep" in text:
+            offenders.append(script.relative_to(SCRIPTS_DIR))
+    assert not offenders, (
+        f"{offenders} match chutes-td with pgrep; call `chutes-cvm host devices-free` instead "
+        "(a zombie's cmdline is empty, so pgrep cannot see the state that matters)"
+    )

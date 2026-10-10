@@ -9,7 +9,7 @@ That last part is why this module is more than a launcher. A TD that powers off 
 its QEMU with it: the last thread stays in ``do_exit`` reclaiming the guest's private memory,
 holding every passthrough device's vfio file descriptor for as long as it runs (hours, for a
 guest that faulted in a terabyte). Unbinding into that state blocks in uninterruptible D state
-*and* costs the host its ability to reboot, so ``launch_blockers()`` is the one precondition
+*and* costs the host its ability to reboot, so ``device_blockers()`` is the one precondition
 every launch checks before anything touches a device.
 
 Not an entry point. ``chutes-cvm guest launch`` (``guest.launch``) is the only way to a guest:
@@ -288,7 +288,7 @@ def reclaim_guidance(qemu: QemuProcess, reclaim: Reclaim | None) -> str:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Launch safety: the one precondition every launch checks
+# Device ownership: may anything touch the passthrough devices?
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -370,18 +370,30 @@ def _pci_wedged_blocker() -> Blocker | None:
 
 # Order is the order a caller should report them: the QEMU is the cause, the wedged tasks are
 # the symptom, and naming the cause first makes the pair legible.
-_CHECKS = (_qemu_blocker, _pci_wedged_blocker)
+_DEVICE_CHECKS = (_qemu_blocker, _pci_wedged_blocker)
 
 
-def launch_blockers() -> list[Blocker]:
-    """Every reason a launch must not touch this host's devices. Empty means safe to launch."""
-    found = (check() for check in _CHECKS)
+def device_blockers() -> list[Blocker]:
+    """Every reason not to touch this host's passthrough devices. Empty means they are free.
+
+    For anything that rebinds drivers, resets GPUs or opens the guest image: a launch,
+    ``bind_passthrough``, ``chutes-cvm host reset-gpus``. A QEMU with live threads holds the
+    devices *and* the image's write lock whether it is running a guest or reclaiming one, which
+    is why both land here.
+
+    This is deliberately not the only question worth asking about the process. "Is a guest
+    *serving*?" is a different one -- a reclaiming QEMU is not, its guest is already off -- and
+    it is the right question for deciding whether to drain pods or skip a shutdown step. Which
+    check applies is the caller's to choose; ``find_qemu_process`` and ``QemuProcess`` are here
+    for callers that want to ask it directly.
+    """
+    found = (check() for check in _DEVICE_CHECKS)
     return [blocker for blocker in found if blocker is not None]
 
 
-def safe_to_launch() -> bool:
-    """True if nothing blocks a launch. The single predicate; do not re-derive it."""
-    return not launch_blockers()
+def devices_free() -> bool:
+    """True if nothing holds this host's passthrough devices. Do not re-derive it."""
+    return not device_blockers()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -415,16 +427,95 @@ def host_memory_placement(numa_nodes: "list[int]") -> "tuple[str, str]":
     return nodes, f"interleaved across the GPUs' host NUMA nodes {nodes}"
 
 
-def stop_existing_vm():
-    print("Force-stopping VM (SIGTERM to QEMU)...")
+# Match the former stop_chutes_td.sh defaults, which host Ansible called with these waits.
+TERM_WAIT_SECS = 15.0
+KILL_WAIT_SECS = 10.0
+
+
+def _clear_pidfile() -> None:
     try:
-        with open(PIDFILE) as pid_file:
-            pid = int(pid_file.read().strip())
-            os.kill(pid, signal.SIGTERM)
-            time.sleep(3)
         os.remove(PIDFILE)
-    except FileNotFoundError:
+    except OSError:  # nosec B110 - already gone, or never written
         pass
+
+
+def _signal(pid: int, sig: signal.Signals) -> None:
+    """Signal QEMU, falling back to sudo when it outranks us (it runs as root)."""
+    try:
+        os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        proc.run(["sudo", "kill", f"-{sig.name[3:]}", str(pid)], capture_output=True)
+
+
+def _wait_for_exit(pid: int, timeout: float, poll: float = 1.0) -> QemuProcess | None:
+    """Poll until the process holds no live threads. None once gone, else the survivor."""
+    deadline = time.monotonic() + timeout
+    while True:
+        found = read_qemu_process(pid)
+        if found is None or not found.alive:
+            return None
+        if time.monotonic() >= deadline:
+            return found
+        time.sleep(poll)
+
+
+def stop_existing_vm(
+    term_wait: float = TERM_WAIT_SECS, kill_wait: float = KILL_WAIT_SECS
+) -> int:
+    """Force-stop the recorded QEMU and confirm it is gone. 0 if none remains, else 1.
+
+    Escalates SIGTERM -> SIGKILL and then *verifies*, because what a caller does next is
+    usually open the guest image with qemu-nbd, which cannot take the write lock while a QEMU
+    still holds it. Reporting success early is what sends a relaunch into a lock collision.
+
+    A QEMU still reclaiming the previous TD's memory will not die on SIGKILL: its leader is
+    already a zombie and the surviving thread is inside ``do_exit``. That is not a failed kill,
+    it is a wait, so it is reported as one -- with the ETA and the reset, not a kill error.
+    """
+    # Found by ``comm``, not by the pidfile: the pidfile goes stale (an earlier run may have
+    # cleared it while the process it named lived on), and it is the process holding the devices
+    # that has to be stopped, whether or not anything recorded it. The pidfile is only cleared,
+    # never trusted.
+    found = find_qemu_process()
+    if found is None:
+        _clear_pidfile()
+        print("No QEMU guest process remains.")
+        return 0
+
+    if found.tearing_down:
+        print(reclaim_guidance(found, read_reclaim(found.pid)), file=sys.stderr)
+        return 1
+
+    print(f"Force-stopping VM (SIGTERM to QEMU pid {found.pid})...")
+    _signal(found.pid, signal.SIGTERM)
+    survivor = _wait_for_exit(found.pid, term_wait)
+    if survivor is not None:
+        print(f"Still alive after {term_wait:.0f}s — sending SIGKILL...")
+        _signal(found.pid, signal.SIGKILL)
+        survivor = _wait_for_exit(found.pid, kill_wait)
+
+    if survivor is None:
+        _clear_pidfile()
+        print("✓ QEMU exited.")
+        return 0
+
+    # The pidfile stays: it is the only remaining record of what holds the image.
+    if survivor.tearing_down:
+        print(reclaim_guidance(survivor, read_reclaim(survivor.pid)), file=sys.stderr)
+        return 1
+    print(
+        f"QEMU pid {survivor.pid} survived SIGKILL with {len(survivor.live_threads)} live "
+        f"thread(s): {', '.join(survivor.live_threads[:3])}.\n"
+        "  It is in uninterruptible sleep and still holds the guest image's write lock, so a "
+        "relaunch would fail to take it.\n"
+        "  The host must be rebooted. A plain `reboot` may hang in device_shutdown(); to reset "
+        "now:\n"
+        f"{SYSRQ_RESET}",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def launch_vm(guest: LaunchContext, host: "HostProfile") -> int:
@@ -433,8 +524,8 @@ def launch_vm(guest: LaunchContext, host: "HostProfile") -> int:
 
     # The last line of defence before anything touches a device. `guest launch` checks this
     # first, but bind_passthrough below is the step that must never run against devices a
-    # previous QEMU still holds, so the precondition is re-asserted next to it.
-    blockers = launch_blockers()
+    # previous QEMU still holds, so the check is re-asserted next to it.
+    blockers = device_blockers()
     if blockers:
         for blocker in blockers:
             print(f"Error: {blocker.detail}", file=sys.stderr)

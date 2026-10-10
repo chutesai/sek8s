@@ -14,8 +14,8 @@
   which only exist *because* an earlier launch already fired the unbinds, so it protected the
   second attempt and never the first. `guest/vm.py` — which already owned the process — now also finds a previous one
   (`find_qemu_process`, matching `comm` and per-thread state), reads how far its reclaim has
-  got (`read_reclaim`, from KVM's `pages_4k` counter), and answers the one precondition every
-  launch checks (`launch_blockers()`; empty means safe). The gate fires before
+  got (`read_reclaim`, from KVM's `pages_4k` counter), and answers whether anything still holds the
+  passthrough devices (`device_blockers()`; empty means they are free). The gate fires before
   `bind_passthrough` touches anything — SR-IOV VF creation as much as the unbind — and `guest
   launch` now refuses with the remaining pages, the drain rate, an ETA, and the two ways forward:
   wait for it to finish, or reset while a reboot still works. Not force-overridable, because
@@ -64,3 +64,26 @@
   before it. Binding devices is not the place to decide whether a launch may happen, and having
   it there created a `vm -> passthrough -> vm` import cycle that was the only reason the
   detection needed modules of its own.
+
+- `scripts/devices/reset-gpus.sh` no longer carries its own copy of the detection. Its whole
+  purpose is to refuse while the GPUs are in use and then SBR-reset them, and its `cmdline`
+  match plus explicit zombie skip meant that during a reclaim it saw no VM and went ahead —
+  SBR-resetting GPUs a live QEMU still held, which is the worst thing it can do. It now calls
+  `chutes-cvm host launch-safe`, and fails closed with an honest message if the CLI is absent.
+
+### Added
+
+- **`chutes-cvm host devices-free`** — exits 0 if nothing holds this host's passthrough
+  devices, 1 otherwise, printing each reason. The same `device_blockers()` a launch checks,
+  exposed because the callers that need it are not all launches: `host reset-gpus` must not SBR
+  devices a QEMU still holds, and host Ansible must not open the guest image while one holds
+  its write lock. Note the exit sense is the conventional one (0 means OK), unlike
+  `vfio-wedged`, which exits 0 when it *finds* a problem; matching that here would make every
+  `if` around it read backwards.
+
+  The checks behind it stay individually callable, because which one applies is
+  context-dependent: "does anything hold the devices?" (a running *or* reclaiming QEMU) is
+  what a launch, a rebind and an SBR need, while "is a guest *serving*?" — where a reclaiming
+  QEMU counts as no — is the right question for deciding whether to drain pods or skip a
+  shutdown step.
+
