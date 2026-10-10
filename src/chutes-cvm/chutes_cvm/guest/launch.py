@@ -40,41 +40,17 @@ from chutes_cvm.guest.network import (
     setup_bridge,
 )
 from chutes_cvm.guest.privileged import LaunchError
-from chutes_cvm.guest.vm import LOGFILE, PIDFILE, PROCESS_NAME, launch_vm
+from chutes_cvm.guest.vm import (
+    LOGFILE,
+    PIDFILE,
+    PROCESS_NAME,
+    launch_blockers,
+    launch_vm,
+)
 from chutes_cvm.guest.volumes import ensure_raw_volume, setup_config_volume
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
-_PROCESS_NAME_CHUTES_TD = "chutes-td"
-
-
 # ── Host gates ──────────────────────────────────────────────────────────────────
-
-
-def _chutes_td_running() -> bool:
-    """True if a live (non-zombie) chutes-td QEMU is already running.
-
-    Kept aligned with ansible/host/roles/chutes_tee_vm/files/is_live_chutes_td.sh: match a
-    qemu-system/qemu-kvm process whose cmdline carries the chutes-td process name.
-    """
-    try:
-        pids = proc.run(
-            ["pgrep", "-f", "qemu-system|qemu-kvm"],
-            capture_output=True,
-            text=True,
-        ).stdout.split()
-    except FileNotFoundError:
-        return False
-    for pid in pids:
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmdline = f.read().replace(b"\x00", b" ").decode(errors="replace")
-        except OSError:
-            continue
-        if "qemu-system" not in cmdline and "qemu-kvm" not in cmdline:
-            continue
-        if _PROCESS_NAME_CHUTES_TD in cmdline:
-            return True
-    return False
 
 
 def _ensure_numa_zone_reclaim() -> None:
@@ -365,12 +341,13 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"VM image dir: {config.vm.vm_image_directory}")
     print(f"Network: {config.network.type}\n")
 
-    if not args.force and _chutes_td_running():
-        print(
-            f"Error: a confidential VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
-            "  Stop it first: chutes-cvm guest down  (or pass --force to override — not recommended).",
-            file=sys.stderr,
-        )
+    # One predicate, and --force only reaches the blockers that say it may. A VM that is
+    # merely running is the operator's call to override; a reclaim is not, because forcing past
+    # it reaches the unbind, and the unbind is what costs the host its ability to reboot.
+    blockers = [b for b in launch_blockers() if not (args.force and b.overridable)]
+    if blockers:
+        for blocker in blockers:
+            print(f"Error: {blocker.detail}", file=sys.stderr)
         return 1
 
     print("Step 0: Verifying host configuration...")

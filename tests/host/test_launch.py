@@ -310,7 +310,7 @@ def _happy(**over):
     )
     defaults = {
         "resolve_public_iface": "eth0",
-        "_chutes_td_running": False,
+        "launch_blockers": [],
         "_measured_image": MeasuredImage("1.4.0", False),
         "prepare_vm_image": "/var/lib/chutes/vm-images/img.qcow2",
     }
@@ -350,18 +350,65 @@ def test_main_happy_path_user_network():
     boot.assert_called_once()
 
 
+def _blocker(name, *, overridable, detail):
+    from chutes_cvm.guest.vm import Blocker
+
+    return Blocker(
+        name=name,
+        summary=name,
+        detail=detail,
+        clears_itself=not overridable,
+        overridable=overridable,
+    )
+
+
+def _running():
+    return [
+        _blocker(
+            "qemu-running",
+            overridable=True,
+            detail="A confidential VM (QEMU pid 4100) is already running ...",
+        )
+    ]
+
+
+def _reclaiming():
+    return [
+        _blocker(
+            "td-reclaim",
+            overridable=False,
+            detail="reclaim running; ETA ~102 min\n    echo b > /proc/sysrq-trigger",
+        )
+    ]
+
+
 def test_main_refuses_duplicate_without_force(capsys):
-    with _happy(_chutes_td_running=True):
+    with _happy(**{"launch_blockers": _running()}):
         rc = launch.main(_STD_ARGV)
     assert rc == 1
     assert "already running" in capsys.readouterr().err
 
 
 def test_main_force_overrides_duplicate_guard():
-    with _happy(_chutes_td_running=True), patch(f"{P}._boot", return_value=0) as boot:
+    with _happy(**{"launch_blockers": _running()}), patch(
+        f"{P}._boot", return_value=0
+    ) as boot:
         rc = launch.main(_STD_ARGV + ["--force"])
     assert rc == 0
     boot.assert_called_once()
+
+
+def test_main_refuses_a_reclaiming_qemu_even_with_force(capsys):
+    """A VM merely running is the operator's call to override. One still reclaiming the previous
+    TD's memory is not: forcing past it reaches the unbind, and the unbind is what costs the
+    host its ability to reboot."""
+    with _happy(**{"launch_blockers": _reclaiming()}), patch(f"{P}._boot") as boot:
+        rc = launch.main(_STD_ARGV + ["--force"])
+    assert rc == 1
+    boot.assert_not_called()
+    err = capsys.readouterr().err
+    assert "102 min" in err
+    assert "sysrq-trigger" in err
 
 
 _REFUSED = LaunchError("this host cannot attest 1.4.0 yet")
