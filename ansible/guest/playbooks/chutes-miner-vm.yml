@@ -521,6 +521,13 @@
         name: remove-ssh
       when: not (debug_build | default(false))
 
+    # Debug keeps sshd (password login) but is published, so it must not ship the build key.
+    - name: Purge authorized_keys (debug builds)
+      ansible.builtin.include_role:
+        name: remove-ssh
+        tasks_from: purge-keys
+      when: debug_build | default(false)
+
 - name: Finalize VM image
   hosts: host
   become: true
