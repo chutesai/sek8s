@@ -17,6 +17,9 @@
   through a shared `sek8s_common.hotkey.load_miner_keypair`. The attestation proxy's manifest
   injects `MINER_PRIVATE_KEY` from the secret's `privateKey` key (optional, like `MINER_SEED`).
 - The admission policy allows the `MINER_PRIVATE_KEY` env var alongside `MINER_SEED`.
+- The chutes-miner-gpu chart moves to 0.4.0. Its agent reads the secret's `privateKey` key as
+  `MINER_PRIVATE_KEY` and its `seed` key optionally, and its secret template keeps `privateKey`
+  on upgrade; chart 0.3.0's agent cannot start on a private-key VM.
 
 ### Changed
 

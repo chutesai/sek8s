@@ -181,7 +181,7 @@ all:
         # chutes_docker_hub_token: !vault ...
 ```
 
-`ss58Address` and the hotkey's key are read from the hotkey JSON on the controller at play time — no need to copy them into inventory. The key is `privateKey` when the file has one (current Bittensor hotkey files; some have no `secretSeed`), else `secretSeed`, and `config.yaml` carries only that one. To override, set `chutes_miner_ss58` plus `chutes_miner_private_key` or `chutes_miner_seed` explicitly and the hotkey parse is skipped. The `chutes-miner` CLI calls (drain, shutdown, maintenance status) read the same file; a hotkey without `secretSeed` needs chutes-miner-cli 0.7.1 or later on the controller.
+`ss58Address` and the hotkey's key are read from the hotkey JSON on the controller at play time — no need to copy them into inventory. The key is `privateKey` when the file has one (current Bittensor hotkey files; some have no `secretSeed`), else `secretSeed`, and `config.yaml` carries only that one. To override, set `chutes_miner_ss58` plus `chutes_miner_private_key` or `chutes_miner_seed` explicitly and the hotkey parse is skipped. The `chutes-miner` CLI calls (drain, shutdown, maintenance status) read the same file; a hotkey without `secretSeed` needs chutes-miner-cli 0.8.0 or later on the controller.
 
 The inventory hostname (`my-tee-host` above) is used as both `chutes-miner --name` and `vm.hostname` in `config.yaml`. These must match the TEE server name registered in chutes-miner — do not use an SSH alias as the inventory key.
 
