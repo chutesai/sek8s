@@ -19,7 +19,7 @@
   become: false
 
 # Deliberately NOT is_live_chutes_td.sh. That answers "is a guest serving?", and a QEMU that
-# powered its guest off but is still reclaiming the TD's private memory answers no -- while
+# powered its guest off but is still reclaiming its private memory answers no -- while
 # still holding the image's write lock for as long as it runs. Waiting on that answer declared
 # the guest gone and marched into the qcow2 lock collision the comment below warns about.
 # `host devices-free` answers the question that matters here: has QEMU let go?
@@ -61,7 +61,7 @@
     msg: >-
       The chutes-td guest did not let go of its devices and image, and could not be
       force-stopped. Read the details below before rebooting: a QEMU still reclaiming
-      the previous TD's memory clears on its own (and a plain `reboot` would hang on the
+      the previous guest's memory clears on its own (and a plain `reboot` would hang on the
       blocked unbinds), whereas one stuck in uninterruptible D-state needs a SysRq reset.
       Either way its qcow2 lock blocks a relaunch until it is gone.
       Details: {{ (_force_stop.stdout | default('')) ~ ' ' ~ (_force_stop.stderr | default('')) }}

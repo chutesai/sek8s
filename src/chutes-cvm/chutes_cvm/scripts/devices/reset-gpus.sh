@@ -48,8 +48,8 @@ SBR_ARGS=("$@")
 # Whether the GPUs are ours to reset is the same device-ownership question a launch asks, so
 # ask it the same way rather than re-implementing it here. This script used to match /proc/<pid>/cmdline and
 # skip zombies -- both of which miss a QEMU that powered its guest off but is still reclaiming
-# the TD's private memory. That process holds every GPU, and SBR-resetting underneath it is the
-# worst thing this script can do.
+# the previous guest's private memory. That process holds every GPU, and SBR-resetting under
+# it is the worst thing this script can do.
 # Fail closed but say so: without the CLI, `if !` below would see exit 127 and refuse with a
 # message about the GPUs being held, which would be a lie.
 if ! command -v chutes-cvm >/dev/null 2>&1; then

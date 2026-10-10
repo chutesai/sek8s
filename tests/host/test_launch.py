@@ -375,7 +375,7 @@ def _running():
 def _reclaiming():
     return [
         _blocker(
-            "td-reclaim",
+            "memory-reclaim",
             overridable=False,
             detail="reclaim running; ETA ~102 min\n    echo b > /proc/sysrq-trigger",
         )
@@ -400,7 +400,7 @@ def test_main_force_overrides_duplicate_guard():
 
 def test_main_refuses_a_reclaiming_qemu_even_with_force(capsys):
     """A VM merely running is the operator's call to override. One still reclaiming the previous
-    TD's memory is not: forcing past it reaches the unbind, and the unbind is what costs the
+    guest's memory is not: forcing past it reaches the unbind, and the unbind is what costs
     host its ability to reboot."""
     with _happy(**{"device_blockers": _reclaiming()}), patch(f"{P}._boot") as boot:
         rc = launch.main(_STD_ARGV + ["--force"])

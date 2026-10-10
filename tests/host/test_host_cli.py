@@ -195,7 +195,7 @@ def _blocker(detail="reclaim running; ETA ~102 min"):
     from chutes_cvm.guest.vm import Blocker
 
     return Blocker(
-        name="td-reclaim",
+        name="memory-reclaim",
         summary="reclaiming",
         detail=detail,
         clears_itself=True,

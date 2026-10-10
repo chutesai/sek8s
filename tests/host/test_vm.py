@@ -298,7 +298,7 @@ def test_comm_compared_at_prctl_truncation(fake_proc):
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# TD private-memory reclaim progress and guidance
+# Private-memory reclaim progress and guidance
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -431,7 +431,7 @@ def test_clear_host_has_no_blockers(clear_host):
 
 
 # ---------------------------------------------------------------------------
-# TD reclaim
+# Private-memory reclaim
 # ---------------------------------------------------------------------------
 
 
@@ -442,7 +442,7 @@ def test_reclaim_is_not_overridable_and_carries_its_eta(monkeypatch, clear_host)
         vm.Reclaim(pages_remaining=158197793, pages_per_sec=25780.0),
     )
     (blocker,) = vm.device_blockers()
-    assert blocker.name == "td-reclaim"
+    assert blocker.name == "memory-reclaim"
     assert not blocker.overridable  # forcing past this reaches the unbind
     assert blocker.clears_itself  # so waiting is a real option
     assert blocker.eta_secs == pytest.approx(158197793 / 25780.0)
@@ -455,7 +455,7 @@ def test_reclaim_without_progress_still_blocks(monkeypatch, clear_host):
     # debugfs unreadable -> no ETA, but the refusal must not depend on having one.
     _found(monkeypatch, _qemu(tearing_down=True), None)
     (blocker,) = vm.device_blockers()
-    assert blocker.name == "td-reclaim"
+    assert blocker.name == "memory-reclaim"
     assert blocker.eta_secs is None
     assert "duration unknown" in blocker.summary
     assert not blocker.overridable
@@ -501,7 +501,7 @@ def test_cause_is_reported_before_symptom(monkeypatch, clear_host):
     _found(monkeypatch, _qemu(tearing_down=True), None)
     monkeypatch.setattr(f"{S}.vfio.pci_operations_wedged", lambda *a, **k: True)
     assert [b.name for b in vm.device_blockers()] == [
-        "td-reclaim",
+        "memory-reclaim",
         "pci-wedged",
     ]
 
@@ -528,7 +528,7 @@ def test_launch_vm_refuses_before_binding_when_blocked(
         f"{S}.device_blockers",
         lambda: [
             vm.Blocker(
-                name="td-reclaim",
+                name="memory-reclaim",
                 summary="reclaiming",
                 detail="reclaim running; ETA ~102 min\n    echo b > /proc/sysrq-trigger",
                 clears_itself=True,

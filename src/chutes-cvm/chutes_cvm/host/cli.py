@@ -360,7 +360,7 @@ def main(argv: "list[str] | None" = None) -> int:
     safe = sub.add_parser(
         "devices-free",
         help="Exit 0 if nothing holds the passthrough devices — no VM running, no previous "
-        "TD still reclaiming its memory, no wedged PCI; 1 otherwise, printing each reason.",
+        "guest still reclaiming its memory, no wedged PCI; 1 otherwise, printing each reason.",
     )
     safe.set_defaults(func=_cmd_devices_free)
 

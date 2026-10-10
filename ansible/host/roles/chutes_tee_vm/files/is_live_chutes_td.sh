@@ -2,7 +2,7 @@
 # Exit 0 if a live chutes-td QEMU process is SERVING a guest on this host, 1 otherwise.
 #
 # Skipping zombies is correct here and not an oversight: a QEMU that powered its guest off
-# but is still reclaiming the TD's private memory is not serving anything, so callers that
+# but is still reclaiming its private memory is not serving anything, so callers that
 # gate pod-drain or skip-on-rerun logic want the answer this gives.
 #
 # If you need "has QEMU let go of the devices and the image?" -- a different question, which

@@ -5,8 +5,8 @@ guest needs) and one ``HostProfile`` (what this machine is) -- builds the comman
 Everything else here is about that same process from the outside: the pidfile, the force-kill,
 and what state a *previous* one has left the host in.
 
-That last part is why this module is more than a launcher. A TD that powers off does not take
-its QEMU with it: the last thread stays in ``do_exit`` reclaiming the guest's private memory,
+That last part is why this module is more than a launcher. A guest that powers off does not
+take its QEMU with it: the last thread stays in ``do_exit`` reclaiming the guest's private memory,
 holding every passthrough device's vfio file descriptor for as long as it runs (hours, for a
 guest that faulted in a terabyte). Unbinding into that state blocks in uninterruptible D state
 *and* costs the host its ability to reboot, so ``device_blockers()`` is the one precondition
@@ -75,7 +75,7 @@ class QemuProcess:
     def tearing_down(self) -> bool:
         """The leader has been reaped but threads live on -- unkillable, and holding the devices.
 
-        For a TDX guest this is the TD private-memory reclaim running in ``do_exit``; it ends on
+        This is the guest's private-memory reclaim running in ``do_exit``; it ends on
         its own, and ``guest.tdreclaim`` says how long that will take.
         """
         return self.leader_zombie and self.alive
@@ -157,8 +157,31 @@ def find_qemu_process(name: str = PROCESS_NAME) -> QemuProcess | None:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# TD private-memory reclaim: how long until the devices are free
+# Private-memory reclaim: how long until the devices are free
 # ────────────────────────────────────────────────────────────────────────────
+#
+# A confidential guest's memory cannot simply be freed when it dies: the host has to hand each
+# page back to the platform's security engine before anyone else may have it. That work happens
+# in the exiting QEMU's last thread, it is proportional to the pages the guest ever faulted in,
+# and it holds every passthrough device until it finishes.
+#
+# The cost was measured on Intel TDX, where the loop is one SEAMCALL sequence per private page:
+# ~39us per 4KB page, single-threaded, ~25.7k pages/s on an 8xH200 host -- 187M pages and just
+# over two hours for a guest that had faulted in ~714GB.
+#
+#     PID 56756  Comm: CPU 62/KVM   RIP: __seamcall
+#      tdx_sept_remove_private_spte -> tdp_mmu_zap_leafs -> kvm_tdp_mmu_unmap_gfn_range
+#      -> __kvm_gmem_invalidate_begin -> kvm_gmem_release -> do_exit
+#
+# AMD SEV-SNP reclaims through its own path (RMP updates, SNP_DECOMMISSION), whose cost we have
+# not measured. Nothing below is TDX-specific: the detection reads ``comm`` and thread state,
+# and the progress counter is KVM's generic ``pages_4k``. Both were verified on an SNP host.
+#
+# On TDX the duration is not something this package can fix. Cost tracks *entry count*, not
+# bytes (4KB per 39us is ~105MB/s against hardware good for tens of GB/s, so it is nearly all
+# fixed per-entry overhead), and guest_memfd has no hugepage support on these kernels --
+# ``CONFIG_KVM_GUEST_MEMFD=y`` with no hugepage symbol, and ``-object tdx-guest`` exposes no
+# options -- so every page is 4KB. 2MB backing would cut the entry count ~512x.
 
 
 # Overridden in tests to point at a fixture tree.
@@ -171,7 +194,7 @@ SAMPLE_SECS = 10.0
 
 @dataclass(frozen=True)
 class Reclaim:
-    """Progress of the TD private-memory reclaim, from KVM's 4KB-SPTE count."""
+    """Progress of the guest's private-memory reclaim, from KVM's 4KB-SPTE count."""
 
     pages_remaining: int
     pages_per_sec: float
@@ -225,7 +248,7 @@ def read_reclaim(pid: int, sample_secs: float = SAMPLE_SECS) -> Reclaim | None:
     """Sample KVM's 4KB-SPTE count twice to get pages remaining and the drain rate.
 
     KVM names its debugfs directory ``<qemu-pid>-<vm-fd>``. ``pages_4k`` is the live count of
-    4KB SPTEs, which for a dying TD is dominated by its private memory, so it serves as the
+    4KB SPTEs, which for a dying guest is dominated by its private memory, so it serves as the
     progress meter. Returns None when debugfs is absent, unreadable, or the VM has no directory
     (reclaim already finished).
     """
@@ -274,7 +297,7 @@ def reclaim_guidance(qemu: QemuProcess, reclaim: Reclaim | None) -> str:
     """Why a launch must not proceed while this reclaim runs, and the two ways forward."""
     shown = ", ".join(qemu.live_threads[:3])
     return (
-        f"The previous VM's TD private-memory reclaim is still running (QEMU pid {qemu.pid} is "
+        f"The previous VM's private-memory reclaim is still running (QEMU pid {qemu.pid} is "
         f"a zombie with {len(qemu.live_threads)} live thread(s): {shown}).\n"
         f"{_eta_phrase(reclaim)}\n"
         "  Refusing to touch the GPUs: unbinding now would block in uninterruptible D state "
@@ -282,7 +305,7 @@ def reclaim_guidance(qemu: QemuProcess, reclaim: Reclaim | None) -> str:
         "normally -- `reboot` would hang in device_shutdown().\n"
         "  Either wait for it to finish and launch again, or reset now, while a reboot still "
         "works. Nothing is lost -- the guest is already off and this memory is being handed "
-        "back to the TDX module:\n"
+        "back to the platform's security engine:\n"
         f"{SYSRQ_RESET}"
     )
 
@@ -317,9 +340,9 @@ def _qemu_blocker() -> Blocker | None:
             f"~{eta / 60:,.0f} min remaining" if eta is not None else "duration unknown"
         )
         return Blocker(
-            name="td-reclaim",
+            name="memory-reclaim",
             summary=(
-                f"QEMU pid {qemu.pid} is still reclaiming the previous TD's private memory "
+                f"QEMU pid {qemu.pid} is still reclaiming the previous guest's private memory "
                 f"({when})"
             ),
             detail=reclaim_guidance(qemu, reclaim),
@@ -358,8 +381,8 @@ def _pci_wedged_blocker() -> Blocker | None:
         detail=(
             "PCI operations are wedged: uninterruptible D-state tasks from an earlier vfio "
             "unbind or nvidia-gpu-tools run, so neither an unbind nor an SBR can run.\n"
-            "  They are waiting on a QEMU that has not finished reclaiming the previous TD's "
-            "memory, and clear on their own once it does.\n"
+            "  They are waiting on a QEMU that has not finished reclaiming the previous "
+            "guest's memory, and clear on their own once it does.\n"
             "  A plain `reboot` will HANG in device_shutdown() while they exist. To reset now:\n"
             f"{SYSRQ_RESET}"
         ),
@@ -470,7 +493,7 @@ def stop_existing_vm(
     usually open the guest image with qemu-nbd, which cannot take the write lock while a QEMU
     still holds it. Reporting success early is what sends a relaunch into a lock collision.
 
-    A QEMU still reclaiming the previous TD's memory will not die on SIGKILL: its leader is
+    A QEMU still reclaiming the previous guest's memory will not die on SIGKILL: its leader is
     already a zombie and the surviving thread is inside ``do_exit``. That is not a failed kill,
     it is a wait, so it is reported as one -- with the ETA and the reset, not a kill error.
     """

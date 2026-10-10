@@ -49,7 +49,7 @@
 # ── Launch ───────────────────────────────────────────────────────────────────
 # No pre-flight probe: `chutes-cvm guest launch` checks for itself whether anything still holds
 # the passthrough devices (guest.vm.device_blockers) and refuses with the reason, the ETA when a
-# previous TD is still reclaiming its memory, and the SysRq sequence. Probing first only gave a
+# previous guest is still reclaiming its memory, and the SysRq sequence. Probing first gave a
 # second, worse-informed copy of that answer -- and the old probe reacted by rebooting, which
 # throws away a reclaim that would have finished on its own.
 #
