@@ -6,7 +6,7 @@ The authorize() dependency is tested via a minimal FastAPI test app so that
 FastAPI's dependency injection handles Request/Header extraction correctly.
 
 The miner SS58 and seed come from conftest.py's pytest_configure env setup:
-  MINER_SS58  = "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ"
+  MINER_SS58  = "5Df8xCSkGWk9VWU2QeWXDLn2p7zebV58TsFWxfhs8VRbARFj"
   MINER_SEED  = "0xe031170f32b4cda05df2f3cf6bc8d7687b683bbce23d9fa960c0b3fc21641b8a"
 
 Nonce validation fires BEFORE signature verification, so tests that exercise
@@ -23,7 +23,7 @@ from sek8s_common.auth import authorize
 from sek8s_common.constants import HOTKEY_HEADER, NONCE_HEADER, SIGNATURE_HEADER
 
 MINER_SS58 = os.environ.get(
-    "MINER_SS58", "5E6xfU3oNU7y1a7pQwoc31fmUjwBZ2gKcNCw8EXsdtCQieUQ"
+    "MINER_SS58", "5Df8xCSkGWk9VWU2QeWXDLn2p7zebV58TsFWxfhs8VRbARFj"
 )
 DUMMY_SIG = "deadbeef" * 16  # 64 hex chars — invalid but reaches nonce check first
 

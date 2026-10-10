@@ -1,0 +1,8 @@
+{
+  "privateKey": "0x81433c30f96e2c3ca96165036d65d9deffa6fcc7eafdfa029162026abe91cc0c7acd542677534ebc6a8eddd23d6edbb8e6a4afadd5deccbf836ed5ba8229bf11",
+  "accountId": "0xdaf64f2d8d983afa7123183eb6139e736ff1d38d9d491a7fb0fe7a6f3ae4fb24",
+  "ss58Address": "5H1oTw5YnpYau6ViMURhEjS3Nar8AJc2wuzusNFbrWGpp4MP",
+  "cryptoType": 1,
+  "secretSeed": "0x30e940aa8b6ba8ff49951b7366326d60bfc64c9a7807787bca239b81009fb888",
+  "publicKey": "0xdaf64f2d8d983afa7123183eb6139e736ff1d38d9d491a7fb0fe7a6f3ae4fb24"
+}

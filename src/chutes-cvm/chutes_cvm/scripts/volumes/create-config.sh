@@ -61,11 +61,16 @@ populate_config_into_mount() {
     echo "$HOSTNAME" > "$MOUNT_DIR/hostname"
     print_info "  ✓ hostname: $HOSTNAME"
 
-    if [[ -n "$MINER_SS58" && -n "$MINER_SEED" ]]; then
+    if [[ -n "$MINER_SS58" ]]; then
+        if [[ -n "$MINER_PRIVATE_KEY" ]]; then
+            key_file="miner-private-key" key="$MINER_PRIVATE_KEY"
+        else
+            key_file="miner-seed" key="$MINER_SEED"
+        fi
         echo "$MINER_SS58" > "$MOUNT_DIR/miner-ss58"
-        echo "$MINER_SEED" > "$MOUNT_DIR/miner-seed"
-        chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/miner-seed"
-        print_info "  ✓ miner credential files"
+        echo "$key" > "$MOUNT_DIR/$key_file"
+        chmod 600 "$MOUNT_DIR/miner-ss58" "$MOUNT_DIR/$key_file"
+        print_info "  ✓ miner credential files (miner-ss58, $key_file)"
     else
         print_info "  - miner credentials empty, skipping (benchmark mode)"
     fi
@@ -102,7 +107,7 @@ EOF
 # Check for help flag
 if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
     cat << EOF
-Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token]
+Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [miner-private-key]
 
 Create a new config qcow2, or refresh an existing one (same path, ext4 label $LABEL).
 
@@ -114,12 +119,13 @@ Values (positional order = env var name):
   output-path / OUTPUT_PATH    qcow2 path (created if missing; refreshed in place otherwise)
   hostname    / HOSTNAME       VM hostname
   miner-ss58  / MINER_SS58     Miner SS58 credential
-  miner-seed  / MINER_SEED     Miner seed credential
+  miner-seed  / MINER_SEED     Miner hotkey seed (or miner-private-key, not both)
   vm-ip       / VM_IP          VM IP address
   vm-gateway  / VM_GATEWAY     VM gateway IP
   vm-dns      / VM_DNS         VM DNS server (default: 8.8.8.8)
   docker-hub-user  / DOCKER_HUB_USER   Optional Docker Hub username (with token)
   docker-hub-token / DOCKER_HUB_TOKEN  Optional Docker Hub PAT/password (with user)
+  miner-private-key / MINER_PRIVATE_KEY  Miner hotkey sr25519 private key (or miner-seed)
 
 Examples:
   $0 config.qcow2 chutes-miner "5abc..." "seed123" 192.168.100.2 192.168.100.1
@@ -129,7 +135,7 @@ Examples:
 The volume will contain:
   /hostname         - VM hostname
   /miner-ss58       - Miner SS58 credential
-  /miner-seed       - Miner seed credential
+  /miner-private-key or /miner-seed - the miner hotkey key (exactly one)
   /network-config.yaml - Netplan network configuration
   /docker-hub-username, /docker-hub-token - optional Docker Hub credentials (mode 0600)
 
@@ -162,10 +168,11 @@ VM_GATEWAY="${6:-${VM_GATEWAY:-}}"
 VM_DNS="${7:-${VM_DNS:-8.8.8.8}}"
 DOCKER_HUB_USER="${8:-${DOCKER_HUB_USER:-}}"
 DOCKER_HUB_TOKEN="${9:-${DOCKER_HUB_TOKEN:-}}"
+MINER_PRIVATE_KEY="${10:-${MINER_PRIVATE_KEY:-}}"
 
 if [[ -z "$OUTPUT_PATH" ]]; then
     print_error "Output path is required (arg 1 or \$OUTPUT_PATH)"
-    echo "Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token]"
+    echo "Usage: $0 <output-path> [hostname] [miner-ss58] [miner-seed] [vm-ip] [vm-gateway] [vm-dns] [docker-hub-user] [docker-hub-token] [miner-private-key]"
     echo "  Any value may instead be supplied via its same-named env var. Run '$0 --help'."
     exit 1
 fi
@@ -176,8 +183,13 @@ if [[ -z "$HOSTNAME" || -z "$VM_IP" || -z "$VM_GATEWAY" || -z "$VM_DNS" ]]; then
     exit 1
 fi
 
-if [[ -n "$MINER_SS58" && -z "$MINER_SEED" ]] || [[ -z "$MINER_SS58" && -n "$MINER_SEED" ]]; then
-    print_error "Miner SS58 and seed must both be provided or both be empty"
+# Miner credentials: an ss58 with exactly one key, or none of them (benchmark).
+if [[ -n "$MINER_PRIVATE_KEY" && -n "$MINER_SEED" ]]; then
+    print_error "Provide the miner private key or the seed, not both"
+    exit 1
+fi
+if [[ -n "$MINER_SS58" && -z "$MINER_PRIVATE_KEY$MINER_SEED" ]] || [[ -z "$MINER_SS58" && -n "$MINER_PRIVATE_KEY$MINER_SEED" ]]; then
+    print_error "Miner SS58 and a key (private key or seed) must both be provided or both be empty"
     exit 1
 fi
 

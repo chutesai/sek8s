@@ -23,7 +23,7 @@ This guide combines the host automation in `host-tools/`, the k3s-based TDX gues
 - Intel TDX-capable server (Ubuntu **26.04** host, NVIDIA GPUs). **8× H200: NVSwitch required** for the validated stack. **RTX Pro 6000** has no NVSwitch. **Lab-validated** combinations are in [`host-tools/README.md`](../host-tools/README.md#validated-host-topologies).
 - Intel PCCS access + API key (for PCK cert registration)
 - The VM image downloaded via `chutes-cvm image download` (requires `aria2`)
-- Miner credentials: SS58 address and secret seed without `0x`
+- Miner credentials: SS58 address and the hotkey's private key (or, for older hotkey files, its secret seed), without `0x`
 - Control node provisioned with the [chutes-miner](https://github.com/chutesai/chutes-miner) Ansible roles
 - `chutes-miner-cli` installed on that control node to manage miner inventory
 - `kubectl` access to the TEE VM's bridged k3s endpoint for verification (Helm **not** required on the TEE node)
@@ -101,7 +101,8 @@ vm:
 
 miner:
   ss58: "<your_ss58>"
-  seed: "<your_seed_no_0x>"
+  private_key: "<hotkey privateKey, no 0x>"
+  # seed: "<secretSeed, no 0x>"  # instead of private_key; newer btcli hotkey files may not include it
 
 # Optional: Docker Hub credentials for authenticated pulls
 # docker_hub:
@@ -209,7 +210,7 @@ You can still use `kubectl` from your workstation to spot-check pods, but day-to
 - **GPU recovery** – If passthrough fails, relaunch the VM (GPUs are rebound automatically). For stuck GPUs, use `sudo nvidia-gpu-tools --recover-broken-gpu --gpu-bdf=<bdf>` (installed with the chutes-cvm CLI by `install.sh`).
 - **Upgrades** – Download the new image with `chutes-cvm image download`, then rerun `chutes-cvm guest launch config.yaml`. The overlay is recreated when the base image SHA256 changes.
 - **Restart workloads** – The miner kubeconfig has get/list/watch/patch on all deployments and daemonsets in all namespaces (ClusterRole `miner-rollout-restart`). Outside the chutes namespace, the admission controller OPA policy allows only patches to `spec.template.metadata.annotations["kubectl.kubernetes.io/restartedAt"]` (rollout restart). Example: `kubectl rollout restart daemonset/attestation-proxy -n attestation-system`.
-- **Security** – Protect the config volume—it holds the plain-text miner seed and Docker Hub token. Rotate credentials by editing `config.yaml` and relaunching (the config volume is refreshed each launch).
+- **Security** – Protect the config volume—it holds the plain-text miner hotkey key (private key or seed) and Docker Hub token. Rotate credentials by editing `config.yaml` and relaunching (the config volume is refreshed each launch).
 
 ---
 

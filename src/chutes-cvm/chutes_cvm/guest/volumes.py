@@ -71,6 +71,7 @@ def setup_config_volume(config: LaunchConfig, benchmark: bool) -> None:
                 "sudo",
                 f"HOSTNAME={config.vm.hostname}",
                 f"MINER_SS58={config.miner.ss58}",
+                f"MINER_PRIVATE_KEY={config.miner.private_key}",
                 f"MINER_SEED={config.miner.seed}",
                 f"VM_IP={config.network.vm_ip}",
                 f"VM_GATEWAY={gateway}",

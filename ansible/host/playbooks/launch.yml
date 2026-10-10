@@ -2,8 +2,9 @@
 # Bootstrap base image (if missing), render config.yaml on host, run `chutes-cvm guest launch`.
 #
 # Required (host_vars / group_vars / Vault):
-#   chutes_miner_ss58, chutes_miner_seed — miner credentials for the guest config
-#   chutes_hotkey_path                   — controller path to Bittensor hotkey JSON (for node-health poll)
+#   chutes_hotkey_path — controller path to Bittensor hotkey JSON: the guest config's miner
+#                        credentials (ss58 + privateKey, else secretSeed) and the node-health poll
+#   (chutes_miner_ss58 plus chutes_miner_private_key or chutes_miner_seed override the file)
 #
 # Optional:
 #   chutes_config_remote_path — default {{ sek8s_remote_host_tools }}/scripts/config.yaml

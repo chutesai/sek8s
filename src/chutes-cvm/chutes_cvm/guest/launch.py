@@ -324,8 +324,10 @@ def _validate(config: LaunchConfig, benchmark: bool) -> None:
     if not benchmark:
         if not config.miner.ss58:
             missing.append("miner.ss58 (miner.ss58 or --miner-ss58)")
-        if not config.miner.seed:
-            missing.append("miner.seed (miner.seed or --miner-seed)")
+        if not (config.miner.private_key or config.miner.seed):
+            missing.append(
+                "miner.private_key or miner.seed (--miner-private-key or --miner-seed)"
+            )
     if missing:
         raise LaunchError(
             "missing required configuration:\n  - " + "\n  - ".join(missing)

@@ -4,8 +4,9 @@ import hashlib
 import io
 import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
+import hotkey_fixtures as hk
 import pytest
 from chutes_cvm.guest import chutes_api
 from chutes_cvm.guest.chutes_api import (
@@ -14,6 +15,7 @@ from chutes_cvm.guest.chutes_api import (
     submit_profile,
 )
 from chutes_cvm.guest.host_profile import HostProfile
+from substrateinterface import Keypair
 
 
 def _capture(**over):
@@ -93,27 +95,38 @@ def test_apply_target_os_requires_block():
 def test_load_creds_missing(tmp_path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("miner: {}\n")
-    with pytest.raises(ChutesApiError, match="ss58 / miner.seed"):
+    with pytest.raises(ChutesApiError, match="miner.private_key or miner.seed"):
         chutes_api._load_miner_creds(str(cfg))
 
 
-def test_load_creds_ok(tmp_path):
+@pytest.mark.parametrize("key", ["seed", "private_key"])
+def test_load_creds_ok(tmp_path, key):
+    value = hk.SEED if key == "seed" else hk.PRIVATE_KEY
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("miner:\n  ss58: 5ABC\n  seed: '0xdead'\n")
-    assert chutes_api._load_miner_creds(str(cfg)) == ("5ABC", "0xdead")
+    cfg.write_text(f"miner:\n  ss58: {hk.SS58}\n  {key}: '{value}'\n")
+    expected = (
+        (hk.SS58, "", hk.SEED) if key == "seed" else (hk.SS58, hk.PRIVATE_KEY, "")
+    )
+    assert chutes_api._load_miner_creds(str(cfg)) == expected
 
 
-def test_sign_message_format_and_headers():
-    kp = MagicMock()
-    kp.ss58_address = "5HOTKEY"
-    kp.sign.return_value = b"\x01\x02\x03"
-    with patch("chutes_cvm.guest.chutes_api.Keypair") as KP:
-        KP.create_from_seed.return_value = kp
-        hotkey, sig = chutes_api._sign("0xseed", b"body", "1700000000")
-    assert hotkey == "5HOTKEY"
-    assert sig == "010203"
-    signed = kp.sign.call_args.args[0]
-    assert signed == f"5HOTKEY:1700000000:{hashlib.sha256(b'body').hexdigest()}"
+@pytest.mark.parametrize(
+    "private_key, seed",
+    [("", hk.SEED), (hk.PRIVATE_KEY, "")],
+    ids=["seed", "private-key"],
+)
+def test_sign_message_format_and_headers(private_key, seed):
+    hotkey, sig = chutes_api._sign(hk.SS58, private_key, seed, b"body", "1700000000")
+    assert hotkey == hk.SS58
+    signed = f"{hk.SS58}:1700000000:{hashlib.sha256(b'body').hexdigest()}"
+    assert Keypair(ss58_address=hk.SS58).verify(signed, bytes.fromhex(sig))
+
+
+def test_sign_refuses_a_key_for_another_hotkey():
+    """Was a warning; signing as another hotkey only ever got the request rejected."""
+    other = Keypair.create_from_seed("0x" + "11" * 32).ss58_address
+    with pytest.raises(ChutesApiError, match="not miner.ss58"):
+        chutes_api._sign(other, "", hk.SEED, b"body", "1700000000")
 
 
 def _creds(tmp_path):

@@ -8,6 +8,7 @@ test_config.py. All privileged steps (volumes/network/boot) and host probes are 
 
 from unittest.mock import MagicMock, patch
 
+import hotkey_fixtures as hk
 import pytest
 import topology_fixtures as known
 from chutes_cvm.guest import image_set, images, launch
@@ -33,6 +34,7 @@ _FLAT_TO_PATH = {
     "base_image": "vm.base_image",
     "vm_image_dir": "vm.vm_image_directory",
     "miner_ss58": "miner.ss58",
+    "miner_private_key": "miner.private_key",
     "miner_seed": "miner.seed",
     "vm_ip": "network.vm_ip",
     "network_type": "network.type",
@@ -119,6 +121,53 @@ def test_validate_requires_creds_in_standard_mode():
 def test_validate_requires_hostname():
     with pytest.raises(LaunchError, match="hostname"):
         _validate(_cfg(), benchmark=True)
+
+
+def test_validate_accepts_a_private_key_in_place_of_the_seed():
+    _validate(
+        _cfg(hostname="h", miner_ss58=hk.SS58, miner_private_key=hk.PRIVATE_KEY),
+        benchmark=False,
+    )
+
+
+def test_validate_requires_a_key():
+    with pytest.raises(LaunchError, match="miner.private_key or miner.seed"):
+        _validate(_cfg(hostname="h", miner_ss58=hk.SS58), benchmark=False)
+
+
+def test_resolve_config_takes_the_private_key_flag():
+    args = _build_parser().parse_args(
+        [
+            "--hostname",
+            "h",
+            "--miner-ss58",
+            hk.SS58,
+            "--miner-private-key",
+            hk.PRIVATE_KEY,
+        ]
+    )
+    cfg, *_ = _resolve_config(args)
+    assert cfg.miner.private_key == hk.PRIVATE_KEY
+    assert cfg.miner.seed == ""
+
+
+@pytest.mark.parametrize(
+    "flags, complaint",
+    [
+        (["--miner-private-key", hk.PRIVATE_KEY, "--miner-seed", hk.SEED], "not both"),
+        (["--miner-private-key", "0x" + hk.PRIVATE_KEY[2:]], "0x prefix"),
+        (["--miner-private-key", hk.PRIVATE_KEY[:127]], "128 hex characters"),
+        (["--miner-seed", "0x" + hk.SEED[2:]], "0x prefix"),
+        (["--miner-seed", hk.PRIVATE_KEY], "64 hex characters"),
+    ],
+    ids=["both", "private-key-0x", "private-key-127", "seed-0x", "private-key-as-seed"],
+)
+def test_resolve_config_refuses_a_bad_credential_before_launch(flags, complaint):
+    args = _build_parser().parse_args(
+        ["--hostname", "h", "--miner-ss58", hk.SS58, *flags]
+    )
+    with pytest.raises(LaunchError, match=complaint):
+        _resolve_config(args)
 
 
 def test_validate_benchmark_only_needs_hostname():
@@ -231,9 +280,9 @@ _STD_ARGV = [
     "--hostname",
     "h",
     "--miner-ss58",
-    "x",
+    hk.SS58,
     "--miner-seed",
-    "y",
+    hk.SEED,
     "--network-type",
     "user",
     "--no-gpus",

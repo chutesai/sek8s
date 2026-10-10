@@ -100,7 +100,7 @@ Production VMs require three attached volumes (created by `chutes-cvm guest laun
 - **Contents**:
   - `hostname` - Node hostname
   - `miner-ss58` - Bittensor SS58 address
-  - `miner-seed` - Bittensor secret seed
+  - `miner-private-key` or `miner-seed` - the hotkey's sr25519 private key or secret seed (exactly one)
   - `network-config.yaml` - Netplan configuration
   - `docker-hub-username` - (optional) Docker Hub username for authenticated pulls
   - `docker-hub-token` - (optional) Docker Hub PAT for authenticated pulls and cosign
