@@ -30,11 +30,15 @@ def run_teardown(shell):
 
 
 def test_a_vm_that_survives_the_force_stop_stops_the_teardown(run_teardown):
-    result, calls = run_teardown(1, stop_stderr="QEMU is still reclaiming the guest's memory")
+    result, calls = run_teardown(
+        1, stop_stderr="QEMU is still reclaiming the guest's memory"
+    )
 
     assert calls == ["chutes-cvm guest stop --force"]
     assert result.returncode == 1
-    assert "still reclaiming" in result.stderr  # the stop's own reason is no longer hidden
+    assert (
+        "still reclaiming" in result.stderr
+    )  # the stop's own reason is no longer hidden
     assert "could not be stopped" in result.stderr
     assert "Teardown complete" not in result.stdout
 

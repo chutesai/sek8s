@@ -551,12 +551,14 @@ def test_b300_keeps_guest_numa_but_not_pxb():
 def test_pxb_grouping_follows_guest_numa_for_other_profiles():
     assert HostProfile.from_dict(document()).uses_pxb_grouping is True  # H200, 2 nodes
     assert (
-        HostProfile.from_dict(document(numa={"node_count": 4})).uses_pxb_grouping is False
+        HostProfile.from_dict(document(numa={"node_count": 4})).uses_pxb_grouping
+        is False
     )
 
 
 def test_pxb_grouping_without_gpus_follows_guest_numa():
     """A GPU-less debug host has no model to object to PXB grouping."""
     assert (
-        HostProfile.from_dict(document(gpus=[], nvswitches=[])).uses_pxb_grouping is True
+        HostProfile.from_dict(document(gpus=[], nvswitches=[])).uses_pxb_grouping
+        is True
     )
