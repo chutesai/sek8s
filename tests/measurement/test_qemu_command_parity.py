@@ -1,30 +1,25 @@
-"""The measurement spec must reproduce the live launcher's RTMR0-shaping args.
+"""The RTMR0-shaping topology, which one traversal now produces for both purposes.
 
-HostProfile.qemu_command must match, byte-for-byte, what the real launch path
-(build_base_cmd + passthrough._build_pci_topology) emits with its sysfs lookups
-mocked to the same NUMA layout — so offline measurements can't drift from a real
-launch. Both paths emit a vfio-pci endpoint per root port; the measurement path
-uses a placeholder BDF (later swapped for a pci-bar-stub), so the endpoint lines
-are dropped from the comparison — only their BDF differs, and neither the BDF nor
-the endpoint device type is settled here.
+There is no second assembly left to compare against: ``QemuCommand.build`` walks the same
+traversal for a ``LaunchContext`` and a ``MeasurementContext``, so root ports, PXB bridges,
+chassis numbering and slot allocation cannot differ between a launch and a measurement by
+construction. What is worth pinning is the shape that walk produces, and that the endpoint hung
+off each root port is the right one for each purpose -- a ``vfio-pci`` for a launch, a
+``pci-bar-stub`` carrying that device's BARs for the dump.
 """
 
 import topology_fixtures as known
+from chutes_cvm.guest import qemu
+from chutes_cvm.guest.context import MeasurementContext, PassthroughSet
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import build_pci_topology
+from chutes_cvm.guest.qemu import PcieRootPinning
 
 _FW = "OVMF.inteltdx.fd"
 
 
 def _synth(doc):
     """The measurement command, built from a HostProfile over the captured device lists."""
-    return (
-        HostProfile(doc)
-        .qemu_command(
-            firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
-        )
-        .to_args()
-    )
+    return known.measurement_command(HostProfile.from_dict(doc), firmware=_FW).to_args()
 
 
 def _topology_args(cmd):
@@ -60,7 +55,7 @@ def test_numa_topology_groups_gpus_by_node():
     """One PXB per host NUMA node, each GPU on the bridge for its own node.
 
     There is no second assembly to compare against any more -- launch and measurement generation
-    call the same builder (passthrough._build_pci_topology), fed from the same captured devices.
+    call the same traversal, fed from the same captured devices.
     What is worth pinning is the shape it produces.
     """
     args = _topology_args(_synth(known.rtx_numa_doc()))
@@ -68,9 +63,18 @@ def test_numa_topology_groups_gpus_by_node():
     assert [
         a.split("id=")[1].split(",")[0] for a in args if a.startswith("pcie-root-port")
     ] == [f"rp{i}" for i in range(1, 9)]
-    # The command is native, so endpoints carry the captured devices' real BDFs; image_config
-    # swaps each for a pci-bar-stub, which is why no placeholder is invented here.
-    assert any("vfio-pci,host=0000:19:00.0" in a for a in _synth(known.rtx_numa_doc()))
+    # The dump hangs a stub off each root port, built from that device's own captured geometry --
+    # no BDF, because the generating box has no such device on its bus. A launch hangs the real
+    # vfio-pci endpoint off the very same root port.
+    host = HostProfile.from_dict(known.rtx_numa_doc())
+    assert any(
+        "pci-bar-stub" in d and "bus=rp1" in d
+        for d in known.measurement_command(host, firmware=_FW).devices
+    )
+    assert (
+        known.launch_context(host).endpoint(host, host.gpus[0], "rp1")
+        == f"vfio-pci,host={host.gpus[0].bdf},bus=rp1,addr=0x0,iommufd=iommufd0"
+    )
 
 
 def test_uneven_numa_split_follows_the_captured_vector():
@@ -103,10 +107,10 @@ def test_nvswitch_endpoints_follow_the_gpus():
 def test_cpu_args_come_from_the_reported_qemu_version():
     doc = known.rtx_numa_doc()
     doc["qemu"]["qemu_version"] = "10.2.1"
-    assert HostProfile(doc).cpu_args == "host,-avx10"
+    assert HostProfile.from_dict(doc).cpu_args == "host,-avx10"
     # Unknown/unsupported QEMU versions take the same -avx10 form.
     doc["qemu"]["qemu_version"] = "99.9.9"
-    assert HostProfile(doc).cpu_args == "host,-avx10"
+    assert HostProfile.from_dict(doc).cpu_args == "host,-avx10"
 
 
 def test_pci_topology_takes_the_decision_it_is_given():
@@ -117,20 +121,31 @@ def test_pci_topology_takes_the_decision_it_is_given():
     This used to be re-derived from the live host instead of taken from the caller, so a
     launcher that chose flat still got PXB bridges.
     """
-    host = HostProfile(known.h200_doc())
-    devices = dict(
-        gpus=host.gpus, nvswitches=host.attached_nvswitches, ib_devices=host.attached_ib
-    )
+    host = HostProfile.from_dict(known.h200_doc())
+    passthrough = PassthroughSet.from_profile(host)
 
-    flat = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
-    flat.devices = []
-    build_pci_topology(flat, **devices, pxb_grouping=False)
-    assert not any("pxb-pcie" in d for d in flat.devices)
+    def topology(pxb_grouping: bool) -> list[str]:
+        """The topology the traversal emits for a profile that says flat or PXB-grouped.
 
-    numa = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
-    numa.devices = []
-    build_pci_topology(numa, **devices, pxb_grouping=True)
-    assert any("pxb-pcie" in d for d in numa.devices)
+        ``_passthrough`` reads only ``uses_pxb_grouping`` off the profile -- which devices reach
+        the guest is the PassthroughSet's business -- so a stub states the one decision directly.
+        """
+        cmd = known.measurement_command(host, firmware=_FW)
+        cmd.devices = []
+        stub = known.QemuProfileStub(
+            mem="8G",
+            smp_topology="4,sockets=1,cores=4,threads=1",
+            uses_guest_numa=pxb_grouping,
+            uses_pxb_grouping=pxb_grouping,
+            tee_provider=host.tee_provider,
+        )
+        context = MeasurementContext.from_host(host, firmware=_FW)
+        assert context.passthrough == passthrough
+        qemu._passthrough(cmd, stub, context, PcieRootPinning(pxb_grouping))
+        return cmd.devices
+
+    assert not any("pxb-pcie" in d for d in topology(False))
+    assert any("pxb-pcie" in d for d in topology(True))
 
 
 def test_b300_numa_guest_keeps_flat_pci():
@@ -140,16 +155,17 @@ def test_b300_numa_guest_keeps_flat_pci():
     devices take the flat path's exact pcie.0 layout: emulated devices from 0x1, root ports from
     0x8. Only the memory/NUMA objects differ from a flat guest.
     """
-    host = HostProfile(known.b300_numa_doc())
+    host = HostProfile.from_dict(known.b300_numa_doc())
     assert host.uses_guest_numa is True
     assert host.uses_pxb_grouping is False
 
-    cmd = host.qemu_command(firmware=_FW, cpu_args="host,-avx10")
+    cmd = known.measurement_command(host, firmware=_FW)
     args = _topology_args(cmd.to_args())
     assert not any("pxb-pcie" in a for a in args)
     assert cmd.numa  # guest NUMA nodes are still built
     assert "memory-backend=mem0" not in cmd.machine
-    assert _slots(args, "virtio-blk-pci")[0] == "0x1"
+    # The dump's emulated devices are backing-free fillers at the launch's slots.
+    assert _slots(args, "virtio-")[0] == "0x1"
     root_ports = [a for a in args if a.startswith("pcie-root-port")]
     assert len(root_ports) == 8
     assert all("bus=pcie.0" in a for a in root_ports)

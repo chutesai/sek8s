@@ -283,7 +283,7 @@ Remove deprecated fields from your config. Run `chutes-cvm config init` for a cu
 See the `LaunchConfig` schema for the complete schema definition. Key sections:
 
 - **vm**: hostname (required), base_image (optional), vm_image_directory (optional)
-- **miner**: ss58, seed (both required)
+- **miner**: ss58 plus one key — private_key (the hotkey file's `privateKey`, 128 hex chars; the primary option) or seed (`secretSeed`, 64 hex chars; still supported, but hotkey files from newer btcli / Bittensor releases may not include it). Both are hex without `0x`; set one, not both.
 - **network**: vm_ip, bridge_ip, dns, public_interface (all required), type, ssh_port (optional)
 - **volumes**: cache, storage (both required), config (optional)
 - **docker_hub** (optional): `username` and `token` — Docker Hub auth for guest pulls/cosign
@@ -302,7 +302,8 @@ vm:
 
 miner:
   ss58: "5Grw..."
-  seed: "my-seed"
+  private_key: "<hotkey privateKey, 128 hex chars, no 0x>"
+  # seed: "<hotkey secretSeed, 64 hex chars, no 0x>"  # instead of private_key, for older hotkey files
 
 network:
   vm_ip: "192.168.100.2"

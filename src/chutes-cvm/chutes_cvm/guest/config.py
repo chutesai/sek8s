@@ -19,7 +19,8 @@ import sys
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from chutes_cvm.guest.hotkey import PRIVATE_KEY_HEX_LEN, SEED_HEX_LEN, check_key_hex
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import YamlConfigSettingsSource
 
@@ -35,41 +36,88 @@ _yaml_path: "str | None" = None
 
 class VmSection(BaseModel):
     hostname: str = Field(
-        default="", description="VM hostname (must be unique per miner hotkey)"
+        default="",
+        description="VM hostname (must be unique per miner hotkey)",
+        json_schema_extra={"cli": "--hostname"},
     )
     base_image: str = Field(
         default="",
         description="Published image-set dir; empty = /var/lib/chutes/base-images/tdx-guest/",
+        json_schema_extra={"cli": "--base-image"},
     )
     vm_image_directory: str = Field(
-        default="", description="Per-VM image dir; empty = /var/lib/chutes/vm-images/"
+        default="",
+        description="Per-VM image dir; empty = /var/lib/chutes/vm-images/",
+        json_schema_extra={"cli": "--vm-image-dir"},
     )
 
 
 class MinerSection(BaseModel):
     ss58: str = Field(
-        default="", description="Miner SS58 credential (required unless --benchmark)"
+        default="",
+        description="Miner SS58 credential (required unless --benchmark)",
+        json_schema_extra={"cli": "--miner-ss58"},
+    )
+    private_key: str = Field(
+        default="",
+        description="Miner hotkey privateKey, 128 hex chars without 0x (set this or seed)",
+        json_schema_extra={"cli": "--miner-private-key"},
     )
     seed: str = Field(
-        default="", description="Miner seed credential (required unless --benchmark)"
+        default="",
+        description="Miner hotkey secretSeed, 64 hex chars without 0x (set this or private_key)",
+        json_schema_extra={"cli": "--miner-seed"},
     )
+
+    @field_validator("private_key")
+    @classmethod
+    def _private_key_format(cls, v: str) -> str:
+        return check_key_hex(v, PRIVATE_KEY_HEX_LEN, "miner.private_key") if v else v
+
+    @field_validator("seed")
+    @classmethod
+    def _seed_format(cls, v: str) -> str:
+        return check_key_hex(v, SEED_HEX_LEN, "miner.seed") if v else v
+
+    @model_validator(mode="after")
+    def _one_credential(self) -> "MinerSection":
+        # The VM refuses a config volume carrying both, so refuse before launching.
+        if self.private_key and self.seed:
+            raise ValueError("set miner.private_key or miner.seed, not both")
+        return self
 
 
 class NetworkSection(BaseModel):
-    vm_ip: str = Field(default="192.168.100.2", description="VM IP address")
-    bridge_ip: str = Field(
-        default="192.168.100.1/24", description="Bridge IP with CIDR"
+    vm_ip: str = Field(
+        default="192.168.100.2",
+        description="VM IP address",
+        json_schema_extra={"cli": "--vm-ip"},
     )
-    dns: str = Field(default="8.8.8.8", description="VM DNS server")
+    bridge_ip: str = Field(
+        default="192.168.100.1/24",
+        description="Bridge IP with CIDR",
+        json_schema_extra={"cli": "--bridge-ip"},
+    )
+    dns: str = Field(
+        default="8.8.8.8",
+        description="VM DNS server",
+        json_schema_extra={"cli": "--vm-dns"},
+    )
     public_interface: str = Field(
         default="",
         description="Public interface; empty = auto-detect from the default route",
+        json_schema_extra={"cli": "--public-iface"},
     )
     type: Literal["tap", "user"] = Field(
         default="tap",
         description="Network type: tap (bridged) or user (SLIRP/port forwarding)",
+        json_schema_extra={"cli": "--network-type"},
     )
-    ssh_port: int = Field(default=2222, description="SSH port for user-mode networking")
+    ssh_port: int = Field(
+        default=2222,
+        description="SSH port for user-mode networking",
+        json_schema_extra={"cli": "--ssh-port"},
+    )
 
 
 class VolumeSpec(BaseModel):
@@ -86,12 +134,33 @@ class ConfigVolumeSpec(BaseModel):
 
 
 class VolumesSection(BaseModel):
-    cache: VolumeSpec = VolumeSpec(size="5000G")
-    storage: VolumeSpec = VolumeSpec(size="500G")
-    config: ConfigVolumeSpec = ConfigVolumeSpec()
+    """The flags live here rather than on the fields because ``VolumeSpec`` is shared: the same
+    ``size``/``path`` pair is the cache's or the storage's depending on which parent holds it, so
+    the flag is a function of (parent, field) and only the parent knows both."""
+
+    cache: VolumeSpec = Field(
+        default=VolumeSpec(size="5000G"),
+        description="Cache volume",
+        json_schema_extra={"cli": {"size": "--cache-size", "path": "--cache-volume"}},
+    )
+    storage: VolumeSpec = Field(
+        default=VolumeSpec(size="500G"),
+        description="Storage volume",
+        json_schema_extra={
+            "cli": {"size": "--storage-size", "path": "--storage-volume"}
+        },
+    )
+    config: ConfigVolumeSpec = Field(
+        default=ConfigVolumeSpec(),
+        description="Config volume",
+        json_schema_extra={"cli": {"path": "--config-volume"}},
+    )
 
 
 class DevicesSection(BaseModel):
+    #: No ``cli`` entry: the flag that reaches this is ``--skip-bind``, which sets it FALSE.
+    #: A flag naming the negation of its field is not "this field's flag", so the launcher
+    #: handles it explicitly rather than pretending the mapping is direct.
     bind_devices: bool = Field(
         default=True,
         description="Bind GPU/NVSwitch to vfio-pci (set false to skip binding)",
@@ -100,17 +169,62 @@ class DevicesSection(BaseModel):
 
 class RuntimeSection(BaseModel):
     foreground: bool = Field(
-        default=False, description="Run the VM in the foreground instead of daemonizing"
+        default=False,
+        description="Run the VM in the foreground instead of daemonizing",
+        json_schema_extra={"cli": "--foreground"},
     )
 
 
 class DockerHubSection(BaseModel):
     username: str = Field(
-        default="", description="Docker Hub username (optional; use with token)"
+        json_schema_extra={"cli": "--docker-hub-username"},
+        default="",
+        description="Docker Hub username (optional; use with token)",
     )
     token: str = Field(
-        default="", description="Docker Hub PAT/password (optional; use with username)"
+        json_schema_extra={"cli": "--docker-hub-token"},
+        default="",
+        description="Docker Hub PAT/password (optional; use with username)",
     )
+
+
+def cli_fields(
+    model: "type[BaseModel] | None" = None, _prefix: "tuple[str, ...]" = ()
+) -> "list[tuple[str, tuple[str, ...], Any, str]]":
+    """Every config field that has a CLI flag, as ``(flag, path, annotation, help)``.
+
+    The model is the single source of truth for a setting: its YAML key, its env var, its default,
+    its description AND its flag. There used to be a second table mapping argparse dests onto
+    config paths, which meant every flag was declared twice -- and a flag added to the parser but
+    forgotten in the table silently did nothing, which is how ``network.ssh_port`` came to be
+    configurable but unplumbed.
+
+    ``json_schema_extra={"cli": "--flag"}`` on a scalar field names its flag. On a field whose type
+    is itself a model, ``{"cli": {child: "--flag"}}`` names its children's -- needed because
+    ``VolumeSpec`` is shared by cache and storage, so the flag depends on the parent.
+
+    ``help`` is the field's description -- prefixed by the parent's for those parent-named flags,
+    since "Volume size" alone does not say which volume.
+    """
+    model = model or LaunchConfig
+    out: "list[tuple[str, tuple[str, ...], Any, str]]" = []
+    for name, field in model.model_fields.items():
+        ann = field.annotation
+        extra = field.json_schema_extra
+        cli = extra.get("cli") if isinstance(extra, dict) else None
+        if isinstance(ann, type) and issubclass(ann, BaseModel):
+            children = cli if isinstance(cli, dict) else {}
+            for child, child_field in ann.model_fields.items():
+                flag = children.get(child)
+                if isinstance(flag, str):
+                    help_ = f"{field.description}: {child_field.description}"
+                    out.append(
+                        (flag, _prefix + (name, child), child_field.annotation, help_)
+                    )
+            out.extend(cli_fields(ann, _prefix + (name,)))
+        elif isinstance(cli, str):
+            out.append((cli, _prefix + (name,), ann, field.description or ""))
+    return out
 
 
 class LaunchConfig(BaseSettings):

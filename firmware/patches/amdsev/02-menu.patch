@@ -1,0 +1,34 @@
+diff --git a/OvmfPkg/AmdSev/AmdSevX64.fdf b/OvmfPkg/AmdSev/AmdSevX64.fdf
+index f86005090d..5551c7afce 100644
+--- a/OvmfPkg/AmdSev/AmdSevX64.fdf
++++ b/OvmfPkg/AmdSev/AmdSevX64.fdf
+@@ -178,8 +178,6 @@ INF  MdeModulePkg/Universal/Console/GraphicsConsoleDxe/GraphicsConsoleDxe.inf
+ INF  MdeModulePkg/Universal/Console/TerminalDxe/TerminalDxe.inf
+ INF  MdeModulePkg/Universal/DriverHealthManagerDxe/DriverHealthManagerDxe.inf
+ INF  MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
+-INF  MdeModulePkg/Application/UiApp/UiApp.inf
+-INF  MdeModulePkg/Application/BootManagerMenuApp/BootManagerMenuApp.inf
+ INF  OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.inf
+ INF  MdeModulePkg/Universal/DevicePathDxe/DevicePathDxe.inf
+ INF  MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoDxe.inf
+diff --git a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+index b696f1b338..c6ffa6eb27 100644
+--- a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
++++ b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+@@ -1665,6 +1665,16 @@ PlatformBootManagerAfterConsole (
+   //
+   TryRunningQemuKernel ();
+ 
++  //
++  // sek8s: the hash-verified direct-boot kernel is the only image this firmware may
++  // start. Getting here means it was absent, refused, or returned -- halt instead of
++  // falling through to boot options or the setup UI.
++  //
++  if (FeaturePcdGet (PcdBootRestrictToFirmware)) {
++    AsciiPrint ("sek8s: verified direct-boot kernel did not start; halting\n");
++    CpuDeadLoop ();
++  }
++
+   //
+   // Perform some platform specific connect sequence
+   //

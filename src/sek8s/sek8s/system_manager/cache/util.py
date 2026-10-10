@@ -80,7 +80,8 @@ async def fetch_repo_info(repo_id: str, revision: str) -> Optional[dict]:
 async def fetch_hf_info(chute_id: str) -> HfInfoResponse:
     """GET validator /chutes/{chute_id}/hf_info and return parsed HfInfoResponse.
 
-    Request is signed with miner credentials when MINER_SS58/MINER_SEED are set.
+    Request is signed with miner credentials when MINER_SS58 and MINER_PRIVATE_KEY or
+    MINER_SEED are set.
     """
     base = (cache_config.validator_base_url or "").strip().rstrip("/")
     if not base:

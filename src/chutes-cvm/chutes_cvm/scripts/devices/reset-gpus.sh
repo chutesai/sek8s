@@ -4,21 +4,25 @@
 # Ensures no VM is running before resetting to prevent corrupting active
 # workloads. The VM must be stopped gracefully before running this.
 #
+# Which reset (CC or PPCIe) is the GPU profile's decision, not this script's: run it through
+# `chutes-cvm host reset-gpus`, which passes the profile's nvidia-gpu-tools arguments.
+#
 # Usage:
-#   sudo ./devices/reset-gpus.sh
-#   chutes-cvm host reset-gpus   # via PATH (after host setup)
+#   chutes-cvm host reset-gpus
+#   sudo ./devices/reset-gpus.sh --reset-with-sbr --reset-after-cc-mode-switch
 
 set -euo pipefail
 
-PROCESS_NAME="chutes-td"
-
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--help]
+Usage: $(basename "$0") <nvidia-gpu-tools SBR args...>
 
 Reset all NVIDIA GPUs via Secondary Bus Reset (SBR) using nvidia-gpu-tools.
+The SBR arguments come from the host's GPU profile; normally run this through
+\`chutes-cvm host reset-gpus\`, which supplies them.
 
-The VM process ($PROCESS_NAME) must not be running during reset.
+No VM may be running, and no previous one may still be reclaiming its
+memory, during reset.
 SBR resets clear GPU state and fabric configuration, which would
 corrupt any active workloads.
 
@@ -34,40 +38,30 @@ case "${1:-}" in
         exit 0
         ;;
     "")
-        ;;
-    *)
-        echo "Unknown option: $1"
+        echo "Error: no SBR arguments given."
         usage
         exit 1
         ;;
 esac
+SBR_ARGS=("$@")
 
-# Non-zombie QEMU whose cmdline includes this guest name (-name / process=).
-_live_chutes_td_qemu_running() {
-    local pid state cmdline
-    while read -r pid; do
-        [[ -z "$pid" ]] && continue
-        [[ -r "/proc/$pid/stat" ]] || continue
-        state=$(ps -p "$pid" -o stat= 2>/dev/null || echo "")
-        [[ "$state" == Z* ]] && continue
-        cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || echo "")
-        if [[ "$cmdline" != *qemu-system* && "$cmdline" != *qemu-kvm* ]]; then
-            continue
-        fi
-        [[ "$cmdline" == *"$PROCESS_NAME"* ]] || continue
-        return 0
-    done < <(
-        { pgrep -f 'qemu-system' 2>/dev/null || true
-          pgrep -f 'qemu-kvm' 2>/dev/null || true
-        } | sort -un
-    )
-    return 1
-}
+# Whether the GPUs are ours to reset is the same device-ownership question a launch asks, so
+# ask it the same way rather than re-implementing it here. This script used to match /proc/<pid>/cmdline and
+# skip zombies -- both of which miss a QEMU that powered its guest off but is still reclaiming
+# the previous guest's private memory. That process holds every GPU, and SBR-resetting under
+# it is the worst thing this script can do.
+# Fail closed but say so: without the CLI, `if !` below would see exit 127 and refuse with a
+# message about the GPUs being held, which would be a lie.
+if ! command -v chutes-cvm >/dev/null 2>&1; then
+    echo "Error: chutes-cvm not found in PATH; cannot check whether the GPUs are free."
+    echo "Run this via \`chutes-cvm host reset-gpus\`, or add the CLI shim to PATH."
+    exit 1
+fi
 
-if _live_chutes_td_qemu_running; then
-    echo "Error: TDX VM (QEMU, $PROCESS_NAME) is running."
+if ! chutes-cvm host devices-free; then
     echo ""
-    echo "Stop the VM gracefully before resetting GPUs:"
+    echo "Not resetting: something still holds the GPUs (see above)."
+    echo "If a VM is running, stop it gracefully first:"
     echo "  chutes-miner tee shutdown --ip <HOST_IP> --confirm"
     echo "  chutes-miner tee shutdown --name <SERVER_NAME> --confirm"
     exit 1
@@ -95,16 +89,7 @@ fi
 
 GPU_TOOLS_TIMEOUT=120
 
-# CC-mode Blackwell / RTX use --reset-after-cc-mode-switch; H200 PPCIe uses ppcie flag.
-if lspci -Dnn 2>/dev/null | grep -qE '10de:(3182|2901|2bb1|2bb5)'; then
-    SBR_ARGS=(--reset-with-sbr --reset-after-cc-mode-switch)
-    SBR_LABEL="CC-mode Blackwell/RTX"
-else
-    SBR_ARGS=(--reset-with-sbr --reset-after-ppcie-mode-switch)
-    SBR_LABEL="PPCIe (H200/H100)"
-fi
-
-echo "Resetting GPUs via Secondary Bus Reset (${SBR_LABEL}, timeout: ${GPU_TOOLS_TIMEOUT}s)..."
+echo "Resetting GPUs via Secondary Bus Reset (${SBR_ARGS[*]}, timeout: ${GPU_TOOLS_TIMEOUT}s)..."
 if ! timeout "$GPU_TOOLS_TIMEOUT" sudo "$CMD" "${SBR_ARGS[@]}"; then
     echo ""
     echo "Error: GPU reset timed out or failed after ${GPU_TOOLS_TIMEOUT}s."

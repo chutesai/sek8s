@@ -22,12 +22,6 @@
         state: absent
       failed_when: false
 
-    - name: Remove stale GPU image
-      ansible.builtin.file:
-        path: "{{ gpu_img_path }}"
-        state: absent
-      failed_when: false
-
 - name: Check if prepared image cache exists
   ansible.builtin.stat:
     path: "{{ prepared_img_path }}"

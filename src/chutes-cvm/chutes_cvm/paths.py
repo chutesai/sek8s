@@ -39,9 +39,14 @@ def firmware_dir() -> Path:
     return Path(os.environ.get("CHUTES_CVM_FIRMWARE_DIR") or (_REPO_ROOT / "firmware"))
 
 
-def firmware_path() -> str:
-    """Full path to the guest TDVF. MUST NOT be overridable by user config: MRTD depends on it."""
-    return str(firmware_dir() / GUEST_FIRMWARE)
+def firmware_path(filename: str = GUEST_FIRMWARE) -> str:
+    """Full path to the guest firmware. MUST NOT be overridable by user config: the TDX MRTD
+    and the SEV-SNP launch digest are both computed over these exact bytes.
+
+    ``filename`` comes from the platform's ``TeeProvider.default_firmware`` -- the TDVF for
+    Intel, the AMD OVMF build for SEV-SNP. Defaults to the TDX firmware so every existing
+    caller is unchanged."""
+    return str(firmware_dir() / filename)
 
 
 def gpu_tools_dir() -> Path:
@@ -49,16 +54,16 @@ def gpu_tools_dir() -> Path:
     return SCRIPTS_DIR / "gpu-tools"
 
 
-def tdx_measure_script() -> Path:
-    """The bundled ``tdx-measure``: the single implementation of which files RTMR3
+def tee_measure_script() -> Path:
+    """The bundled ``tee-measure``: the single implementation of which files RTMR3
     measures, in what order, and how each is hashed.
 
-    The identical file is installed into the guest at ``/usr/local/bin/tdx-measure`` by
-    the rtmr3-measure Ansible role, and is run there by the initramfs measurer, the
-    build-time manifest generator and ``rtmr3-verify``. Predicting a measurement on the
+    The identical file is installed into the guest at ``/usr/local/bin/tee-measure`` by
+    the rootfs-measure Ansible role, and is run there by the initramfs measurer, the
+    build-time manifest generator and ``rootfs-verify``. Predicting a measurement on the
     host must run the same script rather than reimplement it — four independent walkers
-    of ``tdx-measure.conf`` used to exist and they disagreed four ways."""
-    return SCRIPTS_DIR / "tdx-measure"
+    of ``tee-measure.conf`` used to exist and they disagreed four ways."""
+    return SCRIPTS_DIR / "tee-measure"
 
 
 def default_config_path() -> str:

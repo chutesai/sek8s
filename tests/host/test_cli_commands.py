@@ -2,7 +2,7 @@
 
 Covers the noun-group command surface: every operator command is a noun (guest / host /
 image / config / measurements) whose args are forwarded verbatim to that subpackage's main.
-The low-level QEMU boot primitive (chutes_cvm.guest.__main__) is not a CLI command — the
+The low-level QEMU boot primitive (chutes_cvm.guest.vm) is not a CLI command — the
 operator VM lifecycle lives under the `guest` noun (see test_guest_cli.py for its verbs).
 """
 

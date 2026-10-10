@@ -10,6 +10,32 @@ Version source of truth: `src/sek8s/VERSION`
 > **Note:** Prior to 0.2.5, the sek8s package and VM image shared a single version
 > and codebase. Entries below 0.2.5 reflect service-level changes from that era.
 
+## [0.5.0] - 2026-10-10
+
+### Added
+- AMD SEV-SNP attestation. The attestation service picks its evidence provider at runtime from
+  `/dev/tdx_guest` or `/dev/sev-guest`. `SnpQuoteProvider` reads the PSP-signed report through
+  configfs-TSM, falling back to the `SNP_GET_REPORT` ioctl. Both platforms bind
+  `nonce || sha256(server cert public key)` into the report data.
+- `GET /quote` on the attestation service, an alias of `/tdx/quote` (kept) that returns the TDX
+  quote or the SEV-SNP report.
+- system-manager signs validator requests with `MINER_PRIVATE_KEY` (the 64-byte sr25519 private
+  key) when set, else `MINER_SEED`, through the shared `sek8s_common.hotkey.load_miner_keypair`
+  (also used by the attestation proxy). Errors never contain key material.
+
+### Changed
+- system-manager refuses to sign with a key whose address is not `MINER_SS58`, instead of signing
+  as another hotkey, and `MinerConfig.miner_keypair` returns None when no key is set.
+- `AttestationResponse` carries the evidence in `quote` on every platform (a TDX quote or the
+  raw SEV-SNP report), the field the API reads; it tells the platforms apart by the bytes.
+  `tdx_quote` is gone: the API reads it only as a fallback for older VMs, so this release needs
+  an API that reads `quote`.
+
+### Fixed
+- Quote nonce validation (`sek8s.nonce`) requires exactly 64 hex characters. It used
+  `bytes.fromhex`, which skips whitespace between byte pairs, so a 64-character nonce with a
+  gap decoded short of 32 bytes (refused downstream regardless).
+
 ## [0.4.0] - 2026-09-14
 
 ### Added

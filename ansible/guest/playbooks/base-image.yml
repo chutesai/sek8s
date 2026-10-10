@@ -103,13 +103,12 @@
   become: true
   tags:
     - build
-  # This playbook never uses a cache, whatever NO_CACHE says. run-vm only copies the prepared image
-  # over the build disk `when: (not build_image.stat.exists) or no_cache == 'true'`, so with a stale
-  # /var/lib/libvirt/images/tdx-guest.qcow2 lying around and the flag forgotten it boots whatever a
-  # previous run left and captures THAT as the layer. Observed: a base image published with
-  # cuda-toolkit in it, from a half-finished guest build, caught only because it was 3x the expected
-  # size. The output here is a published artifact others pin by hash, so it always starts clean —
-  # and the inputs are hash-pinned anyway, so a re-fetch costs time, never correctness.
+  # This playbook never uses a cache, whatever NO_CACHE says: fetch-image re-fetches the cloud image
+  # and discards the prepared checkpoint. The output is a published artifact others pin by hash, so
+  # it always starts clean — and the inputs are hash-pinned anyway, so a re-fetch costs time, never
+  # correctness. (It was first forced for the build disk: run-vm used to boot whatever disk a
+  # previous run left, and a base image was published with cuda-toolkit in it from a half-finished
+  # guest build. run-vm now always starts from a fresh copy, for every playbook.)
   vars:
     no_cache: 'true'
   # virt-host-prereqs notifies `restart libvirtd` when it rewrites qemu.conf. That fires only on a
@@ -140,6 +139,8 @@
     - name: Boot the build VM
       ansible.builtin.include_role:
         name: run-vm
+      vars:
+        start_img_path: "{{ prepared_start_img_path }}"
 
 - name: Install the common package set
   hosts: vm

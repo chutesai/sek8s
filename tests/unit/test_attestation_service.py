@@ -64,9 +64,11 @@ def attestation_client(monkeypatch, sample_devices):
         "sek8s.services.attestation.GpuDeviceProvider",
         lambda: provider,
     )
+    # The service resolves its provider at request time via QuoteProvider.create(), so the
+    # TEE is chosen by the guest it is running in rather than fixed at import.
     monkeypatch.setattr(
-        "sek8s.services.attestation.TdxQuoteProvider",
-        lambda: tdx_provider,
+        "sek8s.services.attestation.QuoteProvider.create",
+        staticmethod(lambda tee_type=None: tdx_provider),
     )
     monkeypatch.setattr(
         "sek8s.services.attestation.NvEvidenceProvider",
@@ -137,7 +139,8 @@ def test_attest_with_comma_separated_gpu_ids(attestation_client):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["tdx_quote"] == "ZmFrZS1xdW90ZQ=="  # base64 of fake quote
+    assert data["quote"] == "ZmFrZS1xdW90ZQ=="  # base64 of fake quote
+    assert "tdx_quote" not in data
     assert (
         data["nvtrust_evidence"]
         == attestation_client.nvtrust_provider.get_evidence.return_value

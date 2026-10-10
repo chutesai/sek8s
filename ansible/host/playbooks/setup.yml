@@ -1,24 +1,26 @@
 ---
-# Host prep through TDX setup, optional PCCS, prerequisites. Does not launch the VM.
+# Host prep for TDX or SEV-SNP (whichever the CPU runs), optional PCCS on TDX. Does not launch the VM.
 # Run from repo root or ansible/host:
 #   ansible-playbook -i ../inventory/hosts.yml playbooks/setup.yml
 #
 # Optional Vault / extra-vars for automated PCCS:
-#   pccs_api_key, pccs_password — set **both** to run roles/pccs_configure; omit both to skip (playbook prints why).
+#   pccs_api_key, pccs_password — set **both** to run roles/pccs_configure on a TDX host; omit both to skip
+#   (playbook prints why). SEV-SNP hosts never run it: there is no host-side PCCS.
 #   Partial configuration fails with an explicit inventory message.
 
-- name: TDX host setup
+- name: TEE host setup
   hosts: td_hosts
   gather_facts: true
   become: true
   vars:
   # Thin orchestration around the CLI: host_tools bootstraps `chutes-cvm` (installs it + its fetch
-  # deps), tdx_bootstrap runs `chutes-cvm host setup` (which now owns the complete per-host config —
-  # packages incl. chrony/aria2/xfsprogs, NTP, kernel/GRUB, driver blacklist, QGS/QCNL, kvm group,
-  # /var/lib/chutes dirs) then handles the reboot + TDX-init verify, and pccs_configure applies the
-  # vault-held PCCS secrets. The former ntp / host_prerequisites / chutes_dirs roles are folded into
-  # host setup.
+  # deps), tee_bootstrap runs `chutes-cvm host setup` (which owns the complete per-host config for
+  # the host's platform — packages incl. chrony/aria2/xfsprogs, NTP, kernel/GRUB, driver blacklist,
+  # QGS/QCNL on TDX, kvm group, /var/lib/chutes dirs) then handles the reboot and verifies the
+  # platform is enabled, recording host_tee; pccs_configure applies the vault-held PCCS secrets on
+  # TDX hosts only. The former ntp / host_prerequisites / chutes_dirs roles are folded into host setup.
   roles:
     - role: host_tools
-    - role: tdx_bootstrap
+    - role: tee_bootstrap
     - role: pccs_configure
+      when: host_tee == 'tdx'  # TDX quotes need the host PCCS; SEV-SNP has none

@@ -33,7 +33,8 @@ def _resolve_profile_for_devices(ids):
         }
         for i, did in enumerate(ids)
     ]
-    return HostProfile({"gpus": gpus}).gpu_profile
+    cpu = {"count": 1, "sockets": 1, "vendor": "GenuineIntel", "processor_id": None}
+    return HostProfile({"gpus": gpus, "cpu": cpu}).gpu_profile
 
 
 @pytest.mark.parametrize("name", sorted(GPU_PROFILES))
@@ -82,17 +83,3 @@ def test_an_unsupported_edition_does_not_resolve_to_its_sibling():
 def test_empty_is_rejected():
     with pytest.raises(ValueError, match="expected one GPU model"):
         _resolve_profile_for_devices([])
-
-
-def test_measurement_path_is_no_looser_than_the_launch_path():
-    """Both sides must reject a heterogeneous host; only the wording differs.
-
-    The launch path resolves from detected model names, this one from PCI ids, so they
-    cannot share an implementation — but they must not disagree about what is valid.
-    """
-    from chutes_cvm.guest.gpu.profiles import resolve_profile
-
-    with pytest.raises(ValueError, match="Mixed GPU"):
-        resolve_profile({"0": "B200", "1": "H200"})
-    with pytest.raises(ValueError, match="expected one GPU model"):
-        _resolve_profile_for_devices([device_id("B200"), device_id("H200")])

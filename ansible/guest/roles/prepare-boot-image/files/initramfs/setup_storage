@@ -1,12 +1,12 @@
 #!/bin/sh
 # /etc/initramfs-tools/scripts/init-bottom/setup_storage
-PREREQ="rtmr3-measure"
+PREREQ="rootfs-measure"
 prereqs() { echo "$PREREQ"; }
 case $1 in prereqs) prereqs; exit 0;; esac
 
 . /scripts/functions
 . /scripts/luks-helpers
-. /scripts/provision-common
+. /scripts/init-bottom-common
 
 # The initramfs stops udevd after mounting the root filesystem (local-bottom),
 # but leaves /run/udev/control behind.  libdevmapper sees this stale socket,
@@ -75,7 +75,7 @@ trap clear_sensitive_data EXIT INT TERM
 log_begin_msg "Starting storage setup"
 
 # load_vm_data, provision_request, and write_k3s_encryption_config are sourced from
-# /scripts/provision-common (the shared init-bottom /provision flow).
+# /scripts/init-bottom-common (the shared init-bottom /provision flow).
 
 # ── Device detection ─────────────────────────────────────────────────────────
 
@@ -172,7 +172,7 @@ detect_cache_device() {
 post_sync_keys() {
     local volumes_json="\"${STORAGE_LABEL}\",\"${CACHE_LABEL}\""
 
-    # The /provision POST (quote generation, headers, curl) lives in provision-common;
+    # The /provision POST (quote generation, headers, curl) lives in init-bottom-common;
     # it leaves the response at $PROVISION_RESPONSE. Parsing the rotation payload stays here.
     provision_request "$volumes_json" || return 1
     local response_file="$PROVISION_RESPONSE"
@@ -289,10 +289,10 @@ confirm_rotation() {
     # and registry leaf certs, and deletes it before pivot_root.
     rm -f /run/chutes/cert-hash
 
-    # Last hotkey-signed API call is done — shred the stashed seed before init-bottom finishes, so
+    # Last hotkey-signed API call is done — shred the stashed key before init-bottom finishes, so
     # it never survives the initramfs /run -> real-root /run move into userspace. Runs on both the
     # success and failure paths below.
-    hotkey_shred_seed
+    hotkey_shred_key
 
     if [ "$http_code" = "200" ]; then
         rm -f "$resp_file"
@@ -597,7 +597,7 @@ finalize_rotation() {
     fi
 }
 
-# write_k3s_encryption_config is sourced from /scripts/provision-common (shared with
+# write_k3s_encryption_config is sourced from /scripts/init-bottom-common (shared with
 # the debug setup_storage entry). Prod supplies $K3S_ENCRYPTION_KEY from the /provision
 # response; a missing key routes through handle_failure below (fail closed).
 

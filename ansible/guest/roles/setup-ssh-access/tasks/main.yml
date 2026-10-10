@@ -7,7 +7,7 @@
 # matches guest_ssh_keys.
 #
 # Only included by tee-gpu-vm.yml — the playbook decides whether to include
-# this role.  Must run after rtmr3-measure (session-specific keys are measured
+# this role.  Must run after rootfs-measure (session-specific keys are measured
 # but not pre-verified) and before seal-vm.
 #
 # Idempotent: safe to re-run. No flags or conditionals.

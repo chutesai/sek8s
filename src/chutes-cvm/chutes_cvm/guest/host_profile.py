@@ -25,16 +25,12 @@ from pathlib import Path
 from chutes_cvm import proc
 from chutes_cvm.guest.detection import GUEST_CPU_ARGS
 from chutes_cvm.guest.devices import GpuDevice, IbDevice, NvSwitchDevice, PciDevice
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, HOST_RESERVED_CPUS, GpuProfile
-from chutes_cvm.guest.qemu import (
-    PcieRootPinning,
-    QemuCommand,
-    add_volumes,
-    add_vsock,
-    build_base_cmd,
-    build_network,
-    build_pci_topology,
+from chutes_cvm.guest.gpu.profiles import (
+    HOST_RESERVED_CPUS,
+    GpuProfile,
+    profile_for_device_ids,
 )
+from chutes_cvm.guest.tee import TeeProvider
 from chutes_cvm.paths import SCRIPTS_DIR
 
 
@@ -114,7 +110,11 @@ class HostCpu:
 
 
 class HostProfile:
-    """One host, as captured. Construct from the document ``discover-profile.sh`` emits."""
+    """One host, as captured. Build one with ``from_host``, ``from_dict`` or ``from_api_profile``.
+
+    A host is Intel or AMD silicon, and the captured CPU vendor says which: ``tee_provider`` is that
+    platform. Both platforms capture the same data, so the platform is the only thing that differs.
+    """
 
     #: The guest ``-cpu`` per host QEMU version, in the LAUNCH form -- offline generation adds an
     #: explicit CPU identity on top (see image_config). One entry today: 10.2.1 ships with 26.04,
@@ -123,6 +123,18 @@ class HostProfile:
 
     def __init__(self, raw: dict):
         self.raw = raw
+        #: This host's platform, and its QEMU arguments, from the captured CPU vendor: the host's
+        #: identity, NOT whether the platform is enabled on the machine in front of you -- SEV-SNP
+        #: can be off in BIOS on AMD silicon; the provider answers that separately
+        #: (``verify_environment``). A vendor no platform covers is refused here.
+        self.tee_provider: TeeProvider = TeeProvider.for_cpu_vendor(
+            HostCpu.from_dict(raw["cpu"]).vendor
+        )()
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "HostProfile":
+        """The profile a ``discover-profile.sh`` document describes."""
+        return cls(raw)
 
     @classmethod
     def from_host(cls) -> "HostProfile":
@@ -153,7 +165,7 @@ class HostProfile:
             raw = json.loads(path.read_text())
         finally:
             path.unlink(missing_ok=True)
-        profile = cls(raw)
+        profile = cls.from_dict(raw)
         # The one place guest RAM is derived; everything downstream carries it. The script
         # cannot do it: VRAM is unreadable once the GPUs are bound to vfio-pci, so it comes
         # from the profile.
@@ -244,17 +256,7 @@ class HostProfile:
         endpoint describes the whole platform. Checked against real per-device data rather than
         assumed from one representative.
         """
-        ids = {g.device_id for g in self.gpus}
-        if len(ids) != 1:
-            raise ValueError(
-                f"expected one GPU model, found {sorted(ids) or 'none'}; "
-                "a host with mixed GPU device ids cannot be profiled"
-            )
-        device_id = ids.pop()
-        for profile in GPU_PROFILES.values():
-            if profile.matches_device_id(device_id):
-                return profile
-        raise ValueError(f"no GPU profile matches device id {device_id}")
+        return profile_for_device_ids({g.device_id for g in self.gpus})
 
     # ── what the launcher will attach ───────────────────────────────────────
     @property
@@ -273,8 +275,12 @@ class HostProfile:
         The GPU model has no say. ``GpuProfile.enable_numa_topology`` used to gate this, but it
         recorded a host fact ("2 nodes, GPUs split 4+4, confirmed on <hostname>") on a GPU class,
         left over from when GpuProfile was the host profile.
+
+        The platform does: the host offering two nodes is necessary, not sufficient. SEV-SNP
+        guests cannot boot on per-node backends yet (see ``SnpTeeProvider.supports_guest_numa``),
+        so an AMD class of the same shape takes the flat path.
         """
-        return self.numa_node_count == 2
+        return self.numa_node_count == 2 and self.tee_provider.supports_guest_numa
 
     @property
     def uses_pxb_grouping(self) -> bool:
@@ -414,75 +420,23 @@ class HostProfile:
         """The ``-cpu`` string this host launches with, from the QEMU version it reports."""
         return self.CPU_ARGS_BY_QEMU.get(self.qemu_version, GUEST_CPU_ARGS)
 
-    def qemu_command(
-        self,
-        *,
-        firmware: str,
-        cpu_args: "str | None" = None,
-        img_path: str = "root.qcow2",
-        process_name: str = "chutes-td",
-        foreground: bool = False,
-        pidfile: str = "/dev/null",
-        logfile: str = "/dev/null",
-        kernel_path: str = "/dev/null",
-        initrd_path: str = "/dev/null",
-        cmdline: str = "",
-    ) -> QemuCommand:
-        """The QEMU command this host launches with.
+    def verify_environment(self) -> None:
+        """Raise unless this host's environment can run the guest this profile describes.
 
-        Native throughout: the endpoints carry the devices' real BDFs and ``-cpu`` is the launch
-        form, because this is the command a launch would run. The measurement adapter makes its
-        own substitutions afterwards -- swapping each ``vfio-pci`` endpoint for a
-        ``pci-bar-stub`` and pinning the CPU identity -- so nothing offline leaks in here.
+        Host readiness asked OF the profile rather than re-derived beside it. The platform
+        follows from the captured CPU vendor, and the provider knows both which kvm parameter
+        reports it enabled and what an operator should change when it is not -- so nothing
+        else grows a second way to look at a host.
 
-        Root ports are numbered per kind in device order -- ``rp1..rpN`` for GPUs, then
-        ``rp_nvsw*``, then ``rp_ib*`` -- and chassis numbers run across all of them, which is the
-        ordering the guest PXB grouping and therefore RTMR0 depend on.
+        Named for the environment rather than the launch on purpose: a profile describes a
+        machine and knows nothing about booting a guest. It delegates to the provider method
+        of the same name, which is the whole of the check today.
         """
-        numa = self.uses_guest_numa
-        pxb = self.uses_pxb_grouping
-        # One pinning object across every builder, as a launch does: under PXB grouping it pins
-        # the emulated devices to pcie.0 slots 0x2-0x7, below the PXB bridges at 0x18+.
-        pinning = PcieRootPinning(pxb)
-        cmd = build_base_cmd(
-            mem=self.mem,
-            smp_topology=self.smp_topology,
-            process_name=process_name,
-            cpu_args=cpu_args if cpu_args is not None else self.cpu_args,
-            firmware=firmware,
-            img_path=img_path,
-            foreground=foreground,
-            pidfile=pidfile,
-            logfile=logfile,
-            host_nodes=[0, 1] if numa else [],
-            kernel_path=kernel_path,
-            initrd_path=initrd_path,
-            cmdline=cmdline,
-            pci_pinning=pinning,
-        )
-        # The emulated devices a launch places on pcie.0. They occupy slots, and slot layout
-        # lands in the DSDT and so in RTMR0, so the measurement command has to carry them --
-        # image_config substitutes backing-free fillers at the same slots before the dump.
-        build_network(
-            cmd, network_type="tap", net_iface=None, ssh_port=0, pci_pinning=pinning
-        )
-        add_volumes(
-            cmd,
-            config_volume="config.qcow2",
-            cache_volume="cache.raw",
-            storage_volume="storage.raw",
-            pci_pinning=pinning,
-        )
-        add_vsock(cmd, pci_pinning=pinning)
+        self.tee_provider.verify_environment()
 
-        build_pci_topology(
-            cmd,
-            gpus=self.gpus,
-            nvswitches=self.attached_nvswitches,
-            ib_devices=self.attached_ib,
-            pxb_grouping=pxb,
-        )
-        return cmd
+    def guest_object(self) -> str:
+        """The ``-object`` argument declaring this host's confidential guest."""
+        return self.tee_provider.guest_object()
 
     # ── serialisation ───────────────────────────────────────────────────────
     @classmethod
@@ -503,7 +457,7 @@ class HostProfile:
         for key in ("gpus", "nvswitches", "ib_devices"):
             for device in doc.get(key) or ():
                 device["bdf"] = f"{next(slots):04x}:00:00.0"
-        return cls(doc)
+        return cls.from_dict(doc)
 
     def to_api_profile(self) -> dict:
         """This host as the API stores it: exactly the RTMR0 determinants.

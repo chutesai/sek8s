@@ -242,7 +242,7 @@ def test_verifier_is_anchored_by_a_measured_drop_in():
 def test_measured_paths_cover_the_drop_in_directories():
     """/etc/systemd/system must stay measured, or the anchoring above is inert."""
     conf = (
-        REPO / "ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf"
+        REPO / "ansible/guest/roles/rootfs-measure/files/tee-measure-miner.conf"
     ).read_text()
     entries = {
         line.split("#", 1)[0].strip()

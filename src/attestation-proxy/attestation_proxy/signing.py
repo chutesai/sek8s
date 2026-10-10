@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from loguru import logger
+from sek8s_common import hotkey
 from substrateinterface import Keypair
 
 # Purpose string the miner hotkey signs into the proof-of-possession ({ss58}:{nonce}:{purpose})
@@ -75,21 +76,22 @@ def sign_response_body(key: RSAPrivateKey, body: bytes) -> str:
     return base64.b64encode(signature).decode("ascii")
 
 
-def load_miner_keypair(seed: Optional[str]) -> Optional[Keypair]:
-    """Load the miner sr25519 keypair from its seed, or None when no seed is configured.
+def load_miner_keypair(
+    ss58: str, private_key: Optional[str], seed: Optional[str]
+) -> Optional[Keypair]:
+    """Load the miner sr25519 keypair (private key, else seed), or None when neither is set.
 
-    Returning None (no seed) is the backwards-compatible path: old charts don't inject the
-    seed, so the proxy simply doesn't sign. Never logs seed material -- only the derived ss58.
+    Returning None (no key) is the backwards-compatible path: old charts don't inject a key, so
+    the proxy simply doesn't sign. A key that fails to load or does not match ``ss58`` also
+    disables signing rather than the proxy. Never logs key material -- only the derived ss58.
     """
-    if not seed:
-        logger.info("No miner seed configured; hotkey response signing disabled")
-        return None
     try:
-        keypair = Keypair.create_from_seed(seed)
-    except Exception as exc:
-        logger.warning(
-            f"Failed to build miner keypair from seed: {exc}; hotkey signing disabled"
-        )
+        keypair = hotkey.load_miner_keypair(ss58, private_key, seed)
+    except ValueError as exc:
+        logger.error(f"{exc}; hotkey response signing disabled")
+        return None
+    if keypair is None:
+        logger.info("No miner key configured; hotkey response signing disabled")
         return None
     logger.info(f"Loaded miner hotkey {keypair.ss58_address} for response signing")
     return keypair

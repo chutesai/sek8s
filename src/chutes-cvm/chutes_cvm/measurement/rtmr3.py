@@ -1,9 +1,9 @@
-"""Python side of the RTMR3 measurement: run ``tdx-measure``, fold the chain.
+"""Python side of the RTMR3 measurement: run ``tee-measure``, fold the chain.
 
 **This module deliberately does not decide which files are measured, in what
-order, or how they are hashed.** All three live in the ``tdx-measure`` shell
+order, or how they are hashed.** All three live in the ``tee-measure`` shell
 script, which the initramfs measurer, the build-time manifest generator and both
-Python consumers all run. Four independent walkers of ``tdx-measure.conf`` used
+Python consumers all run. Four independent walkers of ``tee-measure.conf`` used
 to exist and they disagreed four ways — inline comments and trimming, symlinked
 conf entries, sort collation, and ``sha384sum FILE`` versus stdin. Re-deriving
 any of it here, however convenient, recreates that class of bug.
@@ -12,8 +12,8 @@ What is left in Python is the chain fold, which touches no files: the hardware
 does the folding at boot, so only the verifier and the offline predictor need it.
 
 **Stdlib only, and no chutes_cvm imports, deliberately.** This exact file is also
-installed into the guest at ``/usr/local/lib/sek8s/rtmr3.py`` (by the rtmr3-measure
-Ansible role, from this checkout) and imported by ``rtmr3-verify``, which runs on the
+installed into the guest at ``/usr/local/lib/sek8s/rtmr3.py`` (by the rootfs-measure
+Ansible role, from this checkout) and imported by ``rootfs-verify``, which runs on the
 guest's *system* interpreter, ordered ``Before=k3s.service``, and powers the VM off on
 failure. It must not resolve through ``/opt/sek8s/venv``, which is outside the RTMR3
 measured-path list, nor drag in the rest of this package. Keep it importable as a bare
@@ -29,7 +29,7 @@ from pathlib import Path
 __all__ = [
     "Rtmr3Error",
     "RTMR3_LEN",
-    "TDX_MEASURE",
+    "TEE_MEASURE",
     "measured_hashes",
     "fold_chain",
     "compute_rtmr3",
@@ -38,40 +38,40 @@ __all__ = [
 #: TDX RTMR registers are SHA-384, i.e. 48 bytes.
 RTMR3_LEN = 48
 
-#: In the guest, installed by the rtmr3-measure role — ``/usr/local/bin`` is itself
+#: In the guest, installed by the rootfs-measure role — ``/usr/local/bin`` is itself
 #: RTMR3-measured. On the host, callers pass the bundled copy
-#: (``chutes_cvm/scripts/tdx-measure``) explicitly.
-TDX_MEASURE = "/usr/local/bin/tdx-measure"
+#: (``chutes_cvm/scripts/tee-measure``) explicitly.
+TEE_MEASURE = "/usr/local/bin/tee-measure"
 
 
 class Rtmr3Error(Exception):
-    """Raised when ``tdx-measure`` fails or returns output that cannot be parsed."""
+    """Raised when ``tee-measure`` fails or returns output that cannot be parsed."""
 
 
 def measured_hashes(
     root: str | Path,
     conf: str | Path,
-    tdx_measure: str | Path = TDX_MEASURE,
+    tee_measure: str | Path = TEE_MEASURE,
 ) -> list[tuple[str, str]]:
     """Return ``(sha384 hex, root-relative path)`` for every measured file, in chain order.
 
     ``root`` prefixes the conf's absolute paths: ``""`` for the live root, or the
     mount point of an image being measured offline. Ordering and hashing are
-    whatever ``tdx-measure`` produced — this function only parses.
+    whatever ``tee-measure`` produced — this function only parses.
     """
-    if not Path(tdx_measure).is_file():
-        raise Rtmr3Error(f"tdx-measure not found: {tdx_measure}")
+    if not Path(tee_measure).is_file():
+        raise Rtmr3Error(f"tee-measure not found: {tee_measure}")
 
     # Fixed argv, no shell: the program is a caller-supplied path and the rest are data.
     result = subprocess.run(  # nosec B603
-        [str(tdx_measure), "hash", str(root), str(conf)],
+        [str(tee_measure), "hash", str(root), str(conf)],
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()[-4:]
         raise Rtmr3Error(
-            "tdx-measure hash failed: " + (" / ".join(detail) or "no output")
+            "tee-measure hash failed: " + (" / ".join(detail) or "no output")
         )
 
     entries: list[tuple[str, str]] = []
@@ -81,18 +81,26 @@ def measured_hashes(
         # "<sha384hex> <path>" — split once, so paths containing spaces survive.
         digest, _, rel_path = line.partition(" ")
         if not rel_path or len(digest) != 96:
-            raise Rtmr3Error(f"malformed tdx-measure output: {line!r}")
+            raise Rtmr3Error(f"malformed tee-measure output: {line!r}")
         entries.append((digest, rel_path))
 
     if not entries:
-        raise Rtmr3Error(f"tdx-measure returned no files for {conf}")
+        raise Rtmr3Error(f"tee-measure returned no files for {conf}")
     return entries
+
+
+def list_digest(hashes: list[tuple[str, str]]) -> str:
+    """SHA-384 (lowercase hex) of the measured list as ``tee-measure hash`` writes it -- the
+    value RTMR3 is extended with on TDX, and what the SEV-SNP initramfs records after checking
+    the root against the canonical manifest."""
+    body = "".join(f"{digest} {rel_path}\n" for digest, rel_path in hashes).encode()
+    return hashlib.sha384(body).hexdigest()
 
 
 def fold_chain(hashes: list[tuple[str, str]]) -> str:
     """RTMR3 over ``(hash hex, path)`` pairs in chain order.
 
-    ``rtmr3 = SHA384(0x00*48 || SHA384(list))``, where ``list`` is ``tdx-measure hash``
+    ``rtmr3 = SHA384(0x00*48 || SHA384(list))``, where ``list`` is ``tee-measure hash``
     output verbatim — one ``"<sha384hex> <path>\\n"`` line per file. ONE hardware extend
     over a digest of the whole ordered list, not one extend per file: 41k per-file TDCALLs
     cost ~167s of boot and bind nothing this does not. Hashing the list text also binds the
@@ -100,16 +108,15 @@ def fold_chain(hashes: list[tuple[str, str]]) -> str:
 
     Returns the final register value as uppercase hex.
     """
-    body = "".join(f"{digest} {rel_path}\n" for digest, rel_path in hashes).encode()
-    chain_digest = hashlib.sha384(body).digest()
+    chain_digest = bytes.fromhex(list_digest(hashes))
     return hashlib.sha384(bytes(RTMR3_LEN) + chain_digest).hexdigest().upper()
 
 
 def compute_rtmr3(
     root: str | Path,
     conf: str | Path,
-    tdx_measure: str | Path = TDX_MEASURE,
+    tee_measure: str | Path = TEE_MEASURE,
 ) -> tuple[str, list[tuple[str, str]]]:
     """Convenience wrapper: ``(final RTMR3 uppercase hex, per-file (hash, path))``."""
-    hashes = measured_hashes(root, conf, tdx_measure)
+    hashes = measured_hashes(root, conf, tee_measure)
     return fold_chain(hashes), hashes

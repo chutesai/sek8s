@@ -20,6 +20,7 @@
     - name: Download Helm for detected architecture
       ansible.builtin.get_url:
         url: https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_arch }}.tar.gz
+        checksum: "sha256:{{ helm_sha256 }}"
         dest: /tmp/helm.tar.gz
         mode: "0644"
 

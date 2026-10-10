@@ -1,238 +1,55 @@
 #!/usr/bin/env python3
-"""TDX measurements generator → the version's teeMeasurements block.
+"""TEE measurements generator: one release's teeMeasurements entry, both platforms.
 
-The known host classes come from the API (the source of truth): `generate` reads the published
-host profiles (`GET /servers/tdx/host_profiles`) and produces one entry per class, carrying the
-API's fingerprint through onto it so the reconciler can join the published measurement to the
-submitted host profile. RTMR generation itself is offline (fork + Docker; no TDX/GPU).
+`generate` reads the known host classes from the API (`GET /servers/tdx/host_profiles`, the
+source of truth), measures each on its own platform, and writes the version's measurements.yaml:
 
-By default only *measured* host classes are processed — the set a third party can verify against
-an already-published measurement. `--include-pending` also processes classes awaiting generation
-(the generator's queue: a newly submitted profile is "pending" until its measurement exists), which
-is what the release build passes to turn new submissions into published measurements.
+    tdx:  mrtd, rtmr1, rtmr2, rtmr3, hardware[].rtmr0      (Intel classes; tdx.TdxMeasurements)
+    snp:  hardware[].measurement, hardware[].acpi_sha256   (AMD classes; snp.SnpMeasurements)
 
-`generate` (no --register) computes the whole block for an image version — MRTD +
-per-topology RTMR0 + RTMR1/RTMR2 (from the staged direct-boot artifacts) + RTMR3
-(over the encrypted root's /etc/tdx-measure.conf files) — and writes measurements.yaml.
-`--register {rtmr0,rtmr3}` narrows it to one register (standalone partials for the
-GPU-VM build, which has no aggregation). `list` prints the API's known host classes.
+One guest image boots on both platforms, so every release emits both sections. The API's
+fingerprint is carried onto each entry so the reconciler can join a published measurement to the
+submitted host profile.
 
-The bulk of this module is the novel part — offline per-topology RTMR0 generation (no
-guest boot), from local/offline-rtmr0-findings.md §7:
-RTMR0 is a SHA-384 chain over the CCEL's MrIndex==1 records — 14 events on this
-branch's direct boot (19 on indirect, with the #15-18 boot variables) — of which
-**5 vary** per topology and the rest are constant (firmware/boot). From one baseline
-CCEL (the constants) plus a per-topology recompute of the varying events, splice +
-replay → rtmr0. The varying events are located by identity (locate_rtmr0_events), so
-the splice is correct regardless of that boot-method count.
+By default only *measured* host classes are processed: the set a third party can verify against
+a published measurement. `--include-pending` also processes classes awaiting their first
+measurement, which is what the release build passes to turn new submissions into published
+measurements. A measured class that fails to generate fails the run; a pending one stays pending.
 
-The 5 varying events and how each is reproduced offline (no guest boot):
+`--register rtmr3` computes RTMR3 alone (the standalone partial for the GPU-VM build, which has
+no aggregation). `list` prints the API's known host classes.
 
-    #0   TdxTable (TD-HOB)      measure_td_hob(memory)      — per (mem) class
-    #11  SHA384(etc/table-loader)   SHA384(fw_cfg blob)     — per topology
-    #12  SHA384(etc/acpi/rsdp)      SHA384(fw_cfg blob)     — per topology
-    #13  SHA384(etc/acpi/tables)    SHA384(fw_cfg blob)     — per topology
-    #14  SMBIOS handoff         from baseline — host/topology-invariant (pinned identity)
-
-#0 and #11-13 are recomputed per topology by the fork; #14 and the constants come from the
-one baseline CCEL. SMBIOS's only host-varying input (the type-1/2/3 identity) is pinned this
-release, so #14 does not vary by host or topology — one CCEL, captured anywhere, generates
-every profile. (Recomputing #14 offline from the SMBIOS blob, to drop the CCEL entirely, is
-future work — see utils/smbios_match.py.)
-
-Needs network access to the API for the host-profile list, and — for actual per-topology ACPI
-generation — the chutesai/tdx-measure fork + Docker on any x86-64 Linux (NO TDX, NO GPUs —
-that's the point of offline measurement). The splice/replay/recompute/assembly path is pure
-stdlib.
+This module is only the run: fetching classes, dispatching them, and writing the file. What each
+platform measures lives in tdx.py and snp.py; what they share, in platform.py.
 """
+
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import yaml
-from chutes_cvm import proc
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.measurement import ccel_replay as cc
-from chutes_cvm.measurement.image_config import ImageConfig
-from chutes_cvm.measurement.runtime_rtmr import (
-    MeasurementError,
-    compute_rtmr1_2,
-    compute_rtmr3,
-)
-from chutes_cvm.paths import GUEST_FIRMWARE, firmware_dir
+from chutes_cvm.guest.image_set import ImageSet
+from chutes_cvm.measurement.platform import MeasurementError, PlatformMeasurements
+from chutes_cvm.measurement.snp import SnpMeasurements
+from chutes_cvm.measurement.tdx import TdxMeasurements, compute_rtmr3
+from chutes_cvm.paths import DEFAULT_API_BASE, firmware_dir
 
 # The API is the source of truth for known host classes and their fingerprints. `generate`
 # reads the published host profiles (the platform inputs each measurement is built from) from
 # this public, unauthenticated endpoint and generates one measurement per profile, carrying the
 # API's fingerprint straight through — the reconciler joins published measurements to submitted
 # host profiles on it, so an entry without a fingerprint is unmatchable.
-DEFAULT_API_BASE = "https://api.chutes.ai"
 _HOST_PROFILES_PATH = "/servers/tdx/host_profiles"
 
-# The topology-varying RTMR0 events are located BY IDENTITY (event type + descriptor),
-# not by fixed position: the boot method sets how many CONSTANT events surround them
-# (indirect boot = 19 events total; direct boot = 14 — no #15-18 boot variables and one
-# fewer QEMU FW CFG), which shifts absolute positions. We recompute #0 (TD-HOB) and the
-# three ACPI DATA digests; #14 (SMBIOS) and every constant stay from the baseline.
-_EV_HANDOFF_TABLES2 = 0x8000000B  # TD-HOB (#0); data contains "TdxTable"
-_EV_PLATFORM_CONFIG_FLAGS = (
-    0x0000000A  # the three ACPI DATA events (#11-13) share this type
-)
 
-# The three ACPI DATA events, in fold order, → their fw_cfg blob name (as staged by
-# extract-measurements.sh) for the #11-13 recompute.
-ACPI_BLOB_FILES = ["table_loader.bin", "rsdp.bin", "acpi_tables.bin"]
-
-# The fork's rtmr0_log (tdx-measure --json-file) indices for the events it recomputes:
-# [0] = TD-HOB, [8,9,10] = the three ACPI DATA digests (table-loader / rsdp / acpi-tables).
-FORK_TDHOB_IDX = 0
-FORK_ACPI_IDX = (8, 9, 10)
-
-
-def overrides_from_fork_log(
-    rtmr0_log: list[str], tdhob_idx: int, acpi_idx: list[int]
-) -> dict[int, bytes]:
-    """Map the fork's recomputed digests onto the located baseline indices (from
-    locate_rtmr0_events): fork #0 → TD-HOB, fork [8,9,10] → the three ACPI DATA events,
-    in order. #14 (SMBIOS, same (mem,cpu) class) and #2/3/4 stay from the baseline."""
-    need = max((FORK_TDHOB_IDX, *FORK_ACPI_IDX)) + 1
-    if len(rtmr0_log) < need:
-        raise ValueError(
-            f"fork rtmr0_log has {len(rtmr0_log)} events, need >= {need}. "
-            "Rebuild the tdx-measure fork with the rtmr0_log field, and confirm "
-            "direct-boot mode (kernel/initrd set in the metadata)."
-        )
-    out = {tdhob_idx: bytes.fromhex(rtmr0_log[FORK_TDHOB_IDX])}
-    for baseline_i, fork_i in zip(acpi_idx, FORK_ACPI_IDX):
-        out[baseline_i] = bytes.fromhex(rtmr0_log[fork_i])
-    return out
-
-
-# ── Core: splice + replay ─────────────────────────────────────────────────────
-
-
-def mr1_events(events: list[cc.Event]) -> list[cc.Event]:
-    """The MrIndex==1 events that fold into RTMR0 (skipping EV_NO_ACTION), in order.
-    Its length is boot-method-dependent (direct=14, indirect=19), so index the events
-    the splice touches via locate_rtmr0_events, not by a fixed findings-§1 number."""
-    return [e for e in events if e.mr_index == 1 and e.event_type != cc.EV_NO_ACTION]
-
-
-def locate_rtmr0_events(events: list[cc.Event]) -> tuple[int, list[int]]:
-    """Locate the spliced events in the MrIndex==1 fold BY IDENTITY, so it works for any
-    boot method's event count. Returns (tdhob_index, [three acpi indices]): the TD-HOB
-    (EV_EFI_HANDOFF_TABLES2 / "TdxTable") and the three ACPI DATA events
-    (EV_PLATFORM_CONFIG_FLAGS / "ACPI DATA"), in fold order."""
-    tdhob = None
-    acpi: list[int] = []
-    for i, e in enumerate(mr1_events(events)):
-        if e.event_type == _EV_HANDOFF_TABLES2 and b"TdxTable" in e.data:
-            tdhob = i
-        elif e.event_type == _EV_PLATFORM_CONFIG_FLAGS and b"ACPI DATA" in e.data:
-            acpi.append(i)
-    if tdhob is None or len(acpi) != 3:
-        raise cc.EventLogError(
-            f"unexpected RTMR0 layout: TD-HOB found={tdhob is not None}, "
-            f"{len(acpi)} ACPI DATA events (need exactly 1 + 3)."
-        )
-    return tdhob, acpi
-
-
-def replay_with_overrides(
-    events: list[cc.Event], overrides: dict[int, bytes], alg: int = cc.RTMR_ALG
-) -> bytes:
-    """Fold RTMR0 (MrIndex==1) substituting overrides[i] (i = index into mr1_events) for
-    that event's SHA-384 digest. This is the splice: constant events keep their baseline
-    digest, the located varying events get their recomputed one."""
-    hash_name = cc._ALG_NAMES[alg]
-    acc = b"\x00" * cc._ALG_SIZES[alg]
-    for pos, ev in enumerate(mr1_events(events)):
-        digest = overrides.get(pos)
-        if digest is None:
-            digest = ev.digest(alg)
-            if digest is None:
-                raise cc.EventLogError(f"event #{pos} ({ev.type_name}) missing digest")
-        acc = hashlib.new(hash_name, acc + digest).digest()
-    return acc
-
-
-def acpi_digests(acpi_dir: str | Path, acpi_idx: list[int]) -> dict[int, bytes]:
-    """{baseline_index: SHA384(blob)} for the three ACPI DATA events, mapping each located
-    index to its fw_cfg blob (table-loader / rsdp / acpi-tables, in fold order). This is the
-    #11-13 recompute, proven in findings §2: the ACPI DATA digests are literally SHA384 of
-    the bytes."""
-    acpi_dir = Path(acpi_dir)
-    out: dict[int, bytes] = {}
-    for baseline_i, fname in zip(acpi_idx, ACPI_BLOB_FILES):
-        blob = acpi_dir / fname
-        if not blob.exists():
-            raise FileNotFoundError(f"missing fw_cfg blob {fname}: {blob}")
-        out[baseline_i] = hashlib.sha384(blob.read_bytes()).digest()
-    return out
-
-
-# ── Per-topology ACPI generation (build host: tdx-measure + Docker) ────────────
-
-
-def generate_acpi_blobs(
-    metadata: dict, out_dir: Path, *, tdx_measure_bin: str, dist: str
-) -> dict:
-    """Run `tdx-measure --create-acpi-tables` to dump the topology's fw_cfg ACPI
-    blobs and its {mrtd, rtmr0}. Mirrors local/scripts/run_validation.sh:43. The
-    generated etc/acpi/* land next to `acpi_tables` in the metadata; we read those
-    for the #11-13 recompute. Returns the parsed tdx-measure JSON ({mrtd, rtmr0}).
-
-    Runs OFFLINE on any x86-64 Linux with Docker + the fork — no TDX, no GPUs. KVM
-    speeds the brief ACPI-gen QEMU run but isn't required; reserve=off (applied by
-    image_config.ImageConfig) lifts the guest-sized-RAM requirement.
-
-    Only the distribution is passed to --create-acpi-tables: the fork pins the exact
-    QEMU source-package version *and* container image digest per dist (qemu_pkg_for),
-    which is what makes the dump reproducible. The QEMU version label (e.g. "10.2.1", from the
-    host profile) is a release label, NOT a Debian package version — forwarding it as the fork's
-    version override lands an unresolvable `pull-lp-source qemu 10.2.1`.
-    """
-    out_dir.mkdir(parents=True, exist_ok=True)
-    meta_path = out_dir / "metadata.json"
-    result_path = out_dir / "result.json"
-    meta_path.write_text(json.dumps(metadata, indent=2))
-    # The metadata positional is placed first: --create-acpi-tables is num_args=1..=2,
-    # so a metadata path immediately after `dist` would be greedily eaten as the version.
-    # Capture the output (the fork's docker build log is very noisy) and, on failure,
-    # raise just the tail — the caller renders it as a one-line PENDING reason.
-    result = proc.run(
-        [
-            tdx_measure_bin,
-            str(meta_path),
-            "--platform-only",
-            "--json-file",
-            str(result_path),
-            "--create-acpi-tables",
-            dist,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        tail = "\n    ".join(
-            (result.stderr or result.stdout or "").strip().splitlines()[-4:]
-        )
-        raise RuntimeError(
-            f"tdx-measure --create-acpi-tables (dist={dist}) failed "
-            f"(exit {result.returncode}):\n    {tail}"
-        )
-    return json.loads(result_path.read_text())
-
-
-# ── Host profiles (from the API) → per-topology generation inputs ──────────────
+# ── host classes from the API ──────────────────────────────────────────────────────────────────
 
 
 def fetch_host_profiles(api_base: str, include_pending: bool = False) -> list[dict]:
@@ -269,37 +86,26 @@ def fetch_host_profiles(api_base: str, include_pending: bool = False) -> list[di
     return data
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
-
-
 def resolve_hardware_names(hardware: list[dict]) -> None:
     """Validate hardware-entry identity and disambiguate colliding labels, in place.
 
     A host class is identified by its FINGERPRINT, not its name. Whenever the fingerprint's
     inputs change, every class re-registers under a new fingerprint while the old record stays
     live -- hosts upgrade at different times, so both must remain until the fleet has moved.
-    Those entries resolve to the same display_name + variant_label by construction, so one
-    topology legitimately appears under several fingerprints.
-
-    This used to assert name uniqueness, which turned that expected churn into a hard build
-    failure and stalled releases behind any fingerprint schema change.
+    Classes that measure identically share one entry, which lists all their fingerprints.
 
     Nothing about the NAME is an invariant, so nothing about it is enforced. It is built from
     display_name + qemu + variant_label, a strict subset of what feeds rtmr0 (per-profile
     cpu_vendor / phys_bits / cpu_processor_id all move rtmr0 and appear in none of them), so
     entries may share a name while differing in rtmr0 without anything being wrong -- the label
-    is simply coarser than the measurement. It is safe to leave unconstrained because the API
-    never keys on it: quotes match by MRTD + RTMRs (configs may share an RTMR0) and name reaches
-    the API only as a log label. Colliding labels are suffixed so logs stay readable.
+    is simply coarser than the measurement. The API never keys on it (quotes match by MRTD +
+    RTMRs, or the SEV-SNP digest), so colliding labels are only suffixed to keep logs readable.
 
-    Raises ValueError only on a duplicate fingerprint -- the key repeated, i.e. corrupt input.
+    Raises ValueError only on a fingerprint listed twice -- the key repeated, i.e. corrupt input.
     """
-    fp_counts: dict[str, int] = {}
-    for e in hardware:
-        fp_counts[e["fingerprint"]] = fp_counts.get(e["fingerprint"], 0) + 1
-    dupe_fps = sorted(f for f, c in fp_counts.items() if c > 1)
-    if dupe_fps:
-        raise ValueError(f"duplicate host-profile fingerprints: {dupe_fps}")
+    fingerprints = [fp for e in hardware for fp in e["fingerprints"]]
+    if len(set(fingerprints)) != len(fingerprints):
+        raise ValueError("a host-profile fingerprint is listed more than once")
 
     by_name: dict[str, list[dict]] = {}
     for e in hardware:
@@ -308,44 +114,34 @@ def resolve_hardware_names(hardware: list[dict]) -> None:
     for name, entries in by_name.items():
         if len(entries) > 1:
             for e in entries:
-                e["name"] = f"{name} ({e['fingerprint'][:12]})"
+                e["name"] = f"{name} ({e['fingerprints'][0][:12]})"
 
 
-def _rtmr0_block(args: argparse.Namespace) -> dict:
-    """Generate the version-level RTMR0 block: {version, mrtd, hardware[], pending_profiles?}.
+# ── dispatch: each host class to its own platform ───────────────────────────────────────────
 
-    Reads the published host profiles from the API (the source of truth for known host classes)
-    and generates ONE hardware entry per profile. For each, the fork self-generates the COMPLETE
-    RTMR0 (all 15 events, no CCEL) from the topology derived off the profile document, and the
-    API's fingerprint is carried through onto the entry (never recomputed) so the reconciler can
-    join it to the submitted host profile. A profile that can't be generated offline yet (e.g. an
-    uncaptured CPU model — cpu_processor_id null) is listed PENDING by fingerprint, not fatal.
 
-    Raises ValueError on a hard error (API unreachable, duplicate hardware names, or MRTD
-    divergence across topologies). Needs the fork + Docker (offline, any x86-64 Linux).
+def measure_host_classes(
+    records: list[dict], platforms: list[PlatformMeasurements]
+) -> list[str]:
+    """Measure each API host class on its own platform; return those still PENDING.
+
+    A class is Intel or AMD, never both, and its CPU vendor says which
+    (``HostProfile.tee_provider``), so each lands in exactly one platform.
+
+    A class that cannot be generated is judged by the API's ``measured`` flag:
+
+    * **never measured** (``measured: false``) -- it stays PENDING: still in the generator's
+      queue, reported but not blocking the release. E.g. an uncaptured CPU (``processor_id``
+      null).
+    * **measured before** (``measured: true``) -- a regression. Hosts of that class attest today,
+      and publishing a release without it would leave them nothing to attest against, so every
+      such class is collected and the run fails with all of them.
+
+    Release inputs never reach this: the platforms loaded them before it runs.
     """
-
-    def fork_rtmr0(host: HostProfile):
-        cmd = host.qemu_command(
-            firmware=str(Path(args.bios_dir) / GUEST_FIRMWARE),
-            process_name="chutes-measure",
-        )
-        with tempfile.TemporaryDirectory() as td:
-            meta = ImageConfig(
-                cmd, host, acpi_tables=str(Path(td) / "acpi.bin")
-            ).to_dict()
-            out = generate_acpi_blobs(
-                meta,
-                Path(td),
-                tdx_measure_bin=args.tdx_measure_bin,
-                dist=args.dist,
-            )
-        return (out.get("rtmr0") or "").upper(), out.get("mrtd", "")
-
-    records = fetch_host_profiles(args.api_base, args.include_pending)
-    hardware: list[dict] = []  # flat teeMeasurements `hardware` entries
-    mrtds: set[str] = set()
+    by_provider = {p.provider: p for p in platforms}
     pending: list[str] = []
+    regressions: list[str] = []
     for record in records:
         fingerprint = record.get("fingerprint") or ""
         label = fingerprint[:12] or "<no-fingerprint>"
@@ -353,50 +149,41 @@ def _rtmr0_block(args: argparse.Namespace) -> dict:
             if not fingerprint:
                 raise ValueError("host profile has no fingerprint")
             host = HostProfile.from_api_profile(record.get("profile") or {})
-            profile, qemu = host.gpu_profile, host.qemu_version
-            rtmr0, mrtd = fork_rtmr0(host)
-            mrtds.add(mrtd.upper())
-            gpu_count = host.gpu_count
-            hw_name = f"{profile.display_name} [{qemu}, {host.variant_label}]"
-            hardware.append(
-                {
-                    "name": hw_name,
-                    "description": (
-                        f"{gpu_count}x {profile.expected_gpus[0].upper()} "
-                        "GPU configuration"
-                    ),
-                    "fingerprint": fingerprint,
-                    "rtmr0": rtmr0,
-                    "expected_gpus": list(profile.expected_gpus),
-                    "gpu_count": gpu_count,
-                }
-            )
-            print(f"    {hw_name}  fp={label}…  rtmr0={rtmr0[:16]}…", file=sys.stderr)
+            provider = type(host.tee_provider)
+            if provider not in by_provider:
+                raise ValueError(
+                    f"no measurements are generated for {provider.__name__}"
+                )
+            by_provider[provider].add(host, fingerprint)
         except Exception as exc:
-            pending.append(fingerprint or label)
-            print(
-                f"  {label}: PENDING — cannot generate offline: {exc}", file=sys.stderr
-            )
-            continue
+            if record.get("measured"):
+                regressions.append(f"{label}: {exc}")
+                print(
+                    f"  {label}: FAILED (previously measured): {exc}", file=sys.stderr
+                )
+            else:
+                pending.append(fingerprint or label)
+                print(f"  {label}: PENDING — not generated yet: {exc}", file=sys.stderr)
 
-    resolve_hardware_names(hardware)
-    # MRTD is version-level (same OVMF/TDVF across every topology of a build).
-    if len(mrtds) > 1:
-        raise ValueError(f"MRTD differs across topologies: {sorted(mrtds)}")
+    if regressions:
+        raise ValueError(
+            f"{len(regressions)} previously measured host class(es) failed to generate; a "
+            "release without them would leave those hosts unable to attest:\n    "
+            + "\n    ".join(regressions)
+        )
+    # Across every platform: the lists land in one measurements.yaml, so a name colliding
+    # between them still needs disambiguating, and a fingerprint repeated across them is the
+    # same corrupt input it would be within one. Entries are mutated in place.
+    resolve_hardware_names([e for p in platforms for e in p.hardware])
+    return sorted(set(pending))
 
-    block: dict = {
-        "version": args.version,
-        "mrtd": next(iter(mrtds), ""),
-        "hardware": hardware,
-    }
-    if pending:
-        block["pending_profiles"] = sorted(set(pending))
-    return block
+
+# ── the run and the CLI ─────────────────────────────────────────────────────────────────────────
 
 
 def _write_output(payload: str, output: str) -> None:
     """Write ``payload`` to ``output`` — ``-`` = stdout; otherwise mkdir -p the parent, write
-    the file, and note it on stderr. Shared by the register-generating subcommands."""
+    the file, and note it on stderr."""
     if output == "-":
         sys.stdout.write(payload)
         return
@@ -406,60 +193,55 @@ def _write_output(payload: str, output: str) -> None:
     print(f"wrote {out}", file=sys.stderr)
 
 
-def _generate_rtmr0(args: argparse.Namespace) -> int:
-    """`generate --register rtmr0`: compute just the RTMR0 block (version-level mrtd + per-topology
-    hardware list) and write it as JSON to --output. A standalone/debug partial — a full `generate`
-    computes RTMR0 inline (via _compute_measurements), so this is no longer an input to it.
-    """
-    try:
-        block = _rtmr0_block(args)
-    except ValueError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
-
-    _write_output(json.dumps(block, indent=2) + "\n", args.output)
-    pending = block.get("pending_profiles")
-    n = len(block["hardware"])
-    print(
-        f"{n} hardware entr{'y' if n == 1 else 'ies'} generated"
-        f"{f', pending: {pending}' if pending else ''}",
-        file=sys.stderr,
-    )
-    # Fail if the API returned host classes but none could be generated (all pending).
-    return 2 if (block.get("pending_profiles") and not block["hardware"]) else 0
-
-
 def _compute_measurements(args: argparse.Namespace) -> dict:
-    """Compute EVERY register for a version and return the assembled teeMeasurements entry.
+    """Compute a release's whole teeMeasurements entry: both platforms, every host class.
 
-    POST-LUKS, from the finalized image: version-level mrtd + per-topology rtmr0 (the fork),
-    rtmr1/rtmr2 (the image's staged direct-boot artifacts), and rtmr3 (mounting the root —
-    unlocking it with the LUKS_PASSPHRASE env var when the image is already encrypted). Pure
-    data assembly — no file output; raises ValueError (topology/aggregation) or MeasurementError
-    (rtmr1/2/3) on failure. Replaces the old compute-rtmr0/1-2/rtmr3 + aggregate roles.
+    One guest image boots on both platforms, so every release measures both, whatever classes the
+    API knows today; a platform's section is written only when it has classes, since the API
+    refuses a section with no hardware (and with it the whole config). Each platform loads what
+    its classes share first (TDX: RTMR1-3
+    from the image; SEV-SNP: firmware and direct-boot artifacts), then each API host class is
+    measured on its own platform. Pure data assembly -- no file output; raises ValueError
+    (topology/aggregation) or MeasurementError (a missing or unreadable input).
     """
-    block = _rtmr0_block(args)
-    rtmr1, rtmr2 = compute_rtmr1_2(args.image, tdx_measure_bin=args.tdx_measure_bin)
-    rtmr3, _ = compute_rtmr3(
-        args.image, luks_passphrase=os.environ.get("LUKS_PASSPHRASE")
-    )
-    print(
-        f"    RTMR1={rtmr1[:16]}…  RTMR2={rtmr2[:16]}…  RTMR3={rtmr3[:16]}…",
-        file=sys.stderr,
-    )
-    pending = block.get("pending_profiles")
+    # Measure only a coherent build: the qcow2, its boot files and the firmware must be the ones
+    # the image set's manifest records, or the published values would admit something else.
+    try:
+        image_set = ImageSet.from_dir(os.path.dirname(os.path.abspath(args.image)))
+        image_set.verify(full=True, firmware=args.bios_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise MeasurementError(f"image set of {args.image}: {exc}") from exc
+    platforms: list[PlatformMeasurements] = [
+        TdxMeasurements(
+            bios_dir=args.bios_dir,
+            tdx_measure_bin=args.tdx_measure_bin,
+            dist=args.dist,
+            image=args.image,
+        ),
+        SnpMeasurements(
+            bios_dir=args.bios_dir,
+            image=args.image,
+            tdx_measure_bin=args.tdx_measure_bin,
+            dist=args.dist,
+        ),
+    ]
+    records = fetch_host_profiles(args.api_base, args.include_pending)
+    pending = measure_host_classes(records, platforms)
     if pending:
         print(f"    pending profiles: {pending}", file=sys.stderr)
-
-    # Insertion order (version → mrtd → rtmr1/2 → runtime_rtmr3 → hardware) matches the
-    # chutes-ops values.yaml teeMeasurements layout this merges into; sort_keys=False keeps it.
+    if not any(p.hardware for p in platforms):
+        raise ValueError(
+            "no measurements generated — the API returned no host profiles that could be "
+            f"generated offline{f' (pending: {pending})' if pending else ''}"
+        )
+    # Insertion order matches the chutes-ops values.yaml teeMeasurements layout this merges
+    # into; sort_keys=False keeps it. A debug build (SSH, no LUKS) attests only under an rc
+    # entry, which the API refuses to load without an authorized_hotkeys allowlist -- so a
+    # debug file merged by mistake fails loudly rather than admitting debug guests as a release.
     return {
         "version": args.version,
-        "mrtd": block["mrtd"],
-        "rtmr1": rtmr1,
-        "rtmr2": rtmr2,
-        "runtime_rtmr3": rtmr3,
-        "hardware": block["hardware"],
+        **({"rc": True} if image_set.rc else {}),
+        **{p.key: p.section() for p in platforms if p.hardware},
     }
 
 
@@ -473,18 +255,18 @@ def _generate_full(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     except MeasurementError as exc:
-        print(f"ERROR (rtmr1/2/3): {exc}", file=sys.stderr)
+        print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     payload = yaml.safe_dump(
         {"measurements": [entry]}, sort_keys=False, indent=2, default_flow_style=False
     )
     _write_output(payload, args.output)
-    n = len(entry["hardware"])
-    print(
-        f"measurements.yaml: {n} hardware entr{'y' if n == 1 else 'ies'}",
-        file=sys.stderr,
+    counts = ", ".join(
+        f"{len(entry[tee]['hardware']) if tee in entry else 0} {tee}"
+        for tee in ("tdx", "snp")
     )
+    print(f"measurements.yaml: {counts} hardware entries", file=sys.stderr)
     return 0
 
 
@@ -520,14 +302,10 @@ def _usage_error(msg: str) -> int:
 
 
 def _cmd_generate(args: argparse.Namespace) -> int:
-    """Route `measurements generate` by --register: none = the full measurements.yaml (every
-    register); rtmr0 = just the RTMR0 JSON block; rtmr3 = just the bare RTMR3 hex. Each mode
-    needs different inputs, validated here (argparse can't require them conditionally).
+    """Route `measurements generate` by --register: none = the full measurements.yaml (both
+    platforms, every register); rtmr3 = just the bare RTMR3 hex. Each mode needs different
+    inputs, validated here (argparse can't require them conditionally).
     """
-    if args.register == "rtmr0":
-        if not args.version:
-            return _usage_error("--register rtmr0 requires --version")
-        return _generate_rtmr0(args)
     if args.register == "rtmr3":
         if not args.image:
             return _usage_error("--register rtmr3 requires --image")
@@ -598,8 +376,9 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(
             "--bios-dir",
             default=str(firmware_dir()),
-            help="directory holding the OVMF firmware (paths.GUEST_FIRMWARE); the fork "
-            "opens the metadata's 'bios' path, so it must resolve absolutely "
+            help="directory holding both guest firmware images: OVMF.inteltdx.fd (TDX) and "
+            "OVMF.amdsev.fd (SEV-SNP). Both measurements hash these exact bytes, and the "
+            "fork opens the TDX one by absolute path "
             "(default: chutes-cvm firmware dir; env CHUTES_CVM_FIRMWARE_DIR)",
         )
 
@@ -608,24 +387,23 @@ def main(argv: list[str] | None = None) -> int:
         help="generate the version's measurements — by default EVERY register into "
         "measurements.yaml; --register narrows it to one (build host: fork + Docker/KVM; "
         "LUKS_PASSPHRASE unlocks an encrypted root for RTMR3)",
-        description="Generate TDX measurements for an image version. With no --register this "
-        "computes the complete set — mrtd + rtmr0 (all topologies) + rtmr1/rtmr2 + rtmr3 — from "
-        "the finalized (post-LUKS) image and writes measurements.yaml. --register restricts it to "
-        "a single register (a standalone partial): rtmr0 emits the mrtd+rtmr0 JSON block; rtmr3 "
-        "emits the bare RTMR3 hex to stdout.",
+        description="Generate TEE measurements for an image version. With no --register this "
+        "computes the complete set from the finalized (post-LUKS) image — TDX: mrtd + rtmr0 (per "
+        "Intel class) + rtmr1/rtmr2 + rtmr3; SEV-SNP: the launch digest (per AMD class) — and "
+        "writes measurements.yaml. --register rtmr3 emits only the bare RTMR3 hex to stdout.",
     )
     _add_fork_args(gen)
     gen.add_argument(
         "--register",
-        choices=("rtmr0", "rtmr3"),
+        choices=("rtmr3",),
         default=None,
-        help="generate only this register instead of the full set (rtmr0 = mrtd+rtmr0 JSON; "
-        "rtmr3 = bare hex). Omit for the complete measurements.yaml.",
+        help="generate only this register instead of the full set (rtmr3 = bare hex). "
+        "Omit for the complete measurements.yaml.",
     )
     gen.add_argument(
         "--version",
         default=None,
-        help="image version (required for the full set and --register rtmr0)",
+        help="image version (required for the full set)",
     )
     gen.add_argument(
         "--image",
@@ -637,8 +415,8 @@ def main(argv: list[str] | None = None) -> int:
     gen.add_argument(
         "--output",
         default="-",
-        help="output path (measurements.yaml for the full set, JSON for --register rtmr0); "
-        "'-' = stdout (default). --register rtmr3 always prints its hex to stdout.",
+        help="output path for the full measurements.yaml; '-' = stdout (default). "
+        "--register rtmr3 always prints its hex to stdout.",
     )
     gen.add_argument(
         "--root-part",

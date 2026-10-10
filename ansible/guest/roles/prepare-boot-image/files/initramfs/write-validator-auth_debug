@@ -16,7 +16,7 @@
 # PREREQ="" — no init-bottom ordering dependency. The input (/run/chutes/validator-ss58) is
 # written at init-premount by fetch_key_and_unlock_debug, which completes before any
 # init-bottom script runs. The output (/run/chutes/validator-auth.env) is not in
-# tdx-measure.conf, so rtmr3-measure never reads it — ordering there is irrelevant.
+# tee-measure.conf, so rootfs-measure never reads it — ordering there is irrelevant.
 
 PREREQ=""
 prereqs() { echo "$PREREQ"; }

@@ -156,22 +156,23 @@ not the test of whether you rebuilt the layer correctly; the guest measurements 
 cat measurements/<version>/measurements.yaml     # relative to your checkout
 ```
 
-Four values matter:
+Four values matter, under the version's `tdx:` section:
 
 | Register | Covers |
 |---|---|
 | `mrtd` | Initial TD memory — the firmware |
 | `rtmr1` | Kernel and boot chain |
 | `rtmr2` | Initramfs, which carries the RTMR3 hash manifest |
-| `runtime_rtmr3` | The measured filesystem — roughly 49,000 files |
+| `rtmr3` | The measured filesystem — roughly 49,000 files |
 
 Compare against the published set:
 
 ```bash
-curl -s https://api.chutes.ai/servers/tee/measurements
+curl -s https://api.chutes.ai/servers/tdx/measurements
 ```
 
-All four should match for the version you built.
+All four should match for the version you built. (`/servers/tee/measurements` is the older,
+TDX-only endpoint; it is deprecated.)
 
 ## If they do not match
 
@@ -184,7 +185,7 @@ and a reference names the exact files rather than leaving you to guess:
 
 ```bash
 sudo virt-cat -a guest-tools/image/prod/<version>/<version>.qcow2 \
-    /etc/tdx-rtmr3-expected-hashes > mine.txt
+    /etc/rootfs-manifest > mine.txt
 diff mine.txt reference.txt
 ```
 

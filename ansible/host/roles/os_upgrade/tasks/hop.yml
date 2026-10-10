@@ -16,7 +16,7 @@
 # new OS (e.g. systemd unit overrides). init_ hooks run on the upgraded OS before
 # chutes-cvm host setup, for state that must exist before it runs (e.g. restoring
 # artifacts a pre_ hook removed). chutes-cvm host setup (via host_prerequisites +
-# tdx_bootstrap) then owns full OS state.
+# tee_bootstrap) then owns full OS state.
 
 - name: "-> {{ _next_version }}: check free disk space on /"
   ansible.builtin.shell: |
@@ -155,5 +155,5 @@
 
 - name: "-> {{ _next_version }}: run chutes-cvm host setup for new OS profile"
   ansible.builtin.include_role:
-    name: tdx_bootstrap
+    name: tee_bootstrap
   when: _next_version == _upgrade_hops | last

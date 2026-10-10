@@ -6,8 +6,8 @@
 //! openssl can do, so this binary fills exactly that gap and nothing more.
 //!
 //! Byte-for-byte compatibility with `substrateinterface.Keypair` is load-bearing
-//! and rests on three conventions, each of which is a silent-failure trap if it
-//! drifts. All three are pinned by the cross-check tests in
+//! and rests on four conventions, each of which is a silent-failure trap if it
+//! drifts. All four are pinned by the cross-check tests in
 //! `tests/rust/test_sr25519.py`, which generate vectors with the real
 //! Python library:
 //!
@@ -19,19 +19,23 @@
 //!   3. SS58 uses network prefix 42 (the generic Substrate/Bittensor prefix, which
 //!      is what makes addresses start with '5') and a blake2b-512 checksum over
 //!      `"SS58PRE" || payload`.
+//!   4. The 64-byte private key (a hotkey file's `privateKey`) is schnorrkel's
+//!      canonical `SecretKey::to_bytes()` layout, scalar || nonce, loaded with
+//!      `SecretKey::from_bytes`. `from_ed25519_bytes` also accepts it but yields a
+//!      different public key.
 //!
 //! Note that sr25519 signatures are randomized: signing the same message twice
 //! yields different bytes, and both verify. Tests must assert on verification,
 //! never on signature equality.
 //!
-//! The seed is only ever read from a file, never from argv, so it cannot leak via
-//! `/proc/<pid>/cmdline` to anything else running in the initramfs.
+//! Key material is only ever read from a file, never from argv, so it cannot leak
+//! via `/proc/<pid>/cmdline` to anything else running in the initramfs.
 
 use std::io::Read;
 use std::process::ExitCode;
 
 use blake2::{Blake2b512, Digest};
-use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, Signature};
+use schnorrkel::{signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey, Signature};
 
 /// Substrate's signing context for sr25519. Must match `py-sr25519-bindings`.
 const SIGNING_CONTEXT: &[u8] = b"substrate";
@@ -41,6 +45,7 @@ const SS58_PRE: &[u8] = b"SS58PRE";
 const SS58_NETWORK: u8 = 42;
 
 const SEED_LEN: usize = 32;
+const PRIVATE_KEY_LEN: usize = 64;
 const PUBKEY_LEN: usize = 32;
 const SIGNATURE_LEN: usize = 64;
 const SS58_CHECKSUM_LEN: usize = 2;
@@ -55,19 +60,23 @@ keys. Output is byte-compatible with substrate-interface / py-sr25519-bindings.
 Built for the sek8s guest initramfs, where the Python substrate stack cannot run.
 
 USAGE:
-    sr25519 address --seed-file <path>
-    sr25519 sign    --seed-file <path> (--message <str> | --message-file <path>)
+    sr25519 address <key>
+    sr25519 sign    <key> (--message <str> | --message-file <path>)
     sr25519 verify  --address <ss58> --signature <hex> (--message <str> | --message-file <path>)
 
 VERBS:
-    address   Derive and print the SS58 address (network 42) for a seed.
+    address   Derive and print the SS58 address (network 42) for a key.
     sign      Print a hex-encoded sr25519 signature over the message.
     verify    Verify a hex signature against an SS58 address. Exit 0 = valid.
 
+KEY (exactly one, required for `address` and `sign`):
+    --seed-file <path>         File holding the 32-byte seed as hex (64 chars).
+    --private-key-file <path>  File holding the 64-byte sr25519 private key as hex
+                               (128 chars), as in a hotkey file's privateKey.
+    Key hex has no 0x prefix; surrounding whitespace is trimmed. Keys are never
+    passed on argv.
+
 OPTIONS:
-    --seed-file <path>     File holding the 32-byte seed as hex (64 chars, optional
-                           0x prefix). Surrounding whitespace is trimmed. Required
-                           for `address` and `sign`. Never passed on argv.
     --message <str>        Message to sign/verify, as a UTF-8 string.
     --message-file <path>  Message to sign/verify, as raw bytes. Use '-' for stdin.
                            Mutually exclusive with --message.
@@ -105,11 +114,11 @@ fn run(args: &[String]) -> Result<String, String> {
 
     match verb {
         "address" => {
-            let keypair = keypair_from_seed_file(&require(&opts, "--seed-file")?)?;
+            let keypair = load_keypair(&opts)?;
             Ok(ss58_encode(&keypair.public.to_bytes()))
         }
         "sign" => {
-            let keypair = keypair_from_seed_file(&require(&opts, "--seed-file")?)?;
+            let keypair = load_keypair(&opts)?;
             let message = read_message(&opts)?;
             let signature = keypair.sign(signing_context(SIGNING_CONTEXT).bytes(&message));
             Ok(hex_encode(&signature.to_bytes()))
@@ -203,24 +212,64 @@ fn read_message(opts: &[(String, String)]) -> Result<Vec<u8>, String> {
 
 // ── Key handling ─────────────────────────────────────────────────────────────
 
-/// Read a hex seed from `path` and expand it the way Substrate does.
+/// Keypair from exactly one of `--seed-file` or `--private-key-file`.
+fn load_keypair(opts: &[(String, String)]) -> Result<schnorrkel::Keypair, String> {
+    match (
+        lookup(opts, "--seed-file"),
+        lookup(opts, "--private-key-file"),
+    ) {
+        (Some(_), Some(_)) => {
+            Err("--seed-file and --private-key-file are mutually exclusive".to_string())
+        }
+        (Some(path), None) => keypair_from_seed(&read_key_file(&path, SEED_LEN, "seed")?),
+        (None, Some(path)) => {
+            keypair_from_private_key(&read_key_file(&path, PRIVATE_KEY_LEN, "private key")?)
+        }
+        (None, None) => Err("one of --seed-file or --private-key-file is required".to_string()),
+    }
+}
+
+fn read_key_file(path: &str, len: usize, what: &str) -> Result<Vec<u8>, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
+    parse_key_hex(&raw, len, what)
+}
+
+/// Strict key hex: exactly `len` bytes, no `0x` prefix. process-config.py applies the
+/// same rule to the config volume, so a key the initramfs accepts boots all the way.
+fn parse_key_hex(raw: &str, len: usize, what: &str) -> Result<Vec<u8>, String> {
+    let body = raw.trim();
+    if body.starts_with("0x") || body.starts_with("0X") {
+        return Err(format!("{what} must not have a 0x prefix"));
+    }
+    let bytes = hex_decode(body)?;
+    if bytes.len() != len {
+        return Err(format!(
+            "{what} must be {len} bytes ({} hex chars), got {} bytes",
+            len * 2,
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Expand a seed the way Substrate does.
 ///
 /// `ExpansionMode::Ed25519` is not a stylistic choice: it is what
 /// `sr25519_pair_from_seed` uses, and picking `Uniform` instead silently yields a
 /// valid-but-different keypair whose SS58 will not match the miner's hotkey.
-fn keypair_from_seed_file(path: &str) -> Result<schnorrkel::Keypair, String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| format!("failed to read {path}: {e}"))?;
-    let seed = hex_decode(raw.trim())?;
-    if seed.len() != SEED_LEN {
-        return Err(format!(
-            "seed must be {SEED_LEN} bytes ({} hex chars), got {} bytes",
-            SEED_LEN * 2,
-            seed.len()
-        ));
-    }
-    let mini =
-        MiniSecretKey::from_bytes(&seed).map_err(|e| format!("invalid sr25519 seed: {e}"))?;
+fn keypair_from_seed(seed: &[u8]) -> Result<schnorrkel::Keypair, String> {
+    let mini = MiniSecretKey::from_bytes(seed).map_err(|e| format!("invalid sr25519 seed: {e}"))?;
     Ok(mini.expand_to_keypair(ExpansionMode::Ed25519))
+}
+
+/// Load a 64-byte private key in the layout py-sr25519-bindings uses.
+///
+/// `SecretKey::from_bytes`, not `from_ed25519_bytes`: both accept the same 64 bytes,
+/// but the ed25519 variant reinterprets the scalar and yields another hotkey's address.
+fn keypair_from_private_key(key: &[u8]) -> Result<schnorrkel::Keypair, String> {
+    let secret =
+        SecretKey::from_bytes(key).map_err(|e| format!("invalid sr25519 private key: {e}"))?;
+    Ok(secret.to_keypair())
 }
 
 // ── SS58 ─────────────────────────────────────────────────────────────────────
@@ -295,14 +344,9 @@ fn nibble_to_char(nibble: u8) -> char {
     }
 }
 
-/// Decode hex, tolerating an optional `0x` prefix. The Ansible host role already
-/// strips `0x` from `secretSeed`, but a hand-written config.yaml may not.
+/// Decode plain hex (no `0x` prefix). Surrounding whitespace is trimmed.
 fn hex_decode(input: &str) -> Result<Vec<u8>, String> {
-    let trimmed = input.trim();
-    let body = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
+    let body = input.trim();
 
     if body.len() % 2 != 0 {
         return Err(format!(
@@ -339,6 +383,8 @@ mod tests {
     // seed-expansion + SS58 path without needing the Python library.
     const ALICE_SEED: &str = "e5be9a5092b81bca64be81d212e7f2f9eba183bb7a90954f7b76361f6edb5c0a";
     const ALICE_SS58: &str = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+    // Alice's private key as substrate-interface reports it (Keypair.private_key).
+    const ALICE_PRIVATE_KEY: &str = "33a6f3093f158a7109f679410bef1a0c54168145e0cecb4df006c1c2fffb1f09925a225d97aa00682d6a59b95b18780c10d7032336e88f3442b42361f4a66011";
 
     fn alice_keypair() -> schnorrkel::Keypair {
         let seed = hex_decode(ALICE_SEED).unwrap();
@@ -361,6 +407,36 @@ mod tests {
             .unwrap()
             .expand_to_keypair(ExpansionMode::Uniform);
         assert_ne!(ss58_encode(&uniform.public.to_bytes()), ALICE_SS58);
+    }
+
+    #[test]
+    fn seed_expansion_yields_the_python_private_key_layout() {
+        let keypair = alice_keypair();
+        assert_eq!(hex_encode(&keypair.secret.to_bytes()), ALICE_PRIVATE_KEY);
+    }
+
+    #[test]
+    fn private_key_reproduces_alices_address() {
+        let keypair = keypair_from_private_key(&hex_decode(ALICE_PRIVATE_KEY).unwrap()).unwrap();
+        assert_eq!(ss58_encode(&keypair.public.to_bytes()), ALICE_SS58);
+    }
+
+    #[test]
+    fn ed25519_private_key_layout_would_be_wrong() {
+        // Guards against swapping in from_ed25519_bytes, which accepts the same bytes.
+        let secret =
+            SecretKey::from_ed25519_bytes(&hex_decode(ALICE_PRIVATE_KEY).unwrap()).unwrap();
+        assert_ne!(ss58_encode(&secret.to_public().to_bytes()), ALICE_SS58);
+    }
+
+    #[test]
+    fn key_hex_must_have_the_exact_length_and_no_prefix() {
+        assert!(parse_key_hex(ALICE_PRIVATE_KEY, PRIVATE_KEY_LEN, "private key").is_ok());
+        assert!(parse_key_hex(&format!("{ALICE_SEED}\n"), SEED_LEN, "seed").is_ok());
+        assert!(parse_key_hex(&ALICE_PRIVATE_KEY[..126], PRIVATE_KEY_LEN, "private key").is_err());
+        assert!(parse_key_hex(ALICE_SEED, PRIVATE_KEY_LEN, "private key").is_err());
+        let prefixed = parse_key_hex(&format!("0x{ALICE_SEED}"), SEED_LEN, "seed");
+        assert_eq!(prefixed.unwrap_err(), "seed must not have a 0x prefix");
     }
 
     #[test]
@@ -416,12 +492,11 @@ mod tests {
     }
 
     #[test]
-    fn hex_round_trips_and_tolerates_0x() {
+    fn hex_round_trips() {
         let bytes = vec![0x00, 0x0f, 0xa5, 0xff];
         let encoded = hex_encode(&bytes);
         assert_eq!(encoded, "000fa5ff");
         assert_eq!(hex_decode(&encoded).unwrap(), bytes);
-        assert_eq!(hex_decode("0x000fa5ff").unwrap(), bytes);
         assert_eq!(hex_decode("  000FA5FF\n").unwrap(), bytes);
     }
 
@@ -429,5 +504,6 @@ mod tests {
     fn hex_rejects_malformed_input() {
         assert!(hex_decode("abc").is_err());
         assert!(hex_decode("zz").is_err());
+        assert!(hex_decode("0x00").is_err());
     }
 }

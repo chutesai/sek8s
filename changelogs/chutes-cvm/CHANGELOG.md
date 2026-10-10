@@ -3,6 +3,150 @@
 The `chutes-cvm` CLI + toolkit (`src/chutes-cvm/`) — an independently installable host CLI
 (`pip`/`install.sh`). Versioned with SemVer via `src/chutes-cvm/VERSION`. Run
 `make promote-changelogs` to aggregate fragments into the current version section.
+## [0.3.0] - 2026-10-10
+
+### Added
+- AMD SEV-SNP hosts. `chutes_cvm.guest.tee` has a `TeeProvider` per platform (TDX, SEV-SNP)
+  owning the QEMU arguments that differ: the confidential-guest object, memory backend, machine
+  flags, SMBIOS product and firmware. A host's platform is taken from its captured CPU vendor
+  (`HostProfile.tee_provider`; an unsupported vendor is refused), and `verify_environment()`
+  checks that the platform is enabled in KVM and reports that platform's BIOS remedy (e.g.
+  "SEV-SNP is not enabled in BIOS — check SMEE, ASID space limit, TSME"). Launch Step 0 uses it.
+- `chutes-cvm host platform [--check]` prints the TEE this host's CPU vendor implies (`tdx` on
+  Intel, `snp` on AMD); `--check` also requires it to be enabled in KVM and exits 1 with the
+  BIOS remedy if not. Host automation branches on it.
+- SEV-SNP guests launch with `memory-backend-memfd,share=on`, `vmport=off` (per NVIDIA's
+  confidential-computing guide), policy `0x30000` with the DEBUG bit clear, the EPYC C-bit
+  constants (`cbitpos=51`, `reduced-phys-bits=1`), and `kernel-hashes=on`, so the
+  kernel/initrd/cmdline hashes land in the launch measurement.
+- `firmware/OVMF.amdsev.fd`, pinned in the repo beside `OVMF.inteltdx.fd` and built
+  reproducibly from edk2-stable202605 (`build-firmware.sh --amd-sev`, recorded in
+  `firmware/PROVENANCE.md`). One deviation from upstream that matters: `PcdUse1GPageTable`, without
+  which the firmware hangs whenever the 64-bit PCI window lands above 1 TiB (GPU passthrough with
+  ~768 GB of guest RAM). The SEV-SNP launch measurement covers these exact bytes.
+- Offline SEV-SNP launch-measurement generation (`measurement/snp.py`): the SEV-SNP ABI's
+  PAGE_INFO digest chain over the firmware, its SEV metadata pages, the kernel/initrd/cmdline
+  hashes page and one VMSA per vCPU, verified byte-exact against live attestation reports.
+- SEV-SNP ACPI pinning. Each class's expected ACPI hash is computed offline
+  (`measurement.snp.AcpiTables`, from the same `--create-acpi-tables` dump RTMR0 uses) and
+  recorded as `acpi_sha256`. A measured SNP launch boots with `sek8s.acpi_sha256=<hash>` on the
+  cmdline, so the firmware checks the guest's tables against it. A test boot passes `unverified`,
+  which matches no published measurement and cannot attest.
+- `H100PcieProfile` for the H100 PCIe (`10de:2331`): CC mode only (no NVLink fabric, so no
+  PPCIe), 80 GB, the API's `h100`.
+- `miner.private_key` (`--miner-private-key`): the hotkey's 64-byte sr25519 private key, from
+  current Bittensor hotkey files that have no `secretSeed`, accepted in place of `miner.seed`. It
+  is written to the config volume as `miner-private-key`, and the host-side shutdown and Chutes
+  API calls sign with it.
+- `chutes-cvm host devices-free`: exits 0 if nothing holds this host's passthrough devices,
+  otherwise 1 with each reason (a running VM, or a QEMU still reclaiming the previous guest's
+  memory). Note the exit sense is the opposite of `vfio-wedged`.
+
+### Changed
+- The launch config takes exactly one of `miner.private_key` or `miner.seed`, as plain hex
+  without `0x` (128 and 64 characters). Both set, a `0x` prefix or a wrong length are refused when
+  the config is loaded, before anything launches; the guest refused these at boot.
+- Host-side signing refuses a key that does not belong to `miner.ss58`. The Chutes API calls used
+  to warn and sign with the key's own hotkey, which the API then rejected.
+- **`guest launch` Step 1 decides measured launch, test boot, or refusal.** It fetches the host
+  class (as `host verify` does) and looks up the image's `(version, rc)`. A measured image launches
+  measured. An unmeasured image -- or no answer from the API, or an unreadable manifest -- is
+  refused if it is a production image, and test-boots (boots, cannot attest) if it is a debug
+  build or `--force` is passed. Behaviour change: an unpublished debug build used to be refused;
+  it now test-boots. A published `rc` build still launches measured. Benchmark launches test-boot
+  without asking. The launch no longer calls `POST /servers/tdx/preflight`.
+- **One reading of the host per launch.** Step 0 reads the profile once and hands it to both
+  the API check and the boot. Previously `discover-profile.sh` ran twice, so the control plane
+  could approve a shape that never booted.
+- `chutes-cvm host verify` reports a host it cannot read as `BLOCKED (host)` rather than as an
+  API failure.
+- `chutes-cvm host setup` is platform-aware: a recipe is one OS version for one platform
+  (`TdxUbuntu2604Recipe` / `SnpUbuntu2604Recipe` over a shared 26.04 base). TDX adds the Intel SGX
+  repo, `ovmf-inteltdx`, the PCCS/QGS/QPL packages and `kvm_intel.tdx=1`; SEV-SNP adds nothing
+  (Ubuntu 26.04's kernel enables it from BIOS alone). Previously an AMD host was given the full
+  Intel stack.
+- SEV-SNP guests launch flat (one memory backend, no `-numa`, no PXB grouping, no vCPU pinning)
+  even on 2-node hosts, because QEMU 10.2.1 wedges an SNP guest during NUMA init (a memory
+  conversion spanning two guest_memfd backends). TDX keeps guest NUMA. AMD 2-node classes are
+  fingerprinted `flat-…`. To be lifted once the pinned QEMU carries "accel/kvm: Fix
+  kvm_convert_memory() calls crossing memory regions".
+- `measurements generate` covers both platforms in one pass. A version's entry has a `tdx:`
+  section (`mrtd`, `rtmr1`, `rtmr2`, `rtmr3`, `hardware[].rtmr0`) and an `snp:` section
+  (`hardware[].measurement`, `acpi_sha256`); each class lands in one, by CPU vendor, and a section
+  is written only when it has classes. This replaces the flat per-version layout, so consumers of
+  measurements.yaml (chutes-ops, the API) must read the sections. `runtime_rtmr3` is now `rtmr3`,
+  the name the API reads.
+- `measurements generate` emits one hardware entry per measurement, listing every host class
+  that measures that way in `fingerprints: [...]` (was one entry per class with a singular
+  `fingerprint`). The API refuses a measurement on two entries.
+- `measurements generate` writes a debug build's entry as `rc: true`, read from the image set's
+  manifest. The API refuses to load an rc release without an `authorized_hotkeys` allowlist, so a
+  debug `measurements.yaml` merged by mistake fails loudly instead of admitting debug guests.
+- `measurements generate` fails when a release-level SEV-SNP input (the firmware, or the image's
+  direct-boot artifacts) is missing, instead of reporting every AMD class PENDING and exiting 0.
+- The image-set `manifest.json` records the SHA-256 of the guest firmware the image was built
+  with (`firmware`), and `ImageSet.verify` checks chutes-cvm's firmware against it, so launch,
+  `image verify` and `measurements generate` refuse any other. Sets from before the field are not
+  checked.
+- The bundled measured-file walk is `scripts/tee-measure`, formerly `tdx-measure`. The
+  `tdx-measure` fork (`--tdx-measure-bin`) keeps its name.
+- `guest launch` flags are derived from the config schema, so each is declared once and takes its
+  help from the field description; `--help` describes every flag. Abbreviated flags are no
+  longer accepted (`allow_abbrev=False`), so a mistyped or removed flag fails instead of silently
+  matching another.
+- `chutes-cvm guest stop --force` exits 1, with reclaim guidance, when QEMU survives SIGKILL
+  (e.g. it is still reclaiming the previous guest's memory and holding the image's write lock),
+  instead of reporting success. `guest down --force` stops there too, leaving the bridge in place,
+  instead of tearing the environment down around the live QEMU.
+- Internal: the QEMU command is assembled by one traversal, `QemuCommand.build(host, context)`,
+  from a `HostProfile` and a `GuestContext` (`LaunchContext` / `MeasurementContext`). PCIe slot
+  claims, which land in RTMR0, run in one fixed order, and the offline measurement command is
+  built dump-shaped rather than rewritten from a launch command, so nothing added to a launch can
+  silently enter the hashed bytes. Launch prep is split into `guest/{privileged,volumes,images,
+  network}.py`, `guest/__main__.py` is now `guest/vm.py`, and `guest/preflight.py` is
+  `guest/chutes_api.py` (`PreflightError` is `ChutesApiError`).
+
+### Fixed
+- **A relaunch could leave the host unable to reboot.** After a TD powers off, QEMU stays alive
+  returning the guest's private memory to the host — measured at ~2 hours for ~714 GB on an 8x
+  H200 host — while still holding every passthrough device. `guest launch`'s device unbind then
+  blocked in D state, and `reboot` hung in `device_shutdown()`, leaving the host needing a SysRq
+  reset. Launch now detects that process (by `comm` and thread state, not `cmdline`, which is
+  empty for a zombie) before touching any device, and refuses with the remaining pages, the rate,
+  an ETA and the options: wait, or reset now. This refusal is not `--force`-overridable. On
+  SEV-SNP the reclaim takes minutes and its progress counter reads 0; poll `host devices-free`.
+  The duplicate-VM check uses the same detection, so a second VM can no longer launch during a
+  reclaim, and the `pci_operations_wedged` error no longer advises a plain reboot (which hangs);
+  it gives the SysRq sequence.
+- `chutes-cvm host reset-gpus` refuses while anything holds the GPUs, including a reclaiming
+  QEMU; it previously SBR-reset GPUs a live QEMU still held. It also takes the reset mode (CC or
+  PPCIe) from the host's GPU profile, as a launch does, instead of sending every card missing from
+  its own list to the PPCIe reset.
+- Guest NUMA is decided only by the host profile. Previously the PXB pinning followed the
+  profile while the memory layout followed live sysfs, so a host whose live NUMA disagreed with
+  its profile booted a command matching no measurement; a contradiction now raises.
+- Measurement reads the staged kernel/initrd/cmdline through the launcher's own reader. The
+  launcher stripped all surrounding whitespace from the cmdline and the measurement only trailing
+  newlines, so a cmdline file with a trailing space would have booted one cmdline while RTMR2
+  hashed another.
+- `measurements generate` fails when a previously measured host class cannot be generated,
+  listing every such class. It was reported PENDING and left out of the release, which exited 0
+  and left hosts of that class nothing to attest against.
+- `build-firmware.sh --secure-boot` never configured the edk2 environment (`edksetup.sh` inherited
+  the script's arguments); flags now work.
+- `network.ssh_port` / `--ssh-port` was ignored for user-mode networking (the default 10022 always
+  won).
+
+### Removed
+- `measurements generate --register rtmr0`. A full `generate` computes RTMR0 inline;
+  `--register rtmr3` stays.
+- `python -m chutes_cvm.guest` and its `--clean`/`--ssh` flags. `chutes-cvm guest launch` is the
+  only path to a guest.
+- `guest launch --config`, which never worked (the positional's default always overrode it). Pass
+  the config as the positional: `chutes-cvm guest launch config.yaml`.
+- The CCEL splice-and-replay path to RTMR0, replaced by the tdx-measure fork's full RTMR0
+  self-generation.
+
 ## [0.2.1] - 2026-10-01
 
 ### Fixed

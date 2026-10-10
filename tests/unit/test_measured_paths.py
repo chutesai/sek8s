@@ -6,7 +6,7 @@ without changing the measurement. Catches accidental removal of a measured path.
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-MINER_CONF = REPO / "ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf"
+MINER_CONF = REPO / "ansible/guest/roles/rootfs-measure/files/tee-measure-miner.conf"
 
 
 def _measured_paths(conf: Path):
@@ -29,7 +29,7 @@ def test_privileged_boot_paths_are_measured():
         # Path-restricted root `rm` wrapper the system-manager sudoers grant targets.
         "/usr/local/bin/cache-rm",
         # Runtime integrity verifier and the storage sync that feeds it.
-        "/usr/local/bin/rtmr3-verify",
+        "/usr/local/bin/rootfs-verify",
         "/usr/local/bin/setup-storage-bind-mounts.sh",
         # Measured helm chart specs (versions/values/flags) and OPA policies.
         "/etc/chutes/charts",

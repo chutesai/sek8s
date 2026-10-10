@@ -252,20 +252,28 @@
     group: root
 
 # Shared boot-attestation / provision libraries sourced by the prod entry scripts
-# (fetch_key_and_unlock -> attest-common; setup_storage -> provision-common). Staged
+# (fetch_key_and_unlock -> init-premount-common; setup_storage -> init-bottom-common). Staged
 # into the initramfs by the fetch_key hook.
-- name: Copy shared boot-attestation library (attest-common)
+- name: Copy shared boot-attestation library (init-premount-common)
   ansible.builtin.copy:
-    src: files/initramfs/attest-common
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/attest-common"
+    src: files/initramfs/init-premount-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-premount-common"
     mode: '0755'
     owner: root
     group: root
 
-- name: Copy shared provision library (provision-common)
+- name: Copy shared TEE evidence library (tee-evidence)
   ansible.builtin.copy:
-    src: files/initramfs/provision-common
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/provision-common"
+    src: files/initramfs/tee-evidence
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/tee-evidence"
+    mode: '0755'
+    owner: root
+    group: root
+
+- name: Copy shared provision library (init-bottom-common)
+  ansible.builtin.copy:
+    src: files/initramfs/init-bottom-common
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-bottom-common"
     mode: '0755'
     owner: root
     group: root
@@ -288,10 +296,10 @@
     owner: root
     group: root
 
-- name: Copy TDX module loader script (init-top)
+- name: Copy TEE module loader script (init-top)
   ansible.builtin.copy:
-    src: files/initramfs/load-tdx
-    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tdx"
+    src: files/initramfs/load-tee
+    dest: "{{ newroot_mount }}/etc/initramfs-tools/scripts/init-top/load-tee"
     mode: '0755'
     owner: root
     group: root
@@ -391,7 +399,7 @@
       exit 0
     fi
     missing=""
-    for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat curl jq openssl base64 cryptsetup blkid ip sr25519; do
+    for b in head tail tr cut sed awk wc grep basename dirname mktemp dd cat printf curl jq openssl base64 cryptsetup blkid ip sr25519; do
       grep -qE "(^|/)${b}$" "$tmp" || missing="$missing $b"
     done
     entries=$(wc -l < "$tmp")

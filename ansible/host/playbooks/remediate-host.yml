@@ -82,10 +82,11 @@
       ansible.builtin.include_role:
         name: host_tools
 
-    - name: Re-provision | tdx_bootstrap
+    - name: Re-provision | tee_bootstrap
       ansible.builtin.include_role:
-        name: tdx_bootstrap
+        name: tee_bootstrap
 
     - name: Re-provision | pccs_configure
       ansible.builtin.include_role:
         name: pccs_configure
+      when: host_tee == 'tdx'  # TDX quotes need the host PCCS; SEV-SNP has none

@@ -137,11 +137,10 @@ already exists, new fragments are merged into the existing section by category.
 #### Release branch workflow (`release/**`)
 
 1. Feature branches merge into `release/next` (or similar).
-2. On each push to a `release/**` branch, the `changelog-auto-promote.yml` workflow
-   runs `promote_changelogs.py --promote`, commits promoted changelogs, and pushes
-   directly to the release branch.
+2. When the release is ready, run `make promote-changelogs` on the release branch and
+   commit the result. Promotion is manual: nothing in CI writes to a branch.
 3. When the release branch is PR'd to `main`, the strict check enforces that **no
-   fragments remain** — everything must already be promoted.
+   fragments remain**, so a release that was not promoted cannot merge.
 4. On merge to `main`, tags are created for bumped versions.
 
 #### Trunk-based workflow (direct to main)
@@ -149,7 +148,7 @@ already exists, new fragments are merged into the existing section by category.
 1. Before creating a PR to `main`, run `make promote-changelogs` locally.
 2. The same strict check applies: no fragments allowed on PRs to `main`.
 
-Never manually add `## [x.y.z]` headings to `CHANGELOG.md` — automation owns those.
+Never manually add `## [x.y.z]` headings to `CHANGELOG.md` — `make promote-changelogs` writes those.
 
 ### Git tags
 

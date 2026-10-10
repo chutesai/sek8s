@@ -24,7 +24,7 @@ SCRIPT = REPO / SCRIPT_REL
 DROPIN = REPO / "ansible/guest/roles/gpu/files/nvidia-persistenced-dropin.conf"
 DEVICE_SETUP = REPO / "ansible/guest/roles/gpu/tasks/device-setup.yml"
 
-# Directory roots from tdx-measure-miner.conf that a boot-time script could plausibly
+# Directory roots from tee-measure-miner.conf that a boot-time script could plausibly
 # write into. Writing under any of these moves RTMR3.
 MEASURED_ROOTS = (
     "/etc/systemd/system",

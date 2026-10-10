@@ -6,14 +6,13 @@
 #     ansible-playbook -i ansible/guest/inventory.debug.yml \
 #     ansible/guest/playbooks/chutes-miner-vm.yml
 #
-# A debug build differs from prod in two ways that matter:
-#   * debug_build: true  -- AppArmor profiles load in COMPLAIN mode, so they enforce nothing.
-#     Denials are logged (apparmor="ALLOWED") but never applied. To test a profile you must
-#     flip it to enforce on the running guest; a stock debug VM will not reproduce a denial.
-#   * guest_ssh_keys    -- authorises SSH into the guest as ROOT (not ubuntu). Without this
-#     there is no way in: production guests have no remote access.
-#
-# The key below is the BUILD HOST's ~/.ssh/id_ed25519.pub (build-setup.yml creates it).
+# debug_build: true differs from prod in two ways that matter:
+#   * AppArmor profiles load in COMPLAIN mode, so they enforce nothing. Denials are logged
+#     (apparmor="ALLOWED") but never applied. To test a profile you must flip it to enforce on
+#     the running guest; a stock debug VM will not reproduce a denial.
+#   * sshd stays, with root password login (password: debug) on SSH and the console. The image
+#     ships no authorized_keys (the build host's key is purged). Production guests have no
+#     remote access.
 all:
   children:
     vm:

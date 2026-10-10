@@ -1,0 +1,321 @@
+---
+# rootfs-measure — Extend TDX RTMR3 with SHA-384 hashes of configured paths.
+#
+# Installs an initramfs hook that extends RTMR3 with SHA-384 hashes of
+# configured files on the real root filesystem at every boot, before
+# pivot_root.  Because the hook script and its config are baked into the
+# initramfs (covered by RTMR1), neither can be tampered with without
+# changing RTMR1.  Any offline modification to a measured file (e.g. SSH
+# key injection) produces a different RTMR3 that verifiers can detect.
+#
+# Canonical files (e.g. verify-access-config) have their SHA-384 hashes
+# computed at build time and embedded in /etc/rootfs-manifest,
+# which is also baked into the initramfs.  At boot the initramfs verifies
+# each canonical file's hash matches the embedded constant before extending
+# RTMR3.  A mismatch powers off the VM.  This roots the integrity of the
+# runtime verification tool in RTMR1: to tamper with verify-access-config
+# AND still boot, an attacker must change the initramfs, which changes RTMR1.
+#
+# The initramfs script is fatal: any failure (TDX device unavailable, missing
+# config, hash mismatch, hash error, or extend error) powers off the VM rather
+# than allowing it to boot with an incomplete or unverifiable RTMR3.
+#
+# tdx-rtmr-extend uses the tsm-mr sysfs interface (merged Linux 6.16):
+#   /sys/class/misc/tdx_guest/measurements/rtmrN:sha384
+# No external libraries required — only build-essential for gcc.
+#
+# This role notifies the global "update initramfs" handler so the hook is
+# included in the initramfs image.  For LUKS builds, the LUKS role also
+# rebuilds the initramfs in a chroot — our hook files on disk will be
+# picked up at that point as well.
+
+# ── Build tdx-rtmr-extend binary ────────────────────────────────────────────
+
+- name: Ensure build tools are present
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - gcc
+    state: present
+
+- name: Copy tdx-rtmr-extend source
+  ansible.builtin.copy:
+    src: tdx-rtmr-extend.c
+    dest: /tmp/tdx-rtmr-extend.c
+    mode: '0644'
+
+- name: Compile tdx-rtmr-extend
+  ansible.builtin.shell: gcc -O2 -o /tmp/tdx-rtmr-extend /tmp/tdx-rtmr-extend.c
+  args:
+    chdir: /tmp
+
+- name: Remove immutable flag from tdx-rtmr-extend (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/tdx-rtmr-extend 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install tdx-rtmr-extend binary
+  ansible.builtin.copy:
+    src: /tmp/tdx-rtmr-extend
+    dest: /usr/local/bin/tdx-rtmr-extend
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set tdx-rtmr-extend immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/tdx-rtmr-extend
+  changed_when: false
+
+- name: Remove temporary tdx-rtmr-extend build artefacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/tdx-rtmr-extend.c
+    - /tmp/tdx-rtmr-extend
+
+# ── Install the shared measurement implementation ───────────────────────────
+# tee-measure decides WHICH files are measured, in WHAT ORDER, and HOW each is hashed.
+# The initramfs measurer (via the hook), prepare-boot-image's manifest generator,
+# rootfs-verify and the host-side measurement predictor all run this one script. Four
+# separate walkers of this conf used to exist and they disagreed four ways; keeping
+# exactly one is the fix. /usr/local/bin is RTMR3-measured, so the script is covered by
+# the measurement it produces.
+#
+# Source of truth is the chutes-cvm package, because that is the copy which must ship
+# standalone (bundled into the wheel, so a `pip install chutes-cvm` on a host can
+# predict a guest measurement with no checkout). The guest gets the same bytes copied
+# out of this checkout at build time — one authored file, not a vendored pair.
+
+- name: Remove immutable flag from tee-measure (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/bin/tee-measure 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install tee-measure
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/src/chutes-cvm/chutes_cvm/scripts/tee-measure"
+    dest: /usr/local/bin/tee-measure
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set tee-measure immutable
+  ansible.builtin.command: chattr +i /usr/local/bin/tee-measure
+  changed_when: false
+
+# The Python half — the chain fold and a parser for tee-measure's output. Installed to
+# /usr/local/lib (RTMR3-measured) rather than into the sek8s venv, because rootfs-verify
+# runs on the system interpreter before k3s and /opt/sek8s/venv is outside the
+# measured-path list. Same file as the host-side predictor imports, for the same reason
+# as tee-measure above.
+
+- name: Create /usr/local/lib/sek8s
+  ansible.builtin.file:
+    path: /usr/local/lib/sek8s
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Remove immutable flag from the rtmr3 helper module (idempotency)
+  ansible.builtin.shell: chattr -i /usr/local/lib/sek8s/rtmr3.py 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install the rtmr3 helper module
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/src/chutes-cvm/chutes_cvm/measurement/rtmr3.py"
+    dest: /usr/local/lib/sek8s/rtmr3.py
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Set the rtmr3 helper module immutable
+  ansible.builtin.command: chattr +i /usr/local/lib/sek8s/rtmr3.py
+  changed_when: false
+
+# ── Detect VM type from installed components ─────────────────────────────────
+# Rather than requiring an explicit flag, we detect the VM type from what other
+# roles have already installed.  setup-storage-bind-mounts.sh is only present
+# on chutes-miner-vm (installed by the cache-volume role).  Its presence drives
+# every subsequent conditional in this role.
+
+- name: Check for storage bind-mount script (present on chutes-miner-vm only)
+  ansible.builtin.stat:
+    path: /usr/local/bin/setup-storage-bind-mounts.sh
+  register: _bind_mounts_script
+
+# ── Install verify-access-config (tee-gpu-vm only) ───────────────────────────
+# Not installed on chutes-miner-vm — that image has no interactive access.
+
+- name: Remove immutable flag from verify-access-config (idempotency)
+  when: not _bind_mounts_script.stat.exists
+  ansible.builtin.shell: chattr -i /usr/local/bin/verify-access-config 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install verify-access-config
+  when: not _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: verify-access-config
+    dest: /usr/local/bin/verify-access-config
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set verify-access-config immutable
+  when: not _bind_mounts_script.stat.exists
+  ansible.builtin.command: chattr +i /usr/local/bin/verify-access-config
+  changed_when: false
+
+# ── Write measurement config ─────────────────────────────────────────────────
+# Selects the correct static path list based on detected VM type.
+
+- name: Write /etc/tee-measure.conf
+  ansible.builtin.copy:
+    src: "{{ 'tee-measure-miner.conf' if _bind_mounts_script.stat.exists else 'tdx-measure-gpu.conf' }}"
+    dest: /etc/tee-measure.conf
+    owner: root
+    group: root
+    mode: '0644'
+
+# DEBUG ONLY — the one place the measured set differs from production.
+#
+# /etc/ssh/ssh_host_* are generated randomly per build. Production deletes them during cleanup
+# (sshd is removed there), so measuring the whole directory is stable AND catches anything
+# unexpected appearing in it. Debug keeps sshd, so the keys stay and would move RTMR3 on every
+# rebuild — which breaks more than the boot gate: RTMR3_VERIFY_DEBUG_MODE downgrades the local
+# poweroff to a warning, but the validator still rejects a VM whose RTMR3 does not match its
+# registered value.
+#
+# Narrowing to the policy files leaves the keys in place (sshd starts, the build key still works)
+# and simply does not measure them. Deleting them instead would need boot-time regeneration, which
+# drifts RTMR3 on the SECOND boot — the same attestation failure, one boot later.
+- name: Narrow /etc/ssh for debug builds (host keys are random per build)
+  ansible.builtin.replace:
+    path: /etc/tee-measure.conf
+    regexp: '^/etc/ssh$'
+    replace: |-
+      /etc/ssh/moduli
+      /etc/ssh/ssh_config
+      /etc/ssh/ssh_config.d
+      /etc/ssh/ssh_import_id
+      /etc/ssh/sshd_config
+      /etc/ssh/sshd_config.d
+  when: debug_build | default(false)
+
+# ── Expected hashes for canonical files: NOT generated here ──────────────────
+# This role owns only the BOOT-TIME side of RTMR3: the path list (/etc/tee-measure.conf), the
+# initramfs hook, and the init-bottom verifier below. The canonical MANIFEST
+# (/etc/rootfs-manifest) is generated later, by the prepare-boot-image role
+# (roles/prepare-boot-image/tasks/generate-expected-hashes.yml), over the fully-assembled image
+# root — because several measured files reach their final on-disk content only in that stage:
+# /etc/fstab is rewritten to /dev/mapper by encryption, /root/.ssh is set by setup-ssh-access,
+# cleanup adds systemd drop-ins, /etc/tdx-luks.conf is written there. Hashing them HERE would bake
+# a stale hash (failing the boot pre-check) or force excluding privileged files (/root/.ssh,
+# /etc/fstab) from verification — the wrong trade-off. Hashing the FINAL root covers every measured
+# file in its true state, so nothing is excluded and offline tampering of any of them is caught at
+# boot. The hook below copies the manifest into the initramfs only `if [ -f ]`, so its absence here
+# is expected; prepare-boot-image writes it before the FINAL initramfs rebuild that embeds it (RTMR1).
+
+# ── Install initramfs hook and init-bottom script ────────────────────────────
+
+- name: Install initramfs hook (rootfs-measure)
+  ansible.builtin.copy:
+    src: initramfs/rootfs-measure-hook
+    dest: /etc/initramfs-tools/hooks/rootfs-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+- name: Install initramfs init-bottom script (rootfs-measure)
+  ansible.builtin.copy:
+    src: initramfs/rootfs-measure
+    dest: /etc/initramfs-tools/scripts/init-bottom/rootfs-measure
+    owner: root
+    group: root
+    mode: '0755'
+  notify: update initramfs
+
+# ── Install rootfs-verify (chutes-miner-vm only) ───────────────────────────────
+# One-time boot check: runs after setup-storage-bind-mounts, recomputes the
+# full RTMR3 chain from tee-measure.conf and compares to hardware RTMR3.
+# Powers off on any mismatch.  Not needed on tee-gpu-vm (no storage bind-mounts).
+
+- name: Remove immutable flag from rootfs-verify (idempotency)
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.shell: chattr -i /usr/local/bin/rootfs-verify 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+
+- name: Install rootfs-verify script
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: rootfs-verify
+    dest: /usr/local/bin/rootfs-verify
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Set rootfs-verify immutable
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.command: chattr +i /usr/local/bin/rootfs-verify
+  changed_when: false
+
+- name: Install rootfs-verify systemd service
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: rootfs-verify.service
+    dest: /etc/systemd/system/rootfs-verify.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd
+
+- name: Write rootfs-verify environment file (debug builds — warn only)
+  when: _bind_mounts_script.stat.exists and (debug_build | default(false))
+  ansible.builtin.copy:
+    dest: /etc/default/rootfs-verify
+    content: "RTMR3_VERIFY_DEBUG_MODE=true\n"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable rootfs-verify service
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.systemd:
+    name: rootfs-verify
+    enabled: yes
+    daemon_reload: yes
+
+# ── Hard k3s dependency on rootfs-verify (chutes-miner-vm only) ───────────────
+# Drop-in ensures k3s is structurally blocked until rootfs-verify confirms
+# RTMR3 integrity.  rootfs-verify powers off on any failure, so this is
+# defence-in-depth for the case where poweroff somehow doesn't execute.
+
+- name: Create k3s.service.d directory
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/k3s.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install k3s rootfs-verify dependency drop-in
+  when: _bind_mounts_script.stat.exists
+  ansible.builtin.copy:
+    src: k3s.service.d/rootfs-verify.conf
+    dest: /etc/systemd/system/k3s.service.d/rootfs-verify.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload systemd

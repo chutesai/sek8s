@@ -21,9 +21,10 @@
 # count, so the capture must be sized like production (mem = gpu_count x ram_per_gpu). The
 # dumper powers off before drivers load, so the GPUs never enter the measurement.
 #
-# Only ccel_data is load-bearing (generate_measurements consumes the baseline CCEL and
-# recomputes per-topology ACPI via the fork). The fw_cfg/SMBIOS preimages are captured
-# best-effort for the future smbios_match.py — their absence is not an error.
+# Nothing in the build consumes this capture: `measurements generate` self-generates the whole
+# RTMR0 per topology through the fork (--platform-only), with no baseline CCEL. It is kept for
+# ad-hoc debugging with ccel_replay. The fw_cfg/SMBIOS preimages are captured best-effort for
+# smbios_match.py; their absence is not an error.
 #
 # The CCEL is identical across debug and prod for a given topology, and is topology-
 # independent for the constant events, so capture once per image version. RTMR1/2/3 are

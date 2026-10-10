@@ -1,29 +1,23 @@
 ---
 # Boot a build VM from an image that is already present and ready.
 #
-# Pure lifecycle: pick the starting image, copy it into libvirt storage, define/start the domain
-# and wait for SSH. It does not fetch or mutate images — see fetch-image and prepare-image.
-- name: Check if GPU image cache exists
-  ansible.builtin.stat:
-    path: "{{ gpu_img_path }}"
-  register: gpu_img_stat
+# Pure lifecycle: copy start_img_path into libvirt storage, define/start the domain and wait for
+# SSH. Which image to start from is the playbook's decision (prepare-image's output, a checkpoint
+# via resume-checkpoint, ...); this role neither chooses, fetches nor mutates images.
+#
+# Every run starts clean: any build VM and build disk left from an earlier run are discarded and
+# start_img_path is copied in fresh. A build that failed part-way leaves both behind, and resuming
+# them layers the next build on half-applied state from a different run — a base-image build once
+# published cuda-toolkit that way, and a failed prod build would have been re-entered with its
+# debug_build misparse baked in. A checkpoint is the only thing a build resumes from.
+- name: Validate start_img_path is set
+  ansible.builtin.assert:
+    that: start_img_path | default('') | length > 0
+    fail_msg: "start_img_path must be set when including the run-vm role"
 
-- name: Determine best starting image
-  ansible.builtin.set_fact:
-    start_img_path: >-
-      {{ gpu_img_path if (gpu_img_stat.stat.exists and no_cache != 'true')
-         else prepared_start_img_path | default(base_img_path) }}
-
-- name: Log starting image selection
+- name: Log starting image
   ansible.builtin.debug:
-    msg: >-
-      Starting build from: {{ start_img_path | basename }}
-      (gpu_cached={{ gpu_img_stat.stat.exists }}, no_cache={{ no_cache }})
-
-- name: Check if build image exists
-  ansible.builtin.stat:
-    path: "{{ build_img_path }}"
-  register: build_image
+    msg: "Starting build from: {{ start_img_path | basename }} (no_cache={{ no_cache }})"
 
 - name: Create cloud-init user-data with SSH key
   ansible.builtin.copy:
@@ -48,27 +42,22 @@
   ansible.builtin.set_fact:
     virt_type: "{{ 'kvm' if kvm_check.rc == 0 else 'qemu' }}"
 
-- name: Check if VM exists
-  ansible.builtin.shell: virsh list --all | grep -q "{{ vm_name }}"
+- name: Check for a build VM left by an earlier run
+  ansible.builtin.command: virsh dominfo "{{ vm_name }}"
   register: vm_exists
   changed_when: false
   failed_when: false
 
-- name: Debug
-  ansible.builtin.debug:
-    msg: "{{ vm_exists }}"
-
-- name: Destroy existing VM
+- name: Destroy the leftover build VM
   ansible.builtin.command: virsh destroy "{{ vm_name }}"
-  when: vm_exists.rc == 0 and (no_cache == 'true' or vm_exists.stdout != '')
-  changed_when: false
-  failed_when: false
+  when: vm_exists.rc == 0
+  changed_when: true
+  failed_when: false  # already shut off
 
-- name: Undefine existing VM
+- name: Undefine the leftover build VM
   ansible.builtin.command: virsh undefine "{{ vm_name }}"
-  when: vm_exists.rc == 0 and (no_cache == 'true' or vm_exists.stdout != '')
-  changed_when: false
-  failed_when: false
+  when: vm_exists.rc == 0
+  changed_when: true
 
 # Read the QEMU user/group that libvirt will use for dynamic ownership so we can
 # pre-set the disk ownership before virt-install. Without this, libvirt registers
@@ -89,13 +78,13 @@
     state: directory
     mode: "0755"
 
-- name: Copy QCOW2 image into libvirt storage
+- name: Copy the starting image into libvirt storage (replacing any earlier build disk)
   ansible.builtin.copy:
     src: "{{ start_img_path }}"
     dest: "{{ build_img_path }}"
     mode: "0644"
     remote_src: yes
-  when: (not build_image.stat.exists) or (no_cache == 'true')
+    force: true
 
 - name: Set build disk ownership for libvirt DAC security driver
   ansible.builtin.file:
@@ -113,12 +102,11 @@
     path: /var/lib/libvirt
     mode: "0755"
 
+# Rebuilt every run, like the disk: it carries the SSH key from user_data_file, which may change.
 - name: Create cloud-init ISO manually
   ansible.builtin.command:
     cmd: cloud-localds /var/lib/libvirt/boot/tdx-cloudinit.iso "{{ user_data_file }}"
-  args:
-    creates: /var/lib/libvirt/boot/tdx-cloudinit.iso
-  when: (not build_image.stat.exists) or (no_cache == 'true')
+  changed_when: true
 
 - name: Set cloud-init ISO permissions
   ansible.builtin.file:
@@ -140,23 +128,8 @@
       --import \
       --noautoconsole
   register: virt_install_result
-  when: vm_exists.rc != 0 or no_cache == 'true'
   changed_when: virt_install_result.rc == 0
   failed_when: virt_install_result.rc != 0
-
-- name: Check if VM is running
-  ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"
-  register: vm_running
-  changed_when: false
-  failed_when: false
-  when: vm_exists.rc == 0 or no_cache == 'true'  # Only check if VM exists
-
-- name: Start existing VM if not running
-  ansible.builtin.command: virsh start "{{ vm_name }}"
-  when: vm_exists.rc == 0 and vm_running.rc != 0 and no_cache == 'false'  # Run if VM exists but isn't running
-  register: virt_start_result
-  changed_when: virt_start_result.rc == 0
-  failed_when: virt_start_result.rc != 0
 
 - name: Wait for VM to be running
   ansible.builtin.shell: virsh list --state-running | grep -q "{{ vm_name }}"

@@ -1,11 +1,11 @@
 """The RTMR3 measurement has exactly ONE implementation — these tests hold it there.
 
-Four independent walkers of ``tdx-measure.conf`` used to exist (the initramfs measurer,
-the build-time manifest generator, ``rtmr3-verify`` and the host-side predictor) and they
+Four independent walkers of ``tee-measure.conf`` used to exist (the initramfs measurer,
+the build-time manifest generator, ``rootfs-verify`` and the host-side predictor) and they
 disagreed four ways. Each divergence below has a test named for the finding it closes, so
 a regression reads as "we grew a second implementation again" rather than as a hash bug.
 
-Everything here drives the real bundled ``tdx-measure`` script — no reimplementation of
+Everything here drives the real bundled ``tee-measure`` script — no reimplementation of
 the walk in test code, because that is precisely the mistake being guarded against.
 """
 
@@ -14,13 +14,18 @@ import os
 import subprocess
 
 import pytest
-from chutes_cvm.measurement.rtmr3 import Rtmr3Error, fold_chain, measured_hashes
-from chutes_cvm.paths import tdx_measure_script
+from chutes_cvm.measurement.rtmr3 import (
+    Rtmr3Error,
+    compute_rtmr3,
+    fold_chain,
+    measured_hashes,
+)
+from chutes_cvm.paths import tee_measure_script
 
 
 def _run(command, root, conf):
     return subprocess.run(
-        [str(tdx_measure_script()), command, str(root), str(conf)],
+        [str(tee_measure_script()), command, str(root), str(conf)],
         capture_output=True,
         text=True,
     )
@@ -62,7 +67,7 @@ def test_inline_comments_and_trailing_whitespace_are_stripped(tmp_path):
     # inline comment, trailing spaces, a trailing tab, and a CRLF line ending
     conf.write_bytes(b"/etc/a   # why this file\n/etc/b\t  \r\n# whole-line\n\n")
 
-    rels = [rel for _, rel in measured_hashes(root, conf, tdx_measure_script())]
+    rels = [rel for _, rel in measured_hashes(root, conf, tee_measure_script())]
     assert rels == ["/etc/a", "/etc/b"]
 
 
@@ -78,7 +83,7 @@ def test_symlinked_file_entry_is_refused(tmp_path):
 
     assert _run("hash", root, conf).returncode == 1
     with pytest.raises(Rtmr3Error, match="symlink"):
-        measured_hashes(root, conf, tdx_measure_script())
+        measured_hashes(root, conf, tee_measure_script())
 
 
 def test_symlinked_directory_entry_is_refused(tmp_path):
@@ -94,7 +99,7 @@ def test_symlinked_directory_entry_is_refused(tmp_path):
 
     assert _run("hash", root, conf).returncode == 1
     with pytest.raises(Rtmr3Error, match="symlink"):
-        measured_hashes(root, conf, tdx_measure_script())
+        measured_hashes(root, conf, tee_measure_script())
 
 
 def test_symlink_inside_a_measured_directory_is_skipped(tmp_path):
@@ -107,7 +112,7 @@ def test_symlink_inside_a_measured_directory_is_skipped(tmp_path):
     conf = tmp_path / "conf"
     conf.write_text("/etc/d\n")
 
-    rels = [rel for _, rel in measured_hashes(root, conf, tdx_measure_script())]
+    rels = [rel for _, rel in measured_hashes(root, conf, tee_measure_script())]
     assert rels == ["/etc/d/real"]
 
 
@@ -160,7 +165,7 @@ def test_ordering_is_c_collation_not_locale(tmp_path, monkeypatch):
     conf = tmp_path / "conf"
     conf.write_text("/etc\n")
 
-    rels = [rel for _, rel in measured_hashes(root, conf, tdx_measure_script())]
+    rels = [rel for _, rel in measured_hashes(root, conf, tee_measure_script())]
     # C collation is byte order: uppercase before lowercase. The forced locale interleaves.
     assert rels == ["/etc/Beta", "/etc/Zeta", "/etc/alpha"], (
         f"under LC_ALL={locale_name} the measured order is {rels}; the boot measurer's "
@@ -179,7 +184,7 @@ def test_backslash_filename_hashes_identically_in_both_paths(tmp_path):
     conf = tmp_path / "conf"
     conf.write_text("/etc\n")
 
-    ((digest, rel),) = measured_hashes(root, conf, tdx_measure_script())
+    ((digest, rel),) = measured_hashes(root, conf, tee_measure_script())
     assert rel == "/etc/sys-systemd\\x2dcrypt.slice"
     assert digest == hashlib.sha384(b"unit").hexdigest()
     assert not digest.startswith("\\")
@@ -192,7 +197,7 @@ def test_missing_paths_contribute_nothing(tmp_path):
     conf = tmp_path / "conf"
     conf.write_text("/etc/present\n/etc/absent\n/opt/nowhere\n")
 
-    rels = [rel for _, rel in measured_hashes(root, conf, tdx_measure_script())]
+    rels = [rel for _, rel in measured_hashes(root, conf, tee_measure_script())]
     assert rels == ["/etc/present"]
 
 
@@ -204,25 +209,25 @@ def test_nothing_measurable_is_an_error(tmp_path):
 
     assert _run("hash", root, conf).returncode == 1
     with pytest.raises(Rtmr3Error, match="no files found"):
-        measured_hashes(root, conf, tdx_measure_script())
+        measured_hashes(root, conf, tee_measure_script())
 
 
 def test_fold_matches_the_single_hardware_extend(fixture_root):
     """The one value the initramfs extends: SHA384(0^48 || SHA384(hash-list text))."""
     root, conf = fixture_root
-    hashes = measured_hashes(root, conf, tdx_measure_script())
+    hashes = measured_hashes(root, conf, tee_measure_script())
 
     body = "".join(f"{d} {p}\n" for d, p in hashes).encode()
     expected = hashlib.sha384(bytes(48) + hashlib.sha384(body).digest())
     assert fold_chain(hashes) == expected.hexdigest().upper()
 
 
-def test_fold_input_is_tdx_measure_output_verbatim(fixture_root):
-    """The digest is taken over tdx-measure's stdout, so re-serialising the parsed pairs
+def test_fold_input_is_tee_measure_output_verbatim(fixture_root):
+    """The digest is taken over tee-measure's stdout, so re-serialising the parsed pairs
     must reproduce those bytes exactly — the boot path hashes the file, not the pairs.
     """
     root, conf = fixture_root
-    hashes = measured_hashes(root, conf, tdx_measure_script())
+    hashes = measured_hashes(root, conf, tee_measure_script())
 
     raw = _run("hash", root, conf).stdout
     assert "".join(f"{d} {p}\n" for d, p in hashes) == raw
@@ -233,7 +238,7 @@ def test_fold_binds_paths_not_just_content(fixture_root):
     two files swapping names must change RTMR3 even though the content multiset is equal.
     """
     root, conf = fixture_root
-    hashes = measured_hashes(root, conf, tdx_measure_script())
+    hashes = measured_hashes(root, conf, tee_measure_script())
     assert len(hashes) >= 2
 
     swapped = list(hashes)
@@ -243,22 +248,22 @@ def test_fold_binds_paths_not_just_content(fixture_root):
 
 
 def test_the_guest_gets_the_same_bytes_as_the_bundled_script():
-    """The Ansible role installs the guest's /usr/local/bin/tdx-measure by copying THIS
+    """The Ansible role installs the guest's /usr/local/bin/tee-measure by copying THIS
     file out of the checkout. If that ever becomes a second authored copy, the whole
     class of bug above comes back."""
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[2]
-    role = repo / "ansible/guest/roles/rtmr3-measure/tasks/main.yml"
+    role = repo / "ansible/guest/roles/rootfs-measure/tasks/main.yml"
     task_text = role.read_text()
 
-    assert "src/chutes-cvm/chutes_cvm/scripts/tdx-measure" in task_text
+    assert "src/chutes-cvm/chutes_cvm/scripts/tee-measure" in task_text
     assert "src/chutes-cvm/chutes_cvm/measurement/rtmr3.py" in task_text
-    # And there is exactly one tdx-measure script in the repo.
+    # And there is exactly one tee-measure script in the repo.
     found = [
-        p for p in repo.rglob("tdx-measure") if p.is_file() and ".git" not in p.parts
+        p for p in repo.rglob("tee-measure") if p.is_file() and ".git" not in p.parts
     ]
-    assert found == [tdx_measure_script()], f"expected one tdx-measure, found {found}"
+    assert found == [tee_measure_script()], f"expected one tee-measure, found {found}"
 
 
 def test_overlapping_config_entries_measure_each_file_once(tmp_path):
@@ -281,3 +286,76 @@ def test_overlapping_config_entries_measure_each_file_once(tmp_path):
     assert listed == sorted(set(listed)), f"duplicate entries in the chain: {listed}"
     assert listed.count("/usr/local/bin/cache-rm") == 1
     assert len(listed) == 2
+
+
+# ── the whole fold over a root ─────────────────────────────────────────────────
+
+
+def test_compute_rtmr3_matches_an_independent_reference(tmp_path):
+    """The fold matches an independent reference, and runs the real tee-measure."""
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/a").write_bytes(b"alpha")
+    (root / "etc/b").write_bytes(b"beta")
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/a\n/etc/b\n")
+
+    rtmr3, per_file = compute_rtmr3(str(root), str(conf), tee_measure_script())
+
+    # Independent reference: rtmr3 = SHA384(0x00*48 || SHA384(hash-list text)).
+    body = "".join(
+        f"{hashlib.sha384(payload).hexdigest()} {path}\n"
+        for payload, path in ((b"alpha", "/etc/a"), (b"beta", "/etc/b"))
+    ).encode()
+    acc = hashlib.sha384(bytes(48) + hashlib.sha384(body).digest())
+    assert rtmr3 == acc.hexdigest().upper()
+    assert [p[1] for p in per_file] == ["/etc/a", "/etc/b"]
+    assert per_file[0][0] == hashlib.sha384(b"alpha").hexdigest()
+
+
+def test_the_fold_is_order_sensitive():
+    """Reordering the same files changes the register — the chain is not a set hash."""
+    pairs = [
+        (hashlib.sha384(b"x").hexdigest(), "/a"),
+        (hashlib.sha384(b"y").hexdigest(), "/b"),
+    ]
+    assert fold_chain(pairs) != fold_chain(list(reversed(pairs)))
+
+
+def test_measured_files_sorts_filters_and_strips_comments(tmp_path):
+    root = tmp_path / "root"
+    (root / "etc/ssh").mkdir(parents=True)
+    (root / "etc/ssh/sshd_config").write_text("cfg")
+    (root / "etc/hostname").write_text("h")
+    (root / "etc/ssh/link").symlink_to(root / "etc/hostname")  # symlink must be skipped
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/ssh\n/etc/hostname   # inline comment\n# a comment\n\n")
+
+    _, entries = compute_rtmr3(str(root), str(conf), tee_measure_script())
+    rels = [e[1] for e in entries]
+
+    assert rels == sorted(rels)  # sorted by root-relative path
+    assert "/etc/hostname" in rels  # inline comment stripped, path still resolved
+    assert "/etc/ssh/sshd_config" in rels
+    assert "/etc/ssh/link" not in rels  # symlink inside a measured dir filtered out
+
+
+def test_measured_files_empty_conf_raises(tmp_path):
+    conf = tmp_path / "conf"
+    conf.write_text("# only comments\n\n")
+    with pytest.raises(Rtmr3Error, match="no paths configured"):
+        compute_rtmr3(str(tmp_path), str(conf), tee_measure_script())
+
+
+def test_symlinked_conf_entry_is_refused(tmp_path):
+    """A conf entry that is itself a symlink used to be followed by the shell walkers
+    and skipped by the Python ones; it is now an error on both sides."""
+    root = tmp_path / "root"
+    (root / "etc").mkdir(parents=True)
+    (root / "etc/real").write_text("x")
+    (root / "etc/link").symlink_to(root / "etc/real")
+    conf = tmp_path / "conf"
+    conf.write_text("/etc/real\n/etc/link\n")
+
+    with pytest.raises(Rtmr3Error, match="symlink"):
+        compute_rtmr3(str(root), str(conf), tee_measure_script())

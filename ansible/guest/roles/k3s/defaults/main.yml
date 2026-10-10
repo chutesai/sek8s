@@ -1,6 +1,12 @@
 ---
 helm_version: v3.20.2 # noqa var-naming[no-role-prefix]
 k3s_version: v1.35.4+k3s1
+# SHA-256 of each download at the versions above; bump them together. The binary and tarball are
+# from the projects' published checksum files; k3s publishes none for install.sh, so that one is
+# the script at the k3s_version tag.
+helm_sha256: 258e830a9e613c8a7a302d6059b4bb3b9758f2f3e1bb8ea0d707ce10a9a72fea # noqa var-naming[no-role-prefix]
+k3s_install_sha256: 8598e002e61d658fed7b7542fc6d2c66d8da6eae69e088830105d2ee1ffb6d91
+k3s_sha256: 080498ece50acdaf23fe5d736f41c616e276a89a4e5605a3f274f39b0fcee85b
 k3s_server_location: /var/lib/rancher/k3s
 # Helm paths for post-start (must match setup_chutes.yml).
 # On root volume (VM-version-specific); not on storage so no sync needed.

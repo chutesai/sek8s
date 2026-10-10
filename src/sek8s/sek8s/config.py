@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sek8s_common.config import AuthConfig, ServerConfig
+from sek8s_common.hotkey import load_miner_keypair
 from substrateinterface import Keypair
 
 logger = logging.getLogger(__name__)
@@ -724,10 +725,11 @@ class Validator(BaseModel):
 class MinerConfig(BaseSettings):
     """
     Miner credentials for signing requests to validators (e.g. cache hf_info).
-    Optional: when MINER_SS58/MINER_SEED are not set, signing is unavailable.
+    Optional: when neither MINER_PRIVATE_KEY nor MINER_SEED is set, signing is unavailable.
     """
 
     miner_ss58: Optional[str] = Field(default=None, alias="MINER_SS58")
+    miner_private_key: Optional[str] = Field(default=None, alias="MINER_PRIVATE_KEY")
     miner_seed: Optional[str] = Field(default=None, alias="MINER_SEED")
     validators_json: Optional[str] = Field(default=None, alias="VALIDATORS")
 
@@ -742,9 +744,14 @@ class MinerConfig(BaseSettings):
 
     @property
     def miner_keypair(self) -> Optional[Keypair]:
-        """Keypair for signing; built from miner_seed when both ss58 and seed are set."""
+        """Keypair for signing (private key, else seed); None when neither is set.
+
+        Raises ValueError when the key is invalid or does not match miner_ss58.
+        """
         if self._keypair is None:
-            self._keypair = Keypair.create_from_seed(self.miner_seed)
+            self._keypair = load_miner_keypair(
+                self.miner_ss58, self.miner_private_key, self.miner_seed
+            )
         return self._keypair
 
     @property

@@ -25,6 +25,7 @@ EXPECTED_FILES = {
     "hostname": "/var/config/hostname",
     "miner-ss58": "/var/config/miner-ss58", 
     "miner-seed": "/var/config/miner-seed",
+    "miner-private-key": "/var/config/miner-private-key",
     "network-config.yaml": "/var/config/network-config.yaml"
 }
 
@@ -32,7 +33,12 @@ EXPECTED_FILES = {
 HOSTNAME_TARGET = "/etc/hostname"
 MINER_CREDS_DIR = "/var/lib/rancher/k3s/credentials"
 MINER_SS58_TARGET = os.path.join(MINER_CREDS_DIR, "miner-ss58")
-MINER_SEED_TARGET = os.path.join(MINER_CREDS_DIR, "miner-seed")
+# Miner key files: the config volume carries exactly one. Each maps to the env var the services
+# read and its hex length. The private key (current hotkey files) is the 64-byte sr25519 key.
+MINER_KEYS = {
+    "miner-private-key": ("MINER_PRIVATE_KEY", 128),
+    "miner-seed": ("MINER_SEED", 64),
+}
 # Separate env file for system-manager miner vars only (cache pre-download signing).
 # systemd loads this in addition to /etc/system-manager/system-manager.env (build-time);
 # we never modify system-manager.env.
@@ -105,27 +111,23 @@ def validate_ss58_address(address):
 
     return True, "SS58 address is valid"
 
-def validate_seed_content(seed):
-    """Validate seed content (hex string without 0x prefix)"""
-    if not isinstance(seed, str):
-        return False, "Seed must be a string"
-    
-    # Remove whitespace
-    seed = seed.strip()
-    
-    # Check if it accidentally has 0x prefix (should be removed)
-    if seed.startswith('0x') or seed.startswith('0X'):
-        return False, "Seed should not have '0x' prefix"
-    
-    # Seed should be hex string, typically 64 characters (32 bytes)
-    if len(seed) != 64:
-        return False, f"Seed length invalid: {len(seed)} (expected 64 hex characters)"
-    
-    # Validate hex characters
-    if not re.match(r'^[a-fA-F0-9]+$', seed):
-        return False, "Seed contains invalid hex characters"
-    
-    return True, "Seed is valid"
+def validate_key_content(key, hex_len, label):
+    """Validate a miner key: exactly hex_len hex characters, no 0x prefix"""
+    if not isinstance(key, str):
+        return False, f"{label} must be a string"
+
+    key = key.strip()
+
+    if key.startswith('0x') or key.startswith('0X'):
+        return False, f"{label} should not have '0x' prefix"
+
+    if len(key) != hex_len:
+        return False, f"{label} length invalid: {len(key)} (expected {hex_len} hex characters)"
+
+    if not re.match(r'^[a-fA-F0-9]+$', key):
+        return False, f"{label} contains invalid hex characters"
+
+    return True, f"{label} is valid"
 
 def validate_hostname(hostname):
     """Validate hostname follows RFC standards and security requirements"""
@@ -374,6 +376,66 @@ def clear_netplan_directory():
         log(f"Failed to clear netplan directory: {e}", "ERROR")
         return False
 
+def read_miner_credentials():
+    """Read and validate the miner credentials on the config volume.
+
+    Returns (ss58, key_name, key), or None when they are missing or invalid. The volume must carry
+    miner-ss58 and exactly one key. (Benchmark launches boot a separate image with its own
+    process-config that takes no miner credentials.)
+    """
+    present = [name for name in ("miner-ss58", *MINER_KEYS) if os.path.isfile(EXPECTED_FILES[name])]
+    keys = [name for name in MINER_KEYS if name in present]
+    if "miner-ss58" not in present or len(keys) != 1:
+        log(
+            "Miner credentials need miner-ss58 and exactly one of miner-private-key or "
+            f"miner-seed; found {present}",
+            "ERROR",
+        )
+        return None
+
+    ss58 = read_config_file(EXPECTED_FILES["miner-ss58"])
+    if ss58 is None:
+        return None
+    is_valid, msg = validate_ss58_address(ss58)
+    if not is_valid:
+        log(f"Invalid miner SS58: {msg}", "ERROR")
+        return None
+    log("Miner SS58 validation passed")
+
+    key_name = keys[0]
+    key = read_config_file(EXPECTED_FILES[key_name])
+    if key is None:
+        return None
+    is_valid, msg = validate_key_content(key, MINER_KEYS[key_name][1], key_name)
+    if not is_valid:
+        log(f"Invalid {key_name}: {msg}", "ERROR")
+        return None
+    log(f"{key_name} validation passed")
+    return ss58, key_name, key
+
+def apply_miner_credentials(ss58, key_name, key):
+    """Write the ss58 + the one key to the credentials dir and system-manager's miner.env.
+
+    The credentials dir is on the storage volume, so the other key's copy from an earlier boot is
+    removed: the VM holds only the credential its config volume carries.
+    """
+    if not write_target_file(ss58 + "\n", MINER_SS58_TARGET, 0o600):
+        return False
+    if not write_target_file(key + "\n", os.path.join(MINER_CREDS_DIR, key_name), 0o600):
+        return False
+    for other in MINER_KEYS:
+        stale = os.path.join(MINER_CREDS_DIR, other)
+        if other != key_name and os.path.lexists(stale):
+            try:
+                os.remove(stale)
+                log(f"Removed {stale} (config volume now carries {key_name})")
+            except OSError as e:
+                log(f"Failed to remove {stale}: {e}", "ERROR")
+                return False
+    SYSTEM_MANAGER_GID = 10150
+    miner_env_content = f"MINER_SS58={ss58}\n{MINER_KEYS[key_name][0]}={key}\n"
+    return write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID)
+
 def validate_and_apply_config():
     """Main validation and configuration function"""
     log("Starting config volume validation")
@@ -387,20 +449,12 @@ def validate_and_apply_config():
     if not clear_netplan_directory():
         return False
     
-    # Check required files exist (hostname and network config are always required;
-    # miner credentials are optional — absent in benchmark mode).
+    # Check required files exist (miner credentials are checked in read_miner_credentials).
     required_files = ["hostname", "network-config.yaml"]
     missing_files = [EXPECTED_FILES[k] for k in required_files if not os.path.isfile(EXPECTED_FILES[k])]
     if missing_files:
         log(f"Missing required config files: {missing_files}", "ERROR")
         return False
-
-    has_miner_creds = (
-        os.path.isfile(EXPECTED_FILES["miner-ss58"]) and
-        os.path.isfile(EXPECTED_FILES["miner-seed"])
-    )
-    if not has_miner_creds:
-        log("Miner credential files absent — running in benchmark mode (no k3s credential setup)")
 
     # Validate hostname
     hostname_content = read_config_file(EXPECTED_FILES["hostname"])
@@ -413,27 +467,9 @@ def validate_and_apply_config():
         return False
     log(f"Hostname validation passed: {hostname_content}")
 
-    # Validate miner credentials (only when present)
-    ss58_content = None
-    seed_content = None
-    if has_miner_creds:
-        ss58_content = read_config_file(EXPECTED_FILES["miner-ss58"])
-        if ss58_content is None:
-            return False
-        is_valid, msg = validate_ss58_address(ss58_content)
-        if not is_valid:
-            log(f"Invalid miner SS58: {msg}", "ERROR")
-            return False
-        log("Miner SS58 validation passed")
-
-        seed_content = read_config_file(EXPECTED_FILES["miner-seed"])
-        if seed_content is None:
-            return False
-        is_valid, msg = validate_seed_content(seed_content)
-        if not is_valid:
-            log(f"Invalid miner seed: {msg}", "ERROR")
-            return False
-        log("Miner seed validation passed")
+    miner_creds = read_miner_credentials()
+    if miner_creds is None:
+        return False
     
     # Validate network config
     network_content = read_config_file(EXPECTED_FILES["network-config.yaml"])
@@ -453,16 +489,9 @@ def validate_and_apply_config():
     if not write_target_file(hostname_content + "\n", HOSTNAME_TARGET, 0o644):
         return False
 
-    # Apply miner credentials and system-manager env (production only)
-    if has_miner_creds:
-        if not write_target_file(ss58_content + "\n", MINER_SS58_TARGET, 0o600):
-            return False
-        if not write_target_file(seed_content + "\n", MINER_SEED_TARGET, 0o600):
-            return False
-        SYSTEM_MANAGER_GID = 10150
-        miner_env_content = f"MINER_SS58={ss58_content}\nMINER_SEED={seed_content}\n"
-        if not write_target_file(miner_env_content, SYSTEM_MANAGER_MINER_ENV, 0o640, owner_uid=0, owner_gid=SYSTEM_MANAGER_GID):
-            return False
+    # Apply miner credentials and system-manager env
+    if not apply_miner_credentials(*miner_creds):
+        return False
 
     # Apply network config
     if not write_target_file(network_content, NETWORK_CONFIG_TARGET, 0o600):

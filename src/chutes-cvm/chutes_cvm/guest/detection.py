@@ -33,11 +33,28 @@ SUPPORTED_QEMU_BY_OS = {
 # The guest ``-cpu`` args every supported host launches with. ``host`` passes the host CPU
 # model through; ``-avx10`` masks the AVX10 feature off. -cpu shapes the CPUID leaves the
 # guest sees, so this must be one value shared by the launcher
-# (``chutes_cvm.guest.__main__``), the pre-upgrade profile rewrite (``guest.preflight``) and
+# (``chutes_cvm.guest.vm``), the pre-upgrade profile rewrite (``guest.chutes_api``) and
 # offline measurement (``measurement.topology_spec``) — a divergence moves RTMR0.
 # It was OS-gated while 24.04 was supported (its QEMU 8.2 has no ``avx10`` property to mask);
 # every release in SUPPORTED_QEMU_BY_OS takes the mask, so it is now a constant.
 GUEST_CPU_ARGS = "host,-avx10"
+
+
+def detect_cpu_vendor() -> str:
+    """The CPUID vendor string (``GenuineIntel`` / ``AuthenticAMD``), from /proc/cpuinfo.
+
+    Which platform a host runs is its silicon's, so this is what host setup is chosen by -- not
+    whether the platform is enabled yet, which setup itself may be what turns on. Empty if it
+    cannot be read; the vendor-to-platform mapping then refuses it.
+    """
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("vendor_id"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
 
 
 def detect_os_version() -> str | None:
@@ -114,6 +131,24 @@ def _lspci_lines(vendor: str) -> list[str]:
     """
     output = proc.check_output(["lspci", "-Dnn"], stderr=proc.STDOUT)
     return [line for line in output.decode().splitlines() if vendor in line]
+
+
+# PCI class 0302 = 3D controller, 0300 = VGA: every NVIDIA datacenter GPU is one or the other.
+# NVSwitches (bridge, 0680) and IB are excluded by class; a BMC's VGA (e.g. ASPEED) by vendor.
+_NVIDIA_GPU_LINE = re.compile(r"\[(?:0302|0300)\]: .*\[10de:([0-9a-fA-F]{4})\]")
+
+
+def detect_gpu_device_ids() -> set[str]:
+    """PCI device ids of this host's NVIDIA GPUs.
+
+    From ``lspci -Dnn`` -- the name-and-id listing, with no config-space reads -- so it stays
+    safe on a host whose GPUs are wedged, which is when ``host reset-gpus`` runs.
+    """
+    return {
+        m.group(1).lower()
+        for line in _lspci_lines(_NVIDIA_VENDOR)
+        if (m := _NVIDIA_GPU_LINE.search(line))
+    }
 
 
 # PCI class 0207 = InfiniBand controller. Excludes Ethernet [0200], DMA [0801], etc.

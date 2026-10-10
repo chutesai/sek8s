@@ -3,6 +3,11 @@
 **Date**: 2026-05-26  
 **Status**: draft
 
+> **Endpoints have since moved.** The `/servers/<vm>/luks/attest` and `/servers/<vm>/luks/confirm`
+> calls below are now `POST /servers/<vm>/provision` and `POST /servers/<vm>/provision/confirm`
+> (`init-bottom-common`, `setup_storage` and `fetch_key_and_unlock` in the initramfs), and are sent
+> to `TDX_BASE_URL`. The rotation design itself is unchanged.
+
 ---
 
 ## Context

@@ -6,7 +6,7 @@ duplicate chutes-td, then perform each privileged step — invoking the bundled 
 owns it for the ones whose logic *is* a sequence of special-tool calls (volumes via
 cryptsetup/nbd, config volume, bridge via ip/iptables), or doing it in-process where it is plain
 file work (the per-VM image copy + sidecar staging, as `sudo cp`/`mkdir`/`rm`) — and finally boot
-via the QEMU boot primitive (``chutes_cvm.guest.__main__``). Per AGENT.md's bash-vs-Python rule,
+via the QEMU boot primitive (``chutes_cvm.guest.vm``). Per AGENT.md's bash-vs-Python rule,
 Python owns the decisions and bash still owns the tool-sequence system mutations.
 
 The privileged helpers create volumes with relative default names (``cache-<host>.raw`` …) and
@@ -17,70 +17,40 @@ orchestration runs with the bundled scripts dir as its working directory.
 from __future__ import annotations
 
 import argparse
-import glob
-import json
 import os
 import sys
+from typing import Literal, get_args, get_origin
 
 from chutes_cvm import proc
-from chutes_cvm.guest import image_set
-from chutes_cvm.guest.config import ConfigError, LaunchConfig
+from chutes_cvm.guest.chutes_api import DEFAULT_API_BASE, ChutesApiError
+from chutes_cvm.guest.config import ConfigError, LaunchConfig, cli_fields
+from chutes_cvm.guest.context import (
+    GuestNetwork,
+    GuestVolumes,
+    LaunchContext,
+    ProcessBundle,
+)
+from chutes_cvm.guest.host_class import HostClass, MeasuredImage, NotMeasured
+from chutes_cvm.guest.host_profile import HostProfile
+from chutes_cvm.guest.image_set import ImageSet
+from chutes_cvm.guest.images import prepare_vm_image
+from chutes_cvm.guest.network import (
+    install_benchmark_netlog,
+    resolve_public_iface,
+    setup_bridge,
+)
+from chutes_cvm.guest.privileged import LaunchError
+from chutes_cvm.guest.vm import (
+    LOGFILE,
+    PIDFILE,
+    PROCESS_NAME,
+    device_blockers,
+    launch_vm,
+)
+from chutes_cvm.guest.volumes import ensure_raw_volume, setup_config_volume
 from chutes_cvm.paths import SCRIPTS_DIR, default_config_path
 
-_PROCESS_NAME_CHUTES_TD = "chutes-td"
-
-
 # ── Host gates ──────────────────────────────────────────────────────────────────
-
-
-def _chutes_td_running() -> bool:
-    """True if a live (non-zombie) chutes-td QEMU is already running.
-
-    Kept aligned with ansible/host/roles/chutes_tee_vm/files/is_live_chutes_td.sh: match a
-    qemu-system/qemu-kvm process whose cmdline carries the chutes-td process name.
-    """
-    try:
-        pids = proc.run(
-            ["pgrep", "-f", "qemu-system|qemu-kvm"],
-            capture_output=True,
-            text=True,
-        ).stdout.split()
-    except FileNotFoundError:
-        return False
-    for pid in pids:
-        try:
-            with open(f"/proc/{pid}/cmdline", "rb") as f:
-                cmdline = f.read().replace(b"\x00", b" ").decode(errors="replace")
-        except OSError:
-            continue
-        if "qemu-system" not in cmdline and "qemu-kvm" not in cmdline:
-            continue
-        if _PROCESS_NAME_CHUTES_TD in cmdline:
-            return True
-    return False
-
-
-def _tdx_active() -> "tuple[bool, str]":
-    """Return (active, source). Check sysfs first (survives dmesg rollover), then /proc/cpuinfo,
-    then dmesg as a last resort — matching the former quick-launch Step 0."""
-    try:
-        with open("/sys/module/kvm_intel/parameters/tdx") as f:
-            if f.read().strip() == "Y":
-                return True, "sysfs (/sys/module/kvm_intel/parameters/tdx=Y)"
-    except OSError:
-        pass
-    try:
-        with open("/proc/cpuinfo") as f:
-            if "tdx" in f.read():
-                return True, "/proc/cpuinfo"
-    except OSError:
-        pass
-    dmesg = proc.run(["sudo", "dmesg"], capture_output=True, text=True).stdout
-    if any(
-        "module initialized" in ln for ln in dmesg.splitlines() if "tdx" in ln.lower()
-    ):
-        return True, "dmesg"
-    return False, ""
 
 
 def _ensure_numa_zone_reclaim() -> None:
@@ -94,366 +64,96 @@ def _ensure_numa_zone_reclaim() -> None:
     print("✓ NUMA zone reclaim disabled (vm.zone_reclaim_mode=0)")
 
 
-def _launchable(config_path: str, base_image: str, force: bool) -> bool:
-    """Return True if launch may proceed: the control plane confirms an image of THIS host's
-    ``(version, rc)`` will attest here. Mirrors `chutes-cvm host verify`'s API check — read the
-    image's (version, rc) from its manifest, capture + sign the host profile, and ask
-    POST /servers/tdx/preflight. Without a launchable verdict the VM would boot and then fail
-    attestation, so refuse early (return False) unless ``force`` overrides with a warning.
+def _measured_image(
+    config_path: str, image_set_dir: str, force: bool, host_profile: HostProfile
+) -> "MeasuredImage | None":
+    """Step 1: is this image measured for this host's class? Returns its entry, or None for a
+    test boot.
+
+    Fetches the class (as `chutes-cvm host verify` does) for ``host_profile`` -- the reading Step
+    0 took and the boot builds from -- and looks up the image's ``(version, rc)``. Measured, it
+    launches. Otherwise a debug build or ``--force`` gets a test boot, which boots but cannot
+    attest; a production image is refused here, before any volume or GPU work, because it would
+    boot and then fail attestation. An unreadable manifest or no answer from the API counts as
+    not measured.
     """
-    # Deferred: preflight pulls substrateinterface (signing) — only needed for an actual launch,
-    # not `guest launch --help` or the early config path.
-    from chutes_cvm.guest.preflight import (
-        DEFAULT_API_BASE,
-        PreflightError,
-        run_preflight,
-    )
-
     try:
-        version, rc = image_set.version_and_rc(base_image)
+        image_set = ImageSet.from_dir(image_set_dir)
     except (FileNotFoundError, ValueError, OSError) as exc:
-        # Can't read the manifest -> can't know what we're booting. Fail closed unless forced.
-        if force:
-            print(
-                f"⚠ could not read image version from {base_image} ({exc}); proceeding anyway "
-                "(--force) — attestation may fail.",
-                file=sys.stderr,
-            )
-            return True
-        print(
-            f"✗ could not read image version from {base_image}: {exc}\n"
-            "  Refusing to launch. Re-run `chutes-cvm image download`, or pass --force.",
-            file=sys.stderr,
+        # Can't read the manifest -> can't know what we're booting, or whether it is a debug build.
+        _test_boot_or_refuse(
+            f"could not read image version from {image_set_dir}: {exc}",
+            "Re-run `chutes-cvm image download`.",
+            debug=False,
+            force=force,
         )
-        return False
+        return None
 
-    label = f"{version}{' (rc)' if rc else ''}"
     api_base = os.environ.get("CHUTES_API_BASE") or DEFAULT_API_BASE
     try:
-        resp = run_preflight(
-            config_path=config_path,
-            version=version,
-            rc=rc,
-            api_base=api_base,
+        host_class = HostClass.fetch(
+            host_profile, config_path=config_path, api_base=api_base
         )
-        launchable = bool(resp.get("launchable"))
-        fingerprint = resp.get("fingerprint", "?")
-        detail = resp.get("detail", "")
-    except PreflightError as exc:
-        launchable, fingerprint, detail = False, "?", str(exc)
-
-    if launchable:
-        print(f"✓ {detail} (fingerprint {fingerprint})")
-        return True
-
-    problem = f"this host cannot attest {label} yet (fingerprint {fingerprint})." + (
-        f" {detail}" if detail else ""
+    except ChutesApiError as exc:
+        _test_boot_or_refuse(
+            f"could not confirm this host can attest {image_set.label}: {exc}",
+            "Retry once the API is reachable.",
+            debug=image_set.rc,
+            force=force,
+        )
+        return None
+    try:
+        measured = host_class.measured_image(image_set)
+    except NotMeasured:
+        detail = f" {host_class.detail}" if host_class.detail else ""
+        _test_boot_or_refuse(
+            f"this host cannot attest {image_set.label} yet "
+            f"(fingerprint {host_class.fingerprint}).{detail}",
+            "Register this host class with `chutes-cvm host submit-profile`, then retry once "
+            "Chutes\n  publishes the measurement (`chutes-cvm host verify` shows readiness).",
+            debug=image_set.rc,
+            force=force,
+        )
+        return None
+    print(
+        f"✓ {image_set.label} is measured for this host class "
+        f"(fingerprint {host_class.fingerprint})"
     )
-    remedy = (
-        "Register this host class with `chutes-cvm host submit-profile`, then retry once Chutes\n"
-        "  publishes the measurement (`chutes-cvm host verify` shows readiness)."
-    )
-    if force:
+    return measured
+
+
+def _test_boot_or_refuse(
+    problem: str, remedy: str, *, debug: bool, force: bool
+) -> None:
+    """Allow a test boot for a debug build or ``--force``, with a warning; otherwise raise
+    ``LaunchError``."""
+    if debug or force:
+        reason = "debug build" if debug else "--force"
         print(
-            f"⚠ {problem}\n  Proceeding anyway (--force) — the VM will fail attestation if this "
-            "image is truly unmeasured for this host.",
+            f"⚠ {problem}\n  Test boot ({reason}): the VM boots but will not attest.",
             file=sys.stderr,
         )
-        return True
-    print(
-        f"✗ {problem}\n"
-        "  Refusing to launch: the VM would boot but fail attestation.\n"
-        f"  {remedy} Pass --force to launch anyway.",
-        file=sys.stderr,
+        return None
+    raise LaunchError(
+        f"{problem}\n  Refusing to launch: the VM would boot but fail attestation.\n"
+        f"  {remedy} Pass --force to launch anyway."
     )
-    return False
-
-
-def _resolve_public_iface(configured: str) -> str:
-    """Return the public interface: the configured one if it exists, else the default-route dev.
-
-    Warns (but does not fail) when a configured name is missing — a stale NIC name after an OS
-    upgrade is caught here rather than producing broken iptables rules.
-    """
-    if configured and _iface_exists(configured):
-        return configured
-    detected = _default_route_iface()
-    if not detected:
-        raise LaunchError(
-            "could not determine the public interface — auto-detection found no default "
-            "route. Set network.public_interface in config.yaml or pass --public-iface."
-        )
-    if configured:
-        print(
-            f"⚠ configured public interface '{configured}' not found; auto-detected "
-            f"'{detected}' from the default route (update network.public_interface to silence)."
-        )
-    return detected
-
-
-def _iface_exists(name: str) -> bool:
-    return proc.run(["ip", "link", "show", name], capture_output=True).returncode == 0
-
-
-def _default_route_iface() -> str:
-    """The interface of the default route (empty if none)."""
-    out = proc.run(
-        ["ip", "-j", "route", "show", "default"], capture_output=True, text=True
-    ).stdout.strip()
-    try:
-        routes = json.loads(out) if out else []
-    except json.JSONDecodeError:
-        return ""
-    return routes[0].get("dev", "") if routes else ""
-
-
-class LaunchError(Exception):
-    """A launch precondition failed (message is user-facing)."""
 
 
 # ── Privileged steps (bash helpers own the actual system mutations) ──────────────
 
 
-def _helper(*parts: str) -> str:
-    return str(SCRIPTS_DIR.joinpath(*parts))
-
-
-def _volume_path(vol: str) -> str:
-    """Resolve a (possibly relative) volume path the way the bash helper will — relative names
-    live in the scripts working directory (SCRIPTS_DIR), matching the former quick-launch cwd.
-    """
-    return vol if os.path.isabs(vol) else str(SCRIPTS_DIR / vol)
-
-
-def _ensure_raw_volume(vol: str, size: str, label: str, kind: str) -> None:
-    """Create a raw LUKS volume via volumes/create-cache.sh unless it already exists.
-
-    ``kind`` is only for messages. qcow2 volumes are never created (only reused if present).
-    """
-    path = _volume_path(vol)
-    if os.path.exists(path):
-        print(f"✓ Using existing {kind} volume: {vol}")
-        return
-    if vol.endswith(".qcow2"):
-        raise LaunchError(
-            f"qcow2 volumes cannot be created — use .raw for a new {kind} volume "
-            f"(e.g. {kind}-<hostname>.raw). Existing qcow2 volumes are reused if present."
-        )
-    print(f"Creating {kind} volume at: {vol} ({size})")
-    _run([_helper("volumes", "create-cache.sh"), vol, size, label])
-
-
-def _setup_config_volume(config: LaunchConfig, benchmark: bool) -> None:
-    """Create/refresh the config volume via volumes/create-config.sh.
-
-    Benchmark passes hostname + network positionally with empty miner creds; production passes
-    every value by NAME through the environment (create-config.sh reads those), so long/optional
-    fields (docker creds, operator key) stay off the command line.
-    """
-    vol = config.volumes.config.path
-    action = "Refreshing existing" if os.path.exists(_volume_path(vol)) else "Creating"
-    print(f"{action} config volume: {vol}")
-    gateway = config.network.bridge_ip.split("/")[0]
-    helper = _helper("volumes", "create-config.sh")
-    if benchmark:
-        _run(
-            [
-                "sudo",
-                helper,
-                vol,
-                config.vm.hostname,
-                "",
-                "",
-                config.network.vm_ip,
-                gateway,
-                config.network.dns,
-            ]
-        )
-    else:
-        _run(
-            [
-                "sudo",
-                f"HOSTNAME={config.vm.hostname}",
-                f"MINER_SS58={config.miner.ss58}",
-                f"MINER_SEED={config.miner.seed}",
-                f"VM_IP={config.network.vm_ip}",
-                f"VM_GATEWAY={gateway}",
-                f"VM_DNS={config.network.dns}",
-                f"DOCKER_HUB_USER={config.docker_hub.username}",
-                f"DOCKER_HUB_TOKEN={config.docker_hub.token}",
-                helper,
-                vol,
-            ]
-        )
-
-
-_DIRECT_BOOT_SIDECARS = ("vmlinuz", "initrd", "cmdline")
-
-
-def _prepare_vm_image(base_image: str, hostname: str, vm_image_dir: str) -> str:
-    """Verify the image set and instantiate the per-VM copy; return the per-VM image path.
-
-    The per-VM image is a full copy of the base qcow2 (not an overlay): luksRemoveKey later
-    destroys the old key slot in-place on the only copy, matching the storage/cache volumes.
-
-    Python owns the decisions/data — verify the set against its manifest and resolve the qcow2 +
-    its manifest sha256 (image_set.resolve), derive the per-VM name, and pick which stale copies
-    to reap. The file mutations are privileged (the image dir is root-owned under /var/lib/chutes),
-    so each runs via sudo, matching the per-step-sudo pattern the rest of launch uses.
-    """
-    try:
-        qcow2, sha256 = image_set.resolve(base_image, full=False)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
-        raise LaunchError(f"image set verification failed: {exc}") from exc
-    print(
-        f"Verified image set via manifest: {qcow2} (sha256={sha256})", file=sys.stderr
-    )
-
-    if not os.path.isdir(vm_image_dir):
-        _run(["sudo", "mkdir", "-p", vm_image_dir])
-
-    vm_image = os.path.join(vm_image_dir, f"tdx-{hostname}-{sha256[:16]}.qcow2")
-
-    # Reap stale per-VM images (and their sidecars) from previous base versions for this host.
-    for stale in sorted(
-        glob.glob(os.path.join(vm_image_dir, f"tdx-{hostname}-*.qcow2"))
-    ):
-        if stale == vm_image:
-            continue
-        print(f"Removing stale VM image: {stale}", file=sys.stderr)
-        stale_base = stale[: -len(".qcow2")]
-        _run(
-            ["sudo", "rm", "-f", stale]
-            + [f"{stale_base}.{ext}" for ext in _DIRECT_BOOT_SIDECARS]
-        )
-
-    if os.path.exists(vm_image):
-        print(f"Using existing VM image: {vm_image}", file=sys.stderr)
-    else:
-        print(f"Copying base image to per-VM image: {vm_image}", file=sys.stderr)
-        _run(["sudo", "cp", qcow2, vm_image])
-
-    # Direct-boot sidecars must travel with the per-VM copy the launcher boots (it resolves
-    # <image-base>.{vmlinuz,initrd,cmdline} next to that copy). Re-sync unconditionally so a
-    # reused per-VM image also refreshes. Missing base sidecars are fatal — no direct boot.
-    base_no_ext, vm_no_ext = qcow2[: -len(".qcow2")], vm_image[: -len(".qcow2")]
-    for ext in _DIRECT_BOOT_SIDECARS:
-        src = f"{base_no_ext}.{ext}"
-        if not os.path.isfile(src):
-            raise LaunchError(
-                f"direct-boot artifact missing next to base image: {src} — the image must ship "
-                "with .vmlinuz/.initrd/.cmdline (stage-boot-artifacts, published with the qcow2)"
-            )
-        _run(["sudo", "cp", src, f"{vm_no_ext}.{ext}"])
-
-    return vm_image
-
-
-def _setup_bridge(config: LaunchConfig) -> str:
-    """Set up TAP bridge networking via network/setup-bridge.sh; return the TAP interface name."""
-    result = proc.run(
-        [
-            _helper("network", "setup-bridge.sh"),
-            "--bridge-ip",
-            config.network.bridge_ip,
-            "--vm-ip",
-            f"{config.network.vm_ip}/24",
-            "--vm-dns",
-            config.network.dns,
-            "--public-iface",
-            config.network.public_interface,
-            "--multi-queue",
-        ],
-        cwd=str(SCRIPTS_DIR),
-        capture_output=True,
-        text=True,
-    )
-    sys.stdout.write(result.stdout)
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        raise LaunchError("bridge setup failed")
-    for line in result.stdout.splitlines():
-        if line.startswith("Network interface:"):
-            return line.split(":", 1)[1].strip()
-    raise LaunchError("could not extract the TAP interface from setup-bridge output")
-
-
-def _install_benchmark_netlog(config: LaunchConfig) -> None:
-    """Install + (re)start the benchmark network-logging service from the bundled network/ files."""
-    net = SCRIPTS_DIR / "network"
-    srcs = {
-        "benchmark-netlog.sh": ("/usr/local/bin/benchmark-netlog.sh", "0755"),
-        "benchmark-netlog.service": (
-            "/etc/systemd/system/benchmark-netlog.service",
-            "0644",
-        ),
-        "benchmark-netlog.logrotate": (
-            "/etc/logrotate.d/benchmark-netlog",
-            "0644",
-        ),
-    }
-    for name, (dst, mode) in srcs.items():
-        src = net / name
-        if not src.exists():
-            raise LaunchError(f"benchmark netlog source missing: {src}")
-        _run(["sudo", "install", "-m", mode, str(src), dst])
-
-    env_file = "/etc/chutes/benchmark-netlog.env"
-    if not os.path.exists(env_file):
-        _run(["sudo", "mkdir", "-p", "/etc/chutes"])
-        content = f"BRIDGE_SUBNET={config.network.bridge_ip}\nNETLOG_DIR=/var/log/chutes/benchmark-netlog\n"
-        proc.run(
-            ["sudo", "tee", env_file],
-            input=content.encode(),
-            stdout=proc.DEVNULL,
-            check=True,
-        )
-    _run(["sudo", "systemctl", "daemon-reload"])
-    proc.run(["sudo", "systemctl", "enable", "benchmark-netlog"], check=False)
-    _run(["sudo", "systemctl", "restart", "benchmark-netlog"])
-    print("✓ benchmark-netlog service installed and running")
-
-
-def _run(cmd: "list[str]") -> None:
-    """Run a privileged step from the scripts working directory; raise LaunchError on failure."""
-    print(f"  $ {' '.join(cmd)}")
-    if proc.run(cmd, cwd=str(SCRIPTS_DIR)).returncode != 0:
-        raise LaunchError(f"command failed: {' '.join(cmd)}")
-
-
 # ── Argument parsing + config precedence ─────────────────────────────────────────
-
-# CLI value flag (argparse dest) → its (section, key) in the nested LaunchConfig. Deeper volume
-# fields are handled separately below. store_true flags are handled separately too.
-_CLI_TO_SECTION = {
-    "hostname": ("vm", "hostname"),
-    "base_image": ("vm", "base_image"),
-    "vm_image_dir": ("vm", "vm_image_directory"),
-    "miner_ss58": ("miner", "ss58"),
-    "miner_seed": ("miner", "seed"),
-    "vm_ip": ("network", "vm_ip"),
-    "bridge_ip": ("network", "bridge_ip"),
-    "vm_dns": ("network", "dns"),
-    "public_iface": ("network", "public_interface"),
-    "network_type": ("network", "type"),
-    "ssh_port": ("network", "ssh_port"),
-    "docker_hub_username": ("docker_hub", "username"),
-    "docker_hub_token": ("docker_hub", "token"),
-}
-
-# CLI volume flags → (volumes subsection, key).
-_CLI_TO_VOLUME = {
-    "cache_size": ("cache", "size"),
-    "cache_volume": ("cache", "path"),
-    "storage_size": ("storage", "size"),
-    "storage_volume": ("storage", "path"),
-    "config_volume": ("config", "path"),
-}
 
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="chutes-cvm guest launch",
+        # No prefix matching. With it on, a removed or mistyped flag silently resolves to
+        # whatever it is a prefix of -- `--config` became `--config-volume`, so a launch config
+        # path was read as a config VOLUME path. It also means adding a flag can break existing
+        # automation by making an abbreviation it relied on ambiguous.
+        allow_abbrev=False,
         description="End-to-end TEE VM launch: verify host, prepare volumes and network, boot.",
         epilog=(
             "Related commands (formerly flags of this orchestrator): `chutes-cvm config init` "
@@ -461,34 +161,64 @@ def _build_parser() -> argparse.ArgumentParser:
             "`chutes-cvm guest down` / `stop` (tear down)."
         ),
     )
+    # Positional only. There was a `--config` sharing this dest, and it never worked: an
+    # optional positional applies its default even when it matches zero arguments, so it
+    # clobbered whatever the flag had set and the launch silently fell back to the default
+    # config path. An inert flag that looks like it is doing something is worse than no flag.
     p.add_argument(
         "config_file", nargs="?", help="Launch config.yaml (CLI flags override it)"
     )
-    p.add_argument("--config", dest="config_file", help="config.yaml path (explicit)")
-    p.add_argument("--hostname")
-    p.add_argument("--base-image", dest="base_image")
-    p.add_argument("--vm-image-dir", dest="vm_image_dir")
-    p.add_argument("--miner-ss58", dest="miner_ss58")
-    p.add_argument("--miner-seed", dest="miner_seed")
-    p.add_argument("--vm-ip", dest="vm_ip")
-    p.add_argument("--bridge-ip", dest="bridge_ip")
-    p.add_argument("--vm-dns", dest="vm_dns")
-    p.add_argument("--public-iface", dest="public_iface")
-    p.add_argument("--cache-size", dest="cache_size")
-    p.add_argument("--cache-volume", dest="cache_volume")
-    p.add_argument("--storage-size", dest="storage_size")
-    p.add_argument("--storage-volume", dest="storage_volume")
-    p.add_argument("--config-volume", dest="config_volume")
-    p.add_argument("--ssh-port", dest="ssh_port", type=int)
-    p.add_argument("--network-type", dest="network_type", choices=["tap", "user"])
-    p.add_argument("--docker-hub-username", dest="docker_hub_username")
-    p.add_argument("--docker-hub-token", dest="docker_hub_token")
-    p.add_argument("--skip-bind", action="store_true", default=None)
-    p.add_argument("--no-gpus", action="store_true", default=None)
-    p.add_argument("--foreground", action="store_true", default=None)
-    p.add_argument("--ephemeral", action="store_true", default=None)
-    p.add_argument("--benchmark", action="store_true", default=None)
-    p.add_argument("--force", action="store_true", default=None)
+    # Every flag that maps to a config setting comes from the model, which owns its YAML key,
+    # env var, default, description and flag together. Declaring them here as well is what let
+    # `network.ssh_port` exist on both sides and be plumbed on neither.
+    for flag, path, annotation, help_ in cli_fields():
+        # No explicit dest: argparse derives `--vm-dns` -> `vm_dns`, which is exactly what the
+        # hand-written flags set, so every existing `args.<name>` reference keeps working.
+        kwargs: dict = {"default": None, "help": help_}
+        if annotation is bool:
+            # store_true with default=None: absent stays None, so it cannot overwrite a YAML
+            # true with False the way argparse's own default would.
+            kwargs["action"] = "store_true"
+        elif get_origin(annotation) is Literal:
+            kwargs["choices"] = list(get_args(annotation))
+        elif annotation is int:
+            kwargs["type"] = int
+        p.add_argument(flag, **kwargs)
+
+    # Not derived from the model. --benchmark/--ephemeral/--no-gpus/--force pick the shape of
+    # the launch and are returned alongside the config rather than folded into it; --config-file
+    # says where to read it from; --skip-bind is the one config flag that names the NEGATION of
+    # its field (devices.bind_devices), so it cannot be "that field's flag".
+    p.add_argument(
+        "--skip-bind",
+        action="store_true",
+        default=None,
+        help="Do not bind GPU/NVSwitch to vfio-pci (devices.bind_devices: false)",
+    )
+    p.add_argument(
+        "--no-gpus",
+        action="store_true",
+        default=None,
+        help="Boot without passing any GPUs through (debug)",
+    )
+    p.add_argument(
+        "--ephemeral",
+        action="store_true",
+        default=None,
+        help="Put the per-VM image under /tmp/chutes-vm-images instead of the config's dir",
+    )
+    p.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=None,
+        help="Launch the benchmark image; miner credentials default to placeholders",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        default=None,
+        help="Launch despite a failed pre-launch check (the VM may fail attestation)",
+    )
     return p
 
 
@@ -506,16 +236,14 @@ def _resolve_config(
 
     # Build nested CLI overrides (only flags the user set) — the highest-precedence source.
     overrides: dict = {}
-    for dest, (section, key) in _CLI_TO_SECTION.items():
-        val = getattr(args, dest)
-        if val is not None:
-            overrides.setdefault(section, {})[key] = val
-    for dest, (sub, key) in _CLI_TO_VOLUME.items():
-        val = getattr(args, dest)
-        if val is not None:
-            overrides.setdefault("volumes", {}).setdefault(sub, {})[key] = val
-    if args.foreground:
-        overrides.setdefault("runtime", {})["foreground"] = True
+    for flag, path, _annotation, _help in cli_fields():
+        val = getattr(args, flag.lstrip("-").replace("-", "_"), None)
+        if val is None:
+            continue
+        node = overrides
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+        node[path[-1]] = val
     if args.skip_bind:
         overrides.setdefault("devices", {})["bind_devices"] = False
 
@@ -572,8 +300,10 @@ def _validate(config: LaunchConfig, benchmark: bool) -> None:
     if not benchmark:
         if not config.miner.ss58:
             missing.append("miner.ss58 (miner.ss58 or --miner-ss58)")
-        if not config.miner.seed:
-            missing.append("miner.seed (miner.seed or --miner-seed)")
+        if not (config.miner.private_key or config.miner.seed):
+            missing.append(
+                "miner.private_key or miner.seed (--miner-private-key or --miner-seed)"
+            )
     if missing:
         raise LaunchError(
             "missing required configuration:\n  - " + "\n  - ".join(missing)
@@ -595,7 +325,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     try:
         config, benchmark, pass_gpus, ephemeral = _resolve_config(args)
-        config.network.public_interface = _resolve_public_iface(
+        config.network.public_interface = resolve_public_iface(
             config.network.public_interface
         )
         _apply_derived_defaults(config, benchmark, ephemeral)
@@ -611,39 +341,42 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"VM image dir: {config.vm.vm_image_directory}")
     print(f"Network: {config.network.type}\n")
 
-    if not args.force and _chutes_td_running():
-        print(
-            f"Error: a TDX VM (QEMU, {_PROCESS_NAME_CHUTES_TD}) is already running.\n"
-            "  Stop it first: chutes-cvm guest down  (or pass --force to override — not recommended).",
-            file=sys.stderr,
-        )
+    # One predicate, and --force only reaches the blockers that say it may. A VM that is
+    # merely running is the operator's call to override; a reclaim is not, because forcing past
+    # it reaches the unbind, and the unbind is what costs the host its ability to reboot.
+    blockers = [b for b in device_blockers() if not (args.force and b.overridable)]
+    if blockers:
+        for blocker in blockers:
+            print(f"Error: {blocker.detail}", file=sys.stderr)
         return 1
 
     print("Step 0: Verifying host configuration...")
-    active, source = _tdx_active()
-    if not active:
-        print(
-            "✗ TDX does not appear active (checked sysfs, /proc/cpuinfo, dmesg). Enable TDX in "
-            "BIOS + kernel and reboot; verify with `cat /sys/module/kvm_intel/parameters/tdx`.",
-            file=sys.stderr,
-        )
+    # THE reading of this host for this launch. discover-profile.sh is the single reader --
+    # preflight signs this profile and the boot primitive builds the command from it, so both
+    # see the same hardware. A second read could disagree with the one the API approved.
+    host = HostProfile.from_host()
+    try:
+        host.verify_environment()
+    except RuntimeError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
         return 1
-    print(f"✓ TDX active (via {source})")
+    print(f"✓ {host.tee_provider.label} active")
     _ensure_numa_zone_reclaim()
 
-    # The gate is a launch-readiness check: does a published measurement for THIS image's
-    # (version, rc) cover this host class? Benchmark VMs use dummy creds and aren't attested, so
-    # they skip it; a debug (RC) image is not special-cased — its rc:true measurement must be
-    # published just like a production image's, which the (version, rc) join checks directly.
-    if benchmark:
-        pass
-    else:
+    # Benchmark VMs use dummy creds and aren't attested, so they test boot without asking. A debug
+    # (RC) image is gated like any other: a published rc:true measurement launches it measured.
+    measured: "MeasuredImage | None" = None
+    if not benchmark:
         print("\nStep 1: Confirming this host can attest the image...")
-        if not _launchable(
-            args.config_file or default_config_path(),
-            config.vm.base_image,
-            args.force,
-        ):
+        try:
+            measured = _measured_image(
+                args.config_file or default_config_path(),
+                config.vm.base_image,
+                bool(args.force),
+                host,
+            )
+        except LaunchError as exc:
+            print(f"✗ {exc}", file=sys.stderr)
             return 1
 
     orig_cwd = os.getcwd()
@@ -653,7 +386,7 @@ def main(argv: "list[str] | None" = None) -> int:
     try:
         if not benchmark:
             print("\nStep 2: Preparing cache volume...")
-            _ensure_raw_volume(
+            ensure_raw_volume(
                 config.volumes.cache.path,
                 config.volumes.cache.size,
                 "tdx-cache",
@@ -661,7 +394,7 @@ def main(argv: "list[str] | None" = None) -> int:
             )
 
         print("\nStep 3: Preparing storage volume...")
-        _ensure_raw_volume(
+        ensure_raw_volume(
             config.volumes.storage.path,
             config.volumes.storage.size,
             "storage",
@@ -669,23 +402,23 @@ def main(argv: "list[str] | None" = None) -> int:
         )
 
         print("\nStep 4: Setting up config volume...")
-        _setup_config_volume(config, benchmark)
+        setup_config_volume(config, benchmark)
 
         print("\nStep 4b: Preparing VM image (verify set + per-VM copy)...")
-        vm_image = _prepare_vm_image(
+        vm_image = prepare_vm_image(
             config.vm.base_image, config.vm.hostname, config.vm.vm_image_directory
         )
 
         net_iface = ""
         if config.network.type == "tap":
             print("\nStep 5: Setting up bridge networking...")
-            net_iface = _setup_bridge(config)
+            net_iface = setup_bridge(config)
             print(f"✓ Bridge configured (TAP: {net_iface})")
             if benchmark:
                 print("\nStep 5b: Installing benchmark network logging...")
-                _install_benchmark_netlog(config)
+                install_benchmark_netlog(config)
 
-        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus)
+        rc = _boot(config, vm_image, net_iface, benchmark, pass_gpus, host, measured)
     except LaunchError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -709,32 +442,37 @@ def _boot(
     net_iface: str,
     benchmark: bool,
     pass_gpus: bool,
+    host: HostProfile,
+    measured: "MeasuredImage | None",
 ) -> int:
-    """Assemble the boot-primitive argument list and call the QEMU primitive in-process."""
-    # Deferred import: the boot primitive pulls the heavy, host-specific chain
-    # (detection/gpu/qemu/passthrough) that only an actual boot needs — importing it here keeps
-    # `guest launch --help` and the early config/gate paths light.
-    from chutes_cvm.guest.__main__ import main as launch_vm_main
-
-    launch_args = ["--image", vm_image, "--network-type", config.network.type]
-    if pass_gpus:
-        launch_args.append("--pass-gpus")
-    if config.network.type == "tap":
-        launch_args += ["--net-iface", net_iface]
-    if benchmark:
-        # Benchmark: no cache volume (partner manages storage); config volume carries only
-        # hostname + network; --ssh shows the login hint.
-        launch_args += ["--ssh", "--config-volume", config.volumes.config.path]
-        launch_args += ["--storage-volume", config.volumes.storage.path]
-    else:
-        launch_args += ["--config-volume", config.volumes.config.path]
-        launch_args += ["--cache-volume", config.volumes.cache.path]
-        launch_args += ["--storage-volume", config.volumes.storage.path]
-    if config.runtime.foreground:
-        launch_args.append("--foreground")
+    """Build this guest's context and call the QEMU primitive in-process. ``measured`` is Step
+    1's entry for this image; None is a test boot."""
+    volumes = GuestVolumes(
+        config=config.volumes.config.path,
+        # Benchmark guests have no cache volume: the partner manages storage.
+        cache=None if benchmark else config.volumes.cache.path,
+        storage=config.volumes.storage.path,
+    )
+    network = GuestNetwork(
+        network_type=config.network.type,
+        # Only tap mode has one; user mode forwards a port instead.
+        net_iface=net_iface or None,
+        ssh_port=config.network.ssh_port,
+    )
+    process = ProcessBundle(PROCESS_NAME, config.runtime.foreground, PIDFILE, LOGFILE)
+    guest = LaunchContext.from_host(
+        host,
+        measured,
+        image=vm_image,
+        volumes=volumes,
+        network=network,
+        process=process,
+        pass_gpus=pass_gpus,
+        show_ssh=benchmark,  # benchmark guests print the login hint
+    )
 
     print("\nLaunching Chutes VM...")
-    return launch_vm_main(launch_args)
+    return launch_vm(guest, host)
 
 
 if __name__ == "__main__":

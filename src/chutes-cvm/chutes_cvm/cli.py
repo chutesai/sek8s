@@ -13,7 +13,7 @@ Stdlib-only dispatcher. Every operator command is a noun group (guest / host / i
 measurements) whose args are forwarded verbatim to that subpackage's own ``main`` — each owns
 its own ``--help`` and imports its implementation lazily, so a command that needs extra
 dependencies never burdens one that doesn't. The low-level QEMU-boot primitive
-(``chutes_cvm.guest.__main__``) is not a CLI command — ``guest launch`` reaches it via import.
+(``chutes_cvm.guest.vm``) is not a CLI command — ``guest launch`` reaches it via import.
 """
 
 import argparse
@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
 # Commands whose arguments are forwarded verbatim to an underlying main(argv). Intercepted
 # before argparse because REMAINDER mishandles leading options (e.g. `image --image`,
 # `host --help`). Each underlying main owns its own --help. The low-level QEMU boot primitive
-# (chutes_cvm.guest.__main__) is not a CLI command — `guest launch` reaches it via import.
+# (chutes_cvm.guest.vm) is not a CLI command — `guest launch` reaches it via import.
 _PASSTHROUGH = (
     "guest",
     "host",

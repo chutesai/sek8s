@@ -4,7 +4,7 @@ monitoring_namespace: monitoring
 # Pinned for reproducible builds. Rendered into /etc/chutes/charts/chutes-miner-gpu.conf,
 # the single source of truth reconciled at boot by 04-helm-chart-upgrade.sh.
 # Override in group_vars or host_vars for debug images (e.g. 0.1.0-dev.1).
-chutes_chart_version: "0.3.0"
+chutes_chart_version: "0.4.0"
 
 # GPU Operator chart version from the NVIDIA Helm repo (nvidia/gpu-operator).
 # Pinned for reproducible builds. Rendered into /etc/chutes/charts/gpu-operator.conf,
