@@ -6,71 +6,47 @@ Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make pr
 ## [2026.10.0] - 2026-10-10
 
 ### Added
-- Host Ansible (`chutes_vm_config`) reads the hotkey file's `privateKey` into `config.yaml` as
-  `miner.private_key`, so hotkeys from current Bittensor (some with no `secretSeed`) can launch a
-  VM. The private key is taken when the file has one and `secretSeed` only otherwise, and
-  `config.yaml` carries just that one key. Explicit `chutes_miner_private_key` joins
-  `chutes_miner_seed` as an override.
+- Host Ansible supports current Bittensor hotkeys, some of which have no `secretSeed`:
+  `chutes_vm_config` writes the hotkey file's `privateKey` to `config.yaml` as
+  `miner.private_key`, and uses `secretSeed` (`miner.seed`) only when the file has no private
+  key. New override `chutes_miner_private_key` (set it or `chutes_miner_seed`, not both). The play
+  fails with one clear message if the file has neither key or both overrides are set.
 
 ### Changed
-- Host Ansible fails with one clear message when the credentials are missing or ambiguous: a
-  hotkey file with neither `privateKey` nor `secretSeed`, or both keys set explicitly.
-- A host relaunched with the new host Ansible moves to the private key, which needs a guest image
-  from this release. The example configs and guides show `private_key` as the primary key and
-  `seed` as the supported alternative.
-- The `tdx_bootstrap` role is now `tee_bootstrap`: it runs `chutes-cvm host setup`, reboots if
-  needed, then verifies with `chutes-cvm host platform --check` and records the result as the
-  `host_tee` fact (`tdx` or `snp`). `setup.yml` and `remediate-host.yml` run `pccs_configure`
-  only when `host_tee == 'tdx'`, so the same playbooks provision AMD SEV-SNP hosts, which have
-  no PCCS.
-- The upgrade playbooks (`upgrade-guest.yml`, `upgrade-host.yml`, `remediate-host.yml`) follow the
-  two-step maintenance flow: after requesting maintenance they wait while the server is `pending`
-  (sole-survivor instances still serving while the validator posts replacement bounties) and only
-  drain and shut the guest down once it reaches `maintenance`. `start-maintenance` exits 0 on
-  `pending`, so the drain used to start immediately and fail after `upgrade_drain_timeout_seconds`
-  with the survivors' pods still running. The wait is bounded by `upgrade_pending_timeout_seconds`
-  (default 11700, the validator's 3-hour deadline plus margin); if it runs out, the play stops
-  without shutting the guest down. A re-run against a `pending` server no longer requests
-  maintenance again. Requires chutes-miner CLI 0.9.0 or later.
-- `launch_and_verify.yml` no longer probes for a wedged PCI subsystem before launching, and no
-  longer force-reboots on its own. `chutes-cvm guest launch` now checks for itself whether
-  anything holds the passthrough devices and refuses with the reason, an ETA when a previous TD
-  is still reclaiming its memory, and the SysRq sequence. The probe was a second, worse-informed
-  copy of that answer, and it reacted by rebooting — throwing away a reclaim that would have
-  finished on its own.
-  A refused launch now stops the play with whatever the launch reported. Rebooting instead is
-  opt-in via `tee_force_reboot_on_launch_failure` (default false), because whether to spend a
-  reboot or wait for a reclaim depends on how long it has left, which the operator can now see.
-- `is_live_chutes_td.sh` documents what it answers and what it does not. Skipping zombies is
-  correct for its remaining callers — `drain_and_shutdown.yml` and `assert_not_running.yml`,
-  which gate pod-drain and skip-on-rerun logic, and must not try to drain a guest that is
-  already off. The header now says to call `chutes-cvm host devices-free` for the other
-  question rather than widening this script, which is how it came to be used for both.
+- **Breaking:** relaunching a host with this host Ansible moves it to `miner.private_key`, which
+  needs a guest image from this release. Example configs and guides now show `private_key`
+  first; `seed` is still supported.
+- The upgrade playbooks (`upgrade-guest.yml`, `upgrade-host.yml`, `remediate-host.yml`) follow
+  chutes-miner's two-step maintenance. A request can leave the server `pending` while its
+  sole-survivor instances keep serving until they are replaced; the guest is drained and shut
+  down only once the server reaches `maintenance`. The wait is bounded by
+  `upgrade_pending_timeout_seconds` (default 11700, the validator's 3-hour deadline plus margin;
+  polled every `upgrade_pending_poll_seconds`, default 60). On timeout the play stops and leaves
+  the guest running. A server already `pending` is not asked again. Sole survivors no longer
+  cause a denial, so `force_upgrade` is only needed when the validator refuses maintenance (no
+  free slot or upgrade window). **Requires chutes-miner CLI 0.9.0 or later** on the controller.
+- `launch_and_verify.yml` no longer probes for a wedged PCI subsystem or reboots the host on its
+  own. `chutes-cvm guest launch` reports what still holds the passthrough devices, with an ETA
+  when a previous guest is still reclaiming memory, and a refused launch now stops the play with
+  that reason. Set `tee_force_reboot_on_launch_failure: true` (default false) to SysRq-reset and
+  retry once instead.
+- The `tdx_bootstrap` role is renamed `tee_bootstrap` and supports AMD SEV-SNP hosts: it runs
+  `chutes-cvm host setup`, reboots if needed, verifies with `chutes-cvm host platform --check`,
+  and sets `host_tee` (`tdx`/`snp`). `setup.yml` and `remediate-host.yml` run `pccs_configure`
+  only on TDX hosts.
 
 ### Fixed
-- `force_reboot.yml`'s SysRq sequence now remounts filesystems read-only (`u`) between the sync
-  (`s`) and the reset (`b`). `s` flushes what is dirty at that instant but leaves every
-  filesystem mounted read-write, so anything written in the seconds before `b` lands on a
-  filesystem the reset then abandons mid-write. `u` closes that window, and is the standard
-  sync/remount/reboot order for an emergency reset.
-- `shutdown_via_miner.yml` declared the guest gone while a QEMU still held its image, then
-  walked into the qcow2 write-lock collision its own comment warns about. It waited on
-  `is_live_chutes_td.sh`, which answers "is a guest *serving*?" — and a QEMU that has powered
-  its guest off but is still reclaiming the TD's private memory answers no, while holding the
-  image's write lock and every passthrough device for as long as that runs (hours, for a guest
-  that had faulted in a terabyte). The wait now asks `chutes-cvm host devices-free`, which
-  answers the question that actually matters here: has QEMU let go?
-  The escalation had the same blind spot: `stop_chutes_td.sh` reported "No chutes-td QEMU
-  process running", exit 0, in precisely the state it was written to catch — so the
-  "could not be stopped" failure never fired. It is replaced by `chutes-cvm guest stop --force`,
-  which escalates SIGTERM → SIGKILL, verifies the process is gone, and distinguishes a kill
-  that failed from a reclaim that simply has not finished. `stop_chutes_td.sh` is deleted; its
-  detection logic was one of four divergent copies.
+- Guest shutdown no longer declares the guest gone while its QEMU is still reclaiming TD memory
+  and holding the image's write lock and the passthrough devices, which made the relaunch hit a
+  qcow2 lock collision. `shutdown_via_miner.yml` now waits on `chutes-cvm host devices-free` and
+  escalates with `chutes-cvm guest stop --force`, which fails when the process cannot be killed
+  instead of reporting nothing running. `stop_chutes_td.sh` is removed.
+- `force_reboot.yml` remounts filesystems read-only (SysRq `u`) between the sync and the reset,
+  so a forced reboot no longer leaves filesystems dirty.
 
 ### Removed
-- The `changelog-auto-promote.yml` workflow. Changelog fragments are now promoted by hand
-  with `make promote-changelogs` on the release branch; CI no longer commits to release
-  branches. PRs to `main` are still refused while any fragment remains unpromoted.
+- The `changelog-auto-promote.yml` workflow. Fragments are promoted by hand with
+  `make promote-changelogs` on the release branch.
 
 ## [2026.09.2] - 2026-09-16
 

@@ -13,32 +13,23 @@ Version source of truth: `src/sek8s/VERSION`
 ## [0.5.0] - 2026-10-10
 
 ### Added
-- `sek8s_common.hotkey.load_miner_keypair(ss58, private_key, seed)`: the miner keypair from the
-  64-byte sr25519 private key when set, else the seed, checked against `MINER_SS58`. Shared by
-  system-manager and the attestation proxy; errors never contain key material.
-- system-manager's `MinerConfig` reads `MINER_PRIVATE_KEY` and signs validator requests with it
-  when set, else with `MINER_SEED`.
-- AMD SEV-SNP attestation support. The attestation service selects its evidence
-  provider at runtime from the guest device node (`/dev/tdx_guest` vs
-  `/dev/sev-guest`) rather than being built for one platform.
-- `SnpQuoteProvider` reads the PSP-signed attestation report through configfs-TSM,
-  falling back to the `/dev/sev-guest` `SNP_GET_REPORT` ioctl on kernels whose
-  sev-guest driver registers no TSM provider. There is no external quote-generation
-  daemon on SNP — the PSP answers guest requests directly — so no vsock socket is
-  involved.
-- `QuoteProvider` base class holding the report-data binding shared by both TEEs:
-  `nonce || sha256(server cert public key)` in the 64-byte report-data field.
+- AMD SEV-SNP attestation. The attestation service picks its evidence provider at runtime from
+  `/dev/tdx_guest` or `/dev/sev-guest`. `SnpQuoteProvider` reads the PSP-signed report through
+  configfs-TSM, falling back to the `SNP_GET_REPORT` ioctl. Both platforms bind
+  `nonce || sha256(server cert public key)` into the report data.
+- `GET /quote` on the attestation service, an alias of `/tdx/quote` (kept) that returns the TDX
+  quote or the SEV-SNP report.
+- system-manager signs validator requests with `MINER_PRIVATE_KEY` (the 64-byte sr25519 private
+  key) when set, else `MINER_SEED`, through the shared `sek8s_common.hotkey.load_miner_keypair`
+  (also used by the attestation proxy). Errors never contain key material.
 
 ### Changed
 - system-manager refuses to sign with a key whose address is not `MINER_SS58`, instead of signing
-  as another hotkey, and `MinerConfig.miner_keypair` returns None when no key is set (it called
-  `create_from_seed(None)` and raised).
+  as another hotkey, and `MinerConfig.miner_keypair` returns None when no key is set.
 - `AttestationResponse` carries the evidence in `quote` on every platform (a TDX quote or the
   raw SEV-SNP report), the field the API reads; it tells the platforms apart by the bytes.
   `tdx_quote` is gone: the API reads it only as a fallback for older VMs, so this release needs
   an API that reads `quote`.
-- `TdxQuoteProvider` inherits the shared cert-hash and report-data plumbing; its
-  quote generation is otherwise unchanged.
 
 ### Fixed
 - Quote nonce validation (`sek8s.nonce`) requires exactly 64 hex characters. It used
