@@ -69,6 +69,7 @@ Version source of truth: `ansible/guest/VERSION`
   the pair to 128 characters, shifting the certificate hash so the API rejected the evidence
   without saying why. The guest's quote and GPU-evidence services (`sek8s.nonce`,
   `chutes_nvevidence`) no longer accept whitespace inside a nonce.
+- Debug images no longer ship the build host's SSH public key in root's `authorized_keys`; it is purged as in production. Root password login is unchanged.
 
 ## [1.4.1] - 2026-09-20
 
