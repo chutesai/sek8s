@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 
 from chutes_cvm.guest.config import ConfigError, LaunchConfig
-from substrateinterface import Keypair, KeypairType
+from chutes_cvm.guest.hotkey import HotkeyError, miner_keypair
 
 # Contract mirrored from sek8s_common (constants + auth.authorize(purpose="status")) and the
 # system-manager status API (mounted at /status, PORT=8080, REQUIRE_TLS=false → plain HTTP).
@@ -44,18 +44,13 @@ def graceful_shutdown(config_path: "str | None", timeout: float = 10.0) -> str:
     except ConfigError as exc:
         raise ShutdownError(f"config: {exc}") from exc
 
-    seed = cfg.miner.seed
-    if not seed:
-        raise ShutdownError(
-            "config has no miner.seed — cannot sign the shutdown request (use --force to "
-            "force-kill instead)."
-        )
     vm_ip = cfg.network.vm_ip
-
     try:
-        kp = Keypair.create_from_seed(seed, crypto_type=KeypairType.SR25519)
-    except Exception as exc:
-        raise ShutdownError(f"invalid miner seed: {exc}") from exc
+        kp = miner_keypair(cfg.miner.ss58, cfg.miner.private_key, cfg.miner.seed)
+    except HotkeyError as exc:
+        raise ShutdownError(
+            f"{exc} — cannot sign the shutdown request (use --force to force-kill instead)."
+        ) from exc
 
     nonce = str(int(time.time()))
     signature = kp.sign(f"{kp.ss58_address}:{nonce}:{_PURPOSE}").hex()

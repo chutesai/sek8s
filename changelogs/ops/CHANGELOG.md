@@ -3,6 +3,51 @@
 Operational tooling changes: `ansible/host/`, `host-tools/`, `.github/workflows/`.
 Versioned with CalVer `YYYY.MM.PATCH` via `changelogs/ops/VERSION`. Run `make promote-changelogs` to aggregate fragments into the current version section.
 
+## [2026.10.0] - 2026-10-10
+
+### Added
+- Host Ansible supports current Bittensor hotkeys, some of which have no `secretSeed`:
+  `chutes_vm_config` writes the hotkey file's `privateKey` to `config.yaml` as
+  `miner.private_key`, and uses `secretSeed` (`miner.seed`) only when the file has no private
+  key. New override `chutes_miner_private_key` (set it or `chutes_miner_seed`, not both). The play
+  fails with one clear message if the file has neither key or both overrides are set.
+
+### Changed
+- **Breaking:** relaunching a host with this host Ansible moves it to `miner.private_key`, which
+  needs a guest image from this release. Example configs and guides now show `private_key`
+  first; `seed` is still supported.
+- The upgrade playbooks (`upgrade-guest.yml`, `upgrade-host.yml`, `remediate-host.yml`) follow
+  chutes-miner's two-step maintenance. A request can leave the server `pending` while its
+  sole-survivor instances keep serving until they are replaced; the guest is drained and shut
+  down only once the server reaches `maintenance`. The wait is bounded by
+  `upgrade_pending_timeout_seconds` (default 11700, the validator's 3-hour deadline plus margin;
+  polled every `upgrade_pending_poll_seconds`, default 60). On timeout the play stops and leaves
+  the guest running. A server already `pending` is not asked again. Sole survivors no longer
+  cause a denial, so `force_upgrade` is only needed when the validator refuses maintenance (no
+  free slot or upgrade window). **Requires chutes-miner CLI 0.9.0 or later** on the controller.
+- `launch_and_verify.yml` no longer probes for a wedged PCI subsystem or reboots the host on its
+  own. `chutes-cvm guest launch` reports what still holds the passthrough devices, with an ETA
+  when a previous guest is still reclaiming memory, and a refused launch now stops the play with
+  that reason. Set `tee_force_reboot_on_launch_failure: true` (default false) to SysRq-reset and
+  retry once instead.
+- The `tdx_bootstrap` role is renamed `tee_bootstrap` and supports AMD SEV-SNP hosts: it runs
+  `chutes-cvm host setup`, reboots if needed, verifies with `chutes-cvm host platform --check`,
+  and sets `host_tee` (`tdx`/`snp`). `setup.yml` and `remediate-host.yml` run `pccs_configure`
+  only on TDX hosts.
+
+### Fixed
+- Guest shutdown no longer declares the guest gone while its QEMU is still reclaiming TD memory
+  and holding the image's write lock and the passthrough devices, which made the relaunch hit a
+  qcow2 lock collision. `shutdown_via_miner.yml` now waits on `chutes-cvm host devices-free` and
+  escalates with `chutes-cvm guest stop --force`, which fails when the process cannot be killed
+  instead of reporting nothing running. `stop_chutes_td.sh` is removed.
+- `force_reboot.yml` remounts filesystems read-only (SysRq `u`) between the sync and the reset,
+  so a forced reboot no longer leaves filesystems dirty.
+
+### Removed
+- The `changelog-auto-promote.yml` workflow. Fragments are promoted by hand with
+  `make promote-changelogs` on the release branch.
+
 ## [2026.09.2] - 2026-09-16
 
 ### Added

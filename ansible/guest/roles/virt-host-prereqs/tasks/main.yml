@@ -15,6 +15,7 @@
       - libvirt-daemon-system
       - qemu-utils
       - cryptsetup
+      - rsync
       - cloud-image-utils
       # fetch-image pulls the multi-GB base image in parallel; a single HTTP stream caps at
       # around 30 MB/s to the CDN regardless of available bandwidth.

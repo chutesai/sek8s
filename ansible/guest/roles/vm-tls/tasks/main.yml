@@ -7,7 +7,7 @@
 # the validator implicitly via the RTMR3-attested /provision call in
 # setup_storage (no separate registration endpoint).
 #
-# This role runs against hosts: vm (like signing-keys and rtmr3-measure) and
+# This role runs against hosts: vm (like signing-keys and rootfs-measure) and
 # installs the script onto the live VM filesystem. The "update initramfs"
 # handler rebuilds the running image's initramfs; the LUKS role (later, on
 # hosts: host) also runs update-initramfs in a chroot of the final image and

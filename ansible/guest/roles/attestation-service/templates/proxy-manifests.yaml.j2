@@ -194,8 +194,15 @@ spec:
             secretKeyRef:
               name: miner-credentials
               key: ss58
-        # Miner sr25519 seed for the release-candidate hotkey proof-of-possession. optional so
-        # the same image still runs on VMs whose secret predates the seed key.
+        # Miner hotkey credential for the release-candidate hotkey proof-of-possession. The secret
+        # holds one of the two (03-k3s-miner-credentials.sh); both optional so the same image
+        # still runs on VMs whose secret predates either key.
+        - name: MINER_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: miner-credentials
+              key: privateKey
+              optional: true
         - name: MINER_SEED
           valueFrom:
             secretKeyRef:

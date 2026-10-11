@@ -19,8 +19,14 @@ local download (``tdx-guest[-debug].*`` inside a per-variant dir)::
         "vmlinuz": {"sha256": "<hex>", "size": <int>},
         "initrd":  {"sha256": "<hex>", "size": <int>},
         "cmdline": {"sha256": "<hex>", "size": <int>}
-      }
+      },
+      "firmware": {"OVMF.inteltdx.fd": "<sha256>", "OVMF.amdsev.fd": "<sha256>"}
     }
+
+``firmware`` records the guest firmware the image was built and measured with. The firmware ships
+with chutes-cvm rather than with the image, and the launch measurement covers its exact bytes, so
+``verify`` refuses any other build. Sets from before it was recorded have no ``firmware`` and are
+not checked.
 
 The manifest is *the* integrity source — it replaces the hand-bumped expected-hash
 constant, and it is the first thing that ties the boot artifacts to their qcow2
@@ -41,7 +47,7 @@ Usage (``chutes-cvm image <verb>``; also ``python3 -m chutes_cvm.guest.image_set
     # Generate the manifest for a finished image (build / publish / capture staging).
     # Hashes <qcow2> and its <base>.{vmlinuz,initrd,cmdline} sidecars, writing
     # manifest.json into the qcow2's directory (that directory IS the set).
-    chutes-cvm image manifest <qcow2> [-o OUT] [--version V] [--debug]
+    chutes-cvm image manifest <qcow2> --version V [-o OUT] [--debug]
 
     # Verify an image-set directory and print QCOW2=/SHA256= for the caller to eval.
     chutes-cvm image verify [--full] <image-set-dir>
@@ -62,17 +68,22 @@ import json
 import os
 import shlex
 import sys
+from dataclasses import dataclass, field
 
 from chutes_cvm import proc
-from chutes_cvm.paths import SCRIPTS_DIR
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider
+from chutes_cvm.paths import SCRIPTS_DIR, firmware_dir
+
+# The guest firmware each platform boots, recorded in the manifest by filename.
+FIRMWARE = (TdxTeeProvider.default_firmware, SnpTeeProvider.default_firmware)
 
 # Roles in the manifest. The on-disk filename for each is the qcow2 basename with the
 # role as its extension (<base>.qcow2 / <base>.vmlinuz / <base>.initrd / <base>.cmdline).
 ROLES = ("qcow2", "vmlinuz", "initrd", "cmdline")
 
 # Where `chutes-cvm image download` puts the production set; the launch default and the base a
-# `host verify` checks when the config names no explicit base_image.
-DEFAULT_BASE_IMAGE = "/var/lib/chutes/base-images/tdx-guest"
+# `host verify` checks when the config names no explicit `vm.base_image`.
+DEFAULT_IMAGE_SET_DIR = "/var/lib/chutes/base-images/tdx-guest"
 
 _CHUNK = 1024 * 1024
 
@@ -105,17 +116,21 @@ def _role_paths(qcow2: str) -> dict[str, str]:
     return {"qcow2": qcow2, **{r: f"{base}.{r}" for r in ROLES if r != "qcow2"}}
 
 
-def write_manifest(
-    qcow2: str, output: str, version: str = "", debug: bool = False
-) -> None:
-    """Hash the qcow2 + its sidecars and write the manifest to ``output``.
+def write_manifest(qcow2: str, output: str, version: str, debug: bool = False) -> None:
+    """Hash the qcow2 + its sidecars and chutes-cvm's guest firmware (the checkout's, in a
+    build), and write the manifest to ``output``.
 
-    Fails loudly if any of the four artifacts is missing — a manifest must describe a
-    complete set. This is the single generator used by the build, publish, and capture
-    staging so the schema never drifts from what ``resolve`` verifies.
+    Fails loudly if any of the four artifacts or either firmware is missing — a manifest must
+    describe a complete set. This is the single generator used by the build, publish, and
+    capture staging so the schema never drifts from what ``ImageSet.verify`` checks.
     """
     role_path = _role_paths(qcow2)
-    missing = [f"{r} ({p})" for r, p in role_path.items() if not os.path.exists(p)]
+    firmware_path = {name: os.path.join(firmware_dir(), name) for name in FIRMWARE}
+    missing = [
+        f"{r} ({p})"
+        for r, p in {**role_path, **firmware_path}.items()
+        if not os.path.exists(p)
+    ]
     if missing:
         raise FileNotFoundError(
             "cannot write manifest — image set is incomplete, missing: "
@@ -127,7 +142,12 @@ def write_manifest(
     }
     with open(output, "w") as f:
         json.dump(
-            {"version": version, "debug": debug, "artifacts": artifacts},
+            {
+                "version": version,
+                "debug": debug,
+                "artifacts": artifacts,
+                "firmware": {n: _sha256(p) for n, p in firmware_path.items()},
+            },
             f,
             indent=2,
             sort_keys=True,
@@ -150,62 +170,114 @@ def _load_manifest(image_dir: str) -> dict:
     return manifest
 
 
-def version_and_rc(image_dir: str) -> "tuple[str, bool]":
-    """``(version, rc)`` for the base image set from its manifest.
+@dataclass(frozen=True)
+class ImageArtifact:
+    """One file of an image set: where it is, and what its manifest says it must be."""
 
-    ``rc`` is the manifest's ``debug`` flag: a debug build attests under its ``rc:true`` measurement
-    and a production build under its ``rc:false`` one, so the pair (version, rc) is exactly what the
-    control-plane preflight joins against to decide whether this image can boot on a host.
-    """
-    manifest = _load_manifest(image_dir)
-    version = str(manifest.get("version") or "")
-    if not version:
-        raise ValueError(f"image set at {image_dir} has no version in its manifest")
-    return version, bool(manifest.get("debug"))
+    role: str
+    path: str
+    sha256: str
+    size: int
 
-
-def resolve(image_dir: str, full: bool) -> tuple[str, str]:
-    """Verify the image set against its manifest; return ``(qcow2_path, qcow2_sha256)``.
-
-    ``full`` re-hashes every file (download-time). Otherwise only presence and size are
-    checked (launch-time) — the bytes were already verified when downloaded.
-    """
-    qcow2 = _find_qcow2(image_dir)
-    manifest = _load_manifest(image_dir)
-    artifacts = manifest["artifacts"]
-
-    role_path = _role_paths(qcow2)
-
-    problems: list[str] = []
-    for role in ROLES:
-        path = role_path[role]
-        expected = artifacts[role]
-        if not os.path.exists(path):
-            problems.append(f"missing {role}: {path}")
-            continue
-        actual_size = os.path.getsize(path)
-        if actual_size != expected.get("size"):
-            problems.append(
-                f"{role} size mismatch: {path} is {actual_size}, "
-                f"manifest says {expected.get('size')}"
-            )
-            continue
+    def problems(self, full: bool) -> list[str]:
+        """How the file on disk differs from the manifest; ``full`` also re-hashes it."""
+        if not os.path.exists(self.path):
+            return [f"missing {self.role}: {self.path}"]
+        actual_size = os.path.getsize(self.path)
+        if actual_size != self.size:
+            return [
+                f"{self.role} size mismatch: {self.path} is {actual_size}, "
+                f"manifest says {self.size}"
+            ]
         if full:
-            actual_sha = _sha256(path)
-            if actual_sha != expected.get("sha256"):
-                problems.append(
-                    f"{role} sha256 mismatch: {path}\n"
-                    f"    manifest: {expected.get('sha256')}\n"
+            actual_sha = _sha256(self.path)
+            if actual_sha != self.sha256:
+                return [
+                    f"{self.role} sha256 mismatch: {self.path}\n"
+                    f"    manifest: {self.sha256}\n"
                     f"    actual:   {actual_sha}"
-                )
+                ]
+        return []
 
-    if problems:
-        raise ValueError(
-            "image set does not match its manifest — the qcow2 and its boot artifacts "
-            "are out of sync:\n  " + "\n  ".join(problems)
+
+@dataclass(frozen=True)
+class ImageSet:
+    """A base image set on disk: one qcow2, its direct-boot sidecars, and the manifest tying them
+    together as one build.
+
+    ``version`` and ``rc`` say which build it is: ``rc`` is the manifest's ``debug`` flag, since a
+    debug build attests under its ``rc:true`` measurement and a production build under its
+    ``rc:false`` one. That pair is what a host class's published measurements are matched against.
+    """
+
+    directory: str
+    version: str
+    rc: bool
+    qcow2: ImageArtifact
+    vmlinuz: ImageArtifact
+    initrd: ImageArtifact
+    cmdline: ImageArtifact
+    # Guest firmware filename -> sha256 the image was built with; empty for older sets.
+    firmware: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dir(cls, directory: str) -> "ImageSet":
+        """Read the set at ``directory``: its manifest and the files it names. Raises
+        FileNotFoundError/ValueError for a missing qcow2 or manifest, or a manifest without a
+        version. Does not check the files themselves; that is ``verify``."""
+        qcow2 = _find_qcow2(directory)
+        manifest = _load_manifest(directory)
+        version = str(manifest.get("version") or "")
+        if not version:
+            raise ValueError(f"image set at {directory} has no version in its manifest")
+        recorded = manifest["artifacts"]
+        artifacts = {
+            role: ImageArtifact(
+                role=role,
+                path=path,
+                sha256=str(recorded[role].get("sha256", "")),
+                size=recorded[role].get("size"),
+            )
+            for role, path in _role_paths(qcow2).items()
+        }
+        return cls(
+            directory=directory,
+            version=version,
+            rc=bool(manifest.get("debug")),
+            firmware=dict(manifest.get("firmware") or {}),
+            **artifacts,
         )
 
-    return qcow2, artifacts["qcow2"]["sha256"]
+    @property
+    def label(self) -> str:
+        return f"{self.version}{' (rc)' if self.rc else ''}"
+
+    def verify(self, full: bool, firmware: str = "") -> None:
+        """Check the files against the manifest; raise ValueError listing every mismatch.
+
+        ``full`` re-hashes every file (download-time). Otherwise only presence and size are
+        checked (launch-time) -- the bytes were already verified when downloaded. The guest
+        firmware in ``firmware`` (by default chutes-cvm's own) is always hashed: it ships apart
+        from the image, so it was never verified with it.
+        """
+        problems = [
+            problem
+            for artifact in (self.qcow2, self.vmlinuz, self.initrd, self.cmdline)
+            for problem in artifact.problems(full)
+        ]
+        for name, expected in self.firmware.items():
+            path = os.path.join(firmware or str(firmware_dir()), name)
+            actual = _sha256(path) if os.path.isfile(path) else "missing"
+            if actual != expected:
+                problems.append(
+                    f"guest firmware {path} is {actual}, but the image was built with "
+                    f"{expected}; install the chutes-cvm that matches this image"
+                )
+        if problems:
+            raise ValueError(
+                "image set does not match its manifest — the qcow2 and its boot artifacts "
+                "are out of sync:\n  " + "\n  ".join(problems)
+            )
 
 
 def _cmd_download(args: argparse.Namespace) -> int:
@@ -226,12 +298,13 @@ def _cmd_download(args: argparse.Namespace) -> int:
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     try:
-        qcow2, sha256 = resolve(args.image_dir, args.full)
+        image = ImageSet.from_dir(args.image_dir)
+        image.verify(args.full)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(f"QCOW2={shlex.quote(qcow2)}")
-    print(f"SHA256={sha256}")
+    print(f"QCOW2={shlex.quote(image.qcow2.path)}")
+    print(f"SHA256={image.qcow2.sha256}")
     return 0
 
 
@@ -288,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="manifest path (default: manifest.json next to the qcow2)",
     )
-    p_manifest.add_argument("--version", default="", help="image version (metadata)")
+    p_manifest.add_argument("--version", required=True, help="image version")
     p_manifest.add_argument(
         "--debug", action="store_true", help="mark the set as a debug build (metadata)"
     )

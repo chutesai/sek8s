@@ -397,9 +397,11 @@ class ExternalProxyServer(BaseProxyServer):
                 f"TLS private key could not be loaded from {config.tls_key_path}; "
                 "cannot start external proxy without signing key"
             )
-        # Optional: miner hotkey for the rc proof-of-possession. None when no seed is
+        # Optional: miner hotkey for the rc proof-of-possession. None when no key is
         # configured (old charts) -> responses go out unsigned, unchanged behaviour.
-        self._miner_keypair = load_miner_keypair(config.miner_seed)
+        self._miner_keypair = load_miner_keypair(
+            config.miner_ss58, config.miner_private_key, config.miner_seed
+        )
 
     @backoff.on_exception(backoff.expo, httpx.ConnectError, max_tries=2, max_time=5)
     async def proxy_request(self, *args, **kwargs) -> Response:

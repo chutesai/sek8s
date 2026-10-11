@@ -1,0 +1,51 @@
+---
+# Choose the image a build starts from, and where its checkpoint is saved. The counterpart of
+# save-checkpoint.
+#
+# The checkpoint is named <checkpoint_name>-<hash of checkpoint_inputs>.qcow2, so it exists only
+# if one was saved from these exact inputs: after any edit to them the name changes, nothing is
+# found, and the stage runs fresh. (A stale one must not be reused: re-running a role on top of
+# it only adds, so anything the role stopped doing would survive into the image.)
+#
+# Sets:
+#   start_img_path       the checkpoint if it exists (and NO_CACHE is not set), else the fallback
+#   checkpoint_img_path  where save-checkpoint writes it, fixed here so a file edited while the
+#                        build runs cannot relabel a checkpoint built from the old contents
+- name: Validate the checkpoint is declared
+  ansible.builtin.assert:
+    that:
+      - checkpoint_name | length > 0
+      - checkpoint_inputs | length > 0
+      - fallback_img_path | length > 0
+    fail_msg: >-
+      checkpoint_name, checkpoint_inputs and fallback_img_path must be set when including
+      resume-checkpoint
+
+# Hash each input file's path and content (paths relative to ansible/guest, so the key is the same
+# in any checkout), then hash that list. Inventory / -e overrides of variables in those files are
+# not part of it — use NO_CACHE=true after changing one.
+- name: Hash the checkpoint's inputs
+  ansible.builtin.shell: >-
+    find {{ checkpoint_inputs | map('quote') | join(' ') }} -type f -print0
+    | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16
+  args:
+    chdir: "{{ playbook_dir }}/.."
+  register: checkpoint_inputs_hash
+  changed_when: false
+  delegate_to: localhost
+  become: false
+
+- name: Name the checkpoint by its inputs
+  ansible.builtin.set_fact:
+    checkpoint_img_path: "{{ checkpoint_dir }}/{{ checkpoint_name }}-{{ checkpoint_inputs_hash.stdout }}.qcow2"
+
+- name: Check if the checkpoint exists
+  ansible.builtin.stat:
+    path: "{{ checkpoint_img_path }}"
+  register: resume_checkpoint_stat
+
+- name: Start from the checkpoint if present, else the fallback
+  ansible.builtin.set_fact:
+    start_img_path: >-
+      {{ checkpoint_img_path if (resume_checkpoint_stat.stat.exists and no_cache != 'true')
+         else fallback_img_path }}

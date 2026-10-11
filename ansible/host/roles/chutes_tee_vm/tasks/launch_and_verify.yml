@@ -46,32 +46,17 @@
   changed_when: false
   failed_when: _image_set_resolve.rc != 0
 
-# ── PCI passthrough wedge guard ──────────────────────────────────────────────
-# GPU passthrough hosts occasionally wedge the PCI subsystem: a vfio-pci unbind
-# or nvidia-gpu-tools task gets stuck in uninterruptible D-state, after which any
-# SBR/CC-mode op (and therefore VM launch) fails with "SBR cannot run until the
-# host is rebooted". Only a reboot clears it. We detect this up front, and again
-# if the launch itself wedges the host, rebooting and waiting for SSH to return
-# before (re)trying the launch. chutes_cvm.vfio.pci_operations_wedged() is the
-# same predicate chutes-cvm guest launch uses internally (scans ps for D-state vfio/gpu-tools).
+# ── Launch ───────────────────────────────────────────────────────────────────
+# No pre-flight probe: `chutes-cvm guest launch` checks for itself whether anything still holds
+# the passthrough devices (guest.vm.device_blockers) and refuses with the reason, the ETA when a
+# previous guest is still reclaiming its memory, and the SysRq sequence. Probing first gave a
+# second, worse-informed copy of that answer -- and the old probe reacted by rebooting, which
+# throws away a reclaim that would have finished on its own.
+#
+# A failed launch therefore stops the play with whatever the launch said. Rebooting instead is
+# opt-in, because whether to spend a reboot or wait is the operator's call, not ours.
 
-- name: Pre-flight — detect a wedged PCI subsystem
-  ansible.builtin.command:
-    argv:
-      - chutes-cvm
-      - host
-      - vfio-wedged
-  register: _pci_wedged
-  failed_when: false
-  changed_when: false
-
-# Forced (SysRq) reboot, not a graceful one: a wedged subsystem hangs
-# systemd-shutdown on the un-killable D-state tasks and the host never reboots.
-- name: Force-reboot host to clear wedged PCI subsystem (pre-flight)
-  ansible.builtin.include_tasks: force_reboot.yml
-  when: _pci_wedged.rc == 0
-
-- name: Launch VM (reboot and retry once if the launch wedges the PCI subsystem)
+- name: Launch VM
   block:
     - name: Launch VM via chutes-cvm guest launch
       ansible.builtin.command:
@@ -83,37 +68,26 @@
       register: _qlaunch
       changed_when: true
   rescue:
-    # Authoritative signal: the D-state tasks that wedge the PCI subsystem persist
-    # until reboot, so re-running the predicate after the failure tells us directly
-    # whether a reboot would help. Fall back to matching chutes-cvm guest launch's error text.
-    - name: Re-check PCI wedge state after launch failure
-      ansible.builtin.command:
-        argv:
-          - chutes-cvm
-          - host
-          - vfio-wedged
-      register: _post_wedge
-      failed_when: false
-      changed_when: false
+    - name: Report why the launch was refused
+      ansible.builtin.debug:
+        msg: >-
+          chutes-cvm guest launch failed (rc={{ _qlaunch.rc | default('?') }}).
+          {{ _qlaunch.stderr | default('') }}
 
-    - name: Classify launch failure (recoverable PCI wedge vs. other)
-      ansible.builtin.set_fact:
-        _launch_pci_wedged: >-
-          {{ (_post_wedge.rc == 0) or
-             ('wedged' in (_qlaunch.stderr | default(''))) or
-             ('SBR cannot run' in (_qlaunch.stderr | default(''))) or
-             ('may need host reboot' in (_qlaunch.stdout | default(''))) }}
-
-    - name: Fail when the launch error is not a recoverable PCI wedge
+    - name: Fail — launch refused, and no forced reboot authorised
       ansible.builtin.fail:
         msg: >-
-          chutes-cvm guest launch failed (rc={{ _qlaunch.rc | default('?') }}) for a reason
-          other than a PCI wedge — not retrying. stderr={{ _qlaunch.stderr | default('') }}
-      when: not (_launch_pci_wedged | bool)
+          chutes-cvm guest launch failed on {{ inventory_hostname }} and
+          tee_force_reboot_on_launch_failure is false, so the host was left alone.
+          Read the reason above before deciding: if a previous guest is still reclaiming its
+          memory it will clear on its own, and a plain `reboot` would hang. Re-run with
+          -e tee_force_reboot_on_launch_failure=true to SysRq-reset and retry once.
+          stderr={{ _qlaunch.stderr | default('') }}
+      when: not (tee_force_reboot_on_launch_failure | default(false) | bool)
 
-    # Forced (SysRq) reboot — see force_reboot.yml. A graceful reboot here is
-    # exactly what hangs the host in systemd-shutdown on the wedged D-state tasks.
-    - name: Force-reboot host to clear wedged PCI subsystem (post-launch)
+    # Opt-in only. Forced (SysRq) rather than graceful: see force_reboot.yml -- a graceful
+    # reboot is what hangs in device_shutdown() on blocked unbinds.
+    - name: Force-reboot host after a refused launch (opt-in)
       ansible.builtin.include_tasks: force_reboot.yml
 
     - name: Retry VM launch after reboot
@@ -127,10 +101,10 @@
       changed_when: true
       failed_when: false
 
-    - name: Fail if launch still fails after reboot
+    - name: Fail if the launch still fails after the reboot
       ansible.builtin.fail:
         msg: >-
-          chutes-cvm guest launch still failing after a reboot to clear the PCI wedge
+          chutes-cvm guest launch still failing after a forced reboot
           (rc={{ _qlaunch_retry.rc }}). stderr={{ _qlaunch_retry.stderr | default('') }}
       when: _qlaunch_retry.rc != 0
 

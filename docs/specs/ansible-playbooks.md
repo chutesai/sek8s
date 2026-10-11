@@ -99,7 +99,7 @@ Operators **provision**, **launch**, and **upgrade** TDX hosts from one inventor
 ### 2. Launch (`launch.yml`)
 
 - **Pre-check:** if a **live chutes-td QEMU** process is already on the host (same detection as **`quick-launch.sh`**), the play **fails** with remediation (**`playbooks/shutdown.yml`** or **`chutes-miner tee shutdown`**), so operators are not surprised by **`quick-launch`** refusing a duplicate instance.  
-- Requires **`chutes_miner_ss58`** and **`chutes_miner_seed`** (host_vars / Vault) so **`chutes_vm_config`** can render **`config.yaml`** on the host.  
+- Requires **`chutes_hotkey_path`** (the hotkey's ss58 plus **`privateKey`**, else **`secretSeed`**), or explicit **`chutes_miner_ss58`** plus **`chutes_miner_private_key`** or **`chutes_miner_seed`** (host_vars / Vault), so **`chutes_vm_config`** can render **`config.yaml`** on the host.  
 - Rsync, prerequisites, download **only if missing**, **`include_role: chutes_vm_config`** (sets **`vm.hostname`** to **`inventory_hostname`** unless **`chutes_vm_hostname`**; picks **primary NIC** and a **guest `/24`** that does not overlap host IPv4, unless **`chutes_guest_bridge_network`** / **`chutes_public_interface`** override), then **`quick-launch.sh`**.  
 - Duplicate QEMU is still blocked in **`quick-launch.sh`** as a second line of defense (use **`--clean`** or **`--force`** only if intentional).
 

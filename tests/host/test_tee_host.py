@@ -1,0 +1,483 @@
+import os
+
+import pytest
+import topology_fixtures as known
+from chutes_cvm.guest import tee as tee_module
+from chutes_cvm.guest.context import (
+    DirectBoot,
+    GuestNetwork,
+    GuestVolumes,
+    LaunchContext,
+    PassthroughSet,
+    ProcessBundle,
+    SnpLaunchContext,
+    TdxLaunchContext,
+)
+from chutes_cvm.guest.host_class import MeasuredImage, SnpMeasuredImage
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider, TeeProvider
+
+# The launch-shaped inputs, named once.
+_LAUNCH = dict(
+    boot=DirectBoot(kernel="/dev/null", initrd="/dev/null", cmdline=""),
+    net=GuestNetwork(network_type="user", ssh_port=0),
+    volumes=GuestVolumes(),
+    process=ProcessBundle(name="chutes-td"),
+    passthrough=PassthroughSet(),
+)
+
+
+def _params(**enabled):
+    """Fake the kvm module parameter files."""
+
+    def _reader(path):
+        return enabled.get(path, False)
+
+    return _reader
+
+
+def test_the_enabled_platform_is_read_from_kvm_tdx(monkeypatch):
+    monkeypatch.setattr(
+        tee_module, "_module_param_enabled", _params(**{tee_module.KVM_INTEL_TDX: True})
+    )
+    assert TeeProvider.enabled_on_host() is TdxTeeProvider
+
+
+def test_the_enabled_platform_is_read_from_kvm_snp(monkeypatch):
+    monkeypatch.setattr(
+        tee_module,
+        "_module_param_enabled",
+        _params(**{tee_module.KVM_AMD_SEV_SNP: True}),
+    )
+    assert TeeProvider.enabled_on_host() is SnpTeeProvider
+
+
+def test_no_enabled_platform_is_an_error(monkeypatch):
+    # An AMD host with SEV-SNP disabled in BIOS still reports AMD, so detection
+    # keys off the kvm parameter rather than the CPU vendor.
+    monkeypatch.setattr(tee_module, "_module_param_enabled", _params())
+    with pytest.raises(RuntimeError, match="No confidential-computing platform"):
+        TeeProvider.enabled_on_host()
+
+
+@pytest.mark.parametrize(
+    "vendor, provider, name",
+    [
+        ("GenuineIntel", TdxTeeProvider, "tdx"),
+        (" AuthenticAMD ", SnpTeeProvider, "snp"),
+    ],
+)
+def test_the_platform_is_the_provider_its_silicon_runs(vendor, provider, name):
+    assert TeeProvider.for_cpu_vendor(vendor) is provider
+    assert provider.name == name
+
+
+def test_an_unknown_vendor_runs_no_platform():
+    with pytest.raises(ValueError, match="cannot determine the TEE"):
+        TeeProvider.for_cpu_vendor("SomeOtherVendor")
+
+
+def test_verify_environment_passes_when_its_own_platform_is_on(monkeypatch):
+    monkeypatch.setattr(
+        tee_module, "_module_param_enabled", _params(**{tee_module.KVM_INTEL_TDX: True})
+    )
+    TdxTeeProvider().verify_environment()  # does not raise
+
+
+def test_verify_environment_names_the_platform_that_is_actually_on(monkeypatch):
+    """An AMD class on a box reporting TDX: either the profile came from other hardware
+    or SEV-SNP is off in BIOS. Both are named, because the operator cannot tell which.
+    """
+    monkeypatch.setattr(
+        tee_module, "_module_param_enabled", _params(**{tee_module.KVM_INTEL_TDX: True})
+    )
+    with pytest.raises(RuntimeError) as exc:
+        SnpTeeProvider().verify_environment()
+
+    msg = str(exc.value)
+    assert "AMD SEV-SNP" in msg and "tdx enabled instead" in msg
+    assert tee_module.KVM_AMD_SEV_SNP in msg
+
+
+def test_verify_environment_when_no_platform_is_enabled(monkeypatch):
+    monkeypatch.setattr(tee_module, "_module_param_enabled", _params())
+    with pytest.raises(RuntimeError, match="no confidential-computing platform"):
+        SnpTeeProvider().verify_environment()
+
+
+def test_each_provider_carries_its_own_parameter_and_remedy():
+    """The remedy is platform-specific, so it lives on the provider. A single shared
+    message listed the AMD BIOS switches even when the failure was on an Intel host."""
+    assert TdxTeeProvider.kvm_param == tee_module.KVM_INTEL_TDX
+    assert SnpTeeProvider.kvm_param == tee_module.KVM_AMD_SEV_SNP
+    assert "SMEE" in SnpTeeProvider.enablement_hint
+    assert "SMEE" not in TdxTeeProvider.enablement_hint
+
+
+def test_only_tdx_supports_guest_numa():
+    """SNP stays flat until the pinned QEMU converts memory across guest_memfd backends."""
+    assert TdxTeeProvider.supports_guest_numa is True
+    assert SnpTeeProvider.supports_guest_numa is False
+
+
+def test_module_param_enabled_reads_y(tmp_path):
+    param = tmp_path / "sev_snp"
+    param.write_text("Y\n")
+    assert tee_module._module_param_enabled(str(param)) is True
+    param.write_text("N\n")
+    assert tee_module._module_param_enabled(str(param)) is False
+
+
+def test_module_param_enabled_missing_file_is_false():
+    assert tee_module._module_param_enabled("/nonexistent/param") is False
+
+
+def test_tdx_provider_emits_quote_socket():
+    tdx = TdxTeeProvider()
+    obj = tdx.guest_object()
+    assert '"qom-type":"tdx-guest"' in obj
+    # TDX quotes come from qgsd on the host over vsock; SNP has no equivalent.
+    assert "quote-generation-socket" in obj
+
+
+def test_tdx_machine_and_backend_are_unchanged():
+    tdx = TdxTeeProvider()
+    assert tdx.machine("mem0") == (
+        "q35,kernel_irqchip=split,confidential-guest-support=tdx,memory-backend=mem0"
+    )
+    assert tdx.machine(None) == (
+        "q35,kernel_irqchip=split,confidential-guest-support=tdx"
+    )
+    assert tdx.memory_backend("mem0", "8G") == "memory-backend-ram,id=mem0,size=8G"
+    assert tdx.memory_backend("mem-node1", "4096M", host_node=1) == (
+        "memory-backend-ram,id=mem-node1,size=4096M,host-nodes=1,policy=bind"
+    )
+
+
+def test_snp_guest_object_carries_cbit_policy_and_kernel_hashes():
+    obj = SnpTeeProvider().guest_object()
+    assert obj.startswith("sev-snp-guest,id=snp0")
+    # QEMU refuses a cbitpos that differs from the host's; neither value is measured.
+    assert "cbitpos=51" in obj
+    assert "reduced-phys-bits=1" in obj
+    # kernel-hashes is what puts the initrd in the launch measurement, which is
+    # what the measured-initrd key-release gate depends on.
+    assert "kernel-hashes=on" in obj
+
+
+def test_snp_policy_is_exactly_the_one_the_api_requires():
+    """chutes-api refuses any other report policy (SNP_REQUIRED_POLICY): SMT allowed (16) and
+    reserved bit 17, with DEBUG (19), MIGRATE_MA, CXL_ALLOW and all else clear. Change both
+    together."""
+    snp = SnpTeeProvider()
+    assert snp.policy == 0x30000
+    assert "policy=0x30000" in snp.guest_object()
+
+
+def test_snp_machine_disables_vmport():
+    snp = SnpTeeProvider()
+    machine = snp.machine("mem0")
+    assert "confidential-guest-support=snp0" in machine
+    assert "vmport=off" in machine
+    assert "memory-backend=mem0" in machine
+
+
+def test_snp_memory_backend_is_shared_memfd():
+    snp = SnpTeeProvider()
+    # SNP private memory is served from guest_memfd; memory-backend-ram fails.
+    assert snp.memory_backend("mem0", "8G") == (
+        "memory-backend-memfd,id=mem0,size=8G,share=on"
+    )
+    assert snp.memory_backend("mem-node0", "4096M", host_node=0) == (
+        "memory-backend-memfd,id=mem-node0,size=4096M,share=on,host-nodes=0,policy=bind"
+    )
+
+
+def _base_cmd(tee, tmp_path, host_nodes=()):
+    return known.launch_command(
+        known.QemuProfileStub(
+            mem="8G",
+            smp_topology="cpus=4,sockets=1,cores=2,threads=2",
+            uses_guest_numa=len(host_nodes) >= 2,
+            tee_provider=tee,
+        ),
+        firmware=str(tmp_path / "OVMF.fd"),
+        img_path=str(tmp_path / "root.qcow2"),
+        host_nodes=list(host_nodes),
+        **_LAUNCH,
+    )
+
+
+def test_launch_command_with_tdx_provider(tmp_path):
+    args = " ".join(_base_cmd(TdxTeeProvider(), tmp_path).to_args())
+    assert "tdx-guest" in args
+    assert "memory-backend-ram,id=mem0" in args
+    assert "product=TDX-VM" in args
+
+
+def test_launch_command_refuses_host_nodes_that_contradict_the_profile(tmp_path):
+    """One source of truth for guest shape. A host whose live NUMA disagrees with its
+    captured profile would otherwise get PXB bridges pinned from the profile and flat
+    memory args derived from sysfs -- a command no measurement was generated for."""
+    with pytest.raises(ValueError, match="does not match the profile"):
+        known.launch_command(
+            _tdx_stub(uses_guest_numa=True),
+            firmware=str(tmp_path / "OVMF.fd"),
+            img_path=str(tmp_path / "root.qcow2"),
+            host_nodes=[],  # profile says NUMA, the machine reports one node
+            **_LAUNCH,
+        )
+
+
+def _tdx_stub(**over):
+    return known.QemuProfileStub(
+        mem="8G", smp_topology="cpus=4,sockets=1,cores=2,threads=2", **over
+    )
+
+
+def test_launch_command_with_snp_provider(tmp_path):
+    args = " ".join(_base_cmd(SnpTeeProvider(), tmp_path).to_args())
+    assert "sev-snp-guest,id=snp0" in args
+    assert "memory-backend-memfd,id=mem0,size=8G,share=on" in args
+    assert "confidential-guest-support=snp0" in args
+    assert "vmport=off" in args
+    assert "product=SNP-VM" in args
+    assert "tdx-guest" not in args
+
+
+def test_launch_command_snp_numa_backends_are_memfd(tmp_path):
+    cmd = _base_cmd(SnpTeeProvider(), tmp_path, host_nodes=[0, 1])
+    backends = [o for o in cmd.objects if o.startswith("memory-backend")]
+    assert len(backends) == 2
+    assert all("memory-backend-memfd" in b and "share=on" in b for b in backends)
+    assert all("policy=bind" in b for b in backends)
+
+
+# ── the platform is a property of the host class, not a detection ─────────────
+
+
+def _profile(vendor):
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    return HostProfile.from_dict(
+        known.host_document(
+            "RTX_PRO_6000", vcpus=124, gpu_nodes=(0,) * 8, cpu_vendor=vendor
+        )
+    )
+
+
+def test_host_profile_derives_its_own_platform():
+    """A class is Intel or AMD silicon, so the profile already determines the TEE --
+    nothing needs to be detected or passed alongside it. The provider IS the identity;
+    there is no platform string beside it to disagree with."""
+    assert isinstance(_profile("GenuineIntel").tee_provider, TdxTeeProvider)
+    assert isinstance(_profile("AuthenticAMD").tee_provider, SnpTeeProvider)
+
+
+def test_derived_platform_selects_its_own_firmware():
+    """Firmware is a property of the platform, so it follows from the profile too."""
+    assert _profile("GenuineIntel").tee_provider.default_firmware == "OVMF.inteltdx.fd"
+    assert _profile("AuthenticAMD").tee_provider.default_firmware == "OVMF.amdsev.fd"
+
+
+def test_launch_command_uses_the_derived_platform(tmp_path):
+    """The command a host launches with carries its own platform's guest object and flags."""
+    intel = _base_cmd(TdxTeeProvider(), tmp_path)
+    amd = _base_cmd(SnpTeeProvider(), tmp_path)
+
+    assert "tdx-guest" in intel.tee_object
+    assert "sev-snp-guest" in amd.tee_object
+    assert "vmport=off" in amd.machine and "vmport=off" not in intel.machine
+
+
+def test_only_a_tdx_guest_gets_the_vsock_its_quotes_travel_over(tmp_path):
+    """SNP reports come from the PSP, so an SNP guest has no host service to reach and no vsock
+    device; a TDX guest keeps the one its quote-generation socket dials."""
+    vsock = "vhost-vsock-pci,guest-cid=3"
+    intel = _base_cmd(TdxTeeProvider(), tmp_path)
+    amd = _base_cmd(SnpTeeProvider(), tmp_path)
+
+    assert TdxTeeProvider().devices() == (vsock,)
+    assert SnpTeeProvider().devices() == ()
+    assert sum(d.startswith(vsock) for d in intel.devices) == 1
+    assert not any("vsock" in d for d in amd.devices)
+
+
+def test_measurement_command_declares_no_confidential_guest(tmp_path):
+    """The dump runs plain q35: its QEMU has no confidential-guest support, so the command must
+    name neither a guest object nor a CC machine -- on either platform."""
+    for vendor in ("GenuineIntel", "AuthenticAMD"):
+        cmd = known.measurement_command(
+            _profile(vendor), firmware=str(tmp_path / "f.fd")
+        )
+        assert cmd.tee_object is None
+        assert "confidential-guest-support" not in cmd.machine
+
+
+def test_the_dump_machine_reproduces_each_platform_s_tables(tmp_path):
+    """The dump must yield the launch's ACPI byte for byte, so it carries what each platform
+    switches off implicitly: a TD has neither SMM nor the PIC; an SNP guest has no SMM but keeps
+    the PIC, and launches with vmport=off. Checked live on SNP: with SMM on, the dump's FADT
+    carries an SMI_CMD port the guest's does not."""
+    intel = known.measurement_command(
+        _profile("GenuineIntel"), firmware=str(tmp_path / "f.fd")
+    ).machine
+    amd = known.measurement_command(
+        _profile("AuthenticAMD"), firmware=str(tmp_path / "f.fd")
+    ).machine
+
+    assert intel.startswith("q35,kernel_irqchip=split,smm=off,pic=off")
+    assert amd.startswith("q35,kernel_irqchip=split,vmport=off,smm=off")
+    assert "pic=off" not in amd
+
+
+def test_unknown_vendor_has_no_platform():
+    """Fail on the profile rather than silently defaulting to one platform."""
+    with pytest.raises(ValueError, match="cannot determine the TEE"):
+        _profile("SomeOtherVendor").tee_provider
+
+
+@pytest.mark.parametrize("vendor", ["GenuineIntel", "AuthenticAMD"])
+def test_the_dump_machine_is_the_launch_machine_without_the_guest_object(
+    vendor, tmp_path
+):
+    """Derived, not restated: drop confidential-guest-support, spell out what the platform
+    switches off implicitly. Nothing else may differ, or the dumped tables do."""
+    profile = _profile(vendor)
+    launch = profile.tee_provider.machine(None).split(",")
+    dump = known.measurement_command(profile, firmware=str(tmp_path / "f.fd")).machine
+    expected = [o for o in launch if not o.startswith("confidential-guest-support=")]
+    expected += profile.tee_provider.implicit_machine_opts
+    assert [
+        o for o in dump.split(",") if not o.startswith("memory-backend=")
+    ] == expected
+
+
+@pytest.mark.parametrize(
+    "vendor, context_type",
+    [("GenuineIntel", TdxLaunchContext), ("AuthenticAMD", SnpLaunchContext)],
+)
+def test_a_launch_context_is_its_host_s_platform(vendor, context_type):
+    assert LaunchContext.type_for(_profile(vendor)) is context_type
+
+
+def test_an_snp_launch_carries_the_acpi_value_as_one_parameter():
+    compose = SnpLaunchContext.with_acpi
+    assert (
+        compose("root=UUID=x ro", "a" * 64)
+        == f"root=UUID=x ro sek8s.acpi_sha256={'a' * 64}"
+    )
+    # No stray separator: the measured string must be exactly what the launch boots.
+    assert compose("", "unverified") == "sek8s.acpi_sha256=unverified"
+
+
+def test_platform_lookups_search_every_platform_whichever_class_asks():
+    """Called through a provider (as verify_environment does), the lookup still sees both."""
+    assert SnpTeeProvider.for_cpu_vendor("GenuineIntel") is TdxTeeProvider
+
+
+def _staged_image(tmp_path):
+    image = tmp_path / "vm.qcow2"
+    image.write_bytes(b"")
+    for ext, body in (
+        ("vmlinuz", b"k"),
+        ("initrd", b"i"),
+        ("cmdline", b"root=UUID=x ro\n"),
+    ):
+        (tmp_path / f"vm.{ext}").write_bytes(body)
+    return str(image)
+
+
+def _setup(tmp_path, pass_gpus=True):
+    """What the launch's setup steps hand the context factories."""
+    return dict(
+        image=_staged_image(tmp_path),
+        volumes=GuestVolumes(),
+        network=GuestNetwork(network_type="user", ssh_port=0),
+        process=ProcessBundle(name="chutes-td"),
+        pass_gpus=pass_gpus,
+    )
+
+
+@pytest.mark.parametrize(
+    "vendor, context_type",
+    [("GenuineIntel", TdxLaunchContext), ("AuthenticAMD", SnpLaunchContext)],
+)
+def test_a_host_s_launch_context_reads_its_image_s_boot_artifacts(
+    vendor, context_type, tmp_path, monkeypatch
+):
+    """The one place a launch's I/O happens: the staged kernel/initrd/cmdline and, for a NUMA
+    guest, the host's online nodes. The build itself reads nothing."""
+    import chutes_cvm.guest.context as context_module
+
+    monkeypatch.setattr(context_module, "host_numa_nodes", lambda: [0, 1])
+    host = _profile(vendor)
+    context = LaunchContext.from_host(host, None, **_setup(tmp_path))
+    assert type(context) is context_type
+    assert context.boot.cmdline == "root=UUID=x ro"
+    assert context.firmware.endswith(host.tee_provider.default_firmware)
+    assert context.host_nodes == ((0, 1) if host.uses_guest_numa else ())
+    assert context.passthrough == PassthroughSet.from_profile(host)
+
+
+def test_a_no_gpus_launch_names_no_devices(tmp_path):
+    context = LaunchContext.from_host(
+        _profile("GenuineIntel"), None, **_setup(tmp_path, pass_gpus=False)
+    )
+    assert context.passthrough == PassthroughSet()
+
+
+def test_an_snp_launch_boots_the_hash_published_for_its_image(tmp_path):
+    """The firmware checks the tables against the published hash, so it rides the measured
+    cmdline -- the same string the SEV-SNP measurement digests."""
+    context = LaunchContext.from_host(
+        _profile("AuthenticAMD"),
+        SnpMeasuredImage(version="1.5.0", rc=False, acpi_sha256=known.ACPI_SHA256),
+        **_setup(tmp_path),
+    )
+    assert context.kernel_cmdline == SnpLaunchContext.with_acpi(
+        "root=UUID=x ro", known.ACPI_SHA256
+    )
+
+
+def test_an_snp_test_boot_tells_the_firmware_it_is_unverified(tmp_path):
+    context = LaunchContext.from_host(
+        _profile("AuthenticAMD"), None, **_setup(tmp_path)
+    )
+    assert context.kernel_cmdline == "root=UUID=x ro sek8s.acpi_sha256=unverified"
+
+
+@pytest.mark.parametrize("measured", [True, False])
+def test_a_tdx_launch_boots_the_image_s_own_cmdline(measured, tmp_path):
+    """ACPI is attested through RTMR0 on TDX: a measured launch and a test boot are the same
+    guest."""
+    entry = MeasuredImage(version="1.5.0", rc=False) if measured else None
+    context = LaunchContext.from_host(
+        _profile("GenuineIntel"), entry, **_setup(tmp_path)
+    )
+    assert type(context) is TdxLaunchContext
+    assert context.kernel_cmdline == "root=UUID=x ro"
+
+
+def test_an_snp_launch_refuses_an_entry_without_its_hash(tmp_path):
+    with pytest.raises(TypeError, match="SnpMeasuredImage"):
+        LaunchContext.from_host(
+            _profile("AuthenticAMD"),
+            MeasuredImage(version="1.5.0", rc=False),
+            **_setup(tmp_path),
+        )
+
+
+def test_host_numa_nodes_reads_the_online_nodes(tmp_path, monkeypatch):
+    import chutes_cvm.guest.context as context_module
+
+    for name in ("node1", "node0", "possible", "nodeX"):
+        (tmp_path / name).mkdir()
+    real_listdir = os.listdir
+    monkeypatch.setattr(
+        context_module.os,
+        "listdir",
+        lambda path: (
+            real_listdir(tmp_path) if path == "/sys/devices/system/node" else []
+        ),
+    )
+    assert context_module.host_numa_nodes() == [0, 1]

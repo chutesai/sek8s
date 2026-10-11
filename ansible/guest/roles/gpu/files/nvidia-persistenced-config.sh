@@ -9,7 +9,7 @@
 # fleet-wide. /run is tmpfs and outside the measured set, so a per-host value can vary
 # there without touching the measurement.
 #
-# Do not write anywhere under a path listed in tdx-measure-{gpu,miner}.conf from this or
+# Do not write anywhere under a path listed in tee-measure-{gpu,miner}.conf from this or
 # any other boot-time script.
 set -euo pipefail
 

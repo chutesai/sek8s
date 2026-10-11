@@ -7,8 +7,13 @@ from unittest.mock import patch
 
 import pytest
 import topology_fixtures as known
-from chutes_cvm.guest.detection import verify_host_qemu_supported
-from chutes_cvm.guest.gpu.profiles import GPU_PROFILES, GpuProfile, resolve_profile
+from chutes_cvm.guest.detection import detect_gpu_device_ids, verify_host_qemu_supported
+from chutes_cvm.guest.gpu.profiles import (
+    GPU_PROFILES,
+    GpuProfile,
+    profile_for_device_ids,
+)
+from chutes_cvm.guest.host_profile import HostProfile
 
 # ---------------------------------------------------------------------------
 # Host-shape fixtures: the RTMR0-determining host facts carried on the topology
@@ -156,7 +161,7 @@ def test_blackwell_hgx_never_passes_through_nvswitches(model_key, gpu_count):
     assert profile.should_passthrough_nvswitches(gpu_count) is False
 
 
-@pytest.mark.parametrize("model_key", ["B200", "B300", "RTX_PRO_6000"])
+@pytest.mark.parametrize("model_key", ["B200", "B300", "H100_PCIE", "RTX_PRO_6000"])
 def test_cc_mode_profiles_use_cc_sbr_reset(model_key):
     profile = GPU_PROFILES[model_key]
     args = profile.get_sbr_reset_args()
@@ -222,10 +227,10 @@ def _sample_hosts():
     from chutes_cvm.guest.host_profile import HostProfile
 
     return [
-        ("h200-nvsw0", HostProfile(known.h200_doc())),
-        ("h200-nvsw1", HostProfile(known.h200_doc(nvswitch_node=1))),
-        ("rtx-numa", HostProfile(known.rtx_numa_doc())),
-        ("rtx-flat", HostProfile(known.rtx_flat_doc())),
+        ("h200-nvsw0", HostProfile.from_dict(known.h200_doc())),
+        ("h200-nvsw1", HostProfile.from_dict(known.h200_doc(nvswitch_node=1))),
+        ("rtx-numa", HostProfile.from_dict(known.rtx_numa_doc())),
+        ("rtx-flat", HostProfile.from_dict(known.rtx_flat_doc())),
     ]
 
 
@@ -265,57 +270,6 @@ def test_vcpus_divisible_by_sockets(name, host):
 def test_threads_is_one(name, host):
     """threads=1 must always be set (no guest SMT)."""
     assert "threads=1" in host.smp_topology
-
-
-# ---------------------------------------------------------------------------
-# resolve_profile: resolution logic
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("model_key", list(GPU_PROFILES.keys()))
-def test_resolve_profile_returns_correct_type(model_key):
-    models = {"0000:41:00.0": model_key}
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES[model_key]
-
-
-def test_resolve_profile_with_multiple_identical_gpus():
-    models = {f"0000:4{i}:00.0": "RTX_PRO_6000" for i in range(8)}
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES["RTX_PRO_6000"]
-
-
-def test_resolve_profile_filters_out_default_entries():
-    """'default' entries (unrecognized GPUs) are ignored if a real model exists."""
-    models = {
-        "0000:41:00.0": "B200",
-        "0000:42:00.0": "default",
-        "0000:43:00.0": "default",
-    }
-    profile = resolve_profile(models)
-    assert profile is GPU_PROFILES["B200"]
-
-
-def test_resolve_profile_rejects_mixed_models():
-    models = {
-        "0000:41:00.0": "B200",
-        "0000:42:00.0": "H200",
-    }
-    with pytest.raises(ValueError, match="Mixed GPU models"):
-        resolve_profile(models)
-
-
-def test_resolve_profile_rejects_unsupported_model():
-    models = {"0000:41:00.0": "TITAN_V"}
-    with pytest.raises(ValueError, match="Unsupported GPU model"):
-        resolve_profile(models)
-
-
-def test_resolve_profile_rejects_all_default():
-    """If every GPU is 'default' (unrecognized), resolution must fail."""
-    models = {"0000:41:00.0": "default", "0000:42:00.0": "default"}
-    with pytest.raises(ValueError, match="No supported GPU models"):
-        resolve_profile(models)
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +360,7 @@ def test_nvswitch_requiring_profile_refuses_a_host_with_none():
     doc = tf.h200_doc()
     doc["nvswitches"] = []
     with pytest.raises(ValueError, match="requires NVSwitches"):
-        HostProfile(doc).attached_nvswitches
+        HostProfile.from_dict(doc).attached_nvswitches
 
 
 @pytest.mark.parametrize("model", sorted(known.CAPTURED_GPU_BARS))
@@ -486,3 +440,101 @@ def test_b300_vcpus_derive_from_a_256_cpu_host():
     """256-CPU B300 sleds need no new profile: vcpus come from the live host."""
     profile = GPU_PROFILES["B300"]
     assert 256 - profile.host_reserved_cpus == 252
+
+
+# ---------------------------------------------------------------------------
+# H100 PCIe: CC mode only, no NVLink fabric
+# ---------------------------------------------------------------------------
+
+
+def test_h100_pcie_is_10de_2331_as_the_api_names_it():
+    profile = GPU_PROFILES["H100_PCIE"]
+    assert profile.matches_device_id("2331")
+    assert profile.vram_gb == 80
+    # The API's "h100" is the PCIe card (model_name_check "H100.*PCIe"); SXM is "h100_sxm".
+    assert profile.expected_gpus == ["h100"]
+
+
+@pytest.mark.parametrize("gpu_count", [1, 2, 4, 8])
+def test_h100_pcie_uses_cc_mode_at_any_count(gpu_count):
+    """PPCIe protects an NVLink fabric the PCIe card does not have."""
+    profile = GPU_PROFILES["H100_PCIE"]
+    assert profile.get_cc_mode_args(gpu_count) == [
+        ["--set-cc-mode=on", "--reset-after-cc-mode-switch"]
+    ]
+    assert profile.should_passthrough_nvswitches(gpu_count) is False
+
+
+def test_the_h100_box_derives_the_class_its_vm_boots_as():
+    """g3-h100-small-dal-1 as discover-profile.sh captured it: 1x EPYC 9124, 32 threads, 187 GB,
+    one H100 PCIe. These are the vCPU count and signature its live SEV-SNP report was taken at
+    (tests/measurement/test_snp.py::test_h100_genoa_report_is_reproduced)."""
+    host = HostProfile.from_dict(
+        known.host_document(
+            "H100_PCIE",
+            vcpus=28,
+            gpu_nodes=(0,),
+            sockets=1,
+            cpu_vendor="AuthenticAMD",
+            cpu_processor_id="110fa100fffba91f",
+            host_mem_gb=187,
+            numa_node_count=1,
+        )
+    )
+    assert host.gpu_profile is GPU_PROFILES["H100_PCIE"]
+    assert host.cpu.count == 32 and host.vcpus == 28
+    assert host.guest_mem_gb == 80
+    assert host.uses_guest_numa is False
+    assert host.variant_label == "flat-28c-80g"
+    assert type(host.tee_provider).__name__ == "SnpTeeProvider"
+
+
+# ---------------------------------------------------------------------------
+# One lookup from a host's GPU device ids to its profile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model_key", sorted(GPU_PROFILES))
+def test_every_profile_is_found_by_its_device_id(model_key):
+    profile = GPU_PROFILES[model_key]
+    assert profile_for_device_ids({profile.pci_device_id.upper()}) is profile
+
+
+@pytest.mark.parametrize(
+    "ids, match",
+    [
+        (set(), "found none"),
+        ({"2331", "2335"}, "mixed"),
+        ({"dead"}, "no GPU profile matches"),
+    ],
+)
+def test_profile_lookup_refuses_what_it_cannot_describe(ids, match):
+    with pytest.raises(ValueError, match=match):
+        profile_for_device_ids(ids)
+
+
+_LSPCI = """\
+0000:82:00.0 3D controller [0302]: NVIDIA Corporation GH100 [H100 PCIe] [10de:2331] (rev a1)
+0000:83:00.0 Bridge [0680]: NVIDIA Corporation GH100 [H100 NVSwitch] [10de:22a3] (rev a1)
+0000:cb:00.0 VGA compatible controller [0300]: ASPEED Technology, Inc. ASPEED Graphics Family [1a03:2000] (rev 52)
+"""
+
+
+def test_gpu_device_ids_come_from_the_gpu_classes_only():
+    """NVSwitches are NVIDIA but not GPUs; a BMC's VGA is a display controller but not NVIDIA."""
+    with patch(
+        "chutes_cvm.guest.detection.proc.check_output", return_value=_LSPCI.encode()
+    ):
+        assert detect_gpu_device_ids() == {"2331"}
+
+
+def test_cpu_vendor_comes_from_proc_cpuinfo():
+    from unittest.mock import mock_open
+
+    from chutes_cvm.guest.detection import detect_cpu_vendor
+
+    cpuinfo = "processor\t: 0\nvendor_id\t: AuthenticAMD\ncpu family\t: 25\n"
+    with patch("builtins.open", mock_open(read_data=cpuinfo)):
+        assert detect_cpu_vendor() == "AuthenticAMD"
+    with patch("builtins.open", side_effect=OSError):
+        assert detect_cpu_vendor() == ""

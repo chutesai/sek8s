@@ -10,9 +10,10 @@
 #
 # SysRq 'b' calls the kernel's emergency_restart() directly, bypassing service
 # and device shutdown, so it reboots even when device_shutdown would hang. We
-# enable SysRq, fire an emergency sync ('s') to limit filesystem damage, then
-# boot ('b'). The s/sleep/b sequence is backgrounded with nohup so the abrupt
-# disconnect doesn't look like a task failure.
+# enable SysRq, fire an emergency sync ('s'), remount every filesystem read-only
+# ('u') so the root fs is not left dirty by the abrupt reset, then boot ('b').
+# The sequence is backgrounded with nohup so the abrupt disconnect doesn't look
+# like a task failure.
 #
 # Expects: upgrade_reboot_timeout_seconds (max seconds to wait for SSH to return).
 
@@ -20,7 +21,9 @@
   ansible.builtin.shell: |
     set -eu
     echo 1 > /proc/sys/kernel/sysrq
-    nohup bash -c 'echo s > /proc/sysrq-trigger; sleep 3; echo b > /proc/sysrq-trigger' \
+    nohup bash -c 'echo s > /proc/sysrq-trigger; sleep 3
+                   echo u > /proc/sysrq-trigger; sleep 3
+                   echo b > /proc/sysrq-trigger' \
       >/dev/null 2>&1 &
   args:
     executable: /bin/bash

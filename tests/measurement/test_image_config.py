@@ -6,8 +6,11 @@ launch's measured ACPI. The byte-exact acceptance (== box-028) runs in the
 tdx-measure container, not here.
 """
 
+from dataclasses import replace
+
 import pytest
 import topology_fixtures as known
+from chutes_cvm.guest.context import MeasurementContext
 from chutes_cvm.guest.host_profile import HostProfile
 from chutes_cvm.measurement.image_config import ImageConfig
 
@@ -15,10 +18,8 @@ _FW = "/opt/ovmf/OVMF.fd"
 
 
 def _md(doc, **kw):
-    host = HostProfile(doc)
-    cmd = host.qemu_command(
-        firmware=_FW, cpu_args="host,-avx10", process_name="chutes-measure"
-    )
+    host = HostProfile.from_dict(doc)
+    cmd = known.measurement_command(host, firmware=_FW)
     return ImageConfig(cmd, host, acpi_tables="/out/acpi.bin", **kw).to_dict()
 
 
@@ -108,23 +109,18 @@ def test_nvswitch_endpoint_modeled():
 
 
 def test_endpoint_without_captured_bars_raises():
-    # A root port whose device captured no BARs fails loudly (ValueError); an unrecognized bus is
-    # NotImplementedError — never a silent wrong measurement. There is no table to fall back on:
-    # BAR2 is resizable, so only the host knows its own layout.
-    host = HostProfile(
+    """The stub reproduces the guest's MMIO windows from the captured BARs, so without them the
+    generated RTMR0 matches no real boot -- refuse rather than measure a wrong aperture.
+    """
+    host = HostProfile.from_dict(
         known.host_document(
             "H200", vcpus=124, gpu_nodes=(0,) * 8, nvswitch_nodes=(0,) * 4
         )
     )
-    md = ImageConfig(
-        host.qemu_command(firmware=_FW, cpu_args="host"),
-        host,
-        acpi_tables="/out/a.bin",
-    )
+    bare = replace(host.gpus[0], bars=[])
+
     with pytest.raises(ValueError, match="no BARs captured"):
-        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_ib1")
-    with pytest.raises(NotImplementedError, match="unrecognized passthrough bus"):
-        md._swap_endpoint("vfio-pci,host=0000:01:00.0,bus=rp_weird")
+        MeasurementContext.from_host(host, firmware=_FW).endpoint(host, bare, "rp_ib1")
 
 
 def test_emulated_slot_fillers_keep_the_slots_the_command_assigned():

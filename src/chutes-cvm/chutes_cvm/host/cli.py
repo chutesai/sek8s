@@ -11,6 +11,8 @@ top-level ``host`` passthrough in ``chutes_cvm.cli``.
   chutes-cvm host tune / restore   # NVIDIA host CPU tuning, and revert
   chutes-cvm host reset-gpus       # reset all GPUs via nvidia-gpu-tools SBR
   chutes-cvm host vfio-wedged      # exit 0 if host PCI passthrough is wedged and needs a reset
+  chutes-cvm host devices-free     # exit 0 if nothing holds the passthrough devices
+                                   #   (note: normal exit sense, unlike vfio-wedged)
 
 reset-gpus / vfio-wedged act on host hardware (GPUs, the PCI subsystem) and are useful with or
 without a running guest, so they live under ``host``, not ``guest``.
@@ -77,18 +79,18 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     # profile and POSTs it for baselining. No image / version / readiness gate — that is `host
     # verify`, which needs a downloaded image to know which measurement to check against. A fresh
     # host (no image yet) is exactly when you submit, so requiring the image here was wrong.
+    from chutes_cvm.guest.chutes_api import ChutesApiError, submit_profile
     from chutes_cvm.guest.detection import (
         SUPPORTED_QEMU_BY_OS,
         verify_host_qemu_supported,
     )
-    from chutes_cvm.guest.preflight import PreflightError, submit_profile
 
     print(_color("── chutes-cvm: host class submission ──", "1;36"))
     target_os = getattr(args, "target_os", None)
     if target_os:
         # Register the class this host will BE after the upgrade: the OS release picks the
         # QEMU that generates the measured guest ACPI, so the profile's release, QEMU and
-        # -cpu args are all rewritten together (chutes_cvm.guest.preflight._apply_target_os).
+        # -cpu args are all rewritten together (chutes_cvm.guest.chutes_api._apply_target_os).
         expected = SUPPORTED_QEMU_BY_OS.get(target_os)
         if expected is None:
             print(
@@ -117,18 +119,18 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
             )
             print(_color("\nResult: FAILED", "1;31"))
             return 1
+    from chutes_cvm.guest.host_profile import HostProfile
+
+    try:
+        host = HostProfile.from_host()
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Registration failed: cannot read this host: {exc}")
+        print(_color("\nResult: FAILED", "1;31"))
+        return 1
     if getattr(args, "dry_run", False):
         # Print what WOULD be submitted, without submitting. The document is the whole of what
         # the class is keyed on, so two hosts printing the same document are one class -- which
         # makes this the check for "did my reconciled row match the real host?".
-        from chutes_cvm.guest.host_profile import HostProfile
-
-        try:
-            host = HostProfile.from_host()
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(f"Registration failed: cannot read this host: {exc}")
-            print(_color("\nResult: FAILED", "1;31"))
-            return 1
         document = host.to_api_profile()
         if target_os:
             document["qemu"]["qemu_version"] = SUPPORTED_QEMU_BY_OS[target_os]
@@ -139,10 +141,11 @@ def _cmd_submit_profile(args: argparse.Namespace) -> int:
     try:
         result = submit_profile(
             config_path=args.config,
+            host_profile=host,
             api_base=args.api,
             target_os=target_os,
         )
-    except PreflightError as exc:
+    except ChutesApiError as exc:
         print(f"Registration failed: {exc}")
         print(_color("\nResult: FAILED", "1;31"))
         return 1
@@ -169,9 +172,42 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_platform(args: argparse.Namespace) -> int:
+    """Print this host's confidential-computing platform (tdx / snp), from its CPU vendor.
+
+    ``--check`` also verifies the platform is switched on -- the kvm module parameter its provider
+    owns, the same check a launch makes -- and fails with that platform's remedy if it is not.
+    """
+    from chutes_cvm.guest.detection import detect_cpu_vendor
+    from chutes_cvm.guest.tee import TeeProvider
+
+    try:
+        provider = TeeProvider.for_cpu_vendor(detect_cpu_vendor())()
+        if args.check:
+            provider.verify_environment()
+    except (ValueError, RuntimeError) as exc:
+        print(f"chutes-cvm host platform: {exc}", file=sys.stderr)
+        return 1
+    print(provider.name)
+    return 0
+
+
 def _cmd_reset_gpus(args: argparse.Namespace) -> int:
-    """Reset all host GPUs via nvidia-gpu-tools SBR (delegates to devices/reset-gpus.sh)."""
-    return _run_script("devices/reset-gpus.sh", [])
+    """Reset all host GPUs via nvidia-gpu-tools SBR.
+
+    Whether that is the CC or the PPCIe reset is the GPU profile's call
+    (``GpuProfile.get_sbr_reset_args``), the same one a launch makes when it escalates to SBR;
+    devices/reset-gpus.sh runs it behind its safety checks.
+    """
+    from chutes_cvm.guest.detection import detect_gpu_device_ids
+    from chutes_cvm.guest.gpu.profiles import profile_for_device_ids
+
+    try:
+        profile = profile_for_device_ids(detect_gpu_device_ids())
+    except ValueError as exc:
+        print(f"chutes-cvm host reset-gpus: {exc}", file=sys.stderr)
+        return 1
+    return _run_script("devices/reset-gpus.sh", profile.get_sbr_reset_args())
 
 
 def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
@@ -181,6 +217,29 @@ def _cmd_vfio_wedged(args: argparse.Namespace) -> int:
     from chutes_cvm.vfio import pci_operations_wedged
 
     return 0 if pci_operations_wedged() else 1
+
+
+def _cmd_devices_free(args: argparse.Namespace) -> int:
+    """Exit 0 if nothing holds this host's passthrough devices, 1 if something does.
+
+    The same ``guest.vm.device_blockers`` a launch checks, exposed because the callers that
+    need it are not all launches: `host reset-gpus` must not SBR devices a QEMU still holds,
+    and host Ansible must not open the guest image while one holds its write lock. Exposing it
+    is what stops those growing their own copy of the detection -- which is how four copies of
+    it came to disagree, every one of them blind to a reclaiming QEMU.
+
+    Note the exit sense is the conventional one: 0 means OK. ``vfio-wedged`` exits 0 when it
+    finds a problem, and reproducing that here would make every `if` around this read backwards.
+    """
+    from chutes_cvm.guest.vm import device_blockers
+
+    blockers = device_blockers()
+    if not blockers:
+        print("Nothing holds this host's passthrough devices.")
+        return 0
+    for blocker in blockers:
+        print(blocker.detail, file=sys.stderr)
+    return 1
 
 
 def _add_api_args(p: argparse.ArgumentParser) -> None:
@@ -220,7 +279,7 @@ def main(argv: "list[str] | None" = None) -> int:
     sub.add_parser(
         "setup",
         add_help=False,
-        help="Provision this TDX host (args forwarded; `chutes-cvm host setup --help`).",
+        help="Provision this TDX or SEV-SNP host (args forwarded; `chutes-cvm host setup --help`).",
     )
 
     verify = sub.add_parser(
@@ -277,11 +336,33 @@ def main(argv: "list[str] | None" = None) -> int:
     )
     restore.set_defaults(func=_cmd_restore)
 
+    platform = sub.add_parser(
+        "platform",
+        help="Print this host's confidential-computing platform: tdx or snp.",
+        description=(
+            "Print the platform this host's CPU runs (Intel = tdx, AMD = snp). With --check, also "
+            "verify it is enabled, as a launch would, and exit 1 with the remedy if not."
+        ),
+    )
+    platform.add_argument(
+        "--check",
+        action="store_true",
+        help="also verify the platform is enabled (exit 1 with the BIOS/kernel remedy if not)",
+    )
+    platform.set_defaults(func=_cmd_platform)
+
     reset = sub.add_parser(
         "reset-gpus",
         help="Reset all host GPUs via nvidia-gpu-tools SBR (stop any VM first).",
     )
     reset.set_defaults(func=_cmd_reset_gpus)
+
+    safe = sub.add_parser(
+        "devices-free",
+        help="Exit 0 if nothing holds the passthrough devices — no VM running, no previous "
+        "guest still reclaiming its memory, no wedged PCI; 1 otherwise, printing each reason.",
+    )
+    safe.set_defaults(func=_cmd_devices_free)
 
     vfio = sub.add_parser(
         "vfio-wedged",

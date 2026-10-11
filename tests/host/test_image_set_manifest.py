@@ -42,14 +42,19 @@ def test_generated_set_verifies_in_place(tmp_path):
 
     assert image_set.main(["manifest", str(qcow2), "--version", "1.4.0"]) == 0
 
-    assert image_set.resolve(str(tmp_path), full=True)[0] == str(qcow2)
+    image = image_set.ImageSet.from_dir(str(tmp_path))
+    image.verify(full=True)
+    assert image.qcow2.path == str(qcow2)
 
 
 def test_manifest_output_override_still_honored(tmp_path):
     qcow2 = _make_set(tmp_path)
     out = tmp_path / "custom.manifest.json"
 
-    assert image_set.main(["manifest", str(qcow2), "-o", str(out)]) == 0
+    assert (
+        image_set.main(["manifest", str(qcow2), "--version", "1.4.0", "-o", str(out)])
+        == 0
+    )
 
     assert out.exists()
     assert not (tmp_path / "manifest.json").exists()

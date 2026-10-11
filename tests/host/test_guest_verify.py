@@ -1,7 +1,7 @@
 """Tests for the host-readiness verify entrypoint (chutes_cvm.guest.verify).
 
 verify_host is API-backed: Gate A is the local QEMU check; Gate B asks
-POST /servers/tdx/host_profiles/status (run_host_class_status) whether this host CLASS is known and
+POST /servers/{tdx,snp}/host_profiles/status (HostClass.fetch) whether this host CLASS is known and
 which published images cover it. Gate B is version-free — a host is verified before it has
 downloaded any image — so a missing image or manifest must never block it. A downloaded image is
 only checked against the covered set as a note. Any status-call failure fails closed to BLOCKED;
@@ -11,8 +11,10 @@ only checked against the covered set as a note. Any status-call failure fails cl
 from contextlib import ExitStack
 from unittest.mock import patch
 
+import topology_fixtures as known
 from chutes_cvm.guest import verify
-from chutes_cvm.guest.preflight import PreflightError
+from chutes_cvm.guest.chutes_api import ChutesApiError
+from chutes_cvm.guest.host_profile import HostProfile
 
 COVERED = [{"version": "1.4.0", "rc": False}, {"version": "1.4.0", "rc": True}]
 
@@ -35,14 +37,22 @@ def _patch(
     )
     if qemu_raises:
         gate.side_effect = ValueError("qemu 10.1.0 != expected 10.2.1")
-    img = stack.enter_context(patch("chutes_cvm.guest.verify._image_version_rc"))
+    img = stack.enter_context(patch("chutes_cvm.guest.verify._image_set"))
     if local_image is None:
         img.side_effect = FileNotFoundError("no manifest")
     else:
-        img.return_value = local_image
-    st = stack.enter_context(patch("chutes_cvm.guest.verify.run_host_class_status"))
+        img.return_value = known.fake_image_set(*local_image)
+    # An Intel host: TDX entries carry only their release, so the dicts below parse as-is.
+    stack.enter_context(
+        patch(
+            "chutes_cvm.guest.verify.HostProfile.from_host",
+            return_value=HostProfile.from_dict(known.rtx_numa_doc()),
+        )
+    )
+    # The signed POST itself; HostClass parses what it returns, as in production.
+    st = stack.enter_context(patch("chutes_cvm.guest.host_class.host_class_status"))
     if status_raises:
-        st.side_effect = PreflightError("API unreachable")
+        st.side_effect = ChutesApiError("API unreachable")
     else:
         st.return_value = {
             "fingerprint": "fp",
@@ -184,3 +194,27 @@ def test_rc_must_match_for_the_local_image_note(capsys):
     with stack:
         assert verify.verify_host() == verify.WARNING
     assert "NOT in the covered set" in capsys.readouterr().out
+
+
+def test_blocked_when_the_host_cannot_be_read(capsys):
+    """A failed host read is not an API failure, and is labelled as what it is."""
+    stack, _, st = _patch()
+    with stack, patch(
+        "chutes_cvm.guest.verify.HostProfile.from_host",
+        side_effect=RuntimeError("lspci missing"),
+    ):
+        assert verify.verify_host() == verify.BLOCKED
+    st.assert_not_called()
+    assert (
+        "BLOCKED (host): cannot read this host: lspci missing"
+        in capsys.readouterr().out
+    )
+
+
+def test_submit_registers_the_reading_the_class_was_fetched_for():
+    stack, _, st = _patch(covered=[], status="unknown")
+    with stack, patch(
+        "chutes_cvm.guest.verify.submit_profile", return_value={"stored": True}
+    ) as sub:
+        verify.verify_host(submit=True)
+    assert sub.call_args.kwargs["host_profile"] is st.call_args.kwargs["host_profile"]

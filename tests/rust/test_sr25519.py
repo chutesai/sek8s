@@ -5,12 +5,19 @@ hotkey without the Python substrate stack. That is only useful if it produces
 *exactly* what `substrateinterface.Keypair` produces, so these tests drive the
 real library as the oracle rather than asserting against hardcoded vectors.
 
+The fixtures are one throwaway hotkey (never a real miner key) written by Bittensor 11.3.0:
+`hotkey-bittensor11-full.json` from `Wallet.create_new_hotkey()` with `secretPhrase`
+removed, and `hotkey-bittensor11-seedless.json` from
+`Wallet.regenerate_hotkey(private_key=...)`, the hotkey file format that has no
+`secretSeed`.
+
 Skipped when the binary has not been built; build it with:
 
     cd src/sr25519 && cargo build --release
 """
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -22,6 +29,10 @@ from substrateinterface import Keypair, KeypairType
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CRATE_DIR = REPO_ROOT / "src" / "sr25519"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+HOTKEY_SIGN = (
+    REPO_ROOT / "ansible/guest/roles/prepare-boot-image/files/initramfs/hotkey-sign"
+)
 
 # Well-known Substrate development seeds, plus one arbitrary seed, so a bug that
 # only shows up for particular scalar values has a chance to surface.
@@ -31,6 +42,23 @@ SEEDS = [
     "0000000000000000000000000000000000000000000000000000000000000001",
     "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
 ]
+
+
+def _load_hotkey(name: str) -> dict:
+    return json.loads((FIXTURES / f"hotkey-bittensor11-{name}.json").read_text())
+
+
+BT11_FULL = _load_hotkey("full")
+BT11_SEEDLESS = _load_hotkey("seedless")
+
+# Private keys as substrate-interface derives them from SEEDS, plus the seedless Bittensor 11
+# hotkey's privateKey as written to disk (0x stripped, as the host tooling does).
+PRIVATE_KEYS = [
+    Keypair.create_from_seed(
+        f"0x{seed}", crypto_type=KeypairType.SR25519
+    ).private_key.hex()
+    for seed in SEEDS
+] + [BT11_SEEDLESS["privateKey"].removeprefix("0x")]
 
 
 def _find_binary() -> str | None:
@@ -67,17 +95,32 @@ def run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
-@pytest.fixture
-def seed_file(tmp_path):
-    """Write a seed to a 0600 file and return its path, as the initramfs will."""
-
-    def _write(seed_hex: str) -> str:
-        path = tmp_path / "miner-seed"
-        path.write_text(seed_hex)
+def _key_file_writer(tmp_path, name):
+    def _write(key_hex: str) -> str:
+        path = tmp_path / name
+        path.write_text(key_hex)
         path.chmod(0o600)
         return str(path)
 
     return _write
+
+
+@pytest.fixture
+def seed_file(tmp_path):
+    """Write a seed to a 0600 file and return its path, as the initramfs will."""
+    return _key_file_writer(tmp_path, "miner-seed")
+
+
+@pytest.fixture
+def private_key_file(tmp_path):
+    """Write a private key to a 0600 file and return its path."""
+    return _key_file_writer(tmp_path, "miner-private-key")
+
+
+def _keypair_from_private_key(private_key: str) -> Keypair:
+    return Keypair.create_from_private_key(
+        f"0x{private_key}", ss58_format=42, crypto_type=KeypairType.SR25519
+    )
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -220,32 +263,224 @@ def test_signatures_are_randomized_and_all_verify(seed_file):
         ("deadbeef", "seed must be 32 bytes"),
         ("zz" * 32, "invalid hex character"),
         ("ab" * 33, "seed must be 32 bytes"),
+        (f"0x{SEEDS[0]}", "seed must not have a 0x prefix"),
     ],
 )
 def test_malformed_seed_is_rejected(seed_content, expected_error, seed_file):
+    """0x is rejected, as process-config.py rejects it, so the initramfs never accepts a key
+    that userspace refuses after the LUKS rotation."""
     result = run("address", "--seed-file", seed_file(seed_content), check=False)
     assert result.returncode != 0
     assert expected_error in result.stderr
 
 
-def test_seed_is_accepted_with_0x_prefix(seed_file):
-    """The Ansible role strips 0x, but a hand-written config.yaml may not."""
-    expected = Keypair.create_from_seed(
-        f"0x{SEEDS[0]}", crypto_type=KeypairType.SR25519
-    ).ss58_address
+def test_missing_key_flag_errors_clearly():
+    result = run("sign", "--message", "x", check=False)
+    assert result.returncode != 0
+    assert "one of --seed-file or --private-key-file is required" in result.stderr
+
+
+def test_seed_and_private_key_flags_are_mutually_exclusive(seed_file, private_key_file):
+    result = run(
+        "address",
+        "--seed-file",
+        seed_file(SEEDS[0]),
+        "--private-key-file",
+        private_key_file(PRIVATE_KEYS[0]),
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+
+
+def test_help_lists_the_verbs_and_key_flags():
+    output = run("--help").stdout
+    for word in ("address", "sign", "verify", "--seed-file", "--private-key-file"):
+        assert word in output
+
+
+# ── Private keys (hotkey files without secretSeed) ──────────────────────────────
+
+
+@pytest.mark.parametrize("private_key", PRIVATE_KEYS)
+def test_private_key_address_matches_substrate_interface(private_key, private_key_file):
+    """The silent-failure check for the key layout: from_ed25519_bytes would load the same
+    bytes without error and print another hotkey's address."""
+    expected = _keypair_from_private_key(private_key).ss58_address
+    result = run("address", "--private-key-file", private_key_file(private_key))
+    assert result.stdout.strip() == expected
+
+
+@pytest.mark.parametrize("private_key", PRIVATE_KEYS)
+def test_rust_private_key_signature_verifies_in_python(private_key, private_key_file):
+    keypair = _keypair_from_private_key(private_key)
+    message = f"{keypair.ss58_address}:{int(time.time())}:attest"
+
+    signature = run(
+        "sign",
+        "--private-key-file",
+        private_key_file(private_key),
+        "--message",
+        message,
+    ).stdout.strip()
+
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+
+@pytest.mark.parametrize("private_key", PRIVATE_KEYS)
+def test_python_private_key_signature_verifies_in_rust(private_key):
+    keypair = _keypair_from_private_key(private_key)
+    message = "provision:vm-01"
+
+    result = run(
+        "verify",
+        "--address",
+        keypair.ss58_address,
+        "--signature",
+        keypair.sign(message).hex(),
+        "--message",
+        message,
+    )
+    assert result.stdout.strip() == "OK"
+
+
+def test_seedless_hotkey_file_address_is_reproduced(private_key_file):
+    """The new hotkey file format end to end: its privateKey gives its own ss58Address."""
+    private_key = BT11_SEEDLESS["privateKey"].removeprefix("0x")
+    result = run("address", "--private-key-file", private_key_file(private_key))
+    assert result.stdout.strip() == BT11_SEEDLESS["ss58Address"]
+
+
+def test_seed_and_private_key_of_one_hotkey_agree(seed_file, private_key_file):
+    """Both credentials of one Bittensor 11 hotkey give its address, in Rust and in Python."""
+    seed = BT11_FULL["secretSeed"].removeprefix("0x")
+    private_key = BT11_FULL["privateKey"].removeprefix("0x")
+    expected = BT11_FULL["ss58Address"]
+
+    assert run("address", "--seed-file", seed_file(seed)).stdout.strip() == expected
     assert (
-        run("address", "--seed-file", seed_file(f"0x{SEEDS[0]}")).stdout.strip()
+        run(
+            "address", "--private-key-file", private_key_file(private_key)
+        ).stdout.strip()
         == expected
+    )
+    seed_keypair = Keypair.create_from_seed(
+        f"0x{seed}", crypto_type=KeypairType.SR25519
+    )
+    assert seed_keypair.ss58_address == expected
+    assert _keypair_from_private_key(private_key).ss58_address == expected
+
+
+@pytest.mark.parametrize(
+    "key_content,expected_error",
+    [
+        (PRIVATE_KEYS[0][:127], "odd length"),
+        (PRIVATE_KEYS[0][:126], "private key must be 64 bytes"),
+        (SEEDS[0], "private key must be 64 bytes"),
+        (f"0x{PRIVATE_KEYS[0]}", "private key must not have a 0x prefix"),
+        ("zz" * 64, "invalid hex character"),
+    ],
+)
+def test_malformed_private_key_is_rejected(
+    key_content, expected_error, private_key_file
+):
+    result = run(
+        "address", "--private-key-file", private_key_file(key_content), check=False
+    )
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+# ── hotkey-sign (the initramfs wrapper) ──────────────────────────────────────────
+
+
+def _hotkey_sign(snippet: str, run_dir: Path) -> subprocess.CompletedProcess:
+    """Source hotkey-sign with the stash paths moved off /run and sr25519 on PATH."""
+    script = (
+        f". {HOTKEY_SIGN}; "
+        f'HOTKEY_SEED="{run_dir}/miner-seed"; '
+        f'HOTKEY_PRIVATE_KEY="{run_dir}/miner-private-key"; '
+        f"{snippet}"
+    )
+    env = {**os.environ, "PATH": f"{Path(BINARY).parent}:{os.environ['PATH']}"}
+    return subprocess.run(
+        ["sh", "-c", script], capture_output=True, text=True, env=env, timeout=30
     )
 
 
-def test_missing_required_flag_errors_clearly():
-    result = run("sign", "--message", "x", check=False)
-    assert result.returncode != 0
-    assert "--seed-file is required" in result.stderr
+@pytest.fixture
+def config_mount(tmp_path):
+    mount = tmp_path / "tdx-config"
+    mount.mkdir()
+    return mount
 
 
-def test_help_lists_the_verbs():
-    output = run("--help").stdout
-    for verb in ("address", "sign", "verify"):
-        assert verb in output
+def test_hotkey_sign_stashes_and_signs_with_a_private_key(config_mount, tmp_path):
+    """A private-key-only config volume proves possession of the hotkey in the initramfs."""
+    private_key = BT11_SEEDLESS["privateKey"].removeprefix("0x")
+    (config_mount / "miner-private-key").write_text(private_key + "\n")
+    run_dir = tmp_path / "run"
+    keypair = _keypair_from_private_key(private_key)
+    body = '{"vm_name":"chutes-01"}'
+    message = f"{keypair.ss58_address}:n1:{hashlib.sha256(body.encode()).hexdigest()}"
+
+    result = _hotkey_sign(
+        f"hotkey_stash_key {config_mount} && hotkey_ss58 && hotkey_sign n1 '{body}'",
+        run_dir,
+    )
+
+    assert result.returncode == 0, result.stderr
+    ss58, signature = result.stdout.split()
+    assert ss58 == BT11_SEEDLESS["ss58Address"]
+    assert keypair.verify(message, bytes.fromhex(signature))
+    assert sorted(p.name for p in run_dir.iterdir()) == ["miner-private-key"]
+
+
+def test_hotkey_sign_rejects_a_volume_with_both_keys(config_mount, tmp_path):
+    """Two credentials is a misconfiguration; fail before attestation, stashing nothing."""
+    (config_mount / "miner-seed").write_text(SEEDS[0])
+    (config_mount / "miner-private-key").write_text(PRIVATE_KEYS[0])
+    run_dir = tmp_path / "run"
+
+    result = _hotkey_sign(f"hotkey_stash_key {config_mount}", run_dir)
+
+    assert result.returncode == 1
+    assert not run_dir.exists()
+
+
+def test_hotkey_sign_stashes_and_signs_with_a_seed(config_mount, tmp_path):
+    (config_mount / "miner-seed").write_text(SEEDS[0])
+    run_dir = tmp_path / "run"
+
+    result = _hotkey_sign(f"hotkey_stash_key {config_mount} && hotkey_ss58", run_dir)
+
+    assert result.returncode == 0, result.stderr
+    expected = Keypair.create_from_seed(
+        f"0x{SEEDS[0]}", crypto_type=KeypairType.SR25519
+    )
+    assert result.stdout.strip() == expected.ss58_address
+    assert sorted(p.name for p in run_dir.iterdir()) == ["miner-seed"]
+
+
+def test_hotkey_sign_fails_without_a_key(config_mount, tmp_path):
+    result = _hotkey_sign(f"hotkey_stash_key {config_mount}", tmp_path / "run")
+    assert result.returncode == 1
+
+
+def test_hotkey_sign_fails_on_an_invalid_key(config_mount, tmp_path):
+    (config_mount / "miner-private-key").write_text(f"0x{PRIVATE_KEYS[0]}")
+    result = _hotkey_sign(f"hotkey_stash_key {config_mount}", tmp_path / "run")
+    assert result.returncode == 1
+
+
+def test_hotkey_sign_shreds_both_stashed_keys(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "miner-seed").write_text(SEEDS[0])
+    (run_dir / "miner-private-key").write_text(PRIVATE_KEYS[0])
+
+    result = _hotkey_sign("hotkey_shred_key && hotkey_sign n1 body", run_dir)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert list(run_dir.iterdir()) == []

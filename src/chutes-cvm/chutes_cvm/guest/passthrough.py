@@ -7,7 +7,6 @@ from chutes_cvm.guest.detection import detect_infiniband_vfs
 from chutes_cvm.guest.gpu.profiles import GpuProfile
 from chutes_cvm.guest.gpu.tools import ensure_gpu_tools_available
 from chutes_cvm.guest.host_profile import HostProfile
-from chutes_cvm.guest.qemu import QemuCommand, build_pci_topology
 from chutes_cvm.paths import SCRIPTS_DIR
 from chutes_cvm.vfio import (
     bind_explicit_devices_to_vfio,
@@ -167,13 +166,6 @@ def _prepare_devices(
     if ib_devices:
         all_devices.extend(ib_devices)
 
-    if pci_operations_wedged():
-        raise RuntimeError(
-            "PCI operations are wedged (uninterruptible D-state tasks from a "
-            "previous vfio unbind or nvidia-gpu-tools run). SBR cannot run in "
-            "this state — reboot the host, then retry `chutes-cvm guest launch`."
-        )
-
     _check_fabric_manager(profile)
 
     if has_stale_vfio_devices(all_devices):
@@ -242,8 +234,12 @@ def _prepare_devices(
     install_udev_rules(str(SCRIPTS_DIR))
 
 
-def setup_passthrough(cmd: QemuCommand, host: HostProfile):
-    """Prepare and bind this host's passthrough devices, and extend the QemuCommand.
+def bind_passthrough(host: HostProfile) -> None:
+    """Bind this host's passthrough devices to vfio-pci. Side effects only.
+
+    Privileged: rebinds drivers and creates SR-IOV VFs. Contributes NOTHING to the QEMU command,
+    which is why it takes no command -- what the guest gets is decided by the captured profile
+    (``attach_passthrough``), not by what this happens to find on the live machine.
 
     Takes the devices from the ``HostProfile`` rather than enumerating them again: the host is
     read once, by ``discover-profile.sh``, and everything downstream uses that reading. A second
@@ -287,15 +283,3 @@ def setup_passthrough(cmd: QemuCommand, host: HostProfile):
     print(f"  Mode: {profile.describe_mode(total_gpus)}")
 
     _prepare_devices(gpus, nvswitches, ib_devices, profile)
-    cmd.objects.append("iommufd,id=iommufd0")
-
-    # Which NVSwitches reach the guest is decided once, by HostProfile.attached_nvswitches,
-    # which the topology builder reads. `nvswitches` above is the host's full inventory --
-    # needed for binding, not for the guest.
-    build_pci_topology(
-        cmd,
-        gpus=host.gpus,
-        nvswitches=host.attached_nvswitches,
-        ib_devices=host.attached_ib,
-        pxb_grouping=host.uses_pxb_grouping,
-    )

@@ -39,9 +39,10 @@ Requires everything in `setup.yml` (SSH) plus:
 
 | Variable | Scope | Required | Notes |
 |---|---|---|---|
-| `chutes_hotkey_path` | group / Vault | **yes** | controller path to Bittensor hotkey JSON; `ss58Address` and `secretSeed` are extracted automatically |
+| `chutes_hotkey_path` | group / Vault | **yes** | controller path to Bittensor hotkey JSON; `ss58Address` and `privateKey` (else `secretSeed`) are extracted automatically |
 | `chutes_miner_ss58` | host / Vault | override only | skip if `chutes_hotkey_path` is set |
-| `chutes_miner_seed` | host / Vault | override only | skip if `chutes_hotkey_path` is set |
+| `chutes_miner_private_key` | host / Vault | override only | skip if `chutes_hotkey_path` is set; or `chutes_miner_seed`, not both |
+| `chutes_miner_seed` | host / Vault | override only | skip if `chutes_hotkey_path` is set; or `chutes_miner_private_key`, not both |
 | `chutes_guest_bridge_network` | host | no | e.g. `192.168.50.0/24`; auto-picked when unset |
 | `chutes_public_interface` | host | no | NIC for bridge; default is default-route interface |
 | `chutes_docker_hub_username` / `chutes_docker_hub_token` | group / Vault | no | optional Docker Hub block in config |
@@ -122,7 +123,7 @@ is what keeps a node from landing on an OS it cannot be provisioned on or launch
 
 To add future upgrade hops (e.g. `26.04 -> 26.10`), add an entry to `os_upgrade_path`.
 
-After each hop the playbook automatically runs `host_prerequisites` and `tdx_bootstrap` (the same roles `setup.yml` uses), leaving the host fully re-provisioned with the correct kernel, Intel DCAP attestation repo, and TDX verified. No manual `setup.yml` re-run is needed. PCCS config and volume directories survive the OS upgrade unchanged.
+After each hop the playbook automatically runs `host_prerequisites` and `tee_bootstrap` (the same roles `setup.yml` uses), leaving the host fully re-provisioned with the correct kernel and its platform's packages, and the platform (TDX or SEV-SNP) verified enabled. No manual `setup.yml` re-run is needed. PCCS config and volume directories survive the OS upgrade unchanged.
 
 **Idempotency and failure recovery:**
 
@@ -132,7 +133,7 @@ The playbook is safe to re-run after most failures:
 |---|---|
 | Pre-hook or `dist-upgrade` | Hop retries from the start; all cleanup steps are idempotent |
 | `do-release-upgrade` fails or is interrupted | Re-run retries `do-release-upgrade`; it is designed to resume partial upgrades |
-| Reboot timeout or `tdx_bootstrap` fails after a successful OS upgrade | The host is already on the new OS version; re-running `upgrade-host.yml` will compute the **next** hop rather than re-provisioning the current one. Run `setup.yml` directly to complete provisioning without triggering another OS upgrade. |
+| Reboot timeout or `tee_bootstrap` fails after a successful OS upgrade | The host is already on the new OS version; re-running `upgrade-host.yml` will compute the **next** hop rather than re-provisioning the current one. Run `setup.yml` directly to complete provisioning without triggering another OS upgrade. |
 
 ---
 
@@ -167,7 +168,7 @@ all:
         # Group-wide: same for all hosts managed by this operator
 
         # Miner hotkey (launch / shutdown / upgrade)
-        # ss58Address and secretSeed are extracted automatically.
+        # ss58Address and privateKey (else secretSeed) are extracted automatically.
         chutes_hotkey_path: ~/.bittensor/wallets/mywallet/hotkeys/myhotkey
 
         # PCCS (setup only) — set BOTH or omit BOTH
@@ -180,7 +181,7 @@ all:
         # chutes_docker_hub_token: !vault ...
 ```
 
-`ss58Address` and `secretSeed` are read from the hotkey JSON on the controller at play time — no need to copy them into inventory. To override either value, set `chutes_miner_ss58` / `chutes_miner_seed` explicitly and the hotkey parse is skipped.
+`ss58Address` and the hotkey's key are read from the hotkey JSON on the controller at play time — no need to copy them into inventory. The key is `privateKey` when the file has one (current Bittensor hotkey files; some have no `secretSeed`), else `secretSeed`, and `config.yaml` carries only that one. To override, set `chutes_miner_ss58` plus `chutes_miner_private_key` or `chutes_miner_seed` explicitly and the hotkey parse is skipped. The `chutes-miner` CLI calls (drain, shutdown, maintenance status) read the same file; a hotkey without `secretSeed` needs chutes-miner-cli 0.8.0 or later on the controller.
 
 The inventory hostname (`my-tee-host` above) is used as both `chutes-miner --name` and `vm.hostname` in `config.yaml`. These must match the TEE server name registered in chutes-miner — do not use an SSH alias as the inventory key.
 

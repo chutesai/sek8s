@@ -288,19 +288,38 @@ async def test_proxy_request_strips_upstream_server_header_internal():
 # ---------------------------------------------------------------------------
 
 
-def test_load_miner_keypair_none_seed():
-    assert load_miner_keypair(None) is None
-    assert load_miner_keypair("") is None
+def test_load_miner_keypair_without_a_key_disables_signing():
+    ss58 = _make_test_keypair().ss58_address
+    assert load_miner_keypair(ss58, None, None) is None
+    assert load_miner_keypair(ss58, "", "") is None
 
 
 def test_load_miner_keypair_invalid_seed():
-    assert load_miner_keypair("not-a-valid-seed") is None
+    assert load_miner_keypair(_make_test_keypair().ss58_address, None, "nope") is None
 
 
 def test_load_miner_keypair_from_seed():
-    keypair = load_miner_keypair(_TEST_SEED)
+    expected = _make_test_keypair()
+    keypair = load_miner_keypair(expected.ss58_address, None, _TEST_SEED)
     assert keypair is not None
-    assert keypair.ss58_address == _make_test_keypair().ss58_address
+    assert keypair.ss58_address == expected.ss58_address
+
+
+def test_load_miner_keypair_from_private_key():
+    expected = _make_test_keypair()
+    keypair = load_miner_keypair(
+        expected.ss58_address, expected.private_key.hex(), None
+    )
+    assert keypair is not None
+    assert keypair.ss58_address == expected.ss58_address
+
+
+def test_load_miner_keypair_mismatched_ss58_disables_signing():
+    """A key for another hotkey must not sign as this VM's MINER_SS58; the proxy keeps serving."""
+    from substrateinterface import Keypair
+
+    other = Keypair.create_from_seed("0x" + "cd" * 32)
+    assert load_miner_keypair(other.ss58_address, None, _TEST_SEED) is None
 
 
 def test_sign_response_round_trip():

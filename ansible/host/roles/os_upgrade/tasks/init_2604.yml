@@ -1,7 +1,7 @@
 ---
 # Init tasks for hosts that have just booted into Ubuntu 26.04 (target-keyed,
 # unlike source-keyed pre_/post_). Runs after the reboot but BEFORE
-# host_prerequisites / tdx_bootstrap run chutes-cvm host setup. Included by hop.yml on
+# host_prerequisites / tee_bootstrap run chutes-cvm host setup. Included by hop.yml on
 # the final hop only.
 #
 # Restore the PCCS artifacts that pre_2510 backed up and removed (Intel's noble

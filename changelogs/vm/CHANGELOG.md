@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Version source of truth: `ansible/guest/VERSION`
 
+## [1.5.0] - 2026-10-10
+
+### Added
+- The guest image boots on both Intel TDX and AMD SEV-SNP hosts. The initramfs loads
+  `tdx_guest` or `sev-guest` (`load-tee` replaces `load-tdx`) and produces the matching
+  evidence (a TDX quote or the raw SEV-SNP report) for boot attestation and `/provision`, in
+  the API's existing `quote` field. A udev rule gives the attestation service access to
+  `/dev/sev-guest`.
+- SEV-SNP guests verify the root filesystem at boot. `rootfs-measure` hashes the same measured
+  paths on both platforms; TDX extends RTMR3 with the final hash as before, while SNP, which has
+  no RTMR3, requires it to equal the hash of the canonical manifest baked into the measured
+  initramfs and powers off otherwise (a file added, removed or changed offline, or a missing
+  manifest). The verified hash is left in `/run/sek8s/rootfs-digest`, and `rootfs-verify`
+  re-checks the root against it after the bind mounts.
+- The config volume can carry the hotkey's 64-byte sr25519 private key (`miner-private-key`,
+  128 hex characters) instead of `miner-seed`, for current Bittensor hotkey files that have no
+  `secretSeed`. Exactly one of the two is allowed; a volume with both fails before boot
+  attestation. The initramfs signer, `process-config.py` (`MINER_PRIVATE_KEY` in
+  system-manager's `miner.env`), the `miner-credentials` secret (`privateKey` or `seed`, never
+  both), the attestation proxy and the admission policy all accept it. Switching keys removes
+  the other's copy. Seed-only VMs produce the same files and a byte-identical secret.
+- The chutes-miner-gpu chart moves to 0.4.0, which reads `privateKey` from the secret; chart
+  0.3.0's agent cannot start on a private-key VM.
+
+### Changed
+- Every file the guest build downloads is pinned by SHA-256 as well as version: the k3s
+  installer (now fetched from the pinned k3s release tag rather than `get.k3s.io`, with
+  retries) and binary, helm, OPA, cosign, the Intel SGX repository key, NVIDIA's cuda-keyring
+  and the root signing public key (`root_signing_key_sha256`; rotating the key is now a
+  commit). A changed or tampered upstream asset fails the build instead of being measured
+  into the image.
+- Root-filesystem measurement is renamed for what it does on both platforms: role and initramfs
+  script `rootfs-measure` (formerly `rtmr3-measure`), post-mount check `rootfs-verify` /
+  `rootfs-verify.service` (formerly `rtmr3-verify`), canonical manifest `/etc/rootfs-manifest`
+  (formerly `/etc/tdx-rtmr3-expected-hashes`), and the measured-file walk `tee-measure`
+  (`/usr/local/bin/tee-measure`, `/etc/tee-measure.conf`; formerly `tdx-measure`). The
+  `tdx-measure` fork that computes MRTD/RTMR0 keeps its name.
+- `nvidia-tee.service` replaces `nvidia-tdx.service` ("TEE GPU setup"); it marks the CC GPUs
+  ready on both TDX and SEV-SNP.
+- `process-config.py` requires `miner-ss58` and exactly one key. A volume with no credentials,
+  a partial set or both keys fails at config processing; previously missing credentials were
+  treated as "benchmark mode" and the VM powered off later in k3s setup.
+- The initramfs signer rejects a `0x`-prefixed seed. `process-config.py` already rejected one,
+  so such a VM used to pass boot attestation and the LUKS rotation and then fail in userspace;
+  it now fails before attestation.
+- The build writes the image-set manifest before computing measurements, since
+  `measurements generate` now checks the guest firmware against the one the manifest records.
+
+### Fixed
+- A guest build always starts from a fresh build VM and the image the playbook chose. `run-vm`
+  used to resume any `tdx-build` VM left behind unless `NO_CACHE` was set. The GPU checkpoint is
+  now named by a hash of the roles and vars that produce it (`resume-checkpoint` role) instead
+  of by guest version, so a checkpoint is reused only when those inputs are unchanged, and
+  `tee-gpu-vm.yml` no longer shares one with `chutes-miner-vm.yml`.
+- Production builds failed on a fresh Ubuntu 26.04 build host at `prepare-boot-image`'s root
+  backup: LUKS encryption copies the root out and back with `rsync`, which the 26.04 server image
+  no longer ships and nothing installed. `virt-host-prereqs` now installs it.
+- Nonces must be exactly 64 hex characters everywhere they are validated. The initramfs
+  checks the nonce and certificate hash before building the report data; it used to truncate
+  the pair to 128 characters, shifting the certificate hash so the API rejected the evidence
+  without saying why. The guest's quote and GPU-evidence services (`sek8s.nonce`,
+  `chutes_nvevidence`) no longer accept whitespace inside a nonce.
+- Debug images no longer ship the build host's SSH public key in root's `authorized_keys`; it is purged as in production. Root password login is unchanged.
+
 ## [1.4.1] - 2026-09-20
 
 ### Changed

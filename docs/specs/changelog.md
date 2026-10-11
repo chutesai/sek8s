@@ -32,8 +32,8 @@ fragments. Promotion is **idempotent**: if the version heading already exists, n
 fragments are merged into the existing section. No external dependencies (towncrier
 or similar). The fragment approach eliminates merge conflicts on `CHANGELOG.md`.
 
-On `release/**` branches, the `changelog-auto-promote.yml` workflow auto-promotes
-on each push. On PRs to `main`, a strict check enforces that no fragments remain.
+Promotion is manual (`make promote-changelogs`), run on the release branch when the
+release is ready. On PRs to `main`, a strict check enforces that no fragments remain.
 Tags are created on merge to `main`.
 
 ### Scope: per-component changelogs in top-level directory
@@ -59,8 +59,8 @@ enforcement never fires for them.
 ### Branching model support
 
 Both trunk-based and release-branch workflows are supported. Feature branches add
-fragments to `unreleased/`. On release branches, CI auto-promotes fragments on each
-merge. For trunk-based, developers run `make promote-changelogs` before PR to main.
+fragments to `unreleased/`. On either model, `make promote-changelogs` is run by hand
+before the PR to main.
 PRs to `main` enforce a strict "no fragments" policy.
 
 ### Fragment format
@@ -91,7 +91,7 @@ through the fragment system and are aggregated consistently.
 Success =
 1. Each version domain has a `CHANGELOG.md` and `unreleased/` directory under
    `changelogs/`.
-2. CI auto-promotes fragments on `release/**` branches (idempotent).
+2. Fragments are promoted by hand with `make promote-changelogs` (idempotent).
 3. CI enforces strict "no fragments" on PRs to `main`.
 4. Tags are created on merge to `main` when changelogs are clean.
 5. No new runtime or dev dependencies introduced.
@@ -114,7 +114,8 @@ Success =
 2. `changelogs/<component>/unreleased/` — fragment directories with `.gitkeep`.
 3. `scripts/promote_changelogs.py` — `--check`, `--check --strict`, and `--promote` modes.
 4. `.github/workflows/version-tag.yml` — strict check on PRs to main, tagging on push.
-5. `.github/workflows/changelog-auto-promote.yml` — auto-promote on release branches.
+5. *(Removed)* `.github/workflows/changelog-auto-promote.yml` — CI no longer commits
+   promotions; the strict check on PRs to `main` is the gate.
 6. `docs/versioning.md` — fragment workflow documentation.
 7. `AGENT.md` — version bumps rule references fragment system.
 

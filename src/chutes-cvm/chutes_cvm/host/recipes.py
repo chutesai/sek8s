@@ -1,20 +1,24 @@
-"""Host recipe registry: per-Ubuntu-version TDX host setup parameters.
+"""Host recipe registry: how to set up a host of one Ubuntu version for one TEE platform.
 
-Each supported Ubuntu version is a HostRecipe subclass that declares PPAs,
-third-party APT repos, kernel package, apt packages, and GRUB cmdline additions.
-A single setup orchestrator (``host/setup.py``) executes the recipe — no OS-version
-branching in the setup logic.  Adding a new Ubuntu version requires one subclass and
-one HOST_RECIPES entry.
+Each supported Ubuntu version is an abstract HostRecipe subclass declaring what every host on it
+needs (PPAs, third-party APT repos, kernel package, apt packages, GRUB cmdline additions); each
+platform it supports is a concrete subclass of that, extending the lists and overriding
+``configure_attestation`` where the platform needs more. A single setup orchestrator
+(``host/setup.py``) executes the recipe — no OS-version or platform branching in the setup
+logic. Adding a new Ubuntu version means one base subclass, one subclass per platform, and
+adding them to RECIPES.
 
 Not to be confused with the API's "host profile" (``/servers/tdx/host_profiles``), which
 is the captured hardware description a host submits so its measurements can be generated.
-This is the install recipe for getting a bare machine to a TDX-capable state.
+This is the install recipe for getting a bare machine to a TDX- or SEV-SNP-capable state.
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from chutes_cvm import proc
+from chutes_cvm.guest.tee import SnpTeeProvider, TdxTeeProvider, TeeProvider
+from chutes_cvm.host import tdx_attestation
 
 
 @dataclass
@@ -72,7 +76,17 @@ class APTRepo:
 
 
 class HostRecipe(ABC):
-    """Base class for Ubuntu-version-specific TDX host setup."""
+    """How to set up a host of one Ubuntu version for one TEE platform.
+
+    An OS version's abstract subclass owns what every host on it needs; its per-platform
+    subclasses extend that through ``super()`` with what their platform adds.
+    """
+
+    @property
+    @abstractmethod
+    def tee(self) -> type[TeeProvider]:
+        """The platform this recipe sets a host up for."""
+        ...
 
     @property
     @abstractmethod
@@ -93,7 +107,7 @@ class HostRecipe(ABC):
 
     @property
     def repos(self) -> list[APTRepo]:
-        """Third-party APT repos (non-PPA) to add before installing packages."""
+        """Third-party APT repos (non-PPA)."""
         return []
 
     @property
@@ -110,8 +124,16 @@ class HostRecipe(ABC):
     @property
     @abstractmethod
     def packages(self) -> list[str]:
-        """All apt packages to install (QEMU, attestation, etc.)."""
+        """Apt packages (QEMU, the platform's attestation stack, ...)."""
         ...
+
+    def configure_attestation(self, noninteractive: bool) -> None:
+        """Configure the host services that serve this platform's guest attestation.
+
+        None by default: a platform whose reports the guest gets without the host's help
+        (SEV-SNP, from the PSP) has nothing to configure.
+        """
+        print(f"  None on {self.tee.label}")
 
     @property
     def base_packages(self) -> list[str]:
@@ -125,16 +147,17 @@ class HostRecipe(ABC):
 
     @property
     def grub_cmdline_additions(self) -> list[str]:
-        """Extra kernel parameters for GRUB_CMDLINE_LINUX_DEFAULT."""
+        """Kernel parameters."""
         return ["nohibernate"]
 
     def describe(self) -> str:
         """Human-readable summary for logging."""
-        return f"Ubuntu {self.name} ({self.codename})"
+        return f"{self.tee.label} on Ubuntu {self.name} ({self.codename})"
 
 
 class Ubuntu2604Recipe(HostRecipe):
-    """Ubuntu 26.04 (Resolute) — native TDX kernel and QEMU 10.2, attestation via Intel DCAP repo."""
+    """Ubuntu 26.04 (Resolute): native TDX and SEV-SNP kernel, QEMU 10.2. What every 26.04 host
+    needs, whatever its platform; the platform subclasses below add theirs."""
 
     @property
     def name(self) -> str:
@@ -150,16 +173,7 @@ class Ubuntu2604Recipe(HostRecipe):
 
     @property
     def repos(self) -> list[APTRepo]:
-        # Intel official SGX/DCAP attestation repository (no Launchpad equivalent).
-        # Provides sgx-dcap-pccs, tdx-qgs, libsgx-dcap-default-qpl for TDX attestation.
         return [
-            APTRepo(
-                name="intel-sgx",
-                uri="https://download.01.org/intel-sgx/sgx_repo/ubuntu/",
-                suite="resolute",
-                components="main",
-                signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
-            ),
             # NVIDIA CUDA repo — the ONLY source of a Fabric Manager matching the guest
             # driver. FM must be the same x.y.z as the guest's NVIDIA driver, and the guest
             # pins 595.71.05 from this same repo family; Ubuntu multiverse ships only
@@ -194,8 +208,40 @@ class Ubuntu2604Recipe(HostRecipe):
 
     @property
     def packages(self) -> list[str]:
+        return ["qemu-system-x86"]
+
+    @property
+    def grub_cmdline_additions(self) -> list[str]:
+        return ["nohibernate", "modprobe.blacklist=nouveau"]
+
+
+class TdxUbuntu2604Recipe(Ubuntu2604Recipe):
+    """Intel TDX on 26.04: the kernel's TDX module switched on, and the host-side quoting stack
+    (PCCS, QGS, QPL) from Intel's DCAP repo."""
+
+    @property
+    def tee(self) -> type[TeeProvider]:
+        return TdxTeeProvider
+
+    @property
+    def repos(self) -> list[APTRepo]:
         return [
-            "qemu-system-x86",
+            *super().repos,
+            # Intel official SGX/DCAP attestation repository (no Launchpad equivalent).
+            # Provides sgx-dcap-pccs, tdx-qgs, libsgx-dcap-default-qpl for TDX attestation.
+            APTRepo(
+                name="intel-sgx",
+                uri="https://download.01.org/intel-sgx/sgx_repo/ubuntu/",
+                suite="resolute",
+                components="main",
+                signing_key_url="https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key",
+            ),
+        ]
+
+    @property
+    def packages(self) -> list[str]:
+        return [
+            *super().packages,
             "ovmf-inteltdx",
             "sgx-dcap-pccs",
             "tdx-qgs",
@@ -206,11 +252,26 @@ class Ubuntu2604Recipe(HostRecipe):
 
     @property
     def grub_cmdline_additions(self) -> list[str]:
-        return ["nohibernate", "kvm_intel.tdx=1", "modprobe.blacklist=nouveau"]
+        return [*super().grub_cmdline_additions, "kvm_intel.tdx=1"]
+
+    def configure_attestation(self, noninteractive: bool) -> None:
+        tdx_attestation.configure(noninteractive)
 
 
-HOST_RECIPES: dict[str, HostRecipe] = {
-    "26.04": Ubuntu2604Recipe(),
+class SnpUbuntu2604Recipe(Ubuntu2604Recipe):
+    """AMD SEV-SNP on 26.04: nothing beyond the OS's own. The 7.0 kernel enables SEV-SNP once
+    BIOS does (kvm_amd sev_snp=Y, no kernel parameter), and SNP reports come from the PSP inside
+    the guest, so there is no host quoting service or PCCS to install."""
+
+    @property
+    def tee(self) -> type[TeeProvider]:
+        return SnpTeeProvider
+
+
+RECIPES: list[HostRecipe] = [TdxUbuntu2604Recipe(), SnpUbuntu2604Recipe()]
+
+HOST_RECIPES: dict[tuple[str, type[TeeProvider]], HostRecipe] = {
+    (r.name, r.tee): r for r in RECIPES
 }
 
 
@@ -230,18 +291,19 @@ def detect_ubuntu_version() -> str:
     return result.stdout.strip()
 
 
-def resolve_recipe(version: str | None = None) -> HostRecipe:
-    """Resolve a HostRecipe for the given (or detected) Ubuntu version.
+def resolve_recipe(tee: TeeProvider, version: str | None = None) -> HostRecipe:
+    """Resolve the HostRecipe for ``tee`` on the given (or detected) Ubuntu version.
 
-    Raises ValueError if the version is not supported.
+    Raises ValueError if the version, or the platform on it, is not supported.
     """
     if version is None:
         version = detect_ubuntu_version()
 
-    recipe = HOST_RECIPES.get(version)
+    recipe = HOST_RECIPES.get((version, type(tee)))
     if recipe is None:
+        supported = sorted(f"{r.tee.label} on {r.name}" for r in RECIPES)
         raise ValueError(
-            f"Unsupported Ubuntu version: {version}. "
-            f"Supported: {list(HOST_RECIPES.keys())}"
+            f"Unsupported host: {tee.label} on Ubuntu {version}. "
+            f"Supported: {', '.join(supported)}"
         )
     return recipe

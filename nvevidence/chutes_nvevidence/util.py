@@ -1,3 +1,5 @@
+import re
+
 from loguru import logger
 
 from chutes_nvevidence.exceptions import NonceError
@@ -30,11 +32,9 @@ def validate_nonce(nonce: str) -> str:
             f"Nonce: {nonce}"
         )
     
-    # Validate it's valid hexadecimal by trying to decode it
-    try:
-        bytes.fromhex(nonce)
-    except ValueError as e:
-        raise NonceError(f"Nonce must contain only hexadecimal characters (0-9, a-f). Error: {e}")
+    # Not bytes.fromhex: it skips embedded whitespace, so 64 characters could decode short.
+    if not re.fullmatch(r"[0-9a-fA-F]+", nonce):
+        raise NonceError("Nonce must contain only hexadecimal characters (0-9, a-f)")
     
     # Normalize to lowercase
     normalized_nonce = nonce.lower()

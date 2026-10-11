@@ -9,7 +9,7 @@
 #     yields the same measurements; first-boot rotation replaces it anyway.
 #   * The root RSA PUBLIC key is fetched from R2 (root_signing_key_url), same as our own builds.
 # Everything else is the standard prod build. Build, then compare your measurements to the published
-# ones at GET https://api.chutes.ai/servers/tee/measurements.
+# ones at GET https://api.chutes.ai/servers/tdx/measurements (Intel) and /servers/snp/measurements (AMD).
 all:
   children:
     vm:

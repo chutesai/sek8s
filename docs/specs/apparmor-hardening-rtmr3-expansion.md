@@ -12,8 +12,8 @@ Defense-in-depth hardening for TDX guest VMs. This spec covers two complementary
 1. **AppArmor MAC enforcement** -- restrict access to sensitive paths (model cache, service credentials, runtime sockets) using mandatory access control profiles, then lock down MAC capabilities so profiles cannot be modified at runtime.
 2. **RTMR3 measurement expansion** -- extend boot-time integrity measurement to cover all system binaries, service configurations, code injection paths, and systemd units so offline tampering is cryptographically detectable.
 
-- **Packages affected**: Ansible guest roles (`apparmor-hardening` new, `rtmr3-measure`, `admission-controller`, `cache-volume`), no Python code changes
-- **Key files**: `ansible/guest/roles/apparmor-hardening/` (new), `ansible/guest/roles/rtmr3-measure/files/tdx-measure-miner.conf`, `ansible/guest/roles/rtmr3-measure/files/initramfs/rtmr3-measure`, `ansible/guest/roles/admission-controller/files/policies/pods.rego`, `ansible/guest/playbooks/chutes-miner-vm.yml`
+- **Packages affected**: Ansible guest roles (`apparmor-hardening` new, `rootfs-measure`, `admission-controller`, `cache-volume`), no Python code changes
+- **Key files**: `ansible/guest/roles/apparmor-hardening/` (new), `ansible/guest/roles/rootfs-measure/files/tee-measure-miner.conf`, `ansible/guest/roles/rootfs-measure/files/initramfs/rootfs-measure`, `ansible/guest/roles/admission-controller/files/policies/pods.rego`, `ansible/guest/playbooks/chutes-miner-vm.yml`
 - **Dependencies**: AppArmor (already installed by `common/container-networking.yml`), `libcap2-bin` (likely already present)
 
 ---
@@ -55,9 +55,9 @@ Success =
 - AppArmor is already installed by the `common` role. The new role must not re-install it.
 - All AppArmor profiles must be static files deployed at image build time -- no runtime profile generation.
 - `verify-apparmor-profiles.service` must run `After=apparmor.service` and `Before=k3s.service,system-manager.service,setup-cache.service`. Failure must poweroff the VM.
-- Only build-time static files may be added to `tdx-measure-miner.conf`. Files modified after boot by config-manager, k3s-config-init, or generate-admission-cert are excluded.
+- Only build-time static files may be added to `tee-measure-miner.conf`. Files modified after boot by config-manager, k3s-config-init, or generate-admission-cert are excluded.
 - Profiles for `system-manager` must allow the download subprocess (`-m sek8s.system_manager.cache.download`) to inherit cache write access.
-- The `rtmr3-measure` initramfs script must log progress for the expanded measurement set (estimated 1500-2000+ files, 30-90 seconds).
+- The `rootfs-measure` initramfs script must log progress for the expanded measurement set (estimated 1500-2000+ files, 30-90 seconds).
 
 ---
 
@@ -125,11 +125,11 @@ Add `MAC_ADMIN` and `MAC_OVERRIDE` to `dangerous_capabilities` in `ansible/guest
 
 #### Modify: `chutes-miner-vm.yml`
 
-Insert `apparmor-hardening` role after `cache-volume` and before `security`. Must come before `rtmr3-measure` so profile files exist when RTMR3 hashes them.
+Insert `apparmor-hardening` role after `cache-volume` and before `security`. Must come before `rootfs-measure` so profile files exist when RTMR3 hashes them.
 
 ### Part 2: RTMR3 Measurement Expansion
 
-#### Modify: `tdx-measure-miner.conf`
+#### Modify: `tee-measure-miner.conf`
 
 Remove `/etc/rancher/k3s/registries.yaml` (runtime-modified, persists across reboots; security properties independently measured through other files).
 
@@ -192,7 +192,7 @@ Add the following paths:
 /usr/local/bin/verify-apparmor-profiles.sh
 ```
 
-#### Modify: `rtmr3-measure` initramfs script
+#### Modify: `rootfs-measure` initramfs script
 
 Add progress logging for the expanded measurement set:
 
@@ -217,9 +217,9 @@ Files modified at runtime by config-manager, k3s-config-init, or per-boot certif
 
 - Any AppArmor profile breaks a legitimate service (system-manager can't download models, setup-cache can't create dirs, k3s can't serve hostPath volumes). Mitigated by `audit deny` logging in debug builds -- denials are visible in `journalctl -k` while matching production enforcement exactly.
 - `verify-apparmor-profiles.service` fails and the VM powers off on every boot. Must be tested in debug builds first.
-- RTMR3 measurement of `/etc/systemd/system` includes a runtime-generated unit file, causing rtmr3-verify to fail on reboot. All units must be verified as build-time static.
+- RTMR3 measurement of `/etc/systemd/system` includes a runtime-generated unit file, causing rootfs-verify to fail on reboot. All units must be verified as build-time static.
 - The expanded RTMR3 measurement exceeds acceptable boot time (>120 seconds). Progress logging must be validated and timing benchmarked.
-- A file added to `tdx-measure-miner.conf` is legitimately modified at runtime, causing RTMR3 mismatch on reboot.
+- A file added to `tee-measure-miner.conf` is legitimately modified at runtime, causing RTMR3 mismatch on reboot.
 
 ---
 
@@ -230,4 +230,4 @@ Files modified at runtime by config-manager, k3s-config-init, or per-boot certif
 - **Boot time increase**: Estimated 30-90 seconds additional boot time for the three-tier measurement expansion. Progress logging ensures visibility.
 - **Image rebuild required**: Both Part 1 and Part 2 require a full guest image rebuild.
 - **No backward compatibility issues**: New role is additive. Only change to existing roles is two new entries in OPA `dangerous_capabilities`.
-- **`registries.yaml` removal**: Must be removed from `tdx-measure-miner.conf` before the next image build (added by commit 7c97ef1 but runtime-modified).
+- **`registries.yaml` removal**: Must be removed from `tee-measure-miner.conf` before the next image build (added by commit 7c97ef1 but runtime-modified).

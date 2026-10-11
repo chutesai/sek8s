@@ -4,8 +4,8 @@
 # or multi-hop to a specific target_version.
 #
 # After each hop the host is automatically re-provisioned via host_prerequisites
-# and tdx_bootstrap (same as setup.yml), leaving it in a consistent state with
-# the correct kernel, Intel DCAP attestation repo, and TDX verified.
+# and tee_bootstrap (same as setup.yml), leaving it in a consistent state with
+# the correct kernel, its platform's packages, and the platform verified enabled.
 #
 # Usage:
 #   # Single hop (e.g. 25.10 -> 26.04):
@@ -147,8 +147,8 @@
     # ── Relaunch VM ─────────────────────────────────────────────────────────
     # Render config, start the VM, and poll node-health so this host exits
     # maintenance and the next host in the serial run can begin immediately.
-    # Requires chutes_miner_ss58, chutes_miner_seed (for config.yaml) and
-    # chutes_hotkey_path (for node-health) in inventory / Vault.
+    # Requires chutes_hotkey_path (miner credentials for config.yaml, and node-health) in
+    # inventory / Vault, or explicit chutes_miner_ss58 plus a key.
     # Set relaunch_vm=false to leave the VM stopped after upgrading.
 
     - name: Relaunch VM and verify node health

@@ -1,0 +1,59 @@
+#!/bin/sh
+# /etc/initramfs-tools/hooks/rootfs-measure
+#
+# Initramfs-tools hook for the RTMR3 measurement feature.
+# Copies tdx-rtmr-extend (sysfs-based, no external libs), sha384sum,
+# the tdx_guest kernel module, /etc/tee-measure.conf, and
+# /etc/rootfs-manifest into the initramfs image so the
+# init-bottom script can verify canonical files and extend RTMR3 at boot.
+#
+# Both config files are baked into the initramfs and covered by RTMR1.
+# Tampering with either requires changing the initramfs, which changes RTMR1.
+
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case $1 in prereqs) prereqs; exit 0;; esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# Binary that extends a TDX RTMR via the tsm-mr sysfs interface (kernel 6.16+)
+copy_exec /usr/local/bin/tdx-rtmr-extend
+
+# sha384sum for hashing measured files (from coreutils — always present)
+copy_exec /usr/bin/sha384sum
+
+# The single implementation of which files are measured, in what order, and how each
+# is hashed — shared with the build-time manifest generator, rootfs-verify and the
+# host-side measurement predictor, so none of them can enumerate or hash differently.
+# POSIX sh over find/sed/sort/wc/mktemp/sha384sum, all present in the initramfs.
+copy_exec /usr/local/bin/tee-measure
+
+# tee-measure batches its hashing through xargs and converts the NUL-delimited records with tr.
+copy_exec /usr/bin/xargs
+copy_exec /usr/bin/tr
+
+# TDX guest kernel module — needed so /dev/tdx_guest is available
+manual_add_modules tdx_guest
+force_load tdx_guest
+
+# Measurement config: the static list of paths to measure into RTMR3.
+# The file is hardcoded in the role source (files/tee-measure-miner.conf or
+# files/tdx-measure-gpu.conf, selected by rtmr3_vm_type in the calling playbook)
+# and is not driven by Ansible variables, ensuring the measured path list is
+# fixed and reproducible from the repository.  Baking it into the initramfs
+# (covered by RTMR1) additionally ensures the list cannot be tampered with
+# at runtime without changing RTMR1.
+if [ -f /etc/tee-measure.conf ]; then
+    mkdir -p "$DESTDIR/etc"
+    cp /etc/tee-measure.conf "$DESTDIR/etc/tee-measure.conf"
+fi
+
+# Expected hashes for canonical files: build-time SHA-384 constants that the
+# init-bottom script verifies before extending RTMR3.  A mismatch powers off
+# the VM.  Baking this file into the initramfs (covered by RTMR1) means any
+# attacker who changes a canonical file (e.g. verify-access-config) must also
+# update this constant, which changes RTMR1 — detectable by the partner.
+if [ -f /etc/rootfs-manifest ]; then
+    mkdir -p "$DESTDIR/etc"
+    cp /etc/rootfs-manifest "$DESTDIR/etc/rootfs-manifest"
+fi

@@ -1,0 +1,272 @@
+diff --git a/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c b/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
+index 20c98bb67f..a1572765e8 100644
+--- a/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
++++ b/OvmfPkg/AcpiPlatformDxe/AcpiPlatform.c
+@@ -35,6 +35,16 @@ InstallAcpiTables (
+   UINT16      HostBridgeDevId;
+ 
+   HostBridgeDevId = PcdGet16 (PcdOvmfHostBridgePciDevId);
++  //
++  // sek8s: only the verified QEMU fw_cfg path may install tables.
++  //
++  Status = InstallQemuFwCfgTables (AcpiTable);
++  if (EFI_ERROR (Status)) {
++    CpuDeadLoop ();
++  }
++
++  return Status;
++
+   if (HostBridgeDevId == CLOUDHV_DEVICE_ID) {
+     if (CC_GUEST_IS_TDX (PcdGet64 (PcdConfidentialComputingGuestAttr))) {
+       Status = InstallCloudHvTablesTdx (AcpiTable);
+diff --git a/OvmfPkg/Library/AcpiPlatformLib/DxeAcpiPlatformLib.inf b/OvmfPkg/Library/AcpiPlatformLib/DxeAcpiPlatformLib.inf
+index 59fcb957d0..bcb03c6ab7 100644
+--- a/OvmfPkg/Library/AcpiPlatformLib/DxeAcpiPlatformLib.inf
++++ b/OvmfPkg/Library/AcpiPlatformLib/DxeAcpiPlatformLib.inf
+@@ -21,6 +21,7 @@
+   QemuFwCfgAcpi.c
+ 
+ [Packages]
++  CryptoPkg/CryptoPkg.dec
+   MdeModulePkg/MdeModulePkg.dec
+   MdePkg/MdePkg.dec
+   OvmfPkg/OvmfPkg.dec
+@@ -32,6 +33,9 @@
+   QemuFwCfgS3Lib
+   UefiBootServicesTableLib
+   TpmMeasurementLib
++  BaseCryptLib
++  BlobVerifierLib
++  SerialPortLib
+ 
+ [Protocols]
+   gQemuAcpiTableNotifyProtocolGuid              # PROTOCOL PRODUCES
+diff --git a/OvmfPkg/Library/AcpiPlatformLib/QemuFwCfgAcpi.c b/OvmfPkg/Library/AcpiPlatformLib/QemuFwCfgAcpi.c
+index d9d0163ffd..2e29ff722c 100644
+--- a/OvmfPkg/Library/AcpiPlatformLib/QemuFwCfgAcpi.c
++++ b/OvmfPkg/Library/AcpiPlatformLib/QemuFwCfgAcpi.c
+@@ -21,6 +21,9 @@
+ #include <Library/QemuFwCfgS3Lib.h>           // QemuFwCfgS3Enabled()
+ #include <Library/UefiBootServicesTableLib.h> // gBS
+ #include <Library/TpmMeasurementLib.h>
++#include <Library/BaseCryptLib.h>
++#include <Library/BlobVerifierLib.h>
++#include <Library/SerialPortLib.h>
+ 
+ //
+ // The user structure for the ordered collection that will track the fw_cfg
+@@ -276,6 +279,177 @@ RollBack:
+   return Status;
+ }
+ 
++
++//
++// sek8s: ACPI verification for SEV-SNP. See ProcessCmdAllocate / InstallQemuFwCfgTables.
++//
++#define SEK8S_ACPI_PARAM       "sek8s.acpi_sha256="
++#define SEK8S_ACPI_UNVERIFIED  "unverified"
++
++STATIC VOID  *mSek8sAcpiHashCtx = NULL;
++
++STATIC
++VOID
++Sek8sAcpiLog (
++  IN CONST CHAR8  *Msg
++  )
++{
++  SerialPortWrite ((UINT8 *)Msg, AsciiStrLen (Msg));
++}
++
++STATIC
++VOID
++Sek8sAcpiFail (
++  IN CONST CHAR8  *Why
++  )
++{
++  Sek8sAcpiLog ("sek8s: ACPI verification failed: ");
++  Sek8sAcpiLog (Why);
++  Sek8sAcpiLog ("\r\n");
++  CpuDeadLoop ();
++}
++
++STATIC
++VOID
++Sek8sAcpiHashInit (
++  VOID
++  )
++{
++  mSek8sAcpiHashCtx = AllocatePool (Sha256GetContextSize ());
++  if ((mSek8sAcpiHashCtx == NULL) || !Sha256Init (mSek8sAcpiHashCtx)) {
++    Sek8sAcpiFail ("hash init");
++  }
++}
++
++//
++// Each item is framed as name[QEMU_LOADER_FNAME_SIZE] || size (UINT64 LE) || bytes, so
++// the stream cannot be re-split into different blobs with the same digest.
++//
++STATIC
++VOID
++Sek8sAcpiHashItem (
++  IN CONST CHAR8  *Name,
++  IN CONST VOID   *Data,
++  IN UINTN        Size
++  )
++{
++  CHAR8   NameBuf[QEMU_LOADER_FNAME_SIZE];
++  UINT64  Size64;
++
++  if (mSek8sAcpiHashCtx == NULL) {
++    Sek8sAcpiFail ("blob before table-loader");
++  }
++
++  ZeroMem (NameBuf, sizeof NameBuf);
++  CopyMem (NameBuf, Name, AsciiStrnLenS (Name, sizeof NameBuf - 1));
++  Size64 = Size;
++  if (!Sha256Update (mSek8sAcpiHashCtx, NameBuf, sizeof NameBuf) ||
++      !Sha256Update (mSek8sAcpiHashCtx, &Size64, sizeof Size64) ||
++      !Sha256Update (mSek8sAcpiHashCtx, Data, Size))
++  {
++    Sek8sAcpiFail ("hash update");
++  }
++}
++
++STATIC
++VOID
++Sek8sAcpiVerify (
++  VOID
++  )
++{
++  UINT8         Digest[SHA256_DIGEST_SIZE];
++  CHAR8         Got[SHA256_DIGEST_SIZE * 2 + 1];
++  UINT32        CmdSize;
++  CHAR8         *Cmd;
++  CONST CHAR8   *Want;
++  CONST CHAR8   *Hit;
++  UINTN         Idx;
++  STATIC CONST CHAR8  Hex[] = "0123456789abcdef";
++
++  if ((mSek8sAcpiHashCtx == NULL) || !Sha256Final (mSek8sAcpiHashCtx, Digest)) {
++    Sek8sAcpiFail ("hash final");
++  }
++
++  FreePool (mSek8sAcpiHashCtx);
++  mSek8sAcpiHashCtx = NULL;
++
++  for (Idx = 0; Idx < SHA256_DIGEST_SIZE; Idx++) {
++    Got[2 * Idx]     = Hex[Digest[Idx] >> 4];
++    Got[2 * Idx + 1] = Hex[Digest[Idx] & 0xF];
++  }
++
++  Got[SHA256_DIGEST_SIZE * 2] = '\0';
++  Sek8sAcpiLog ("sek8s: ACPI sha256 ");
++  Sek8sAcpiLog (Got);
++  Sek8sAcpiLog ("\r\n");
++
++  //
++  // The expected value rides in the kernel cmdline. Read it the way
++  // QemuKernelLoaderFsDxe does and verify it against the SEV hashes table (VerifyBlob
++  // halts on a hash mismatch itself), so the value is covered by the launch digest.
++  //
++  QemuFwCfgSelectItem (QemuFwCfgItemCommandLineSize);
++  CmdSize = QemuFwCfgRead32 ();
++  if (CmdSize == 0) {
++    Sek8sAcpiFail ("no kernel cmdline");
++  }
++
++  Cmd = AllocatePool (CmdSize);
++  if (Cmd == NULL) {
++    Sek8sAcpiFail ("cmdline alloc");
++  }
++
++  QemuFwCfgSelectItem (QemuFwCfgItemCommandLineData);
++  QemuFwCfgReadBytes (CmdSize, Cmd);
++  if (EFI_ERROR (VerifyBlob (L"cmdline", Cmd, CmdSize, EFI_SUCCESS))) {
++    Sek8sAcpiFail ("cmdline not verified against the SEV hashes table");
++  }
++
++  if (Cmd[CmdSize - 1] != '\0') {
++    Sek8sAcpiFail ("cmdline not NUL-terminated");
++  }
++
++  Hit = NULL;
++  for (Want = Cmd; (Want = AsciiStrStr (Want, SEK8S_ACPI_PARAM)) != NULL; Want++) {
++    if ((Want == Cmd) || (Want[-1] == ' ')) {
++      if (Hit != NULL) {
++        Sek8sAcpiFail ("expected hash given twice");
++      }
++
++      Hit = Want + sizeof (SEK8S_ACPI_PARAM) - 1;
++    }
++  }
++
++  if (Hit == NULL) {
++    Sek8sAcpiFail ("no " SEK8S_ACPI_PARAM " in cmdline");
++  }
++
++  //
++  // A test boot names no hash. The value is in the verified cmdline, so the launch digest
++  // differs from every one computed with a real hash: the guest boots but cannot attest.
++  //
++  Idx = sizeof (SEK8S_ACPI_UNVERIFIED) - 1;
++  if ((AsciiStrnCmp (Hit, SEK8S_ACPI_UNVERIFIED, Idx) == 0) &&
++      ((Hit[Idx] == '\0') || (Hit[Idx] == ' ')))
++  {
++    FreePool (Cmd);
++    Sek8sAcpiLog ("sek8s: ACPI tables NOT verified (" SEK8S_ACPI_PARAM SEK8S_ACPI_UNVERIFIED ")\r\n");
++    return;
++  }
++
++  Idx = AsciiStrnLenS (Hit, sizeof Got);
++  if ((Idx < sizeof Got - 1) || ((Idx > sizeof Got - 1) && (Hit[sizeof Got - 1] != ' '))) {
++    Sek8sAcpiFail ("malformed expected hash");
++  }
++
++  if (CompareMem (Hit, Got, sizeof Got - 1) != 0) {
++    Sek8sAcpiFail ("hash does not match cmdline");
++  }
++
++  FreePool (Cmd);
++  Sek8sAcpiLog ("sek8s: ACPI tables verified\r\n");
++}
++
+ /**
+   Process a QEMU_LOADER_ALLOCATE command.
+ 
+@@ -431,6 +605,8 @@ ProcessCmdAllocate (
+     Blob->Size
+     );
+ 
++  Sek8sAcpiHashItem ((CONST CHAR8 *)Allocate->File, Blob->Base, Blob->Size);
++
+   return EFI_SUCCESS;
+ 
+ FreeBlob:
+@@ -1120,7 +1296,7 @@ InstallQemuFwCfgTables (
+ 
+   Status = QemuFwCfgFindFile ("etc/table-loader", &FwCfgItem, &FwCfgSize);
+   if (EFI_ERROR (Status)) {
+-    return Status;
++    Sek8sAcpiFail ("no etc/table-loader");
+   }
+ 
+   if (FwCfgSize % sizeof *LoaderEntry != 0) {
+@@ -1157,6 +1333,9 @@ InstallQemuFwCfgTables (
+     FwCfgSize
+     );
+ 
++  Sek8sAcpiHashInit ();
++  Sek8sAcpiHashItem ("etc/table-loader", LoaderStart, FwCfgSize);
++
+   LoaderEnd = LoaderStart + FwCfgSize / sizeof *LoaderEntry;
+ 
+   AllocationsRestrictedTo32Bit = NULL;
+@@ -1246,6 +1425,8 @@ InstallQemuFwCfgTables (
+     }
+   }
+ 
++  Sek8sAcpiVerify ();
++
+   InstalledKey = AllocatePool (INSTALLED_TABLES_MAX * sizeof *InstalledKey);
+   if (InstalledKey == NULL) {
+     Status = EFI_OUT_OF_RESOURCES;

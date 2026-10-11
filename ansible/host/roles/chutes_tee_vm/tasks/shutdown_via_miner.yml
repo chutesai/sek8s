@@ -18,15 +18,22 @@
   delegate_to: localhost
   become: false
 
-- name: Wait for QEMU guest process to exit
-  ansible.builtin.script:
-    executable: /bin/bash
-    cmd: is_live_chutes_td.sh
+# Deliberately NOT is_live_chutes_td.sh. That answers "is a guest serving?", and a QEMU that
+# powered its guest off but is still reclaiming its private memory answers no -- while
+# still holding the image's write lock for as long as it runs. Waiting on that answer declared
+# the guest gone and marched into the qcow2 lock collision the comment below warns about.
+# `host devices-free` answers the question that matters here: has QEMU let go?
+- name: Wait for the QEMU guest process to let go of its devices and image
+  ansible.builtin.command:
+    argv:
+      - chutes-cvm
+      - host
+      - devices-free
   register: power_wait
-  # rc == 1 means no live guest — that's our success condition
+  # rc == 0 means nothing holds them any more — that is our success condition.
   failed_when: false
   changed_when: false
-  until: power_wait.rc != 0
+  until: power_wait.rc == 0
   retries: "{{ (upgrade_powerdown_timeout_seconds | int) // 5 }}"
   delay: 5
 
@@ -35,13 +42,16 @@
 # relaunch refreshes the config volume (qemu-nbd cannot lock an image a live
 # QEMU still holds). SIGTERM -> SIGKILL the chutes-td QEMU and re-check.
 - name: Force-stop guest if it did not power down gracefully
-  ansible.builtin.script:
-    executable: /bin/bash
-    cmd: stop_chutes_td.sh
+  ansible.builtin.command:
+    argv:
+      - chutes-cvm
+      - guest
+      - stop
+      - --force
   register: _force_stop
   failed_when: false
-  changed_when: power_wait.rc == 0
-  when: power_wait.rc == 0
+  changed_when: power_wait.rc != 0
+  when: power_wait.rc != 0
 
 # A guest that survives SIGKILL is in uninterruptible (D) state and will keep
 # the image lock until reboot. Fail loudly with that instruction instead of
@@ -49,11 +59,12 @@
 - name: Fail when guest could not be stopped (host reboot required)
   ansible.builtin.fail:
     msg: >-
-      The chutes-td guest did not power down gracefully and could not be killed
-      (SIGKILL ineffective — the QEMU process is stuck in uninterruptible D-state
-      from hung I/O). Its qcow2 image lock will block VM relaunch. Reboot
-      {{ inventory_hostname }} and re-run this playbook.
+      The chutes-td guest did not let go of its devices and image, and could not be
+      force-stopped. Read the details below before rebooting: a QEMU still reclaiming
+      the previous guest's memory clears on its own (and a plain `reboot` would hang on the
+      blocked unbinds), whereas one stuck in uninterruptible D-state needs a SysRq reset.
+      Either way its qcow2 lock blocks a relaunch until it is gone.
       Details: {{ (_force_stop.stdout | default('')) ~ ' ' ~ (_force_stop.stderr | default('')) }}
   when:
-    - power_wait.rc == 0
+    - power_wait.rc != 0
     - _force_stop.rc | default(0) != 0

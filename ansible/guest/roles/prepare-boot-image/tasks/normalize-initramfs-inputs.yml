@@ -7,7 +7,7 @@
 #
 #   overlayroot  writes a fresh /.random-seed into every initramfs. It also installs an
 #                init-bottom script that can mount an overlay over the root filesystem, and it
-#                sorts BEFORE rtmr3-measure — an unused root-remount mechanism sitting in the
+#                sorts BEFORE rootfs-measure — an unused root-remount mechanism sitting in the
 #                measured boot path ahead of the thing that measures the root. sek8s uses a
 #                LUKS-encrypted writable root and never an overlay.
 #   mdadm        bakes a generation timestamp into mdadm.conf. RAID is a HOST concern here
@@ -16,7 +16,7 @@
 #   copymods     mounts a tmpfs over $rootmnt/lib/modules. No-ops here (exits early when the root
 #                already has modules for the running kernel) and reads only RTMR2-covered inputs,
 #                so this is dead weight rather than exposure — but it is another unused mount
-#                primitive sorting ahead of rtmr3-measure.
+#                primitive sorting ahead of rootfs-measure.
 #   dyn-netconf  writes a BOOTIF interface file into /run. Guest networking is static; unused.
 #
 # Hooks not packages: all four are ubuntu-server `Depends:`, so purging them would drag

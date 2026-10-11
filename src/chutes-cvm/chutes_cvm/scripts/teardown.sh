@@ -46,7 +46,12 @@ if [[ "$NO_STOP" == "true" ]]; then
 else
   echo "Force-stopping Chutes VM (if running)..."
   # --force: this is teardown's hard-kill step; `guest stop` alone now powers off gracefully.
-  chutes-cvm guest stop --force 2>/dev/null || true
+  # It fails when QEMU survives SIGKILL (still reclaiming the guest's memory, holding the devices
+  # and the image's write lock), and says why; tearing down around a live QEMU would hide that.
+  if ! chutes-cvm guest stop --force; then
+    echo "teardown.sh: the VM could not be stopped (see above); leaving the environment in place." >&2
+    exit 1
+  fi
 fi
 
 echo "Waiting for VM processes to exit..."

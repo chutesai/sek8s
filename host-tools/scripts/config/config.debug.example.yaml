@@ -8,7 +8,11 @@ vm:
   
 miner:
   ss58: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-  seed: "your_seed_here"
+  # One key, hex without 0x: the hotkey file's privateKey (128 chars).
+  private_key: "your_private_key_here"
+  # Or, instead of private_key, the hotkey file's secretSeed (64 chars). Hotkey files from newer
+  # btcli / Bittensor releases may not include secretSeed; use private_key for those.
+  # seed: "your_seed_here"
 
 # Optional Docker Hub auth (same as production). Helps avoid anonymous Hub rate limits during pulls/cosign.
 # https://docs.docker.com/docker-hub/access-tokens/

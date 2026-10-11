@@ -66,7 +66,7 @@ The build process:
 3. Applies security hardening and admission policies
 4. Encrypts root filesystem with LUKS
 5. Configures initramfs for TDX-based boot unlock
-6. Outputs the final encrypted image SET under `guest-tools/image/<build_env>/<vm_version>/` — the `<vm_version>.qcow2`, its direct-boot `.vmlinuz`/`.initrd`/`.cmdline` sidecars, and `manifest.json` (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; a debug build appends `-debug` to both the directory and the image name). The directory is a ready-to-use image set: copy it into `/var/lib/chutes/base-images/<variant>/` to boot it with `chutes-cvm guest launch`.
+6. Outputs the final encrypted image SET under `guest-tools/image/<build_env>/<vm_version>/` — the `<vm_version>.qcow2`, its direct-boot `.vmlinuz`/`.initrd`/`.cmdline` sidecars, and `manifest.json`, which also records the guest firmware the image was built with (see `playbooks/group_vars/host.yml` and inventory `build_env`; `vm_version` comes from `ansible/guest/VERSION`; a debug build appends `-debug` to both the directory and the image name). The directory is a ready-to-use image set: copy it into `/var/lib/chutes/base-images/<variant>/` to boot it with `chutes-cvm guest launch`.
 
 At the **start** of `chutes-miner-vm.yml` (before the build VM is launched), the playbook prints the build configuration and **pauses for confirmation** (press Enter to continue, Ctrl+C to abort).
 
@@ -100,7 +100,7 @@ Production VMs require three attached volumes (created by `chutes-cvm guest laun
 - **Contents**:
   - `hostname` - Node hostname
   - `miner-ss58` - Bittensor SS58 address
-  - `miner-seed` - Bittensor secret seed
+  - `miner-private-key` or `miner-seed` - the hotkey's sr25519 private key or secret seed (exactly one)
   - `network-config.yaml` - Netplan configuration
   - `docker-hub-username` - (optional) Docker Hub username for authenticated pulls
   - `docker-hub-token` - (optional) Docker Hub PAT for authenticated pulls and cosign

@@ -15,10 +15,11 @@ class AttestationProxyConfig(AuthConfig):
 
     allowed_validators_str: str = Field(..., alias="ALLOWED_VALIDATORS")
     miner_ss58: str = Field(..., alias="MINER_SS58")
-    # Optional: the miner sr25519 seed. When set (new charts inject it from the
-    # miner-credentials secret), the external proxy signs each response with the miner
-    # hotkey as a release-candidate proof-of-possession. Absent (old charts running the
+    # Optional: the miner hotkey credential, the sr25519 private key or the seed (the
+    # miner-credentials secret holds one). When set, the external proxy signs each response with
+    # the miner hotkey as a release-candidate proof-of-possession. Absent (old charts running the
     # latest image) -> no signing, unchanged pass-through, so older VMs keep working.
+    miner_private_key: Optional[str] = Field(default=None, alias="MINER_PRIVATE_KEY")
     miner_seed: Optional[str] = Field(default=None, alias="MINER_SEED")
 
     model_config = SettingsConfigDict(

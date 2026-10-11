@@ -1,8 +1,6 @@
 ---
-# Required: path where the checkpoint image will be saved.
-# Set via `vars:` when including this role, e.g.:
-#   vars:
-#     checkpoint_img_path: "{{ prepared_img_path }}"
+# Required: path where the checkpoint image will be saved. resume-checkpoint sets it (as a fact)
+# from the checkpoint's name and inputs; it can also be set via `vars:` when including this role.
 checkpoint_img_path: ""
 
 # Build VM network — must match run-vm defaults. Override via inventory group_vars

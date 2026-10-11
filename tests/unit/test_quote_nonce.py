@@ -99,3 +99,13 @@ async def test_get_quote_builds_full_width_report_data():
     assert len(report_data) == 128
     assert report_data[:64] == VALID_NONCE
     assert report_data[64:] == CERT_HASH
+
+
+@pytest.mark.parametrize("gap", [" ", "\t", "\n"], ids=["space", "tab", "newline"])
+def test_rejects_embedded_whitespace(gap):
+    """64 characters, but whitespace between byte pairs is skipped by bytes.fromhex, so 62 hex
+    digits and a 2-character gap would decode to 31 bytes."""
+    nonce = "a" * 30 + gap * 2 + "a" * 32
+    assert len(nonce) == QUOTE_NONCE_HEX_LEN
+    with pytest.raises(NonceError, match="hexadecimal"):
+        validate_quote_nonce(nonce)

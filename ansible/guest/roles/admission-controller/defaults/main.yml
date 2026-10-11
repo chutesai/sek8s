@@ -7,6 +7,10 @@ opa_version: "1.15.2"
 # v2.6.3 is the last v2 security patch (fixes CVE-2026-39395). Project uses 'cosign verify --key'
 # which is stable across v2 and v3; staying on v2 avoids any v3 bundle-format changes.
 cosign_version: "2.6.3"
+# SHA-256 of each download at the versions above (amd64), from the projects' published checksum
+# files; bump them together.
+opa_sha256: "a9d9481e463e7af8cb1a2cd7c3deb764f0327b3281c54e632546c2f425fc0824"
+cosign_sha256: "3c5ca64d02d9af45586bdca78cf85ce138881c1a60450871f0438e50070b6e4b"
 opa_log_level: "info"
 # Per-decision logging (full AdmissionReview input → journal). OFF in prod: it is
 # high-volume noise that evicts the boot/attestation history from the journal window,

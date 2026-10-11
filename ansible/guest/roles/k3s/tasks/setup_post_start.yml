@@ -14,7 +14,7 @@
 
 # Written on EVERY build, not just debug. /etc/systemd/system is measured as a whole directory,
 # so this drop-in is covered by RTMR3 either way — but shipping it on both means a flipped value
-# is a CONTENT change with a manifest entry, which rtmr3-verify catches at boot and powers off on.
+# is a CONTENT change with a manifest entry, which rootfs-verify catches at boot and powers off on.
 # Were it absent on production, adding it offline would only show up as a failed remote
 # attestation, after the VM had already booted with the fail-closed poweroff disabled.
 - name: Create k3s-post-start drop-in directory

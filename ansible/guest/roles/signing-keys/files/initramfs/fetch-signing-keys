@@ -15,13 +15,13 @@
 #     delegated via the RSA chain: RTMR3 attests root pubkey → root pubkey
 #     verifies the signature → signature authenticates the leaf key.
 #   - If any signature check fails, or the API is unreachable, the VM powers
-#     off.  Fail-closed by design — same pattern as rtmr3-measure.
+#     off.  Fail-closed by design — same pattern as rootfs-measure.
 #
 # Ordering:
 #   PREREQ="" — no init-bottom ordering dependency needed.  Network was
 #   established by fetch_key_and_unlock (init-premount), which always
 #   completes before any init-bottom script runs (guaranteed by
-#   initramfs-tools stage ordering).  Output keys are not in tdx-measure.conf
+#   initramfs-tools stage ordering).  Output keys are not in tee-measure.conf
 #   and are not measured into RTMR3.
 
 PREREQ=""

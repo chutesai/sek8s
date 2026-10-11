@@ -258,7 +258,7 @@ typetest = ["mypy ; implementation_name == \"cpython\"", "pyright", "typing-exte
 
 [[package]]
 name = "attestation-proxy"
-version = "0.3.2"
+version = "0.3.3"
 description = "Dual-port attestation proxy for sek8s"
 optional = false
 python-versions = ">=3.12,<3.15"
@@ -853,7 +853,7 @@ files = [
 
 [[package]]
 name = "chutes-cvm"
-version = "0.1.0"
+version = "0.3.0"
 description = "CLI and toolkit for operating Chutes confidential GPU VMs (host inspection, launch, attestation preflight, measurement generation)"
 optional = false
 python-versions = ">=3.12,<3.15"
@@ -3857,7 +3857,7 @@ test = ["coverage", "pytest"]
 
 [[package]]
 name = "sek8s"
-version = "0.4.0"
+version = "0.5.0"
 description = "GPU infrastructure for Chutes miners and zero-trust workloads"
 optional = false
 python-versions = ">=3.12,<3.15"
@@ -3894,7 +3894,7 @@ url = "src/sek8s"
 
 [[package]]
 name = "sek8s-common"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared utilities for sek8s packages"
 optional = false
 python-versions = ">=3.12,<3.15"

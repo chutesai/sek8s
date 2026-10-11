@@ -1,9 +1,9 @@
-"""TDX host setup orchestration.
+"""TDX / SEV-SNP host setup orchestration.
 
 Consumes a HostRecipe and executes the setup steps: PPAs, packages,
 kernel selection, GRUB configuration, and kvm group membership.
-All OS-version differences are encoded in the recipe — this module
-contains no version-specific branching.
+All OS-version and platform differences are encoded in the recipe — this
+module contains no version- or platform-specific branching.
 """
 
 import argparse
@@ -14,7 +14,10 @@ import sys
 from urllib.parse import urlparse
 
 from chutes_cvm import proc
+from chutes_cvm.guest.detection import detect_cpu_vendor
+from chutes_cvm.guest.tee import TeeProvider
 from chutes_cvm.host.recipes import PPA, APTRepo, HostRecipe, resolve_recipe
+from chutes_cvm.host.system import run, write_system_file
 
 # Fabric Manager version must match the NVIDIA driver version in the guest
 # image.  FM communicates with GPU firmware shared between host and guest;
@@ -25,12 +28,6 @@ from chutes_cvm.host.recipes import PPA, APTRepo, HostRecipe, resolve_recipe
 # 0ubuntu0.26.04.1 revision that was never published, which made host setup fail on
 # B200/B300 (the only hosts that reach the FM step) with an apt "no installation candidate".
 FM_PKG_VERSION = "595.71.05-1ubuntu1"
-
-
-def _run(cmd: list[str], **kwargs):
-    """Run a command, printing it first. Raises on failure."""
-    print(f"  $ {' '.join(cmd)}")
-    proc.run(cmd, check=True, **kwargs)
 
 
 def _assert_kernel_available(kernel_package: str) -> None:
@@ -81,7 +78,7 @@ def _add_repo(repo: APTRepo):
         # through the package means apt updates the key if NVIDIA rotates it.
         keyring_path = repo.signing_key_path
         deb_path = f"/tmp/{repo.name}-keyring.deb"  # nosec B108
-        _run(
+        run(
             [
                 "sudo",
                 "curl",
@@ -92,11 +89,11 @@ def _add_repo(repo: APTRepo):
                 repo.signing_key_deb,
             ]
         )
-        _run(["sudo", "dpkg", "-i", deb_path])
+        run(["sudo", "dpkg", "-i", deb_path])
     else:
         keyring_path = f"/etc/apt/keyrings/{repo.name}.asc"
-        _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
-        _run(
+        run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+        run(
             [
                 "sudo",
                 "curl",
@@ -114,7 +111,7 @@ def _add_repo(repo: APTRepo):
     if repo.components:
         sources_content += f"Components: {repo.components}\n"
     sources_content += f"Signed-By: {keyring_path}\n"
-    _write_system_file(sources_file, sources_content)
+    write_system_file(sources_file, sources_content)
 
     # Pin by the repo's OWN host. This was hardcoded to download.01.org, so every repo added
     # here wrote a pin naming Intel's origin — harmless while Intel was the only repo, and
@@ -124,7 +121,7 @@ def _add_repo(repo: APTRepo):
     pin_content = (
         f"Package: *\n" f"Pin: origin {origin}\n" f"Pin-Priority: {repo.pin_priority}\n"
     )
-    _write_system_file(pin_file, pin_content)
+    write_system_file(pin_file, pin_content)
 
 
 def _add_ppa(ppa: PPA, codename: str):
@@ -140,7 +137,7 @@ def _add_ppa(ppa: PPA, codename: str):
         _add_ppa_manual(ppa, suite)
     else:
         print(f"  Adding PPA: {ppa.uri}")
-        _run(["sudo", "add-apt-repository", "-y", ppa.uri])
+        run(["sudo", "add-apt-repository", "-y", ppa.uri])
 
     distro_id = f"LP-PPA-{ppa.team}-{ppa.name}"
     pin_file = (
@@ -151,7 +148,7 @@ def _add_ppa(ppa: PPA, codename: str):
         f"Pin: release o={distro_id}\n"
         f"Pin-Priority: {ppa.pin_priority}\n"
     )
-    _write_system_file(pin_file, pin_content)
+    write_system_file(pin_file, pin_content)
 
     unattended_file = f"/etc/apt/apt.conf.d/99unattended-upgrades-kobuk-{ppa.name}"
     unattended_content = (
@@ -160,7 +157,7 @@ def _add_ppa(ppa: PPA, codename: str):
         f"}};\n"
         f'Unattended-Upgrade::Allow-downgrade "true";\n'
     )
-    _write_system_file(unattended_file, unattended_content)
+    write_system_file(unattended_file, unattended_content)
 
 
 def _add_ppa_manual(ppa: PPA, suite: str):
@@ -176,7 +173,7 @@ def _add_ppa_manual(ppa: PPA, suite: str):
 
     _remove_stale_ppa_sources(ppa)
 
-    _run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
+    run(["sudo", "mkdir", "-p", "/etc/apt/keyrings"])
     _fetch_signing_key(ppa.signing_key, keyring_path)
 
     sources_content = (
@@ -186,7 +183,7 @@ def _add_ppa_manual(ppa: PPA, suite: str):
         f"Components: main\n"
         f"Signed-By: {keyring_path}\n"
     )
-    _write_system_file(sources_file, sources_content)
+    write_system_file(sources_file, sources_content)
 
 
 def _fetch_signing_key(fingerprint: str, dest: str):
@@ -215,16 +212,7 @@ def _remove_stale_ppa_sources(ppa: PPA):
     for pattern in patterns:
         for path in glob.glob(pattern):
             print(f"  Removing stale PPA source: {path}")
-            _run(["sudo", "rm", "-f", path])
-
-
-def _write_system_file(path: str, content: str):
-    """Write content to a root-owned system file via tee."""
-    _run(
-        ["sudo", "tee", path],
-        input=content.encode(),
-        stdout=proc.DEVNULL,
-    )
+            run(["sudo", "rm", "-f", path])
 
 
 _CONCRETE_KERNEL_RE = re.compile(r"linux-image-(\d+\.\d+\.\d+-\d+-[a-z0-9-]+)")
@@ -295,11 +283,11 @@ def _grub_set_kernel(kernel_version: str):
     saved_entry = f"{mid}>{kid}" if mid else kid
 
     grub_default_cfg = "/etc/default/grub.d/99-tdx-kernel.cfg"
-    _write_system_file(
+    write_system_file(
         grub_default_cfg,
         "GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n",
     )
-    _run(
+    run(
         [
             "sudo",
             "grub-editenv",
@@ -308,7 +296,7 @@ def _grub_set_kernel(kernel_version: str):
             f"saved_entry={saved_entry}",
         ],
     )
-    _run(["sudo", "update-grub"])
+    run(["sudo", "update-grub"])
 
 
 def _grub_update_cmdline(additions: list[str]):
@@ -331,11 +319,11 @@ def _grub_update_cmdline(additions: list[str]):
         modified = True
 
     if modified:
-        _write_system_file(grub_file, content)
-        _run(["sudo", "update-grub"])
+        write_system_file(grub_file, content)
+        run(["sudo", "update-grub"])
         # --no-nvram prevents grub-install from updating EFI boot order
         # (important for MAAS-managed machines that expect PXE boot)
-        _run(["sudo", "grub-install", "--no-nvram"])
+        run(["sudo", "grub-install", "--no-nvram"])
 
 
 _BLACKWELL_HGX_GPU_IDS = ("10de:2901", "10de:3182")  # B200, B300
@@ -396,7 +384,7 @@ def _setup_host_fabric_manager():
                 print(f"  {ib_umad_conf} already up to date")
                 already_current = True
     if not already_current:
-        _write_system_file(ib_umad_conf, ib_umad_content)
+        write_system_file(ib_umad_conf, ib_umad_content)
         print(f"  ✓ {ib_umad_conf} written")
 
     # Load ib_umad now (idempotent — modprobe is a no-op if already loaded).
@@ -447,7 +435,7 @@ def _setup_host_fabric_manager():
 
     # Pin to the exact version — matches how the Ansible guest role pins
     # nvidia packages via /etc/apt/preferences.d/nvidia-version-pin.
-    _run(
+    run(
         [
             "apt",
             "install",
@@ -477,7 +465,7 @@ def _setup_host_fabric_manager():
         if "PARTITION_RAIL_POLICY" not in original:
             updated = original.rstrip() + "\nPARTITION_RAIL_POLICY=symmetric\n"
         if updated != original:
-            _write_system_file(fm_cfg, updated)
+            write_system_file(fm_cfg, updated)
             print(f"  ✓ {fm_cfg}: PARTITION_RAIL_POLICY set to symmetric")
         else:
             print(f"  {fm_cfg}: PARTITION_RAIL_POLICY already configured")
@@ -495,14 +483,14 @@ def _setup_host_fabric_manager():
         == 0
     )
 
-    _run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
+    run(["sudo", "systemctl", "enable", "nvidia-fabricmanager"])
     if already_running:
         print(
             "  nvidia-fabricmanager.service already running — restarting to pick up config changes"
         )
-        _run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
+        run(["sudo", "systemctl", "restart", "nvidia-fabricmanager"])
     else:
-        _run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
+        run(["sudo", "systemctl", "start", "nvidia-fabricmanager"])
     print("  ✓ nvidia-fabricmanager.service enabled and running")
 
 
@@ -538,8 +526,8 @@ def _blacklist_gpu_drivers():
                 already_current = True
 
     if not already_current:
-        _write_system_file(blacklist_path, blacklist_content)
-        _run(["sudo", "update-initramfs", "-u"])
+        write_system_file(blacklist_path, blacklist_content)
+        run(["sudo", "update-initramfs", "-u"])
         print(f"  ✓ GPU driver blacklist installed ({blacklist_path})")
 
     # Unload any auto-loaded GPU driver immediately (no reboot required) so it
@@ -560,63 +548,6 @@ def _blacklist_gpu_drivers():
             print(f"  ✓ {mod} unloaded")
 
 
-def _configure_qcnl(conf_path: str = "/etc/sgx_default_qcnl.conf"):
-    """Ensure QCNL accepts PCCS's self-signed TLS certificate.
-
-    PCCS runs locally with a self-signed cert.  The default QCNL config ships
-    with use_secure_cert=true which causes CURL error 60 on every quote
-    request.  We patch it to false so QGS can reach the local PCCS.
-
-    The file is a JSON5-ish format (allows comments and trailing commas) so
-    we use a regex patch rather than json.loads to avoid stripping comments.
-    """
-    if not os.path.exists(conf_path):
-        print(f"  {conf_path} not found — QCNL not installed yet, skipping")
-        return
-
-    with open(conf_path) as f:
-        original = f.read()
-
-    updated = re.sub(
-        r'"use_secure_cert"\s*:\s*true',
-        '"use_secure_cert": false',
-        original,
-    )
-
-    if updated == original:
-        print(f"  {conf_path} already has use_secure_cert=false")
-        return
-
-    print(f"  Patching {conf_path}: use_secure_cert → false")
-    _write_system_file(conf_path, updated)
-
-
-def _configure_qgs_vsock(conf_path: str = "/etc/qgs.conf"):
-    """Ensure QGS uses vsock (port 4050) rather than a Unix domain socket.
-
-    The default shipped config has the port line commented out, which causes
-    QGS to bind a Unix socket that the VM cannot reach.  We uncomment/set
-    'port = 4050' so QGS listens on vsock and restarts the service if the
-    file was changed.
-    """
-    if not os.path.exists(conf_path):
-        print(f"  {conf_path} not found — QGS not installed yet, skipping")
-        return
-
-    with open(conf_path) as f:
-        original = f.read()
-
-    updated = re.sub(r"^#?\s*port\s*=.*$", "port = 4050", original, flags=re.MULTILINE)
-
-    if updated == original:
-        print(f"  {conf_path} already set to vsock port 4050")
-        return
-
-    print(f"  Configuring {conf_path}: enabling vsock port 4050")
-    _write_system_file(conf_path, updated)
-    _run(["sudo", "systemctl", "restart", "qgsd"])
-
-
 def _add_user_to_kvm():
     """Add the invoking (non-root) user to the kvm group."""
     user = os.environ.get("SUDO_USER") or os.environ.get("USER")
@@ -624,31 +555,7 @@ def _add_user_to_kvm():
         print("  Skipping kvm group (running as root with no SUDO_USER)")
         return
     print(f"  Adding {user} to kvm group")
-    _run(["sudo", "usermod", "-aG", "kvm", user])
-
-
-def _ensure_pccs_node_modules(pccs_dir: str = "/opt/intel/sgx-dcap-pccs"):
-    """Run npm install in the PCCS directory when node_modules are absent.
-
-    sgx-dcap-pccs Debian post-install only calls npm install during interactive
-    debconf prompts.  With DEBIAN_FRONTEND=noninteractive the step is skipped,
-    leaving node_modules/ empty and the service unable to start.
-    """
-    node_modules = os.path.join(pccs_dir, "node_modules")
-    if os.path.isdir(node_modules):
-        print(f"  {pccs_dir}/node_modules already present, skipping npm install")
-        return
-
-    package_json = os.path.join(pccs_dir, "package.json")
-    if not os.path.exists(package_json):
-        print(
-            f"  {pccs_dir}/package.json not found — sgx-dcap-pccs not installed, skipping"
-        )
-        return
-
-    print(f"  node_modules missing in {pccs_dir}, running npm install...")
-    _run(["npm", "install", "--prefer-offline"], cwd=pccs_dir)
-    print("  ✓ PCCS node_modules installed")
+    run(["sudo", "usermod", "-aG", "kvm", user])
 
 
 _CHRONY_CONF = """\
@@ -683,8 +590,8 @@ def _setup_ntp():
     # timesyncd only slews; mask it so chrony owns the clock. Tolerant — it may be absent/masked.
     for action in ("stop", "disable", "mask"):
         proc.run(["systemctl", action, "systemd-timesyncd"], check=False)
-    _write_system_file("/etc/chrony/chrony.conf", _CHRONY_CONF)
-    _run(["systemctl", "enable", "--now", "chrony"])
+    write_system_file("/etc/chrony/chrony.conf", _CHRONY_CONF)
+    run(["systemctl", "enable", "--now", "chrony"])
     # Force an immediate step, then best-effort wait for the first sync (never fatal).
     proc.run(["chronyc", "makestep"], check=False)
     waited = proc.run(["chronyc", "waitsync", "60", "1", "0", "1"], check=False)
@@ -707,21 +614,21 @@ def _ensure_chutes_dirs():
 
 
 def setup_host(recipe: HostRecipe, noninteractive: bool = False):
-    """Execute TDX host setup using the given recipe.
+    """Set this host up for the recipe's platform on the recipe's OS.
 
     Must be run as root (or via sudo). This is the complete per-host configuration — a host is
     launch-ready after it (modulo the CLI install itself, PCCS secrets, and a reboot, which the
     ansible layer owns). Steps:
-    1. Add PPAs with apt pinning
+    1. Add PPAs with apt pinning, and the recipe's repos
     2. apt update
-    3. Install kernel + base_packages (chrony/aria2/xfsprogs) + packages
+    3. Install kernel + base_packages (chrony/aria2/xfsprogs) + the recipe's packages
     3b. Configure chrony (NTP, immediate clock step)
     4. Set kernel as default boot target
-    5. Update GRUB cmdline
-    6. Configure QGS for vsock (port 4050)
-    7. Configure QCNL to accept local PCCS self-signed cert
-    8. Add user to kvm group
-    9. Ensure /var/lib/chutes directories
+    5. Update GRUB cmdline with the recipe's parameters
+    6. Host attestation services, as the recipe configures them (TDX: QGS vsock, QCNL, PCCS
+       modules; SEV-SNP: none -- the PSP answers the guest's report requests directly)
+    7. Add user to kvm group
+    8. Ensure /var/lib/chutes directories
 
     When noninteractive=True (e.g. called by Ansible via --noninteractive),
     DEBIAN_FRONTEND=noninteractive is set so apt never blocks on prompts.
@@ -732,7 +639,7 @@ def setup_host(recipe: HostRecipe, noninteractive: bool = False):
     its own post-install flow.
     """
     print(f"\n{'=' * 60}")
-    print(f"  TDX Host Setup: {recipe.describe()}")
+    print(f"  Host setup: {recipe.describe()}")
     print(f"{'=' * 60}\n")
 
     if os.geteuid() != 0:
@@ -754,8 +661,8 @@ def setup_host(recipe: HostRecipe, noninteractive: bool = False):
     # 1. PPAs
     if recipe.ppas:
         print("Step 1: Adding APT PPAs...")
-        _run(["apt", "update"])
-        _run(["apt", "install", "--yes", "software-properties-common", "gawk"])
+        run(["apt", "update"])
+        run(["apt", "install", "--yes", "software-properties-common", "gawk"])
         for ppa in recipe.ppas:
             _add_ppa(ppa, recipe.codename)
     else:
@@ -767,13 +674,13 @@ def setup_host(recipe: HostRecipe, noninteractive: bool = False):
 
     # 2. apt update
     print("\nStep 2: Updating package index...")
-    _run(["apt", "update"])
+    run(["apt", "update"])
 
     # 3. Install kernel + packages (base_packages = the folded-in host deps: chrony/aria2/xfsprogs)
     print(f"\nStep 3: Installing kernel ({recipe.kernel_package}) and packages...")
     _assert_kernel_available(recipe.kernel_package)
     all_packages = [recipe.kernel_package] + recipe.base_packages + recipe.packages
-    _run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
+    run(["apt", "install", "--yes", "--allow-downgrades"] + all_packages)
 
     kernel_version = _get_kernel_version(recipe.kernel_package)
     print(f"  Kernel version resolved: {kernel_version}")
@@ -787,11 +694,6 @@ def setup_host(recipe: HostRecipe, noninteractive: bool = False):
     )
     if result.returncode != 0:
         print(f"  {modules_extra} not available (may be built into the kernel package)")
-
-    if noninteractive:
-        # sgx-dcap-pccs post-install only runs npm install during interactive
-        # debconf prompts; in non-interactive mode we must do it ourselves.
-        _ensure_pccs_node_modules()
 
     # 3b. NTP: chrony (installed above) steps the clock immediately so no VM inherits a skew.
     _setup_ntp()
@@ -812,35 +714,32 @@ def setup_host(recipe: HostRecipe, noninteractive: bool = False):
     print("\nStep 5c: Configuring host Fabric Manager (B200/B300)...")
     _setup_host_fabric_manager()
 
-    # 6. QGS vsock mode
-    print("\nStep 6: Configuring QGS for vsock (port 4050)...")
-    _configure_qgs_vsock()
+    # 6. Host attestation services
+    print("\nStep 6: Configuring host attestation services...")
+    recipe.configure_attestation(noninteractive)
 
-    # 7. QCNL self-signed cert
-    print("\nStep 7: Configuring QCNL to accept local PCCS self-signed cert...")
-    _configure_qcnl()
-
-    # 8. kvm group
-    print("\nStep 8: Configuring kvm group...")
+    # 7. kvm group
+    print("\nStep 7: Configuring kvm group...")
     _add_user_to_kvm()
 
-    # 9. Host directories chutes-cvm operations expect (base image sets / per-VM overlays).
+    # 8. Host directories chutes-cvm operations expect (base image sets / per-VM overlays).
     _ensure_chutes_dirs()
 
     print(f"\n{'=' * 60}")
-    print("  TDX host setup complete. Reboot to load the new kernel.")
+    print(f"  {recipe.tee.label} host setup complete. Reboot to load the new kernel.")
     print(f"{'=' * 60}\n")
 
 
 def main(argv: "list[str] | None" = None) -> int:
     """CLI entry for host setup: `chutes-cvm host setup` (or `python -m chutes_cvm.host.setup`).
 
-    Detects the Ubuntu version, resolves the matching host recipe, and executes the
-    setup steps (PPAs, kernel, packages, GRUB, kvm group). Was the setup-tdx-host script.
+    Detects the Ubuntu version and the host's platform, resolves the matching recipe, and runs the
+    setup steps (PPAs, kernel, packages, GRUB, kvm group). The platform is the CPU vendor's
+    (Intel = TDX, AMD = SEV-SNP), not whether it is enabled yet: setup may be what enables it.
     """
     parser = argparse.ArgumentParser(
         prog="chutes-cvm host setup",
-        description="Set up TDX host for confidential GPU computing",
+        description="Set up this TDX or SEV-SNP host for confidential GPU computing",
     )
     parser.add_argument(
         "--noninteractive",
@@ -854,7 +753,8 @@ def main(argv: "list[str] | None" = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        recipe = resolve_recipe()
+        # Fails before touching the host if this OS has no recipe for the CPU's platform.
+        recipe = resolve_recipe(TeeProvider.for_cpu_vendor(detect_cpu_vendor())())
     except (ValueError, RuntimeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

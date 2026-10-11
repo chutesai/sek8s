@@ -10,9 +10,10 @@
 #
 # Installed scripts (debug set — all-or-nothing):
 #   hooks/fetch_key                 shared  (stages binaries + shell libs)
-#   scripts/init-top/load-tdx       shared
-#   scripts/attest-common           shared  (boot-attestation lib)
-#   scripts/provision-common        shared  (/provision + k3s-encryption lib)
+#   scripts/init-top/load-tee       shared
+#   scripts/init-premount-common    shared  (boot-attestation lib)
+#   scripts/init-bottom-common      shared  (/provision + k3s-encryption lib)
+#   scripts/tee-evidence            shared  (TEE detection + TDX quote / SNP report)
 #   scripts/hotkey-sign             shared  (sr25519 miner-hotkey signing lib)
 #   scripts/init-premount/fetch_key_and_unlock_debug   DEBUG entry (fail-open, no LUKS)
 #   scripts/init-bottom/setup_storage_debug            DEBUG entry (static k3s key)

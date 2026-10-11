@@ -676,6 +676,7 @@ allowed_env_vars := {
     "LANG",
     "LC_ALL",
     "TZ",
+    "MINER_PRIVATE_KEY",
     "MINER_SEED",
     "MINER_SS58",
     "VALIDATORS",

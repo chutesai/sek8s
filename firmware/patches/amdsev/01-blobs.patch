@@ -1,0 +1,20 @@
+diff --git a/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c b/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
+index 4598233ec1..e3e702a5c6 100644
+--- a/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
++++ b/OvmfPkg/QemuKernelLoaderFsDxe/QemuKernelLoaderFsDxe.c
+@@ -1086,7 +1086,14 @@ QemuKernelVerifyBlob (
+       (StrCmp (FileName, L"initrd") != 0) &&
+       (StrCmp (FileName, L"cmdline") != 0))
+   {
+-    return EFI_SUCCESS;
++    //
++    // sek8s: accept only the blobs the SEV hashes table can verify -- kernel,
++    // initrd and cmdline -- so the boot path is exactly the measured one. Any
++    // other name stops the loader file system from being installed, and nothing
++    // boots.
++    //
++    DEBUG ((DEBUG_ERROR, "%a: unexpected boot blob \"%s\"\n", __func__, FileName));
++    return EFI_SECURITY_VIOLATION;
+   }
+ 
+   Blob   = FindKernelBlob (FileName);

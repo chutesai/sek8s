@@ -6,7 +6,11 @@ vm:
 
 miner:
   ss58: {{ chutes_miner_ss58 | to_json }}
+{% if chutes_miner_private_key | default('') | length > 0 %}
+  private_key: {{ chutes_miner_private_key | to_json }}
+{% else %}
   seed: {{ chutes_miner_seed | to_json }}
+{% endif %}
 
 {% if chutes_docker_hub_username is defined and chutes_docker_hub_username | length > 0 and chutes_docker_hub_token is defined and chutes_docker_hub_token | length > 0 %}
 docker_hub:

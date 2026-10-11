@@ -1,5 +1,9 @@
 # ansible/guest/roles/attestation-service/defaults/main.yml
 
+# SHA-256 of Intel's SGX repository signing key: the trust root the SGX/TDX attestation
+# packages are verified against.
+intel_sgx_key_sha256: "92f96f84281031d889deb81060c44325f0481aee621ae47a15ae1df4431b4a23"
+
 # Attestation Service settings
 admission_bind_address: "0.0.0.0"
 admission_port: 8080
