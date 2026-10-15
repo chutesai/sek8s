@@ -158,12 +158,12 @@ Once the VM is running:
 1. **Reachability** – The guest IP (`vm_ip`) is reachable from the host via the bridge (`br0`). The k3s API is NATed to `https://<host_public_ip>:6443`.
 2. **Debug shell (optional)** – Debug images allow SSH. Example:
    ```bash
-   ssh -p 2222 root@192.168.100.2
-   # default password: 123456 (change immediately in debug builds)
+   ssh root@192.168.100.2
+   # debug builds only: root password is "debug"
    ```
 3. **Fetch kubeconfig** – Copy `/etc/rancher/k3s/k3s.yaml` from the guest and point it at the bridged endpoint:
    ```bash
-   scp -P 2222 root@192.168.100.2:/etc/rancher/k3s/k3s.yaml ~/.kube/chutes.yaml
+   scp root@192.168.100.2:/etc/rancher/k3s/k3s.yaml ~/.kube/chutes.yaml
    sed -i "s/127.0.0.1/<host_public_ip>/" ~/.kube/chutes.yaml
    export KUBECONFIG=~/.kube/chutes.yaml
    kubectl get nodes
