@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import os
 import stat
@@ -27,6 +28,9 @@ CLUSTER_DOMAIN = "svc.cluster.local"
 SOCKET_PATH = "/var/run/attestation/attestation.sock"
 MAX_CONSECUTIVE_FAILURES = 5
 
+# Host-service routes that fork chutes-nvevidence; everything else on the socket is cheap.
+EVIDENCE_PATHS = frozenset({"attest", "nvtrust/evidence"})
+
 EXTERNAL_PORT = int(os.getenv("EXTERNAL_PORT", "8443"))
 INTERNAL_PORT = int(os.getenv("INTERNAL_PORT", "8444"))
 SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8002"))
@@ -35,12 +39,36 @@ SERVICE_PORT = int(os.getenv("SERVICE_PORT", "8002"))
 class SharedProxyResources:
     """Shared resources used by both internal and external proxy servers."""
 
-    def __init__(self):
+    def __init__(self, config: AttestationProxyConfig):
         self.unix_client: Optional[httpx.AsyncClient] = None
         self.http_client: Optional[httpx.AsyncClient] = None
         self.consecutive_socket_failures = 0
         self._initialized = False
         self._lock = asyncio.Lock()
+        # Shared by both servers so validator and chute-pod traffic draw from one budget.
+        self.evidence_semaphore = asyncio.Semaphore(config.evidence_concurrency)
+        self.evidence_queue_timeout = config.evidence_queue_timeout
+
+    @asynccontextmanager
+    async def evidence_slot(self):
+        """Hold one of the evidence slots, or 503 if none frees up within the timeout."""
+        try:
+            await asyncio.wait_for(
+                self.evidence_semaphore.acquire(), self.evidence_queue_timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Evidence request queued longer than {self.evidence_queue_timeout}s; rejecting"
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Attestation service busy",
+                headers={"Retry-After": "5"},
+            )
+        try:
+            yield
+        finally:
+            self.evidence_semaphore.release()
 
     async def initialize(self):
         """Initialize shared HTTP clients (idempotent)."""
@@ -109,8 +137,8 @@ class BaseProxyServer(WebServer):
         rather than per port. Port is the wrong granularity: the external app also
         serves `/server/health` with no authentication at all, and `/server/devices`
         with `allow_miner=True` — the miner being the party the guest keeps tenants
-        from. Only the two validator-only routes pass ``expose=True``, because the
-        validator cannot log into the guest and would otherwise have to ask the miner
+        from. Only validator-only routes opt in, via ``@expose_upstream_errors``, because
+        the validator cannot log into the guest and would otherwise have to ask the miner
         to fetch the journal for it. Everyone else gets the fixed string; the detail is
         logged either way.
         """
@@ -291,9 +319,12 @@ class BaseProxyServer(WebServer):
             media_type="text/plain",
         )
 
-    async def proxy_to_host_service(
-        self, path: str, request: Request, *, expose_errors: bool = False
-    ):
+    @staticmethod
+    def _exposes_errors(request: Request) -> bool:
+        """Whether this route opted in via @expose_upstream_errors."""
+        return getattr(request.state, "expose_errors", False)
+
+    async def proxy_to_host_service(self, path: str, request: Request):
         """Proxy requests to host attestation service via Unix socket"""
         method = request.method
         body = await request.body()
@@ -312,17 +343,31 @@ class BaseProxyServer(WebServer):
             body=body,
             params=params,
             use_unix_socket=True,
-            expose_errors=expose_errors,
+            expose_errors=self._exposes_errors(request),
         )
 
-    async def proxy_to_service(
-        self,
-        service_name: str,
-        path: str,
-        request: Request,
-        *,
-        expose_errors: bool = False,
-    ):
+    def _add_host_service_routes(self, *, evidence_handler, default_handler):
+        """Register the /server/* routes, evidence first.
+
+        Starlette matches in registration order, so the EVIDENCE_PATHS routes must precede
+        the catch-all or they never match and the concurrency limit is silently skipped.
+        """
+        for path in EVIDENCE_PATHS:
+            self.app.add_api_route(f"/server/{path}", evidence_handler, methods=["GET"])
+        self.app.add_api_route(
+            "/server/{path:path}",
+            default_handler,
+            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        )
+
+    async def proxy_evidence_to_host_service(self, request: Request):
+        """proxy_to_host_service for an EVIDENCE_PATHS route, under the shared limit."""
+        # The matched route's template, so the upstream path is never caller input.
+        path = request.scope["route"].path.removeprefix("/server/")
+        async with self.shared.evidence_slot():
+            return await self.proxy_to_host_service(path, request)
+
+    async def proxy_to_service(self, service_name: str, path: str, request: Request):
         """Proxy requests to K8s workload services"""
         if not service_name.replace("-", "").replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="Invalid service name")
@@ -348,8 +393,26 @@ class BaseProxyServer(WebServer):
             body=body,
             params=params,
             use_unix_socket=False,
-            expose_errors=expose_errors,
+            expose_errors=self._exposes_errors(request),
         )
+
+
+def expose_upstream_errors(handler):
+    """Let this route's error responses carry the upstream error text.
+
+    Only for a handler whose authorize() admits the validator and nobody else -- see
+    BaseProxyServer._error_detail. A decorator rather than a handler parameter: FastAPI turns
+    any defaulted parameter into a query param, which handed the choice to the caller.
+    """
+    signature = inspect.signature(handler)
+
+    @wraps(handler)
+    async def wrapper(self, *args, **kwargs):
+        request = signature.bind(self, *args, **kwargs).arguments["request"]
+        request.state.expose_errors = True
+        return await handler(self, *args, **kwargs)
+
+    return wrapper
 
 
 def attach_hotkey_headers(handler):
@@ -432,10 +495,9 @@ class ExternalProxyServer(BaseProxyServer):
             "/server/devices", self.proxy_devices_authenticated, methods=["GET"]
         )
 
-        self.app.add_api_route(
-            "/server/{path:path}",
-            self.proxy_to_host_service_authenticated,
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        self._add_host_service_routes(
+            evidence_handler=self.proxy_evidence_authenticated,
+            default_handler=self.proxy_to_host_service_authenticated,
         )
 
         self.app.add_api_route(
@@ -462,6 +524,7 @@ class ExternalProxyServer(BaseProxyServer):
         return await self.proxy_to_host_service(path="devices", request=request)
 
     @attach_hotkey_headers
+    @expose_upstream_errors
     async def proxy_to_host_service_authenticated(
         self,
         path: str,
@@ -473,9 +536,20 @@ class ExternalProxyServer(BaseProxyServer):
         Carries the hotkey PoP: this is the route GET /server/attest lands on, and verify_server
         reads the proof off that response.
         """
-        return await self.proxy_to_host_service(path, request, expose_errors=True)
+        return await self.proxy_to_host_service(path, request)
 
     @attach_hotkey_headers
+    @expose_upstream_errors
+    async def proxy_evidence_authenticated(
+        self,
+        request: Request,
+        _auth: bool = Depends(authorize(allow_validator=True, purpose="attest")),
+    ):
+        """Validator-authenticated evidence route; carries the PoP like the catch-all did."""
+        return await self.proxy_evidence_to_host_service(request)
+
+    @attach_hotkey_headers
+    @expose_upstream_errors
     async def proxy_to_service_authenticated(
         self,
         service_name: str,
@@ -488,9 +562,7 @@ class ExternalProxyServer(BaseProxyServer):
         Carries the hotkey PoP: chute evidence is fetched through here and the rc gate reads the
         proof off that response.
         """
-        return await self.proxy_to_service(
-            service_name, path, request, expose_errors=True
-        )
+        return await self.proxy_to_service(service_name, path, request)
 
 
 class InternalProxyServer(BaseProxyServer):
@@ -517,10 +589,9 @@ class InternalProxyServer(BaseProxyServer):
 
         self.app.add_api_route("/health", self.health_check, methods=["GET"])
 
-        self.app.add_api_route(
-            "/server/{path:path}",
-            self.proxy_to_host_service,
-            methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+        self._add_host_service_routes(
+            evidence_handler=self.proxy_evidence_to_host_service,
+            default_handler=self.proxy_to_host_service,
         )
 
         self.app.add_exception_handler(404, self.not_found_handler)
@@ -539,7 +610,7 @@ def run():
             logging.getLogger().setLevel(logging.DEBUG)
             logger.debug("Debug mode enabled")
 
-        shared_resources = SharedProxyResources()
+        shared_resources = SharedProxyResources(config)
 
         external_config = AttestationProxyConfig()
         external_config.port = EXTERNAL_PORT

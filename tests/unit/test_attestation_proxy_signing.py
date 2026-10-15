@@ -190,7 +190,9 @@ def test_external_proxy_raises_on_missing_key(monkeypatch, tmp_path):
     monkeypatch.setattr("attestation_proxy.service.asynccontextmanager", lambda f: f)
 
     with pytest.raises(RuntimeError, match="TLS private key could not be loaded"):
-        ExternalProxyServer(config, SharedProxyResources())
+        ExternalProxyServer(
+            config, SharedProxyResources(MagicMock(evidence_concurrency=1))
+        )
 
 
 @pytest.mark.asyncio
@@ -409,8 +411,9 @@ def test_error_detail_is_exposed_only_on_validator_only_routes():
     port, because port is the wrong granularity: the external app also serves
     `/server/health` with no authentication at all, and `/server/devices` with
     `allow_miner=True` -- the miner being the party the guest keeps tenants from. So the
-    invariant is that a handler opts into `expose_errors=True` only if its own
-    `authorize(...)` admits the validator and nobody else.
+    invariant is that a handler opts in with `@expose_upstream_errors` only if its own
+    `authorize(...)` admits the validator and nobody else, and that nothing else can
+    turn the flag on.
 
     Checked on the AST rather than by grep so renaming a handler cannot quietly drop it
     out of the check.
@@ -425,8 +428,6 @@ def test_error_detail_is_exposed_only_on_validator_only_routes():
 
     def authorize_kwargs(fn):
         """The authorize(...) kwargs on a handler's dependencies, if any."""
-        for arg in list(fn.args.args) + list(fn.args.kwonlyargs):
-            pass
         for default in fn.args.defaults + [d for d in fn.args.kw_defaults if d]:
             for node in ast.walk(default):
                 if (
@@ -438,32 +439,60 @@ def test_error_detail_is_exposed_only_on_validator_only_routes():
                     }
         return None
 
-    exposing = set()
-    handlers = {}
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        handlers[fn.name] = fn
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Call) and any(
-                kw.arg == "expose_errors"
-                and isinstance(kw.value, ast.Constant)
-                and kw.value.value is True
-                for kw in node.keywords
-            ):
-                exposing.add(fn.name)
+    functions = [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    exposing = [
+        fn
+        for fn in functions
+        if any(
+            getattr(d, "id", None) == "expose_upstream_errors"
+            for d in fn.decorator_list
+        )
+    ]
 
     assert exposing, "no handler exposes error detail; the gate has been removed"
 
-    for name in exposing:
-        auth = authorize_kwargs(handlers[name])
-        assert auth is not None, f"{name} exposes error detail but has no authorize()"
+    for fn in exposing:
+        auth = authorize_kwargs(fn)
+        assert (
+            auth is not None
+        ), f"{fn.name} exposes error detail but has no authorize()"
         assert (
             auth.get("allow_validator") is True
-        ), f"{name} does not admit the validator"
+        ), f"{fn.name} does not admit the validator"
         assert not auth.get(
             "allow_miner"
-        ), f"{name} exposes upstream error detail to the miner"
+        ), f"{fn.name} exposes upstream error detail to the miner"
+
+    # The decorator is the only way in: nothing else may set the flag, and every
+    # expose_errors= passed to proxy_request must be read back from it.
+    for fn in functions:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if kw.arg != "expose_errors" or fn.name == "proxy_request":
+                        continue
+                    assert (
+                        isinstance(kw.value, ast.Call)
+                        and getattr(kw.value.func, "attr", None) == "_exposes_errors"
+                    ), f"{fn.name} passes expose_errors other than via the decorator"
+
+    def stores(node):
+        return [
+            n
+            for n in ast.walk(node)
+            if isinstance(n, ast.Attribute)
+            and n.attr == "expose_errors"
+            and isinstance(n.ctx, ast.Store)
+        ]
+
+    decorator = next(f for f in functions if f.name == "expose_upstream_errors")
+    assert len(stores(tree)) == 1 and stores(tree) == stores(
+        decorator
+    ), "expose_errors must be set only by the expose_upstream_errors decorator"
 
 
 def test_error_detail_is_never_interpolated_directly_into_a_response():
