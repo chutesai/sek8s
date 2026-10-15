@@ -21,6 +21,13 @@ class AttestationProxyConfig(AuthConfig):
     # latest image) -> no signing, unchanged pass-through, so older VMs keep working.
     miner_private_key: Optional[str] = Field(default=None, alias="MINER_PRIVATE_KEY")
     miner_seed: Optional[str] = Field(default=None, alias="MINER_SEED")
+    # Each evidence request forks a chutes-nvevidence run over every GPU; a validator burst
+    # of one request per GPU OOM-kills the attestation-service under its MemoryMax. Queued
+    # requests past the timeout get a 503 rather than holding the caller indefinitely.
+    evidence_concurrency: int = Field(default=1, ge=1, alias="EVIDENCE_CONCURRENCY")
+    evidence_queue_timeout: float = Field(
+        default=30.0, gt=0, alias="EVIDENCE_QUEUE_TIMEOUT"
+    )
 
     model_config = SettingsConfigDict(
         env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
